@@ -1,0 +1,25 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.DS_Store
+.idea/
+.vscode/
+.claude/
+input/*.pdf
+input/*.xls
+input/*.xlsx
+output/*.xlsx
+logs/*.log
+# Business documents (root-level only)
+PRD_Automacao_Pedidos.pdf

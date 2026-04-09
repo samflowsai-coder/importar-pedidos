@@ -1,0 +1,8 @@
+services:
+  app:
+    build: .
+    env_file: .env
+    volumes:
+      - ./input:/app/input:ro
+      - ./output:/app/output
+      - ./logs:/app/logs

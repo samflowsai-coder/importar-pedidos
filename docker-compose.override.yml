@@ -1,0 +1,14 @@
+# Dev override: hot-reload + source mount (local only, never production)
+services:
+  app:
+    command: python ui.py
+    volumes:
+      - ./input:/app/input:ro
+      - ./output:/app/output
+      - ./logs:/app/logs
+      - .:/app
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8000:8000"

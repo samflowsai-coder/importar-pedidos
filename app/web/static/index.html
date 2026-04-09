@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Importar Pedidos</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:             #09090B;
+      --surface:        #18181B;
+      --surface-hover:  #1F1F23;
+      --border:         #27272A;
+      --border-subtle:  #1C1C1F;
+      --text:           #FAFAFA;
+      --text-secondary: #A1A1AA;
+      --text-muted:     #71717A;
+      --accent:         #6366F1;
+      --accent-hover:   #818CF8;
+      --accent-bg:      rgba(99,102,241,.10);
+      --success:        #22C55E;
+      --success-bg:     rgba(34,197,94,.10);
+      --error:          #EF4444;
+      --error-bg:       rgba(239,68,68,.10);
+      --radius-sm:      6px;
+      --radius:         8px;
+      --radius-lg:      12px;
+    }
+
+    html, body {
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* ── Header ──────────────────────────────────────────── */
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      height: 52px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: rgba(9,9,11,.85);
+      backdrop-filter: blur(12px);
+      display: flex;
+      align-items: center;
+      padding: 0 24px;
+      gap: 10px;
+    }
+
+    .logo {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .app-name {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -.015em;
+      color: var(--text);
+    }
+
+    .badge {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .06em;
+      padding: 2px 7px;
+      border-radius: 20px;
+      background: var(--accent-bg);
+      color: var(--accent-hover);
+      text-transform: uppercase;
+    }
+
+    /* ── Layout ──────────────────────────────────────────── */
+    .main {
+      display: flex;
+      justify-content: center;
+      padding: 48px 20px 96px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 620px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    /* ── Upload Zone ─────────────────────────────────────── */
+    .upload-zone {
+      position: relative;
+      border: 1.5px dashed var(--border);
+      border-radius: var(--radius-lg);
+      background: var(--surface);
+      padding: 44px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 150ms ease, background 150ms ease;
+    }
+
+    .upload-zone.drag-over,
+    .upload-zone:hover {
+      border-color: var(--accent);
+      background: var(--accent-bg);
+    }
+
+    .upload-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      width: 100%;
+      height: 100%;
+      cursor: pointer;
+    }
+
+    .upload-icon-wrap {
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
+      background: var(--border);
+      margin: 0 auto 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 150ms ease;
+    }
+
+    .upload-zone:hover .upload-icon-wrap,
+    .upload-zone.drag-over .upload-icon-wrap {
+      background: var(--accent-bg);
+    }
+
+    .upload-primary {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text);
+      margin-bottom: 4px;
+    }
+
+    .upload-secondary {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .upload-tags {
+      display: inline-flex;
+      gap: 6px;
+      margin-top: 14px;
+    }
+
+    .tag {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .05em;
+      padding: 3px 8px;
+      border-radius: 4px;
+    }
+    .tag-pdf { background: rgba(239,68,68,.12); color: #F87171; }
+    .tag-xls { background: rgba(34,197,94,.12); color: #4ADE80; }
+
+    /* ── File List ───────────────────────────────────────── */
+    .file-list { display: flex; flex-direction: column; gap: 3px; }
+
+    .file-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      transition: background 100ms ease;
+    }
+    .file-item:hover { background: var(--surface-hover); }
+
+    .file-ext-badge {
+      width: 34px;
+      height: 34px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: .05em;
+      flex-shrink: 0;
+    }
+    .file-ext-badge.pdf { background: rgba(239,68,68,.12); color: #F87171; }
+    .file-ext-badge.xls { background: rgba(34,197,94,.12); color: #4ADE80; }
+
+    .file-name {
+      flex: 1;
+      font-size: 13px;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-size {
+      font-size: 12px;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .icon-btn {
+      width: 26px;
+      height: 26px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 100ms ease, color 100ms ease;
+    }
+    .icon-btn:hover { background: var(--error-bg); color: var(--error); }
+
+    /* ── Input / Button ──────────────────────────────────── */
+    .field-row { display: flex; gap: 8px; }
+
+    .input {
+      flex: 1;
+      height: 40px;
+      padding: 0 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 150ms ease;
+    }
+    .input::placeholder { color: var(--text-muted); }
+    .input:focus { border-color: var(--accent); }
+
+    .btn {
+      height: 40px;
+      padding: 0 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+    }
+    .btn:hover { background: var(--surface-hover); color: var(--text); border-color: #3F3F46; }
+
+    .btn-primary {
+      width: 100%;
+      height: 44px;
+      justify-content: center;
+      background: var(--accent);
+      border-color: transparent;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -.01em;
+      border-radius: var(--radius);
+    }
+    .btn-primary:hover { background: var(--accent-hover); border-color: transparent; color: #fff; }
+    .btn-primary:disabled { opacity: .35; pointer-events: none; }
+    .btn-processing { pointer-events: none; gap: 10px; }
+
+    /* ── Spinner ─────────────────────────────────────────── */
+    .spin {
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,.2);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .65s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Results ─────────────────────────────────────────── */
+    .result-list { display: flex; flex-direction: column; gap: 8px; }
+
+    .result-card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .result-head {
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .status-dot.ok  { background: var(--success); box-shadow: 0 0 6px var(--success); }
+    .status-dot.err { background: var(--error); }
+
+    .result-source { font-size: 13px; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .result-meta   { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+
+    .result-files { padding: 6px 8px; display: flex; flex-direction: column; gap: 1px; }
+
+    .result-file-link {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 12px;
+      transition: background 100ms ease, color 100ms ease;
+    }
+    .result-file-link:hover { background: var(--accent-bg); color: var(--accent-hover); }
+    .result-file-link svg { flex-shrink: 0; color: var(--text-muted); }
+    .result-file-link:hover svg { color: var(--accent-hover); }
+
+    .result-error-msg { padding: 12px 16px; font-size: 13px; color: #F87171; }
+
+    /* ── Empty state ─────────────────────────────────────── */
+    .hidden { display: none !important; }
+
+    /* ── Modal ───────────────────────────────────────────── */
+    .overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.65);
+      backdrop-filter: blur(6px);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 50;
+      opacity: 0; pointer-events: none;
+      transition: opacity 180ms ease;
+    }
+    .overlay.open { opacity: 1; pointer-events: auto; }
+
+    .modal {
+      width: 480px;
+      max-width: calc(100vw - 32px);
+      max-height: 72vh;
+      display: flex; flex-direction: column;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      transform: translateY(10px);
+      transition: transform 180ms ease;
+      overflow: hidden;
+    }
+    .overlay.open .modal { transform: translateY(0); }
+
+    .modal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .modal-title { font-size: 14px; font-weight: 600; }
+
+    .modal-path {
+      padding: 8px 18px;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: ui-monospace, 'SF Mono', monospace;
+      border-bottom: 1px solid var(--border-subtle);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .modal-body {
+      flex: 1; overflow-y: auto;
+      padding: 6px;
+    }
+    .modal-body::-webkit-scrollbar { width: 5px; }
+    .modal-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    .dir-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; border-radius: var(--radius-sm);
+      cursor: pointer; font-size: 13px; color: var(--text-secondary);
+      transition: background 100ms ease, color 100ms ease;
+    }
+    .dir-row:hover { background: var(--surface-hover); color: var(--text); }
+    .dir-row.up { color: var(--text-muted); font-style: italic; }
+
+    .modal-footer {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .modal-sel-path {
+      flex: 1; font-size: 11px; color: var(--text-muted);
+      font-family: ui-monospace, 'SF Mono', monospace;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .btn-sm {
+      height: 34px; padding: 0 14px;
+      font-size: 13px; font-weight: 500;
+    }
+
+    /* ── Animations ──────────────────────────────────────── */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(5px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .anim { animation: fadeUp 200ms ease forwards; }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <div class="logo">
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M1.5 3.5h11M1.5 7h7M1.5 10.5h9" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
+    </svg>
+  </div>
+  <span class="app-name">Importar Pedidos</span>
+  <span class="badge">ERP</span>
+</header>
+
+<div class="main">
+  <div class="container">
+
+    <!-- 1. Upload -->
+    <div>
+      <p class="section-title">Arquivos de entrada</p>
+      <div class="upload-zone" id="uploadZone">
+        <input type="file" id="fileInput" multiple accept=".pdf,.xls,.xlsx">
+        <div class="upload-icon-wrap">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M10 13.5V5.5M10 5.5L7 8.5M10 5.5l3 3" stroke="#A1A1AA" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M3 14.5v1A1.5 1.5 0 004.5 17h11a1.5 1.5 0 001.5-1.5v-1" stroke="#A1A1AA" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <p class="upload-primary">Arraste e solte seus pedidos aqui</p>
+        <p class="upload-secondary">ou clique para selecionar arquivos</p>
+        <div class="upload-tags">
+          <span class="tag tag-pdf">PDF</span>
+          <span class="tag tag-xls">XLS</span>
+          <span class="tag tag-xls">XLSX</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. File list -->
+    <div id="fileListWrap" class="hidden">
+      <div class="file-list" id="fileList"></div>
+    </div>
+
+    <!-- 3. Output dir -->
+    <div>
+      <p class="section-title">Pasta de destino</p>
+      <div class="field-row">
+        <input class="input" id="outputDir" type="text" placeholder="Selecione ou digite o caminho…">
+        <button class="btn" id="browseBtn" type="button">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M1 3.5a1 1 0 011-1h2.5l1.5 2H12a1 1 0 011 1V11a1 1 0 01-1 1H2a1 1 0 01-1-1V3.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+          </svg>
+          Selecionar
+        </button>
+      </div>
+    </div>
+
+    <!-- 4. CTA -->
+    <button class="btn btn-primary" id="submitBtn" disabled>
+      Processar Pedidos
+    </button>
+
+    <!-- 5. Results -->
+    <div id="resultsWrap" class="hidden">
+      <p class="section-title" style="margin-bottom:10px">Resultado</p>
+      <div class="result-list" id="resultList"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Folder browser modal -->
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Selecionar pasta de destino</span>
+      <button class="icon-btn" id="modalClose" style="margin:-2px">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+          <path d="M1.5 1.5l10 10M11.5 1.5l-10 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-path" id="modalPath">—</div>
+    <div class="modal-body" id="modalBody">
+      <div style="padding:24px;text-align:center;color:var(--text-muted)">Carregando…</div>
+    </div>
+    <div class="modal-footer">
+      <span class="modal-sel-path" id="modalSelPath"></span>
+      <button class="btn btn-sm" id="modalCancel">Cancelar</button>
+      <button class="btn btn-primary btn-sm" id="modalConfirm">Selecionar aqui</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── State ──────────────────────────────────────────────── */
+let files = [];
+let browsePath = null;
+
+/* ── DOM refs ───────────────────────────────────────────── */
+const uploadZone   = document.getElementById('uploadZone');
+const fileInput    = document.getElementById('fileInput');
+const fileListWrap = document.getElementById('fileListWrap');
+const fileList     = document.getElementById('fileList');
+const outputDir    = document.getElementById('outputDir');
+const browseBtn    = document.getElementById('browseBtn');
+const submitBtn    = document.getElementById('submitBtn');
+const resultsWrap  = document.getElementById('resultsWrap');
+const resultList   = document.getElementById('resultList');
+const overlay      = document.getElementById('overlay');
+const modalBody    = document.getElementById('modalBody');
+const modalPath    = document.getElementById('modalPath');
+const modalSelPath = document.getElementById('modalSelPath');
+
+/* ── Init: load default output dir ──────────────────────── */
+fetch('/api/config').then(r => r.json()).then(cfg => {
+  outputDir.value = cfg.defaultOutputDir || '';
+  syncBtn();
+});
+
+/* ── Upload zone ─────────────────────────────────────────── */
+fileInput.addEventListener('change', e => ingestFiles(Array.from(e.target.files)));
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('drag-over');
+  ingestFiles(Array.from(e.dataTransfer.files));
+});
+
+function ingestFiles(incoming) {
+  incoming
+    .filter(f => /\.(pdf|xls|xlsx)$/i.test(f.name))
+    .forEach(f => { if (!files.find(s => s.name === f.name)) files.push(f); });
+  renderFiles();
+  syncBtn();
+}
+
+function renderFiles() {
+  if (!files.length) { fileListWrap.classList.add('hidden'); return; }
+  fileListWrap.classList.remove('hidden');
+  fileList.innerHTML = files.map((f, i) => {
+    const ext = f.name.split('.').pop().toLowerCase();
+    const cls = ext === 'pdf' ? 'pdf' : 'xls';
+    return `
+      <div class="file-item">
+        <div class="file-ext-badge ${cls}">${ext.toUpperCase()}</div>
+        <span class="file-name">${esc(f.name)}</span>
+        <span class="file-size">${fmtSize(f.size)}</span>
+        <button class="icon-btn" onclick="removeFile(${i})" title="Remover">
+          <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+            <path d="M1 1l9 9M10 1L1 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>`;
+  }).join('');
+}
+
+function removeFile(i) {
+  files.splice(i, 1);
+  renderFiles();
+  syncBtn();
+}
+
+function fmtSize(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(0) + ' KB';
+  return (b / 1048576).toFixed(1) + ' MB';
+}
+
+outputDir.addEventListener('input', syncBtn);
+
+function syncBtn() {
+  submitBtn.disabled = !files.length || !outputDir.value.trim();
+}
+
+/* ── Submit ──────────────────────────────────────────────── */
+submitBtn.addEventListener('click', async () => {
+  if (!files.length || !outputDir.value.trim()) return;
+
+  submitBtn.classList.add('btn-processing');
+  submitBtn.innerHTML = '<div class="spin"></div>Processando…';
+  resultsWrap.classList.add('hidden');
+
+  try {
+    const fd = new FormData();
+    files.forEach(f => fd.append('files', f));
+    fd.append('output_dir', outputDir.value.trim());
+
+    const res  = await fetch('/api/process', { method: 'POST', body: fd });
+    const data = await res.json();
+    renderResults(data);
+  } catch (err) {
+    renderResults({ results: [], errors: [{ source: '—', error: err.message }] });
+  } finally {
+    submitBtn.classList.remove('btn-processing');
+    submitBtn.innerHTML = 'Processar Pedidos';
+    syncBtn();
+  }
+});
+
+function renderResults(data) {
+  resultsWrap.classList.remove('hidden');
+  let html = '';
+
+  (data.results || []).forEach(r => {
+    const links = (r.files || []).map(f => `
+      <a class="result-file-link"
+         href="/api/download?path=${encodeURIComponent(f.path)}"
+         download="${esc(f.name)}">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M2 12h10M7 2v7M7 9L4.5 6.5M7 9l2.5-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        ${esc(f.name)}
+      </a>`).join('');
+
+    html += `
+      <div class="result-card anim">
+        <div class="result-head">
+          <div class="status-dot ok"></div>
+          <span class="result-source">${esc(r.source)}</span>
+          <span class="result-meta">Pedido ${esc(r.order)} &middot; ${r.files.length} arquivo(s)</span>
+        </div>
+        <div class="result-files">${links}</div>
+      </div>`;
+  });
+
+  (data.errors || []).forEach(e => {
+    html += `
+      <div class="result-card anim">
+        <div class="result-head">
+          <div class="status-dot err"></div>
+          <span class="result-source">${esc(e.source)}</span>
+        </div>
+        <div class="result-error-msg">${esc(e.error)}</div>
+      </div>`;
+  });
+
+  if (!html) html = `
+    <div class="result-card anim">
+      <div class="result-error-msg">Nenhum resultado retornado.</div>
+    </div>`;
+
+  resultList.innerHTML = html;
+}
+
+/* ── Folder browser ──────────────────────────────────────── */
+browseBtn.addEventListener('click', () => {
+  overlay.classList.add('open');
+  loadDir(outputDir.value.trim() || '~');
+});
+
+document.getElementById('modalClose').addEventListener('click', closeModal);
+document.getElementById('modalCancel').addEventListener('click', closeModal);
+overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
+
+document.getElementById('modalConfirm').addEventListener('click', () => {
+  if (browsePath) {
+    outputDir.value = browsePath;
+    syncBtn();
+  }
+  closeModal();
+});
+
+function closeModal() { overlay.classList.remove('open'); }
+
+async function loadDir(path) {
+  modalBody.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted)">Carregando…</div>';
+  try {
+    const res  = await fetch('/api/fs?path=' + encodeURIComponent(path));
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    browsePath = data.current;
+    modalPath.textContent = data.current;
+    modalSelPath.textContent = data.current;
+
+    let html = '';
+    if (data.parent) {
+      html += `<div class="dir-row up" onclick="loadDir('${escPath(data.parent)}')">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+          <path d="M8.5 10.5L4 6.5l4.5-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>Voltar</span>
+      </div>`;
+    }
+
+    if (!data.entries.length) {
+      html += '<div style="padding:16px 12px;font-size:13px;color:var(--text-muted)">Nenhuma subpasta encontrada</div>';
+    } else {
+      html += data.entries.map(e => `
+        <div class="dir-row" onclick="loadDir('${escPath(e.path)}')">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M1 4a1 1 0 011-1h2.5l1.5 2H12a1 1 0 011 1v5a1 1 0 01-1 1H2a1 1 0 01-1-1V4z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/>
+          </svg>
+          ${esc(e.name)}
+        </div>`).join('');
+    }
+    modalBody.innerHTML = html;
+  } catch (err) {
+    modalBody.innerHTML = `<div style="padding:16px 12px;font-size:13px;color:var(--error)">${esc(err.message)}</div>`;
+  }
+}
+
+/* ── Utils ───────────────────────────────────────────────── */
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Escape path for use inside single-quoted onclick attributes.
+// Escapes backslashes and single quotes (rare on macOS, but safe).
+function escPath(s) {
+  return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+}
+</script>
+</body>
+</html>
