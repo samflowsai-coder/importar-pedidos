@@ -247,3 +247,26 @@ def test_nba_store_as_customer_name():
     store_names = {i.delivery_name for i in order.items if i.delivery_name}
     # Every item should have a delivery_name set
     assert len(store_names) == 21, f"Expected 21 distinct store names, got {len(store_names)}"
+
+
+# ── FIX: Riachuelo ME — page-footer URL not imported as item ─────────────────
+
+def test_riachuelo_me_no_url_items():
+    """URL footer artifact from PDF page break must not appear as a product item."""
+    order = _process("RIACHUELO - PEDIDO.pdf")
+    assert order is not None
+    for item in order.items:
+        assert item.description is not None
+        assert not item.description.startswith("http"), (
+            f"URL artifact imported as item: {item.description!r}"
+        )
+
+
+def test_riachuelo_me_no_null_product_codes():
+    """Every item exported by the ME parser must have a product code."""
+    order = _process("RIACHUELO - PEDIDO.pdf")
+    assert order is not None
+    for item in order.items:
+        assert item.product_code is not None, (
+            f"Item with no product_code: description={item.description!r}"
+        )

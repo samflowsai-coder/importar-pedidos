@@ -11,6 +11,16 @@ _SIGNATURE = "Mercado Eletrônico"
 _ITEM_LINE = re.compile(r"^\d+\.\s+[\d,]", re.MULTILINE)
 # Formatted CNPJ: XX.XXX.XXX/XXXX-XX
 _CNPJ_RE = re.compile(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}")
+# Page-footer artifacts printed by the portal between item rows on page breaks:
+#   "04/03/2026, 16:19 Mercado Eletrônico"  ← timestamp + brand header
+#   "https://www.me.com.br/..."             ← print URL
+#   "1 2/4"                                 ← pagination stamp
+_PAGE_ARTIFACT_RE = re.compile(
+    r"^\s*\d{2}/\d{2}/\d{4},\s*\d{2}:\d{2}\s+Mercado Eletr[oô]nico\s*$"
+    r"|^\s*https?://\S+.*$"
+    r"|^\s*\d+\s+\d+/\d+\s*$",
+    re.MULTILINE,
+)
 
 
 class MercadoEletronicoParser(BaseParser):
@@ -56,6 +66,8 @@ class MercadoEletronicoParser(BaseParser):
     # ------------------------------------------------------------------
 
     def _parse_items(self, full_text: str) -> list[OrderItem]:
+        # Strip page-footer artifacts (portal URL + pagination stamps) before parsing
+        full_text = _PAGE_ARTIFACT_RE.sub("", full_text)
         positions = [m.start() for m in _ITEM_LINE.finditer(full_text)]
         if not positions:
             return []
@@ -118,6 +130,9 @@ class MercadoEletronicoParser(BaseParser):
         if not m:
             return None, None
         raw = m.group(1).strip()
+        # Guard: URL artifacts that survived pre-processing or appeared mid-block
+        if raw.startswith("http://") or raw.startswith("https://"):
+            return None, None
         code_m = re.match(r"^(\d+)_", raw)
         product_code = code_m.group(1) if code_m else None
         desc = re.sub(r"^\d+_\w+\s*-\s*", "", raw).strip()
