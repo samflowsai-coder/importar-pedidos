@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Manual de Instalação — Importar Pedidos</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      font-size: 15px;
+      line-height: 1.7;
+      color: #18181B;
+      background: #F4F4F5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .page {
+      max-width: 780px;
+      margin: 0 auto;
+      padding: 48px 24px 96px;
+    }
+
+    /* Header */
+    .doc-header {
+      margin-bottom: 48px;
+      padding-bottom: 32px;
+      border-bottom: 1px solid #E4E4E7;
+    }
+    .doc-logo {
+      display: inline-flex; align-items: center; gap: 10px;
+      margin-bottom: 20px;
+    }
+    .logo-mark {
+      width: 32px; height: 32px; border-radius: 8px;
+      background: #6366F1;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .logo-name { font-size: 15px; font-weight: 600; color: #18181B; }
+    .doc-title {
+      font-size: 32px; font-weight: 700;
+      letter-spacing: -0.03em;
+      color: #09090B;
+      margin-bottom: 10px;
+    }
+    .doc-sub { font-size: 16px; color: #71717A; }
+
+    /* TOC */
+    .toc {
+      background: #fff;
+      border: 1px solid #E4E4E7;
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin-bottom: 48px;
+    }
+    .toc-title {
+      font-size: 11px; font-weight: 600;
+      letter-spacing: .07em; text-transform: uppercase;
+      color: #A1A1AA; margin-bottom: 12px;
+    }
+    .toc ol { padding-left: 20px; }
+    .toc li { margin-bottom: 4px; }
+    .toc a { color: #6366F1; text-decoration: none; font-size: 14px; font-weight: 500; }
+    .toc a:hover { text-decoration: underline; }
+
+    /* Sections */
+    .section { margin-bottom: 56px; }
+    .section-num {
+      font-size: 12px; font-weight: 600;
+      letter-spacing: .08em; text-transform: uppercase;
+      color: #6366F1; margin-bottom: 6px;
+    }
+    h2 {
+      font-size: 22px; font-weight: 700;
+      letter-spacing: -0.02em; color: #09090B;
+      margin-bottom: 16px;
+    }
+    h3 {
+      font-size: 16px; font-weight: 600;
+      color: #18181B; margin: 24px 0 10px;
+    }
+    p { color: #3F3F46; margin-bottom: 12px; }
+    p:last-child { margin-bottom: 0; }
+
+    /* Steps */
+    .steps { display: flex; flex-direction: column; gap: 16px; }
+    .step {
+      display: flex; gap: 16px;
+      background: #fff; border: 1px solid #E4E4E7;
+      border-radius: 12px; padding: 18px 20px;
+    }
+    .step-num {
+      width: 28px; height: 28px; border-radius: 8px;
+      background: #6366F1; color: #fff;
+      font-size: 13px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; margin-top: 1px;
+    }
+    .step-body { flex: 1; }
+    .step-title { font-size: 15px; font-weight: 600; color: #09090B; margin-bottom: 4px; }
+    .step-desc { font-size: 14px; color: #52525B; }
+
+    /* Code */
+    code {
+      font-family: 'SF Mono', 'Consolas', monospace;
+      font-size: 13px; background: #F0F0F1;
+      padding: 2px 6px; border-radius: 4px;
+      color: #3F3F46;
+    }
+    .code-block {
+      background: #18181B; color: #E4E4E7;
+      border-radius: 10px; padding: 16px 20px;
+      font-family: 'SF Mono', 'Consolas', monospace;
+      font-size: 13px; line-height: 1.6;
+      margin: 12px 0; overflow-x: auto;
+    }
+    .code-block .comment { color: #71717A; }
+    .code-block .value { color: #4ADE80; }
+
+    /* Callouts */
+    .callout {
+      display: flex; gap: 12px;
+      border-radius: 10px; padding: 14px 16px;
+      margin: 16px 0; font-size: 14px;
+    }
+    .callout-icon { font-size: 18px; flex-shrink: 0; line-height: 1.5; }
+    .callout.info { background: rgba(99,102,241,.07); border: 1px solid rgba(99,102,241,.2); }
+    .callout.warn { background: rgba(245,158,11,.07); border: 1px solid rgba(245,158,11,.2); }
+    .callout.ok   { background: rgba(22,163,74,.07); border: 1px solid rgba(22,163,74,.2); }
+    .callout.info .callout-text { color: #3730A3; }
+    .callout.warn .callout-text { color: #92400E; }
+    .callout.ok   .callout-text { color: #14532D; }
+
+    /* Table */
+    table {
+      width: 100%; border-collapse: collapse;
+      background: #fff; border-radius: 10px;
+      overflow: hidden; border: 1px solid #E4E4E7;
+      margin: 16px 0; font-size: 14px;
+    }
+    th {
+      background: #F9F9FA; padding: 10px 16px;
+      font-size: 11px; font-weight: 600;
+      letter-spacing: .06em; text-transform: uppercase;
+      color: #71717A; text-align: left;
+      border-bottom: 1px solid #E4E4E7;
+    }
+    td { padding: 11px 16px; border-bottom: 1px solid #F0F0F1; color: #3F3F46; }
+    tr:last-child td { border-bottom: none; }
+    td strong { color: #18181B; }
+
+    /* Badge */
+    .badge {
+      display: inline-block;
+      font-size: 11px; font-weight: 600;
+      padding: 2px 8px; border-radius: 20px;
+      background: rgba(99,102,241,.1); color: #4338CA;
+      letter-spacing: .04em;
+    }
+
+    /* Divider */
+    hr { border: none; border-top: 1px solid #E4E4E7; margin: 48px 0; }
+
+    /* Footer */
+    .footer {
+      text-align: center; font-size: 13px;
+      color: #A1A1AA; padding-top: 32px;
+      border-top: 1px solid #E4E4E7;
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="doc-header">
+    <div class="doc-logo">
+      <div class="logo-mark">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M2 4h12M2 8h8M2 12h10" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <span class="logo-name">Importar Pedidos</span>
+    </div>
+    <h1 class="doc-title">Manual de Instalação</h1>
+    <p class="doc-sub">Guia completo para configurar o sistema em uma máquina Windows.</p>
+  </div>
+
+  <!-- TOC -->
+  <div class="toc">
+    <p class="toc-title">Índice</p>
+    <ol>
+      <li><a href="#prereqs">Pré-requisitos</a></li>
+      <li><a href="#install">Instalação do sistema</a></li>
+      <li><a href="#config">Configuração inicial</a></li>
+      <li><a href="#uso">Uso diário</a></li>
+      <li><a href="#faq">Dúvidas frequentes</a></li>
+    </ol>
+  </div>
+
+  <!-- 1. Pré-requisitos -->
+  <div class="section" id="prereqs">
+    <p class="section-num">Seção 1</p>
+    <h2>Pré-requisitos</h2>
+    <p>Antes de instalar, o computador precisa ter o Python instalado. É um programa gratuito, feito uma única vez.</p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <p class="step-title">Abrir o site do Python</p>
+          <p class="step-desc">Acesse <strong>python.org/downloads</strong> no navegador e clique no botão amarelo de download (versão 3.11 ou superior).</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <p class="step-title">Executar o instalador</p>
+          <p class="step-desc">Abra o arquivo baixado. <strong>Importante:</strong> na primeira tela do instalador, marque a opção <code>Add Python to PATH</code> antes de clicar em "Install Now".</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <p class="step-title">Confirmar a instalação</p>
+          <p class="step-desc">Abra o Prompt de Comando (tecla Windows → digite <code>cmd</code> → Enter) e execute <code>python --version</code>. Se aparecer um número de versão, está pronto.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout warn" style="margin-top:16px">
+      <span class="callout-icon">⚠️</span>
+      <span class="callout-text"><strong>Se já tiver Python instalado:</strong> pule esta seção. O sistema funciona com qualquer versão 3.9 ou superior.</span>
+    </div>
+  </div>
+
+  <!-- 2. Instalação -->
+  <div class="section" id="install">
+    <p class="section-num">Seção 2</p>
+    <h2>Instalação do sistema</h2>
+    <p>Com o Python instalado, a instalação do Importar Pedidos é feita em um único clique.</p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <p class="step-title">Copiar a pasta do sistema</p>
+          <p class="step-desc">Copie a pasta <strong>importar pedidos</strong> para um local fixo no computador — por exemplo, <code>C:\SamFlowsAI\importar pedidos</code>. Não coloque na Área de Trabalho.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <p class="step-title">Executar o instalador</p>
+          <p class="step-desc">Dentro da pasta, dê duplo-clique em <strong>instalar.bat</strong>. Uma janela preta vai abrir e mostrar o progresso. Aguarde até aparecer a mensagem <em>"Instalação concluída com sucesso"</em>.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <p class="step-title">Criar atalho na Área de Trabalho</p>
+          <p class="step-desc">Clique com o botão direito em <strong>iniciar.bat</strong> → <em>Enviar para</em> → <em>Área de Trabalho (criar atalho)</em>. É por este atalho que o operador abrirá o sistema todo dia.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout ok" style="margin-top:16px">
+      <span class="callout-icon">✅</span>
+      <span class="callout-text">O <code>instalar.bat</code> precisa ser executado apenas uma vez. A partir daí, o operador usa somente o <code>iniciar.bat</code>.</span>
+    </div>
+  </div>
+
+  <!-- 3. Configuração -->
+  <div class="section" id="config">
+    <p class="section-num">Seção 3</p>
+    <h2>Configuração inicial</h2>
+
+    <h3>3.1 — Chave de API</h3>
+    <p>O sistema utiliza inteligência artificial como recurso auxiliar. Para isso, é necessário configurar uma chave de acesso no arquivo <code>.env</code>.</p>
+    <p>Abra a pasta do sistema, clique com o botão direito no arquivo <code>.env</code> → <em>Abrir com</em> → <em>Bloco de Notas</em>.</p>
+
+    <div class="code-block">
+      <span class="comment"># Substitua pelo valor fornecido pelo suporte</span><br>
+      OPENROUTER_API_KEY=<span class="value">sua-chave-aqui</span>
+    </div>
+
+    <div class="callout warn">
+      <span class="callout-icon">⚠️</span>
+      <span class="callout-text">Não compartilhe este arquivo nem envie a chave por e-mail ou WhatsApp. Em caso de dúvida, entre em contato com o suporte.</span>
+    </div>
+
+    <h3>3.2 — Pastas de trabalho</h3>
+    <p>Após abrir o sistema pela primeira vez, clique no ícone de <strong>configurações</strong> (engrenagem, canto superior direito) e defina:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Campo</th>
+          <th>O que configurar</th>
+          <th>Exemplo</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Pasta de entrada</strong></td>
+          <td>Onde os PDFs e planilhas dos fornecedores serão colocados</td>
+          <td><code>C:\Pedidos\Entrada</code></td>
+        </tr>
+        <tr>
+          <td><strong>Pasta de saída</strong></td>
+          <td>Onde os arquivos prontos para o ERP serão salvos</td>
+          <td><code>C:\Pedidos\ERP</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout info">
+      <span class="callout-icon">💡</span>
+      <span class="callout-text">Crie as pastas antes de configurar. A pasta de entrada pode ser a mesma onde hoje os pedidos são salvos ao serem recebidos por e-mail.</span>
+    </div>
+
+    <h3>3.3 — Conexão com a internet</h3>
+    <p>O sistema funciona <strong>sem internet</strong> para os fornecedores já cadastrados (Riachuelo, Centauro, Beira Rio, Kolosh, Sam's Club, etc.). A internet é necessária apenas para processar formatos novos ou desconhecidos, que são enviados para análise automática.</p>
+  </div>
+
+  <!-- 4. Uso diário -->
+  <div class="section" id="uso">
+    <p class="section-num">Seção 4</p>
+    <h2>Uso diário</h2>
+    <p>O fluxo de trabalho é simples e acontece inteiramente no navegador.</p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <p class="step-title">Iniciar o sistema</p>
+          <p class="step-desc">Dê duplo-clique no atalho <strong>Importar Pedidos</strong> da Área de Trabalho. O navegador abre automaticamente com o sistema. A janela preta que aparece não deve ser fechada.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <p class="step-title">Colocar os pedidos na pasta de entrada</p>
+          <p class="step-desc">Salve os arquivos PDF ou XLS recebidos dos fornecedores na <strong>pasta de entrada</strong> configurada. Podem ser vários arquivos de uma vez.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <p class="step-title">Selecionar e importar</p>
+          <p class="step-desc">Na aba <strong>Pendentes</strong>, clique em <em>Atualizar</em> para ver os arquivos. Marque os que deseja processar e clique em <em>Importar</em>. O sistema gera os arquivos XLS para o ERP automaticamente.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <p class="step-title">Baixar e importar no ERP</p>
+          <p class="step-desc">Após o processamento, os links de download aparecem na tela. Clique para baixar cada arquivo XLS e importe normalmente no ERP. Os pedidos originais são movidos automaticamente para a pasta <em>Pedidos importados</em>.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <p class="step-title">Encerrar o sistema</p>
+          <p class="step-desc">Feche a janela preta (ou pressione <code>Ctrl+C</code> dentro dela) quando terminar o uso do dia.</p>
+        </div>
+      </div>
+    </div>
+
+    <h3>Aba Importados</h3>
+    <p>A aba <strong>Importados</strong> mostra o histórico de todos os pedidos processados — com data, número do pedido, cliente e links para baixar novamente os arquivos gerados.</p>
+    <p>Caso precise reprocessar um pedido (por exemplo, se o arquivo do ERP for perdido), clique em <strong>Reimportar</strong> na entrada correspondente.</p>
+  </div>
+
+  <!-- 5. FAQ -->
+  <div class="section" id="faq">
+    <p class="section-num">Seção 5</p>
+    <h2>Dúvidas frequentes</h2>
+
+    <h3>O navegador não abriu automaticamente</h3>
+    <p>Abra o navegador manualmente e acesse <code>http://localhost:3636</code>.</p>
+
+    <h3>Apareceu "Formato não reconhecido"</h3>
+    <p>O arquivo é de um fornecedor ainda não cadastrado no sistema. Envie o arquivo para o suporte para que seja adicionado. O sistema já cobre: Riachuelo, Centauro, Beira Rio, Kolosh / Dakota, Sam's Club, Kallan, Magic Feet, Authentic Feet e NBA.</p>
+
+    <h3>O sistema ficou lento ou travou</h3>
+    <p>Feche a janela preta e abra o sistema novamente pelo atalho da Área de Trabalho.</p>
+
+    <h3>Preciso processar um pedido de novo</h3>
+    <p>Acesse a aba <strong>Importados</strong>, encontre o pedido e clique em <strong>Reimportar</strong>.</p>
+
+    <h3>Esqueci qual pasta está configurada</h3>
+    <p>Clique na engrenagem (canto superior direito) para ver e alterar as pastas configuradas.</p>
+
+    <h3>Atualizações do sistema</h3>
+    <p>Quando houver atualização, o suporte vai enviar uma nova versão da pasta. Substitua a pasta antiga pela nova e execute <code>instalar.bat</code> novamente. As configurações e histórico de importações são preservados.</p>
+  </div>
+
+  <hr>
+
+  <div class="footer">
+    <p>Importar Pedidos · Suporte: SamFlowsAI</p>
+  </div>
+
+</div>
+</body>
+</html>

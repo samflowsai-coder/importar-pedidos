@@ -17,3 +17,6 @@ LICENSE
 .DS_Store
 docker-compose*.yml
 tests/
+input/
+output/
+logs/
