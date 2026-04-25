@@ -1,8 +1,8 @@
 [project]
-name = "importar-pedidos"
+name = "portal-de-pedidos"
 version = "0.1.0"
-description = "Automação de pedidos: PDF + XLS → ERP"
-requires-python = ">=3.9"
+description = "Portal de Pedidos — porta de entrada de pedidos (PDF/XLS) → ERP Fire Sistemas"
+requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.0",
     "fastapi>=0.100",
@@ -15,6 +15,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "loguru>=0.7",
     "requests>=2.33.0",
+    "firebird-driver>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -25,8 +26,11 @@ dev = [
     "pip-audit>=2.7",
 ]
 
+[tool.setuptools.packages.find]
+include = ["app*"]
+
 [tool.ruff]
-target-version = "py39"
+target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]

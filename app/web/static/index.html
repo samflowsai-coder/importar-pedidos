@@ -3,34 +3,40 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Importar Pedidos</title>
+  <title>Portal de Pedidos</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    /* ── Tokens: light first ── */
     :root {
-      --bg:             #F4F4F5;
-      --surface:        #FFFFFF;
-      --surface-hover:  #F9F9FA;
+      --bg:             #FFFFFF;
+      --surface:        #FAFAFA;
+      --surface-hover:  #F4F4F5;
       --border:         #E4E4E7;
-      --border-subtle:  #EFEFEF;
-      --text:           #18181B;
+      --border-subtle:  #EFEFF1;
+      --border-hover:   #D4D4D8;
+      --text:           #09090B;
       --text-secondary: #52525B;
-      --text-muted:     #A1A1AA;
+      --text-muted:     #71717A;
       --accent:         #6366F1;
       --accent-hover:   #4F46E5;
       --accent-bg:      rgba(99,102,241,.08);
       --success:        #16A34A;
       --success-bg:     rgba(22,163,74,.08);
-      --error:          #DC2626;
+      --error:           #DC2626;
       --error-bg:       rgba(220,38,38,.08);
       --warn:           #D97706;
       --warn-bg:        rgba(217,119,6,.08);
       --radius-sm:      6px;
       --radius:         8px;
       --radius-lg:      12px;
+      --header-bg:      rgba(255,255,255,.78);
+      --bar-bg:         rgba(255,255,255,.92);
+      --shadow-sm:      0 1px 2px rgba(0,0,0,.04), 0 1px 3px rgba(0,0,0,.06);
+      --shadow-md:      0 4px 10px rgba(0,0,0,.06), 0 2px 4px rgba(0,0,0,.04);
     }
 
     html, body {
@@ -48,12 +54,13 @@
       position: sticky; top: 0; z-index: 10;
       height: 52px;
       border-bottom: 1px solid var(--border-subtle);
-      background: rgba(244,244,245,.92);
+      background: var(--header-bg);
       backdrop-filter: blur(12px);
       display: flex; align-items: center; justify-content: space-between;
-      padding: 0 24px;
+      padding: 0 32px;
     }
     .header-left { display: flex; align-items: center; gap: 10px; }
+    .header-right { display: flex; align-items: center; gap: 8px; }
 
     .logo {
       width: 26px; height: 26px; border-radius: 6px;
@@ -69,6 +76,25 @@
       text-transform: uppercase;
     }
 
+    /* Firebird indicator */
+    .fb-indicator {
+      display: flex; align-items: center; gap: 5px;
+      padding: 3px 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      cursor: default; user-select: none;
+    }
+    .fb-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--text-muted); flex-shrink: 0;
+      transition: background 300ms, box-shadow 300ms;
+    }
+    .fb-dot.connected { background: var(--success); box-shadow: 0 0 5px var(--success); }
+    .fb-label {
+      font-size: 10px; font-weight: 700; letter-spacing: .06em;
+      color: var(--text-muted); text-transform: uppercase;
+    }
+
     .icon-btn {
       width: 32px; height: 32px;
       border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -77,12 +103,12 @@
       cursor: pointer; flex-shrink: 0;
       transition: background 120ms, color 120ms, border-color 120ms;
     }
-    .icon-btn:hover { background: var(--surface-hover); color: var(--text); border-color: #D1D1D6; }
+    .icon-btn:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-hover); }
     .icon-btn.danger:hover { background: var(--error-bg); color: var(--error); border-color: var(--error); }
 
     /* ── Layout ── */
-    .main { display: flex; justify-content: center; padding: 32px 20px 96px; }
-    .container { width: 100%; max-width: 720px; display: flex; flex-direction: column; gap: 0; }
+    .main { display: flex; justify-content: center; padding: 32px 32px 96px; }
+    .container { width: 100%; max-width: 960px; display: flex; flex-direction: column; }
 
     /* ── Tabs ── */
     .tabs {
@@ -107,6 +133,7 @@
       padding: 1px 6px; border-radius: 10px;
       background: var(--border); color: var(--text-muted);
       min-width: 18px; text-align: center;
+      font-variant-numeric: tabular-nums;
     }
     .tab-btn.active .tab-count { background: var(--accent-bg); color: var(--accent-hover); }
 
@@ -115,7 +142,7 @@
 
     /* ── Toolbar ── */
     .toolbar {
-      display: flex; align-items: center; gap: 8px;
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
       margin-bottom: 16px;
     }
     .toolbar-path {
@@ -126,7 +153,7 @@
       background: var(--surface); border: 1px solid var(--border);
       border-radius: var(--radius-sm);
     }
-    .toolbar-path.missing { color: var(--warn); border-color: rgba(245,158,11,.3); background: var(--warn-bg); }
+    .toolbar-path.missing { color: var(--warn); border-color: rgba(251,191,36,.25); background: var(--warn-bg); }
 
     .btn {
       height: 36px; padding: 0 14px;
@@ -137,7 +164,7 @@
       white-space: nowrap;
       transition: background 120ms, color 120ms, border-color 120ms;
     }
-    .btn:hover { background: var(--surface-hover); color: var(--text); border-color: #D1D1D6; }
+    .btn:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-hover); }
     .btn:disabled { opacity: .35; pointer-events: none; }
 
     .btn-primary {
@@ -162,7 +189,10 @@
       font-size: 12px; color: var(--text-secondary);
       cursor: pointer; user-select: none;
     }
-    .select-count { flex: 1; font-size: 12px; color: var(--text-muted); }
+    .select-count {
+      flex: 1; font-size: 12px; color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
 
     /* ── Checkbox ── */
     input[type="checkbox"] {
@@ -183,7 +213,7 @@
       transition: background 100ms, border-color 100ms;
     }
     .file-row:hover { background: var(--surface-hover); }
-    .file-row.selected { border-color: rgba(99,102,241,.4); background: rgba(99,102,241,.05); }
+    .file-row.selected { border-color: rgba(99,102,241,.4); background: rgba(99,102,241,.06); }
 
     .ext-badge {
       width: 34px; height: 34px; border-radius: 6px;
@@ -191,21 +221,43 @@
       font-size: 9px; font-weight: 800; letter-spacing: .05em;
       flex-shrink: 0;
     }
-    .ext-badge.pdf { background: rgba(220,38,38,.10); color: #DC2626; }
+    .ext-badge.pdf  { background: var(--error-bg);   color: var(--error);   }
     .ext-badge.xls,
-    .ext-badge.xlsx { background: rgba(22,163,74,.10); color: #16A34A; }
+    .ext-badge.xlsx { background: var(--success-bg); color: var(--success); }
 
     .file-info { flex: 1; min-width: 0; }
     .file-name {
       font-size: 13px; font-weight: 500;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .file-meta { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+    .file-meta {
+      font-size: 11px; color: var(--text-muted); margin-top: 1px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ── Skeleton ── */
+    @keyframes shimmer {
+      0%   { background-position: -400px 0; }
+      100% { background-position: 400px 0; }
+    }
+    .skeleton-row {
+      height: 54px;
+      border-radius: var(--radius);
+      background: linear-gradient(
+        90deg,
+        var(--surface) 25%,
+        var(--surface-hover) 50%,
+        var(--surface) 75%
+      );
+      background-size: 400px 100%;
+      animation: shimmer 1.4s ease-in-out infinite;
+      margin-bottom: 2px;
+    }
 
     /* ── Import action bar ── */
     .import-bar {
       position: sticky; bottom: 0; z-index: 5;
-      background: rgba(244,244,245,.95); backdrop-filter: blur(12px);
+      background: var(--bar-bg); backdrop-filter: blur(12px);
       border-top: 1px solid var(--border);
       padding: 12px 0; margin-top: 16px;
       display: flex; align-items: center; gap: 10px;
@@ -230,8 +282,7 @@
     /* ── Empty state ── */
     .empty {
       display: flex; flex-direction: column; align-items: center; justify-content: center;
-      gap: 10px;
-      padding: 64px 24px;
+      gap: 10px; padding: 64px 24px;
       color: var(--text-muted); text-align: center;
     }
     .empty-icon {
@@ -251,8 +302,13 @@
       background: var(--surface); overflow: hidden;
       animation: fadeUp 200ms ease forwards;
     }
-    .result-card.ok   { border-color: rgba(22,163,74,.2); }
-    .result-card.err  { border-color: rgba(220,38,38,.2); }
+    .result-card.ok  { border-color: rgba(74,222,128,.18); }
+    .result-card.err { border-color: rgba(248,113,113,.18); }
+
+    @media (prefers-color-scheme: light) {
+      .result-card.ok  { border-color: rgba(22,163,74,.2); }
+      .result-card.err { border-color: rgba(220,38,38,.2); }
+    }
 
     .result-head {
       padding: 10px 14px;
@@ -265,9 +321,11 @@
     .status-dot.err { background: var(--error); }
 
     .result-source { font-size: 13px; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .result-meta   { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+    .result-meta   { font-size: 11px; color: var(--text-muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
-    .result-files  { padding: 4px 6px 6px; display: flex; flex-direction: column; gap: 1px; }
+    .result-rows { padding: 2px 6px 8px; display: flex; flex-direction: column; gap: 1px; }
+
+    /* XLSX download row */
     .result-file-link {
       display: flex; align-items: center; gap: 8px;
       padding: 7px 10px; border-radius: var(--radius-sm);
@@ -277,6 +335,27 @@
     .result-file-link:hover { background: var(--accent-bg); color: var(--accent-hover); }
     .result-file-link svg { flex-shrink: 0; color: var(--text-muted); }
     .result-file-link:hover svg { color: var(--accent-hover); }
+    .result-row-lbl {
+      font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+      width: 56px; flex-shrink: 0; color: var(--text-muted);
+    }
+
+    /* Firebird result row */
+    .result-fb-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px; border-radius: var(--radius-sm);
+      font-size: 12px;
+    }
+    .result-fb-row.ok   { color: var(--success); }
+    .result-fb-row.skip { color: var(--text-muted); }
+    .fb-skip-badge {
+      font-size: 11px; padding: 1px 6px; border-radius: 4px;
+      background: var(--warn-bg); color: var(--warn);
+    }
+    .fb-none-badge {
+      font-size: 11px; padding: 1px 6px; border-radius: 4px;
+      background: var(--border); color: var(--text-muted);
+    }
 
     .result-error-msg { padding: 8px 14px 12px; font-size: 12px; color: var(--error); }
 
@@ -300,7 +379,11 @@
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       margin-bottom: 2px;
     }
-    .log-sub { font-size: 11px; color: var(--text-muted); display: flex; gap: 10px; flex-wrap: wrap; }
+    .log-sub {
+      font-size: 11px; color: var(--text-muted);
+      display: flex; gap: 10px; flex-wrap: wrap;
+      font-variant-numeric: tabular-nums;
+    }
     .log-sub span { display: flex; align-items: center; gap: 4px; }
 
     .log-actions { display: flex; gap: 6px; flex-shrink: 0; margin-top: 1px; }
@@ -309,8 +392,7 @@
     .log-error-msg { padding: 6px 14px 10px; font-size: 12px; color: var(--error); }
 
     .reimport-result {
-      padding: 6px 14px 10px;
-      font-size: 12px;
+      padding: 6px 14px 10px; font-size: 12px;
       display: flex; align-items: center; gap: 6px;
     }
     .reimport-result.ok  { color: var(--success); }
@@ -330,7 +412,7 @@
     /* ── Modal ── */
     .overlay {
       position: fixed; inset: 0;
-      background: rgba(0,0,0,.35); backdrop-filter: blur(6px);
+      background: rgba(0,0,0,.5); backdrop-filter: blur(6px);
       display: flex; align-items: center; justify-content: center;
       z-index: 50; opacity: 0; pointer-events: none;
       transition: opacity 180ms;
@@ -352,7 +434,7 @@
       display: flex; align-items: center; justify-content: space-between;
       padding: 14px 18px; border-bottom: 1px solid var(--border); flex-shrink: 0;
     }
-    .modal-title { font-size: 14px; font-weight: 600; }
+    .modal-title { font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
 
     .modal-body { flex: 1; overflow-y: auto; padding: 6px; }
     .modal-body::-webkit-scrollbar { width: 5px; }
@@ -384,14 +466,204 @@
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
 
-    /* ── Config modal fields ── */
-    .cfg-body { padding: 20px; display: flex; flex-direction: column; gap: 20px; }
+    /* ── Config modal ── */
+    .cfg-body { padding: 0; display: flex; flex-direction: column; }
+
+    .cfg-section { padding: 20px 20px 16px; }
+    .cfg-section + .cfg-section { border-top: 1px solid var(--border-subtle); }
+
+    .cfg-section-title {
+      font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--text-muted); margin-bottom: 16px;
+    }
+
+    .cfg-field { margin-bottom: 16px; }
+    .cfg-field:last-child { margin-bottom: 0; }
     .cfg-field label {
       display: block; font-size: 11px; font-weight: 600;
-      letter-spacing: .06em; text-transform: uppercase;
+      letter-spacing: .04em; text-transform: uppercase;
       color: var(--text-muted); margin-bottom: 8px;
     }
     .cfg-field .field-row { display: flex; gap: 8px; }
+
+    /* Segmented control */
+    .seg-ctrl {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      border: 1px solid var(--border); border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .seg-btn {
+      padding: 7px 0;
+      background: transparent; border: none;
+      border-right: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 12px; font-weight: 500; font-family: inherit;
+      cursor: pointer; text-align: center;
+      transition: background 120ms, color 120ms;
+    }
+    .seg-btn:last-child { border-right: none; }
+    .seg-btn:hover { background: var(--surface-hover); color: var(--text); }
+    .seg-btn.active { background: var(--accent-bg); color: var(--accent-hover); font-weight: 600; }
+
+    /* Firebird status in config */
+    .fb-status-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      font-size: 12px; color: var(--text-muted);
+    }
+    .fb-status-row .fb-dot { flex-shrink: 0; }
+
+    .cfg-footer {
+      display: flex; gap: 8px; justify-content: flex-end;
+      padding: 14px 20px; border-top: 1px solid var(--border); flex-shrink: 0;
+    }
+
+    /* ── Preview modal ── */
+    .modal-wide {
+      width: min(880px, calc(100vw - 32px));
+      flex: 0 0 auto;
+      max-height: 86vh;
+      display: flex; flex-direction: column;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      transform: translateY(10px); transition: transform 180ms;
+      overflow: hidden;
+      box-shadow: var(--shadow-md);
+    }
+    .overlay.open .modal-wide { transform: translateY(0); }
+
+    .preview-header-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--surface);
+    }
+    .preview-field-label {
+      font-size: 10px; font-weight: 700; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+    .preview-field-value {
+      font-size: 13px; font-weight: 500; color: var(--text);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+
+    .preview-totals {
+      display: flex; gap: 28px;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--bg);
+    }
+    .preview-total-item {
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .preview-total-label {
+      font-size: 10px; font-weight: 700; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--text-muted);
+    }
+    .preview-total-value {
+      font-size: 16px; font-weight: 600; color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .preview-groups {
+      padding: 12px 20px 0;
+      display: flex; flex-wrap: wrap; gap: 6px;
+      border-bottom: 1px solid var(--border-subtle);
+      padding-bottom: 12px;
+    }
+    .preview-group-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px;
+      background: var(--accent-bg); color: var(--accent-hover);
+      border-radius: 20px;
+      font-size: 11px; font-weight: 600;
+    }
+    .preview-group-chip .chip-count {
+      opacity: .7; font-weight: 500;
+    }
+
+    .preview-body {
+      flex: 1; overflow: auto;
+      background: var(--bg);
+    }
+
+    .preview-table {
+      width: 100%; border-collapse: collapse;
+      font-size: 12px;
+    }
+    .preview-table thead th {
+      position: sticky; top: 0; z-index: 1;
+      background: var(--surface);
+      padding: 10px 12px;
+      font-size: 10px; font-weight: 700;
+      letter-spacing: .06em; text-transform: uppercase;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      text-align: left; white-space: nowrap;
+    }
+    .preview-table tbody td {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text);
+      vertical-align: top;
+    }
+    .preview-table tbody tr:hover td { background: var(--surface-hover); }
+    .preview-table td.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .preview-table td.mono {
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .preview-table .row-muted td { color: var(--text-muted); }
+    .preview-table .group-row td {
+      background: var(--surface);
+      font-size: 11px; font-weight: 700;
+      letter-spacing: .04em; text-transform: uppercase;
+      color: var(--text-secondary);
+      padding: 8px 12px;
+      border-top: 1px solid var(--border);
+    }
+
+    .preview-footer {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px 18px;
+      border-top: 1px solid var(--border); flex-shrink: 0;
+      background: var(--surface);
+    }
+    .preview-footer .footer-note {
+      flex: 1; font-size: 11px; color: var(--text-muted);
+    }
+
+    .preview-error-banner {
+      margin: 12px 20px 0;
+      padding: 10px 12px;
+      background: var(--error-bg); border: 1px solid var(--error);
+      border-radius: var(--radius-sm);
+      font-size: 12px; color: var(--error);
+    }
+
+    .preview-dropzone {
+      display: flex; flex-direction: column; align-items: center; gap: 8px;
+      padding: 32px 24px;
+      border: 1.5px dashed var(--border-hover);
+      border-radius: var(--radius);
+      background: var(--bg);
+      color: var(--text-muted); font-size: 13px;
+      cursor: pointer;
+      transition: background 120ms, border-color 120ms, color 120ms;
+    }
+    .preview-dropzone:hover,
+    .preview-dropzone.dragover {
+      background: var(--accent-bg); border-color: var(--accent);
+      color: var(--accent-hover);
+    }
 
     /* ── Utilities ── */
     .hidden { display: none !important; }
@@ -411,15 +683,21 @@
         <path d="M1.5 3.5h11M1.5 7h7M1.5 10.5h9" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
       </svg>
     </div>
-    <span class="app-name">Importar Pedidos</span>
+    <span class="app-name">Portal de Pedidos</span>
     <span class="badge">ERP</span>
   </div>
-  <button class="icon-btn" id="configBtn" title="Configurações">
-    <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-      <path d="M7.5 9.5a2 2 0 100-4 2 2 0 000 4z" stroke="currentColor" stroke-width="1.3"/>
-      <path d="M12.2 7.5c0-.26.02-.52.06-.77l1.27-.74a.5.5 0 00.17-.68l-1.2-2.08a.5.5 0 00-.65-.18l-1.27.74a5 5 0 00-1.34-.77V1.5a.5.5 0 00-.5-.5H6.26a.5.5 0 00-.5.5v1.02a5 5 0 00-1.34.77l-1.27-.74a.5.5 0 00-.65.18L1.3 5.31a.5.5 0 00.17.68l1.27.74A5.1 5.1 0 002.8 7.5c0 .26-.02.52-.06.77l-1.27.74a.5.5 0 00-.17.68l1.2 2.08c.13.22.4.3.65.18l1.27-.74c.42.3.87.55 1.34.77v1.02c0 .28.22.5.5.5h2.44c.28 0 .5-.22.5-.5v-1.02a5 5 0 001.34-.77l1.27.74a.5.5 0 00.65-.18l1.2-2.08a.5.5 0 00-.17-.68l-1.27-.74c.04-.25.06-.51.06-.77z" stroke="currentColor" stroke-width="1.3"/>
-    </svg>
-  </button>
+  <div class="header-right">
+    <div class="fb-indicator" id="fbIndicator" title="Firebird não configurado">
+      <span class="fb-dot" id="fbDot"></span>
+      <span class="fb-label">FB</span>
+    </div>
+    <button class="icon-btn" id="configBtn" title="Configurações">
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <path d="M7.5 9.5a2 2 0 100-4 2 2 0 000 4z" stroke="currentColor" stroke-width="1.3"/>
+        <path d="M12.2 7.5c0-.26.02-.52.06-.77l1.27-.74a.5.5 0 00.17-.68l-1.2-2.08a.5.5 0 00-.65-.18l-1.27.74a5 5 0 00-1.34-.77V1.5a.5.5 0 00-.5-.5H6.26a.5.5 0 00-.5.5v1.02a5 5 0 00-1.34.77l-1.27-.74a.5.5 0 00-.65.18L1.3 5.31a.5.5 0 00.17.68l1.27.74A5.1 5.1 0 002.8 7.5c0 .26-.02.52-.06.77l-1.27.74a.5.5 0 00-.17.68l1.2 2.08c.13.22.4.3.65.18l1.27-.74c.42.3.87.55 1.34.77v1.02c0 .28.22.5.5.5h2.44c.28 0 .5-.22.5-.5v-1.02a5 5 0 001.34-.77l1.27.74a.5.5 0 00.65-.18l1.2-2.08a.5.5 0 00-.17-.68l-1.27-.74c.04-.25.06-.51.06-.77z" stroke="currentColor" stroke-width="1.3"/>
+      </svg>
+    </button>
+  </div>
 </header>
 
 <!-- ── Main ───────────────────────────────────────────────────────── -->
@@ -433,7 +711,7 @@
         <span class="tab-count" id="pendingCount">0</span>
       </button>
       <button class="tab-btn" data-tab="imported" onclick="switchTab('imported')">
-        Importados
+        Pedidos
         <span class="tab-count" id="importedCount">0</span>
       </button>
     </div>
@@ -442,6 +720,12 @@
     <div class="tab-panel active" id="tab-pending">
       <div class="toolbar">
         <div class="toolbar-path" id="watchDirLabel">—</div>
+        <button class="btn" id="previewBtn" onclick="openPreviewPicker()" title="Enviar um arquivo e revisar antes de importar">
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <path d="M6.5 1v8M6.5 1L3.5 4M6.5 1l3 3M1 11.5h11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Revisar pedido
+        </button>
         <button class="btn" id="refreshBtn" onclick="loadPending()">
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
             <path d="M11 6.5A4.5 4.5 0 112.5 4M2.5 1.5V4H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
@@ -449,45 +733,47 @@
           Atualizar
         </button>
       </div>
+      <input type="file" id="previewFileInput" accept=".pdf,.xls,.xlsx" style="display:none" onchange="handlePreviewFileInput(event)">
 
       <div id="pendingContent">
         <div class="empty" id="pendingEmpty">
           <div class="empty-icon">
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-              <path d="M10 4v8M10 4L7 7M10 4l3 3M3.5 14.5h13" stroke="#71717A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M10 4v8M10 4L7 7M10 4l3 3M3.5 14.5h13" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </div>
           <p class="empty-title">Nenhum pedido pendente</p>
           <p class="empty-sub" id="pendingEmptySub">Adicione arquivos PDF, XLS ou XLSX na pasta configurada.</p>
+          <button class="btn btn-sm hidden" id="emptyCfgBtn" onclick="document.getElementById('configBtn').click()">
+            Configurar pasta
+          </button>
         </div>
 
         <div id="pendingList" class="hidden">
-          <div class="select-bar">
-            <label>
-              <input type="checkbox" id="selectAll" onchange="toggleSelectAll()">
-              Selecionar todos
-            </label>
-            <span class="select-count" id="selectCount">0 selecionado(s)</span>
+          <div class="select-bar" style="padding:0 2px 8px;background:transparent;border:none">
+            <span class="select-count" style="color:var(--text-muted);font-size:11px">
+              Clique em um pedido para revisar antes de enviar ao Fire.
+            </span>
           </div>
           <div class="file-list" id="fileListEl"></div>
         </div>
       </div>
 
-      <div class="import-bar" id="importBar">
-        <button class="btn btn-primary" id="importBtn" disabled onclick="doImport()">
-          Importar selecionados
-        </button>
-      </div>
-
-      <div id="importResults" class="hidden">
-        <div class="result-list" id="importResultList"></div>
-      </div>
     </div>
 
     <!-- ── Tab: Importados ── -->
     <div class="tab-panel" id="tab-imported">
       <div class="toolbar">
-        <span style="flex:1;font-size:12px;color:var(--text-muted)">Histórico de importações</span>
+        <input class="input" id="logSearch" type="search"
+               placeholder="Buscar por cliente, CNPJ ou número do pedido…"
+               style="flex:1;max-width:360px;height:30px;font-size:12px"
+               oninput="onLogSearchInput()">
+        <div class="seg-ctrl" style="grid-template-columns:repeat(4,1fr);height:30px">
+          <button class="seg-btn active" data-portal-filter="" onclick="setPortalFilter('')" style="padding:0 10px;font-size:11px">Tudo</button>
+          <button class="seg-btn" data-portal-filter="parsed" onclick="setPortalFilter('parsed')" style="padding:0 10px;font-size:11px">Em revisão</button>
+          <button class="seg-btn" data-portal-filter="sent_to_fire" onclick="setPortalFilter('sent_to_fire')" style="padding:0 10px;font-size:11px">No Fire</button>
+          <button class="seg-btn" data-portal-filter="cancelled" onclick="setPortalFilter('cancelled')" style="padding:0 10px;font-size:11px">Cancelado</button>
+        </div>
         <button class="btn" onclick="loadImported()">
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
             <path d="M11 6.5A4.5 4.5 0 112.5 4M2.5 1.5V4H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
@@ -495,13 +781,26 @@
           Atualizar
         </button>
       </div>
+      <div class="toolbar" id="logMeta" style="padding:0 0 4px;border:none;min-height:14px;font-size:11px;color:var(--text-muted)"></div>
+
+      <!-- Batch action bar (appears when at least one 'parsed' order is selected) -->
+      <div id="batchBar" class="hidden" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--accent);background:var(--accent-bg);border-radius:var(--radius);margin-bottom:10px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer;margin-right:auto">
+          <input type="checkbox" id="batchSelectAll" onchange="toggleBatchSelectAll()">
+          <span id="batchSelectionCount">0 selecionado(s)</span>
+        </label>
+        <button class="btn btn-sm" onclick="clearBatchSelection()">Limpar</button>
+        <button class="btn btn-primary btn-sm" onclick="doBatchSendToFire()" id="batchSendBtn">
+          Cadastrar no Fire
+        </button>
+      </div>
 
       <div class="log-list" id="logList">
         <div class="empty">
           <div class="empty-icon">
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-              <rect x="3.5" y="3.5" width="13" height="13" rx="2" stroke="#71717A" stroke-width="1.5"/>
-              <path d="M7 10h6M7 7h3M7 13h4" stroke="#71717A" stroke-width="1.4" stroke-linecap="round"/>
+              <rect x="3.5" y="3.5" width="13" height="13" rx="2" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5"/>
+              <path d="M7 10h6M7 7h3M7 13h4" stroke="currentColor" stroke-opacity=".4" stroke-width="1.4" stroke-linecap="round"/>
             </svg>
           </div>
           <p class="empty-title">Nenhuma importação ainda</p>
@@ -510,6 +809,100 @@
       </div>
     </div>
 
+  </div>
+</div>
+
+<!-- ── Preview Modal ───────────────────────────────────────────────── -->
+<div class="overlay" id="previewOverlay">
+  <div class="modal-wide">
+    <div class="modal-header">
+      <span class="modal-title" id="previewTitle">Revisar pedido</span>
+      <button class="icon-btn" onclick="closePreviewModal()">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Loading/error states -->
+    <div id="previewLoading" class="empty" style="padding:60px 24px">
+      <div class="empty-icon">
+        <div class="spin-dark" style="width:18px;height:18px"></div>
+      </div>
+      <p class="empty-title" id="previewLoadingTitle">Analisando arquivo…</p>
+      <p class="empty-sub" id="previewLoadingSub">Isso pode levar alguns segundos.</p>
+    </div>
+
+    <div id="previewErrorBanner" class="preview-error-banner hidden"></div>
+
+    <!-- Content -->
+    <div id="previewContent" class="hidden" style="display:flex;flex-direction:column;min-height:0;flex:1">
+      <div class="preview-header-grid">
+        <div>
+          <div class="preview-field-label">Pedido</div>
+          <div class="preview-field-value" id="pvOrderNumber">—</div>
+        </div>
+        <div>
+          <div class="preview-field-label">Data</div>
+          <div class="preview-field-value" id="pvIssueDate">—</div>
+        </div>
+        <div>
+          <div class="preview-field-label">Cliente</div>
+          <div class="preview-field-value" id="pvCustomerName" title="">—</div>
+        </div>
+        <div>
+          <div class="preview-field-label">CNPJ</div>
+          <div class="preview-field-value" id="pvCustomerCnpj">—</div>
+        </div>
+      </div>
+
+      <div class="preview-totals">
+        <div class="preview-total-item">
+          <span class="preview-total-label">Itens</span>
+          <span class="preview-total-value" id="pvTotalItems">0</span>
+        </div>
+        <div class="preview-total-item">
+          <span class="preview-total-label">Quantidade</span>
+          <span class="preview-total-value" id="pvTotalQty">0</span>
+        </div>
+        <div class="preview-total-item">
+          <span class="preview-total-label">Valor total</span>
+          <span class="preview-total-value" id="pvTotalValue">R$ 0,00</span>
+        </div>
+        <div class="preview-total-item">
+          <span class="preview-total-label">Lojas</span>
+          <span class="preview-total-value" id="pvTotalGroups">0</span>
+        </div>
+      </div>
+
+      <div class="preview-groups hidden" id="pvGroups"></div>
+
+      <!-- Product check banner -->
+      <div id="pvCheckBanner" class="hidden" style="padding:10px 20px;border-bottom:1px solid var(--border-subtle);font-size:12px;display:flex;align-items:center;gap:12px;background:var(--surface)"></div>
+
+      <div class="preview-body">
+        <table class="preview-table">
+          <thead>
+            <tr>
+              <th style="width:28%">Descrição</th>
+              <th>Código</th>
+              <th>EAN</th>
+              <th style="text-align:right">Qtd</th>
+              <th style="text-align:right">Unit.</th>
+              <th style="text-align:right">Total</th>
+              <th>Entrega</th>
+              <th style="text-align:center;width:68px">Fire</th>
+            </tr>
+          </thead>
+          <tbody id="pvItemsBody"></tbody>
+        </table>
+      </div>
+
+      <div class="preview-footer" id="pvFooter">
+        <span class="footer-note" id="pvFooterNote">Clique em <strong>Importar para revisão</strong> para salvar no portal. A revisão fica na aba Pedidos até você cadastrar no Fire.</span>
+        <div id="pvFooterActions" style="display:flex;gap:8px"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -525,34 +918,60 @@
       </button>
     </div>
     <div class="cfg-body">
-      <div class="cfg-field">
-        <label>Pasta de entrada (watch folder)</label>
-        <div class="field-row">
-          <input class="input" id="cfgWatchDir" type="text" placeholder="Caminho da pasta…">
-          <button class="btn" onclick="openBrowse('watchDir')">
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-              <path d="M1 3.5a1 1 0 011-1h2.5l1.5 2H11a1 1 0 011 1V10a1 1 0 01-1 1H2a1 1 0 01-1-1V3.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-            </svg>
-            Selecionar
-          </button>
+
+      <!-- Pastas -->
+      <div class="cfg-section">
+        <div class="cfg-section-title">Pastas</div>
+        <div class="cfg-field">
+          <label>Entrada (watch folder)</label>
+          <div class="field-row">
+            <input class="input" id="cfgWatchDir" type="text" placeholder="Caminho da pasta…">
+            <button class="btn" onclick="openBrowse('watchDir')">
+              <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+                <path d="M1 3.5a1 1 0 011-1h2.5l1.5 2H11a1 1 0 011 1V10a1 1 0 01-1 1H2a1 1 0 01-1-1V3.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+              </svg>
+              Selecionar
+            </button>
+          </div>
+        </div>
+        <div class="cfg-field">
+          <label>Saída (XLS do ERP)</label>
+          <div class="field-row">
+            <input class="input" id="cfgOutputDir" type="text" placeholder="Caminho da pasta…">
+            <button class="btn" onclick="openBrowse('outputDir')">
+              <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+                <path d="M1 3.5a1 1 0 011-1h2.5l1.5 2H11a1 1 0 011 1V10a1 1 0 01-1 1H2a1 1 0 01-1-1V3.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+              </svg>
+              Selecionar
+            </button>
+          </div>
         </div>
       </div>
-      <div class="cfg-field">
-        <label>Pasta de saída (XLS do ERP)</label>
-        <div class="field-row">
-          <input class="input" id="cfgOutputDir" type="text" placeholder="Caminho da pasta…">
-          <button class="btn" onclick="openBrowse('outputDir')">
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-              <path d="M1 3.5a1 1 0 011-1h2.5l1.5 2H11a1 1 0 011 1V10a1 1 0 01-1 1H2a1 1 0 01-1-1V3.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-            </svg>
-            Selecionar
-          </button>
+
+      <!-- Exportação -->
+      <div class="cfg-section">
+        <div class="cfg-section-title">Exportação</div>
+        <div class="cfg-field">
+          <label>Modo</label>
+          <div class="seg-ctrl">
+            <button class="seg-btn active" data-mode="xlsx" onclick="setExportMode('xlsx')">XLSX</button>
+            <button class="seg-btn" data-mode="db" onclick="setExportMode('db')">Banco DB</button>
+            <button class="seg-btn" data-mode="both" onclick="setExportMode('both')">Ambos</button>
+          </div>
+        </div>
+        <div class="cfg-field">
+          <label>Firebird</label>
+          <div class="fb-status-row">
+            <span class="fb-dot" id="cfgFbDot"></span>
+            <span id="cfgFbText">Verificando…</span>
+          </div>
         </div>
       </div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;border-top:1px solid var(--border);padding-top:16px">
-        <button class="btn" onclick="closeCfgModal()">Cancelar</button>
-        <button class="btn btn-primary" onclick="saveConfig()">Salvar configurações</button>
-      </div>
+
+    </div>
+    <div class="cfg-footer">
+      <button class="btn" onclick="closeCfgModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveConfig()">Salvar configurações</button>
     </div>
   </div>
 </div>
@@ -582,11 +1001,11 @@
 
 <script>
 /* ── State ── */
-let cfg = { watchDir: '', outputDir: '' };
+let cfg = { watchDir: '', outputDir: '', exportMode: 'xlsx', firebirdConfigured: false };
 let pendingFiles = [];
-let selected = new Set();
 let browseTarget = 'watchDir';
 let browseCurrentPath = null;
+let currentExportMode = 'xlsx';
 
 /* ── Init ── */
 async function init() {
@@ -602,7 +1021,37 @@ async function loadConfig() {
     document.getElementById('cfgWatchDir').value = cfg.watchDir || '';
     document.getElementById('cfgOutputDir').value = cfg.outputDir || '';
     document.getElementById('watchDirLabel').textContent = cfg.watchDir || 'Pasta não configurada';
+    currentExportMode = cfg.exportMode || 'xlsx';
+    updateFbIndicator(cfg.firebirdConfigured);
   } catch (_) {}
+}
+
+function updateFbIndicator(configured) {
+  const dot    = document.getElementById('fbDot');
+  const ind    = document.getElementById('fbIndicator');
+  const cfgDot = document.getElementById('cfgFbDot');
+  const cfgTxt = document.getElementById('cfgFbText');
+
+  if (configured) {
+    dot.classList.add('connected');
+    ind.title = 'Firebird conectado';
+    cfgDot.classList.add('connected');
+    cfgTxt.textContent = 'Configurado via FB_DATABASE';
+    cfgTxt.style.color = 'var(--success)';
+  } else {
+    dot.classList.remove('connected');
+    ind.title = 'Firebird não configurado';
+    cfgDot.classList.remove('connected');
+    cfgTxt.textContent = 'Não configurado — defina FB_DATABASE no ambiente';
+    cfgTxt.style.color = 'var(--text-muted)';
+  }
+}
+
+function setExportMode(mode) {
+  currentExportMode = mode;
+  document.querySelectorAll('.seg-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
 }
 
 /* ── Tabs ── */
@@ -617,14 +1066,14 @@ async function loadPending() {
   const btn = document.getElementById('refreshBtn');
   btn.innerHTML = '<div class="spin-dark"></div> Atualizando…';
   btn.disabled = true;
+  showSkeleton();
   try {
     const data = await api('/api/pending');
     pendingFiles = data.files || [];
-    selected = new Set();
     renderPending(data);
     document.getElementById('pendingCount').textContent = pendingFiles.length;
   } catch (e) {
-    showPendingEmpty('Erro ao carregar: ' + e.message);
+    showPendingEmpty('Erro ao carregar: ' + e.message, false);
   } finally {
     btn.innerHTML = `
       <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
@@ -632,6 +1081,13 @@ async function loadPending() {
       </svg> Atualizar`;
     btn.disabled = false;
   }
+}
+
+function showSkeleton() {
+  document.getElementById('pendingEmpty').classList.add('hidden');
+  document.getElementById('pendingList').classList.remove('hidden');
+  document.getElementById('fileListEl').innerHTML =
+    Array(4).fill('<div class="skeleton-row"></div>').join('');
 }
 
 function renderPending(data) {
@@ -643,71 +1099,45 @@ function renderPending(data) {
   const listEl  = document.getElementById('pendingList');
 
   if (!pendingFiles.length) {
+    const notConfigured = !data.watchDir;
     const sub = document.getElementById('pendingEmptySub');
-    if (!data.exists) {
-      sub.textContent = 'Pasta não encontrada. Configure em Configurações.';
+    const ctaBtn = document.getElementById('emptyCfgBtn');
+    if (notConfigured) {
+      sub.textContent = 'Configure uma pasta de entrada para começar.';
+      ctaBtn.classList.remove('hidden');
+    } else if (!data.exists) {
+      sub.textContent = 'Pasta não encontrada. Verifique o caminho em Configurações.';
+      ctaBtn.classList.remove('hidden');
     } else {
       sub.textContent = 'Adicione arquivos PDF, XLS ou XLSX na pasta configurada.';
+      ctaBtn.classList.add('hidden');
     }
     emptyEl.classList.remove('hidden');
     listEl.classList.add('hidden');
-    updateImportBar();
     return;
   }
 
   emptyEl.classList.add('hidden');
   listEl.classList.remove('hidden');
   renderFileRows();
-  updateSelectAll();
-  updateImportBar();
 }
 
 function renderFileRows() {
   const el = document.getElementById('fileListEl');
   el.innerHTML = pendingFiles.map(f => {
-    const isSelected = selected.has(f.name);
     const extCls = f.ext === 'pdf' ? 'pdf' : 'xls';
     return `
-      <div class="file-row ${isSelected ? 'selected' : ''}" onclick="toggleFile('${escJs(f.name)}')">
-        <input type="checkbox" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation();toggleFile('${escJs(f.name)}')">
+      <div class="file-row" onclick="previewPending('${escJs(f.name)}')" title="Revisar e enviar ao Fire">
         <div class="ext-badge ${extCls}">${f.ext.toUpperCase()}</div>
         <div class="file-info">
           <div class="file-name">${esc(f.name)}</div>
           <div class="file-meta">${fmtSize(f.size)} &middot; ${fmtDate(f.mtime)}</div>
         </div>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="opacity:.5;flex-shrink:0">
+          <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
       </div>`;
   }).join('');
-}
-
-function toggleFile(name) {
-  if (selected.has(name)) selected.delete(name);
-  else selected.add(name);
-  renderFileRows();
-  updateSelectAll();
-  updateImportBar();
-}
-
-function toggleSelectAll() {
-  const cb = document.getElementById('selectAll');
-  if (cb.checked) pendingFiles.forEach(f => selected.add(f.name));
-  else selected.clear();
-  renderFileRows();
-  updateImportBar();
-}
-
-function updateSelectAll() {
-  const cb = document.getElementById('selectAll');
-  cb.checked = pendingFiles.length > 0 && selected.size === pendingFiles.length;
-  cb.indeterminate = selected.size > 0 && selected.size < pendingFiles.length;
-  document.getElementById('selectCount').textContent = `${selected.size} selecionado(s)`;
-}
-
-function updateImportBar() {
-  const btn = document.getElementById('importBtn');
-  btn.disabled = selected.size === 0;
-  btn.textContent = selected.size > 0
-    ? `Importar ${selected.size} pedido${selected.size > 1 ? 's' : ''}`
-    : 'Importar selecionados';
 }
 
 function showPendingEmpty(msg) {
@@ -716,83 +1146,172 @@ function showPendingEmpty(msg) {
   document.getElementById('pendingList').classList.add('hidden');
 }
 
-/* ── Import ── */
-async function doImport() {
-  if (!selected.size) return;
-  const btn = document.getElementById('importBtn');
-  btn.disabled = true;
-  btn.innerHTML = '<div class="spin"></div> Importando…';
-
-  document.getElementById('importResults').classList.add('hidden');
-  document.getElementById('importResultList').innerHTML = '';
+/* ── Preview from watch folder ── */
+async function previewPending(filename) {
+  currentPreview = null;
+  showPreviewModal();
+  setPreviewLoading(true, 'Analisando arquivo…', esc(filename));
+  hidePreviewError();
 
   try {
-    const data = await api('/api/import', {
+    const data = await api('/api/preview-pending', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ files: Array.from(selected) }),
+      body: JSON.stringify({ filename }),
     });
-
-    renderImportResults(data);
-    await loadPending();
-    loadImported();
-  } catch (e) {
-    renderImportResults({ results: [], errors: [{ source: '—', error: e.message }] });
-  } finally {
-    btn.innerHTML = 'Importar selecionados';
-    updateImportBar();
+    currentPreview = data;
+    renderPreview(data);
+  } catch (err) {
+    setPreviewLoading(false);
+    showPreviewError(err.message || 'Falha ao analisar o arquivo');
+    document.getElementById('previewContent').classList.add('hidden');
   }
 }
 
-function renderImportResults(data) {
-  const wrap = document.getElementById('importResults');
-  const list = document.getElementById('importResultList');
-  wrap.classList.remove('hidden');
-  let html = '';
-
-  (data.results || []).forEach(r => {
-    const links = (r.files || []).map(f => `
-      <a class="result-file-link"
-         href="/api/download?path=${encodeURIComponent(f.path)}"
-         download="${esc(f.name)}">
-        <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-          <path d="M2 11h9M6.5 2v6M6.5 8L4.5 6M6.5 8l2-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        ${esc(f.name)}
-      </a>`).join('');
-
-    html += `
-      <div class="result-card ok">
-        <div class="result-head">
-          <div class="status-dot ok"></div>
-          <span class="result-source">${esc(r.source)}</span>
-          <span class="result-meta">Pedido ${esc(r.order)}</span>
-        </div>
-        <div class="result-files">${links}</div>
-      </div>`;
-  });
-
-  (data.errors || []).forEach(e => {
-    html += `
-      <div class="result-card err">
-        <div class="result-head">
-          <div class="status-dot err"></div>
-          <span class="result-source">${esc(e.source)}</span>
-        </div>
-        <div class="result-error-msg">${esc(e.error)}</div>
-      </div>`;
-  });
-
-  list.innerHTML = html || '<div class="result-card"><div class="result-error-msg">Nenhum resultado.</div></div>';
-}
 
 /* ── Imported ── */
+let logFilter = { portal: '', q: '' };
+let logSearchTimer = null;
+let lastLoadedEntries = [];
+let batchSelection = new Set(); // ids of parsed orders selected for batch send
+
+function setPortalFilter(portal) {
+  logFilter.portal = portal;
+  document.querySelectorAll('[data-portal-filter]').forEach(b => {
+    b.classList.toggle('active', b.dataset.portalFilter === portal);
+  });
+  loadImported();
+}
+
+function onLogSearchInput() {
+  const v = document.getElementById('logSearch').value.trim();
+  logFilter.q = v;
+  clearTimeout(logSearchTimer);
+  logSearchTimer = setTimeout(loadImported, 180);
+}
+
 async function loadImported() {
   try {
-    const data = await api('/api/imported');
-    renderImported(data.entries || []);
-    document.getElementById('importedCount').textContent = (data.entries || []).length;
+    const params = new URLSearchParams({ limit: '200', offset: '0' });
+    if (logFilter.q) params.set('q', logFilter.q);
+    if (logFilter.portal) params.set('portal_status', logFilter.portal);
+    const data = await api('/api/imported?' + params.toString());
+    const entries = data.entries || [];
+    lastLoadedEntries = entries;
+    // drop selection ids that no longer exist in view
+    const visibleIds = new Set(entries.filter(e => (e.portal_status || '') === 'parsed').map(e => e.id));
+    batchSelection = new Set([...batchSelection].filter(id => visibleIds.has(id)));
+    renderImported(entries);
+    updateBatchBar();
+    const total = typeof data.total === 'number' ? data.total : entries.length;
+    document.getElementById('importedCount').textContent = total;
+    const meta = document.getElementById('logMeta');
+    if (meta) {
+      meta.textContent = entries.length === total
+        ? `${total} pedido(s)`
+        : `Mostrando ${entries.length} de ${total}`;
+    }
   } catch (_) {}
+}
+
+function parsedEntriesInView() {
+  return lastLoadedEntries.filter(e => (e.portal_status || '') === 'parsed');
+}
+
+function toggleBatch(id, checked) {
+  if (checked) batchSelection.add(id); else batchSelection.delete(id);
+  updateBatchBar();
+  // reflect on the checkbox state of select-all
+  const allIds = parsedEntriesInView().map(e => e.id);
+  const allChecked = allIds.length > 0 && allIds.every(i => batchSelection.has(i));
+  const someChecked = allIds.some(i => batchSelection.has(i));
+  const master = document.getElementById('batchSelectAll');
+  master.checked = allChecked;
+  master.indeterminate = !allChecked && someChecked;
+}
+
+function toggleBatchSelectAll() {
+  const checked = document.getElementById('batchSelectAll').checked;
+  const ids = parsedEntriesInView().map(e => e.id);
+  if (checked) ids.forEach(i => batchSelection.add(i));
+  else ids.forEach(i => batchSelection.delete(i));
+  // update each row checkbox
+  ids.forEach(i => {
+    const cb = document.getElementById('batch-cb-' + i);
+    if (cb) cb.checked = checked;
+  });
+  updateBatchBar();
+}
+
+function clearBatchSelection() {
+  batchSelection = new Set();
+  document.querySelectorAll('[id^="batch-cb-"]').forEach(cb => { cb.checked = false; });
+  document.getElementById('batchSelectAll').checked = false;
+  document.getElementById('batchSelectAll').indeterminate = false;
+  updateBatchBar();
+}
+
+function updateBatchBar() {
+  const bar = document.getElementById('batchBar');
+  const cnt = batchSelection.size;
+  if (cnt > 0) {
+    bar.classList.remove('hidden');
+    document.getElementById('batchSelectionCount').textContent = `${cnt} selecionado${cnt > 1 ? 's' : ''}`;
+    const btn = document.getElementById('batchSendBtn');
+    btn.disabled = false;
+    btn.textContent = `Cadastrar ${cnt} no Fire`;
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+
+async function doBatchSendToFire() {
+  const ids = [...batchSelection];
+  if (!ids.length) return;
+  const btn = document.getElementById('batchSendBtn');
+  btn.disabled = true;
+  const prev = btn.innerHTML;
+  btn.innerHTML = '<span class="spin"></span> Cadastrando…';
+  try {
+    const res = await api('/api/batch/send-to-fire', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    batchSelection = new Set();
+    // surface summary
+    const msg = res.failed
+      ? `${res.ok} cadastrado(s) no Fire, ${res.failed} com erro.`
+      : `${res.ok} pedido(s) cadastrado(s) no Fire.`;
+    alert(msg + (res.failed ? '\n\nDetalhes no console.' : ''));
+    if (res.failed) {
+      console.warn('Batch send-to-fire failures:', res.results.filter(r => !r.ok));
+    }
+    await loadImported();
+  } catch (err) {
+    alert('Falha ao cadastrar em lote: ' + (err.message || err));
+  } finally {
+    btn.innerHTML = prev;
+  }
+}
+
+function portalStatusLabel(s) {
+  return s === 'parsed' ? 'Em revisão'
+    : s === 'sent_to_fire' ? 'No Fire'
+    : s === 'cancelled' ? 'Cancelado'
+    : s || '—';
+}
+function portalStatusColor(s) {
+  return s === 'parsed' ? 'var(--warn)'
+    : s === 'sent_to_fire' ? 'var(--success)'
+    : s === 'cancelled' ? 'var(--text-muted)'
+    : 'var(--text-muted)';
+}
+function portalStatusBg(s) {
+  return s === 'parsed' ? 'var(--warn-bg)'
+    : s === 'sent_to_fire' ? 'var(--success-bg)'
+    : s === 'cancelled' ? 'var(--surface-hover)'
+    : 'var(--surface-hover)';
 }
 
 function renderImported(entries) {
@@ -802,8 +1321,8 @@ function renderImported(entries) {
       <div class="empty">
         <div class="empty-icon">
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <rect x="3.5" y="3.5" width="13" height="13" rx="2" stroke="#71717A" stroke-width="1.5"/>
-            <path d="M7 10h6M7 7h3M7 13h4" stroke="#71717A" stroke-width="1.4" stroke-linecap="round"/>
+            <rect x="3.5" y="3.5" width="13" height="13" rx="2" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5"/>
+            <path d="M7 10h6M7 7h3M7 13h4" stroke="currentColor" stroke-opacity=".4" stroke-width="1.4" stroke-linecap="round"/>
           </svg>
         </div>
         <p class="empty-title">Nenhuma importação ainda</p>
@@ -820,45 +1339,105 @@ function renderImported(entries) {
       e.customer ? esc(e.customer) : null,
     ].filter(Boolean).join(' &middot; ');
 
-    const links = isOk ? (e.output_files || []).map(f => `
-      <a class="result-file-link"
-         href="/api/download?path=${encodeURIComponent(f.path)}"
-         download="${esc(f.name)}">
-        <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-          <path d="M2 11h9M6.5 2v6M6.5 8L4.5 6M6.5 8l2-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        ${esc(f.name)}
-      </a>`).join('') : '';
+    const ps = e.portal_status || (e.fire_codigo != null ? 'sent_to_fire' : 'parsed');
+    const statusPill = `
+      <span class="preview-group-chip" style="background:${portalStatusBg(ps)};color:${portalStatusColor(ps)};font-size:10px;padding:2px 8px">
+        ${esc(portalStatusLabel(ps))}
+      </span>`;
+    const fireBadge = e.fire_codigo != null
+      ? `<span class="preview-group-chip" title="CAB_VENDAS.CODIGO no Fire" style="background:var(--success-bg);color:var(--success);font-size:10px;padding:2px 8px">Fire #${esc(e.fire_codigo)}</span>`
+      : '';
+
+    const checkSummary = e.check && e.check.summary
+      ? (e.check.summary.items_missing > 0
+          ? `<span style="color:var(--warn);font-weight:500">⚠ ${e.check.summary.items_missing} item(s) sem match no Fire</span>`
+          : `<span style="color:var(--success);font-weight:500">✓ ${e.check.summary.items_matched}/${e.check.summary.items_total} itens com match</span>`)
+      : '';
 
     const errorMsg = !isOk && e.error
       ? `<div class="log-error-msg">${esc(e.error)}</div>`
       : '';
 
+    const canBatch = ps === 'parsed';
+    const checkboxHtml = canBatch
+      ? `<input type="checkbox" id="batch-cb-${esc(e.id)}" ${batchSelection.has(e.id) ? 'checked' : ''}
+                 onclick="event.stopPropagation()"
+                 onchange="toggleBatch('${esc(e.id)}', this.checked)"
+                 style="margin-right:10px;flex-shrink:0;cursor:pointer">`
+      : '<span style="width:13px;margin-right:10px;flex-shrink:0"></span>';
+
     return `
-      <div class="log-card ${isOk ? 'ok' : 'err'}" id="log-${esc(e.id)}">
-        <div class="log-head">
-          <div class="log-info">
-            <div class="log-filename">${esc(e.source_filename)}</div>
+      <div class="log-card ${isOk ? 'ok' : 'err'}" id="log-${esc(e.id)}"
+           onclick="openImportDetail('${esc(e.id)}')" style="cursor:pointer">
+        <div class="log-head" style="display:flex;align-items:center">
+          ${checkboxHtml}
+          <div class="log-info" style="flex:1">
+            <div class="log-filename">${esc(e.source_filename)} ${statusPill} ${fireBadge}</div>
             <div class="log-sub">
               <span>${dt}</span>
               ${orderInfo ? `<span>${orderInfo}</span>` : ''}
+              ${checkSummary ? `<span>${checkSummary}</span>` : ''}
             </div>
           </div>
-          <div class="log-actions">
-            <button class="btn btn-sm" onclick="doReimport('${escJs(e.source_filename)}', '${esc(e.id)}')"
-                    id="reimport-${esc(e.id)}" title="Reimportar">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M10 6A4 4 0 112 4.5M2 2v2.5H4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-              Reimportar
-            </button>
-          </div>
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="opacity:.5;flex-shrink:0">
+            <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
         </div>
-        ${links ? `<div class="log-files">${links}</div>` : ''}
         ${errorMsg}
-        <div class="reimport-result hidden" id="reimport-result-${esc(e.id)}"></div>
       </div>`;
   }).join('');
+}
+
+async function openImportDetail(importId) {
+  currentPreview = null;
+  showPreviewModal();
+  setPreviewLoading(true, 'Carregando pedido…', '');
+  hidePreviewError();
+
+  try {
+    const data = await api('/api/imported/' + encodeURIComponent(importId) + '/preview');
+    currentPreview = data;
+    renderPreview(data);
+  } catch (err) {
+    setPreviewLoading(false);
+    showPreviewError(err.message || 'Falha ao carregar pedido');
+    document.getElementById('previewContent').classList.add('hidden');
+  }
+}
+
+async function sendToFire(importId) {
+  const btn = document.getElementById('pvCommitBtn');
+  btn.disabled = true;
+  const prev = btn.innerHTML;
+  btn.innerHTML = '<span class="spin"></span> Cadastrando…';
+  hidePreviewError();
+  try {
+    const res = await api('/api/imported/' + encodeURIComponent(importId) + '/send-to-fire', {
+      method: 'POST',
+    });
+    closePreviewModal();
+    await loadImported();
+    switchTab('imported');
+  } catch (err) {
+    btn.disabled = false;
+    btn.innerHTML = prev;
+    showPreviewError(err.message || 'Falha ao cadastrar no Fire');
+  }
+}
+
+async function cancelImport(importId) {
+  if (!confirm('Cancelar este pedido? Ele não será enviado ao Fire.')) return;
+  try {
+    await api('/api/imported/' + encodeURIComponent(importId) + '/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    closePreviewModal();
+    await loadImported();
+  } catch (err) {
+    showPreviewError(err.message || 'Falha ao cancelar');
+  }
 }
 
 async function doReimport(filename, entryId) {
@@ -885,7 +1464,7 @@ async function doReimport(filename, entryId) {
       <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
         <path d="M2 6.5l3 3 6-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
-      Reimportado com sucesso &middot; ${links}`;
+      Reimportado com sucesso ${links ? '&middot; ' + links : ''}`;
     resultEl.classList.remove('hidden');
 
     loadImported();
@@ -909,6 +1488,8 @@ async function doReimport(filename, entryId) {
 document.getElementById('configBtn').addEventListener('click', () => {
   document.getElementById('cfgWatchDir').value = cfg.watchDir || '';
   document.getElementById('cfgOutputDir').value = cfg.outputDir || '';
+  setExportMode(currentExportMode);
+  updateFbIndicator(cfg.firebirdConfigured);
   document.getElementById('cfgOverlay').classList.add('open');
 });
 
@@ -928,10 +1509,11 @@ async function saveConfig() {
     const data = await api('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ watchDir, outputDir }),
+      body: JSON.stringify({ watchDir, outputDir, exportMode: currentExportMode }),
     });
     cfg = data;
     document.getElementById('watchDirLabel').textContent = cfg.watchDir;
+    updateFbIndicator(cfg.firebirdConfigured);
     closeCfgModal();
     loadPending();
     loadImported();
@@ -1022,7 +1604,7 @@ function esc(s) {
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-function escJs(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+function escJs(s)   { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 function escPath(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 
 function fmtSize(b) {
@@ -1033,17 +1615,271 @@ function fmtSize(b) {
 
 function fmtDate(iso) {
   if (!iso) return '—';
-  const d = new Date(iso);
-  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
 function fmtDatetime(iso) {
   if (!iso) return '—';
-  const d = new Date(iso);
-  return d.toLocaleString('pt-BR', {
+  return new Date(iso).toLocaleString('pt-BR', {
     day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
   });
+}
+
+/* ── Preview → Commit ── */
+let currentPreview = null;
+
+function openPreviewPicker() {
+  const input = document.getElementById('previewFileInput');
+  input.value = '';
+  input.click();
+}
+
+function handlePreviewFileInput(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  runPreview(file);
+}
+
+async function runPreview(file) {
+  currentPreview = null;
+  showPreviewModal();
+  setPreviewLoading(true, 'Analisando arquivo…', 'Isso pode levar alguns segundos.');
+  hidePreviewError();
+
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch('/api/preview', { method: 'POST', body: form });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    currentPreview = data;
+    renderPreview(data);
+  } catch (err) {
+    setPreviewLoading(false);
+    showPreviewError(err.message || 'Falha ao analisar o arquivo');
+    document.getElementById('previewContent').classList.add('hidden');
+  }
+}
+
+function showPreviewModal() {
+  document.getElementById('previewOverlay').classList.add('open');
+  document.getElementById('previewContent').classList.add('hidden');
+  document.getElementById('previewLoading').classList.remove('hidden');
+}
+
+function closePreviewModal() {
+  document.getElementById('previewOverlay').classList.remove('open');
+  currentPreview = null;
+}
+
+function setPreviewLoading(on, title, sub) {
+  const el = document.getElementById('previewLoading');
+  if (on) {
+    if (title) document.getElementById('previewLoadingTitle').textContent = title;
+    if (sub) document.getElementById('previewLoadingSub').textContent = sub;
+    el.classList.remove('hidden');
+  } else {
+    el.classList.add('hidden');
+  }
+}
+
+function showPreviewError(msg) {
+  const b = document.getElementById('previewErrorBanner');
+  b.textContent = msg;
+  b.classList.remove('hidden');
+}
+
+function hidePreviewError() {
+  document.getElementById('previewErrorBanner').classList.add('hidden');
+}
+
+function fmtBRL(v) {
+  const n = Number(v || 0);
+  return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+function fmtQty(v) {
+  const n = Number(v || 0);
+  return Number.isInteger(n) ? n.toLocaleString('pt-BR') : n.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+}
+
+function renderPreview(data) {
+  setPreviewLoading(false);
+  hidePreviewError();
+  const content = document.getElementById('previewContent');
+  content.classList.remove('hidden');
+
+  const h = data.header || {};
+  document.getElementById('pvOrderNumber').textContent = h.order_number || '—';
+  document.getElementById('pvIssueDate').textContent = h.issue_date || '—';
+  const name = h.customer_name || '—';
+  const nameEl = document.getElementById('pvCustomerName');
+  nameEl.textContent = name;
+  nameEl.title = name;
+  document.getElementById('pvCustomerCnpj').textContent = h.customer_cnpj || '—';
+
+  const t = data.totals || {};
+  document.getElementById('pvTotalItems').textContent = fmtQty(t.items_count);
+  document.getElementById('pvTotalQty').textContent = fmtQty(t.total_qty);
+  document.getElementById('pvTotalValue').textContent = fmtBRL(t.total_value);
+  document.getElementById('pvTotalGroups').textContent = (data.groups || []).length || 1;
+
+  const groupsEl = document.getElementById('pvGroups');
+  const groups = data.groups || [];
+  if (groups.length > 1) {
+    groupsEl.classList.remove('hidden');
+    groupsEl.innerHTML = groups.map(g => `
+      <span class="preview-group-chip">
+        ${esc(g.label || 'Pedido')}
+        <span class="chip-count">${g.items_count}&nbsp;itens&nbsp;·&nbsp;${fmtBRL(g.total_value)}</span>
+      </span>
+    `).join('');
+  } else {
+    groupsEl.classList.add('hidden');
+    groupsEl.innerHTML = '';
+  }
+
+  // Match map by (ean || code) for rendering the Fire column
+  const check = data.check;
+  const matchByEan = new Map();
+  const matchByCode = new Map();
+  if (check && check.items) {
+    check.items.forEach(m => {
+      if (m.ean) matchByEan.set(m.ean, m);
+      if (m.product_code) matchByCode.set(m.product_code, m);
+    });
+  }
+
+  // Check banner
+  const banner = document.getElementById('pvCheckBanner');
+  if (!check) {
+    banner.classList.add('hidden');
+  } else if (!check.available) {
+    banner.classList.remove('hidden');
+    banner.innerHTML = `<span style="color:var(--text-muted)">⚪ Check contra o Fire indisponível (${esc(check.reason || 'FB não configurado')})</span>`;
+  } else {
+    banner.classList.remove('hidden');
+    const s = check.summary;
+    const client = check.client;
+    const clientBit = client.match
+      ? `<span style="color:var(--success)">✓ Cliente ${esc(client.razao_social || '')} (Fire #${esc(client.fire_id)})</span>`
+      : `<span style="color:var(--error)">✗ Cliente não encontrado no Fire (CNPJ ${esc(client.cnpj || '—')})</span>`;
+    const itemsBit = s.items_missing > 0
+      ? `<span style="color:var(--warn)">⚠ ${s.items_matched}/${s.items_total} itens com match &middot; ${s.items_missing} sem correspondência</span>`
+      : `<span style="color:var(--success)">✓ ${s.items_matched}/${s.items_total} itens com match no Fire</span>`;
+    banner.innerHTML = `${clientBit}<span style="color:var(--border-hover)">|</span>${itemsBit}`;
+  }
+
+  const tbody = document.getElementById('pvItemsBody');
+  const items = data.items || [];
+  if (!items.length) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:28px 14px;color:var(--text-muted)">Sem itens reconhecidos.</td></tr>`;
+  } else {
+    const byGroup = new Map();
+    items.forEach(it => {
+      let key = 'default', label = h.customer_name || 'Pedido';
+      if (it.delivery_cnpj && it.delivery_cnpj !== h.customer_cnpj) {
+        key = 'cnpj:' + it.delivery_cnpj;
+        label = it.delivery_name || it.delivery_cnpj;
+      } else if (it.delivery_name) {
+        key = 'name:' + it.delivery_name;
+        label = it.delivery_name;
+      }
+      if (!byGroup.has(key)) byGroup.set(key, { label, items: [] });
+      byGroup.get(key).items.push(it);
+    });
+
+    const rows = [];
+    const multi = byGroup.size > 1;
+    for (const { label, items: gitems } of byGroup.values()) {
+      if (multi) {
+        rows.push(`<tr class="group-row"><td colspan="8">${esc(label)}</td></tr>`);
+      }
+      for (const it of gitems) {
+        const deliv = [it.delivery_name, it.delivery_date].filter(Boolean).join(' · ');
+        const match = (it.ean && matchByEan.get(it.ean)) || (it.product_code && matchByCode.get(it.product_code));
+        let cell;
+        if (!check) cell = '<span style="color:var(--text-muted)">—</span>';
+        else if (!check.available) cell = '<span style="color:var(--text-muted)" title="check indisponível">—</span>';
+        else if (match && match.match) {
+          const title = `#${match.fire_product_id} · ${match.fire_description || ''} · via ${match.match_source}`;
+          cell = `<span style="color:var(--success);font-weight:600" title="${esc(title)}">✓</span>`;
+        } else {
+          cell = '<span style="color:var(--error);font-weight:600" title="sem match no Fire">✗</span>';
+        }
+        rows.push(`
+          <tr>
+            <td>${esc(it.description || '—')}</td>
+            <td class="mono">${esc(it.product_code || '—')}</td>
+            <td class="mono">${esc(it.ean || '—')}</td>
+            <td class="num">${fmtQty(it.quantity)}</td>
+            <td class="num">${it.unit_price != null ? fmtBRL(it.unit_price) : '—'}</td>
+            <td class="num">${it.total_price != null ? fmtBRL(it.total_price) : '—'}</td>
+            <td>${esc(deliv || '—')}</td>
+            <td style="text-align:center">${cell}</td>
+          </tr>`);
+      }
+    }
+    tbody.innerHTML = rows.join('');
+  }
+
+  // Contextual footer buttons based on portal_status
+  const ps = data.portal_status; // undefined for fresh preview
+  const actions = document.getElementById('pvFooterActions');
+  const note = document.getElementById('pvFooterNote');
+  if (!ps) {
+    // Fresh preview from file — save for review
+    note.innerHTML = 'Clique em <strong>Importar para revisão</strong>. O pedido não vai para o Fire ainda — você confere o match e envia depois.';
+    actions.innerHTML = `
+      <button class="btn" onclick="closePreviewModal()">Cancelar</button>
+      <button class="btn btn-primary" id="pvCommitBtn" onclick="commitPreview()" ${items.length ? '' : 'disabled'}>
+        Importar para revisão
+      </button>`;
+  } else if (ps === 'parsed') {
+    note.innerHTML = 'Pedido <strong>em revisão</strong>. Confira o match com o Fire e envie quando estiver OK.';
+    actions.innerHTML = `
+      <button class="btn" onclick="cancelImport('${esc(data.preview_id)}')" style="color:var(--error)">Cancelar pedido</button>
+      <button class="btn" onclick="closePreviewModal()">Fechar</button>
+      <button class="btn btn-primary" id="pvCommitBtn" onclick="sendToFire('${esc(data.preview_id)}')">
+        Cadastrar no Fire
+      </button>`;
+  } else if (ps === 'sent_to_fire') {
+    note.innerHTML = `Pedido <strong>cadastrado no Fire</strong>${data.fire_codigo ? ` (CAB_VENDAS.CODIGO = ${esc(data.fire_codigo)})` : ''}. Status deve ser validado diretamente no Fire.`;
+    actions.innerHTML = `<button class="btn btn-primary" onclick="closePreviewModal()">Fechar</button>`;
+  } else if (ps === 'cancelled') {
+    note.innerHTML = 'Pedido <strong>cancelado</strong>. Não foi enviado ao Fire.';
+    actions.innerHTML = `<button class="btn" onclick="closePreviewModal()">Fechar</button>`;
+  } else {
+    actions.innerHTML = `<button class="btn" onclick="closePreviewModal()">Fechar</button>`;
+  }
+}
+
+async function commitPreview() {
+  if (!currentPreview) return;
+  const btn = document.getElementById('pvCommitBtn');
+  btn.disabled = true;
+  const prev = btn.innerHTML;
+  btn.innerHTML = '<span class="spin"></span> Salvando…';
+  hidePreviewError();
+
+  try {
+    await api('/api/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preview_id: currentPreview.preview_id }),
+    });
+    closePreviewModal();
+    await Promise.all([loadPending(), loadImported()]);
+    setPortalFilter('parsed');
+    switchTab('imported');
+  } catch (err) {
+    btn.disabled = false;
+    btn.innerHTML = prev;
+    showPreviewError(err.message || 'Falha ao salvar o pedido');
+  }
 }
 
 init();

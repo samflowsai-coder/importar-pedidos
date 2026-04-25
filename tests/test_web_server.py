@@ -7,11 +7,23 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.persistence import db
 from app.web.server import app
 
 client = TestClient(app, raise_server_exceptions=False)
 
 SAMPLES = Path(__file__).parent.parent / "samples"
+
+
+@pytest.fixture(autouse=True)
+def isolated_sqlite(tmp_path_factory):
+    """Redirect app_state.db to a per-test tmp file so tests never touch prod DB."""
+    tmp = tmp_path_factory.mktemp("dbstate")
+    db.set_db_path(tmp / "app_state.db")
+    db.reset_init_cache()
+    yield
+    db.set_db_path(None)
+    db.reset_init_cache()
 
 
 # ── Basic smoke ──────────────────────────────────────────────────────────────
@@ -20,15 +32,17 @@ def test_index_returns_html():
     r = client.get("/")
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
-    assert "Importar Pedidos" in r.text
+    assert "Portal de Pedidos" in r.text
 
 
 def test_config_returns_default_output_dir():
     r = client.get("/api/config")
     assert r.status_code == 200
     data = r.json()
-    assert "defaultOutputDir" in data
-    assert "output" in data["defaultOutputDir"]
+    assert "outputDir" in data
+    assert "output" in data["outputDir"]
+    assert "exportMode" in data
+    assert data["exportMode"] in ("xlsx", "db", "both")
 
 
 # ── Security: download endpoint ──────────────────────────────────────────────
@@ -131,6 +145,397 @@ def test_process_riachuelo_splits_into_three(tmp_path):
     data = r.json()
     assert len(data["results"]) == 1
     assert len(data["results"][0]["files"]) == 3
+
+
+# ── Preview → Commit flow ────────────────────────────────────────────────────
+
+@pytest.mark.skipif(not SAMPLES.exists(), reason="samples/ directory not found")
+def test_preview_returns_structured_payload():
+    pdf = SAMPLES / "2600009562-2026-02-25.pdf"
+    if not pdf.exists():
+        pytest.skip("Sample PDF not available")
+
+    r = client.post(
+        "/api/preview",
+        files=[("file", (pdf.name, pdf.read_bytes(), "application/pdf"))],
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert "preview_id" in data
+    assert data["header"]["order_number"] == "2600009562"
+    assert isinstance(data["items"], list)
+    assert data["totals"]["items_count"] == len(data["items"])
+    assert "groups" in data
+
+
+def test_preview_rejects_disallowed_extension():
+    r = client.post(
+        "/api/preview",
+        files=[("file", ("malware.exe", b"MZ", "application/octet-stream"))],
+    )
+    assert r.status_code == 400
+
+
+def test_commit_rejects_unknown_preview_id():
+    r = client.post("/api/commit", json={"preview_id": "does-not-exist"})
+    assert r.status_code == 404
+
+
+@pytest.mark.skipif(not SAMPLES.exists(), reason="samples/ directory not found")
+def test_commit_consumes_preview_and_persists_log(tmp_path, monkeypatch):
+    from app import config as app_config
+    # Redirect config to tmp so we don't touch real log / output paths
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("EXPORT_MODE", "xlsx")
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {
+            "watch_dir": str(tmp_path),
+            "output_dir": str(tmp_path),
+            "export_mode": "xlsx",
+        },
+    )
+    monkeypatch.setattr(
+        app_config,
+        "imported_dir",
+        lambda _cfg: tmp_path,
+    )
+
+    pdf = SAMPLES / "2600009562-2026-02-25.pdf"
+    if not pdf.exists():
+        pytest.skip("Sample PDF not available")
+
+    r = client.post(
+        "/api/preview",
+        files=[("file", (pdf.name, pdf.read_bytes(), "application/pdf"))],
+    )
+    assert r.status_code == 200
+    preview_id = r.json()["preview_id"]
+
+    r2 = client.post("/api/commit", json={"preview_id": preview_id})
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["order"] == "2600009562"
+    assert r2.json()["portal_status"] == "parsed"
+
+    # Second commit with same id must be rejected
+    r3 = client.post("/api/commit", json={"preview_id": preview_id})
+    assert r3.status_code == 409
+
+    # Entry is persisted and queryable via /api/imported, with portal_status='parsed'
+    r4 = client.get("/api/imported?limit=10")
+    assert r4.status_code == 200
+    body = r4.json()
+    assert body["total"] >= 1
+    found = [e for e in body["entries"] if e["order_number"] == "2600009562"]
+    assert found
+    assert found[0]["portal_status"] == "parsed"
+    assert found[0]["fire_codigo"] is None
+
+
+@pytest.mark.skipif(not SAMPLES.exists(), reason="samples/ directory not found")
+def test_preview_pending_reads_from_watch_folder(tmp_path, monkeypatch):
+    from app import config as app_config
+
+    # Seed watch folder with a sample PDF
+    sample = SAMPLES / "2600009562-2026-02-25.pdf"
+    if not sample.exists():
+        pytest.skip("Sample PDF not available")
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    imp = tmp_path / "imported"
+    imp.mkdir()
+    seeded = watch / sample.name
+    seeded.write_bytes(sample.read_bytes())
+
+    monkeypatch.setattr(app_config, "load", lambda: {
+        "watch_dir": str(watch), "output_dir": str(tmp_path), "export_mode": "xlsx",
+    })
+    monkeypatch.setattr(app_config, "imported_dir", lambda _cfg: imp)
+
+    r = client.post("/api/preview-pending", json={"filename": sample.name})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["header"]["order_number"] == "2600009562"
+    preview_id = body["preview_id"]
+
+    r2 = client.post("/api/commit", json={"preview_id": preview_id, "outputDir": str(tmp_path)})
+    assert r2.status_code == 200, r2.text
+
+    # File must have been moved from watch to imported folder
+    assert not seeded.exists()
+    assert (imp / sample.name).exists()
+
+
+def test_preview_pending_rejects_missing_file(tmp_path, monkeypatch):
+    from app import config as app_config
+    monkeypatch.setattr(app_config, "load", lambda: {
+        "watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx",
+    })
+    r = client.post("/api/preview-pending", json={"filename": "nao-existe.pdf"})
+    assert r.status_code == 404
+
+
+def test_preview_pending_rejects_path_traversal(tmp_path, monkeypatch):
+    from app import config as app_config
+    monkeypatch.setattr(app_config, "load", lambda: {
+        "watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx",
+    })
+    # Attempt to escape the watch folder
+    r = client.post("/api/preview-pending", json={"filename": "../../../etc/passwd"})
+    assert r.status_code in (400, 404)  # either ext-reject or not-found after basename strip
+
+
+def test_cancel_parsed_order_marks_as_cancelled():
+    from app.persistence import repo
+    import uuid
+    from datetime import datetime
+    entry_id = str(uuid.uuid4())
+    repo.insert_import({
+        "id": entry_id,
+        "source_filename": "x.pdf",
+        "imported_at": datetime.now().isoformat(timespec="seconds"),
+        "order_number": "TEST-1",
+        "customer": "ACME",
+        "status": "success",
+        "portal_status": "parsed",
+        "snapshot": {"header": {"order_number": "TEST-1"}, "items": []},
+    })
+
+    r = client.post(f"/api/imported/{entry_id}/cancel", json={"reason": "duplicado"})
+    assert r.status_code == 200
+    assert r.json()["portal_status"] == "cancelled"
+
+    got = repo.get_import(entry_id)
+    assert got["portal_status"] == "cancelled"
+
+
+def test_cancel_sent_to_fire_rejected():
+    from app.persistence import repo
+    import uuid
+    from datetime import datetime
+    entry_id = str(uuid.uuid4())
+    repo.insert_import({
+        "id": entry_id,
+        "source_filename": "x.pdf",
+        "imported_at": datetime.now().isoformat(timespec="seconds"),
+        "order_number": "TEST-2",
+        "status": "success",
+        "portal_status": "sent_to_fire",
+        "fire_codigo": 999,
+        "snapshot": {"header": {"order_number": "TEST-2"}, "items": []},
+    })
+    r = client.post(f"/api/imported/{entry_id}/cancel", json={})
+    assert r.status_code == 409
+
+
+def test_send_to_fire_rejects_wrong_portal_status():
+    from app.persistence import repo
+    import uuid
+    from datetime import datetime
+    entry_id = str(uuid.uuid4())
+    repo.insert_import({
+        "id": entry_id,
+        "source_filename": "x.pdf",
+        "imported_at": datetime.now().isoformat(timespec="seconds"),
+        "order_number": "TEST-3",
+        "status": "success",
+        "portal_status": "cancelled",
+        "snapshot": {"header": {"order_number": "TEST-3"}, "items": []},
+    })
+    r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    assert r.status_code == 409
+
+
+def test_send_to_fire_missing_order_returns_404():
+    r = client.post("/api/imported/does-not-exist/send-to-fire")
+    assert r.status_code == 404
+
+
+def test_send_to_fire_inserts_when_success(monkeypatch):
+    """Mock FirebirdExporter to simulate a real Fire insert without the DB."""
+    from app.persistence import repo
+    from app.exporters import firebird_exporter as fb_mod
+    import uuid
+    from datetime import datetime
+
+    entry_id = str(uuid.uuid4())
+    repo.insert_import({
+        "id": entry_id,
+        "source_filename": "pedido.pdf",
+        "imported_at": datetime.now().isoformat(timespec="seconds"),
+        "order_number": "TEST-OK",
+        "customer": "ACME",
+        "status": "success",
+        "portal_status": "parsed",
+        "snapshot": {
+            "header": {"order_number": "TEST-OK", "customer_name": "ACME"},
+            "items": [{"description": "x", "quantity": 1.0, "ean": "1234"}],
+            "source_file": "",
+        },
+    })
+
+    def _fake_export(self, order):
+        return fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number,
+            items_inserted=1,
+            fire_codigo=4242,
+        )
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _fake_export)
+
+    # also force export_mode to 'db' to skip XLSX export path
+    from app import config as app_config
+    monkeypatch.setattr(app_config, "load", lambda: {
+        "watch_dir": ".", "output_dir": ".", "export_mode": "db",
+    })
+
+    r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    assert r.status_code == 200, r.text
+    assert r.json()["fire_codigo"] == 4242
+
+    got = repo.get_import(entry_id)
+    assert got["portal_status"] == "sent_to_fire"
+    assert got["fire_codigo"] == 4242
+
+
+def test_batch_send_to_fire_mixed_outcomes(monkeypatch):
+    """Batch endpoint tolerates partial failures: some parsed, one cancelled, one not-found."""
+    from app.persistence import repo
+    from app.exporters import firebird_exporter as fb_mod
+    from app import config as app_config
+    import uuid
+    from datetime import datetime
+
+    parsed_ids = []
+    for _ in range(2):
+        entry_id = str(uuid.uuid4())
+        repo.insert_import({
+            "id": entry_id,
+            "source_filename": "pedido.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": f"BATCH-{entry_id[:4]}",
+            "customer": "ACME",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {
+                "header": {"order_number": f"BATCH-{entry_id[:4]}", "customer_name": "ACME"},
+                "items": [{"description": "x", "quantity": 1.0}],
+                "source_file": "",
+            },
+        })
+        parsed_ids.append(entry_id)
+
+    cancelled_id = str(uuid.uuid4())
+    repo.insert_import({
+        "id": cancelled_id,
+        "source_filename": "x.pdf",
+        "imported_at": datetime.now().isoformat(timespec="seconds"),
+        "order_number": "CANC-1",
+        "status": "success",
+        "portal_status": "cancelled",
+        "snapshot": {"header": {"order_number": "CANC-1"}, "items": []},
+    })
+
+    fire_seq = iter([4001, 4002])
+
+    def _fake_export(self, order):
+        return fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number,
+            items_inserted=1,
+            fire_codigo=next(fire_seq),
+        )
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _fake_export)
+    monkeypatch.setattr(app_config, "load", lambda: {
+        "watch_dir": ".", "output_dir": ".", "export_mode": "db",
+    })
+
+    r = client.post("/api/batch/send-to-fire", json={
+        "ids": parsed_ids + [cancelled_id, "unknown-id"],
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 4
+    assert body["ok"] == 2
+    assert body["failed"] == 2
+
+    by_id = {r["id"]: r for r in body["results"]}
+    for pid in parsed_ids:
+        assert by_id[pid]["ok"] is True
+        assert by_id[pid]["fire_codigo"] in (4001, 4002)
+    assert by_id[cancelled_id]["ok"] is False
+    assert by_id[cancelled_id]["reason"] == "wrong_status"
+    assert by_id["unknown-id"]["ok"] is False
+    assert by_id["unknown-id"]["reason"] == "not_found"
+
+    # Parsed rows are now sent_to_fire
+    for pid in parsed_ids:
+        got = repo.get_import(pid)
+        assert got["portal_status"] == "sent_to_fire"
+
+
+def test_batch_send_to_fire_rejects_empty_and_oversized():
+    r = client.post("/api/batch/send-to-fire", json={"ids": []})
+    assert r.status_code == 400
+
+    r2 = client.post("/api/batch/send-to-fire", json={"ids": ["x"] * 101})
+    assert r2.status_code == 400
+
+
+def test_rehydrate_preview_returns_snapshot():
+    from app.persistence import repo
+    import uuid
+    from datetime import datetime
+    entry_id = str(uuid.uuid4())
+    repo.insert_import({
+        "id": entry_id,
+        "source_filename": "x.pdf",
+        "imported_at": datetime.now().isoformat(timespec="seconds"),
+        "order_number": "REHYDR-1",
+        "customer": "ACME",
+        "status": "success",
+        "portal_status": "parsed",
+        "snapshot": {
+            "header": {"order_number": "REHYDR-1", "customer_name": "ACME"},
+            "items": [{"description": "item A", "quantity": 3.0}],
+            "source_file": "",
+        },
+        "check": {"available": False, "reason": "FB_DATABASE_NOT_SET", "client": {"match": False}, "items": [], "summary": {}},
+    })
+    r = client.get(f"/api/imported/{entry_id}/preview")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["preview_id"] == entry_id
+    assert body["portal_status"] == "parsed"
+    assert body["header"]["order_number"] == "REHYDR-1"
+    assert body["check"]["available"] is False
+
+
+def test_imported_filter_by_search_and_status():
+    from app.persistence import repo
+    # Seed a few rows directly
+    import uuid
+    from datetime import datetime
+    for customer, status in [("Riachuelo SA", "success"), ("Beira Rio", "success"), ("Erro LTDA", "error")]:
+        repo.insert_import({
+            "id": str(uuid.uuid4()),
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "X-1",
+            "customer": customer,
+            "status": status,
+            "output_files": [],
+            "error": None if status == "success" else "boom",
+        })
+
+    r = client.get("/api/imported?q=Riachuelo")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert body["entries"][0]["customer"] == "Riachuelo SA"
+
+    r2 = client.get("/api/imported?status=error")
+    assert r2.status_code == 200
+    assert r2.json()["total"] == 1
 
 
 @pytest.mark.skipif(not SAMPLES.exists(), reason="samples/ directory not found")
