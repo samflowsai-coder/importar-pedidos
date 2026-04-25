@@ -4,12 +4,14 @@
 
 | Ferramenta | Por quê |
 |---|---|
-| **Python 3.12** | Match statement nativo, type hints modernos, melhor performance |
+| **Python 3.11+** | `requires-python = ">=3.11"` no `pyproject.toml`. Match statement, `X \| Y` union syntax, type hints modernos. |
 | **pydantic v2** | Validação robusta dos modelos de dados, serialização eficiente |
 | **pdfplumber** | Melhor extração de texto e tabelas de PDF (vs pypdf2 ou camelot) |
 | **openpyxl** | Leitura de .xlsx e geração do XLS de saída para ERP |
 | **xlrd** | Suporte a .xls legado (arquivos antigos sem suporte no openpyxl) |
-| **anthropic SDK** | LLM como fallback inteligente quando parser genérico falha |
+| **FastAPI + uvicorn** | Interface web (preview → commit) em `app/web/server.py` |
+| **firebird-driver** | Conexão direta com o ERP Fire Sistemas (Firebird embedded ou TCP) |
+| **openai SDK + OpenRouter** | LLM fallback via OpenRouter (default: Gemini Flash 1.5; configurável por `OPENROUTER_MODEL`). Anthropic SDK direto foi descontinuado. |
 | **loguru** | Logging estruturado com rotação automática, zero config |
 | **python-dotenv** | Gestão de secrets via .env sem riscos de commit acidental |
 | **ruff** | Linting + formatação em um único tool, 10–100x mais rápido que flake8 |
@@ -31,12 +33,16 @@ input/*.pdf|.xls|.xlsx
         └──XLS──► XLSExtractor   (openpyxl/xlrd: linhas)
                 │
                 ▼
+        Cascata de 8 parsers      ← Mercado Eletrônico, Pedido Compras Revenda,
+                │                    SBF/Centauro, Beira Rio, Kolosh, Sam's Club,
+                │                    Kallan XLS, Desmembramento XLS
+                ▼
         GenericParser             ← regex + heurística de tabela
                 │
           (falhou?)
                 │
                 ▼
-        LLMFallbackParser         ← claude-haiku, structured output
+        LLMFallbackParser         ← OpenRouter (Gemini Flash 1.5 default), structured output
                 │
                 ▼
         OrderNormalizer           ← datas, uppercase, title case
@@ -45,7 +51,7 @@ input/*.pdf|.xls|.xlsx
         OrderValidator            ← obrigatórios, quantidades > 0
                 │
                 ▼
-        ERPExporter               ← output/pedidos_erp.xlsx
+        ERPExporter               ← output/*.xlsx (split por loja) e/ou Firebird
 ```
 
 ## Decisões Arquiteturais
@@ -66,7 +72,7 @@ pip install -e ".[dev]"
 
 # 2. Configurar ambiente
 cp .env.example .env
-# editar .env com ANTHROPIC_API_KEY
+# editar .env com OPENROUTER_API_KEY (e opcionais FB_DATABASE etc.)
 
 # 3. Colocar arquivos em input/
 cp meus_pedidos/*.pdf input/
@@ -94,9 +100,12 @@ app/
 ├── normalizers/    ← padroniza campos (datas, case, etc)
 ├── validators/     ← valida campos obrigatórios e valores
 ├── consolidators/  ← (Fase 2) merge de múltiplos pedidos
-├── exporters/      ← gera XLS final para ERP
+├── exporters/      ← gera XLS final + importa no Firebird
+├── erp/            ← Firebird/Fire Sistemas: connection, queries, mapper
+├── persistence/    ← log SQLite local (histórico de execuções)
+├── web/            ← FastAPI server + preview cache + static
 ├── models/         ← Order, OrderHeader, OrderItem, ERPRow
-├── llm/            ← integração Anthropic para fallback
+├── llm/            ← integração OpenRouter (OpenAI SDK) para fallback
 ├── utils/          ← logger compartilhado
 └── pipeline.py     ← orquestrador de um arquivo
 ```
@@ -105,8 +114,8 @@ app/
 
 | Operação | Custo |
 |---|---|
-| Parser genérico (regras) | $0 |
-| LLM fallback (Haiku) | ~$0.001/arquivo |
+| Parsers determinísticos (8 específicos + genérico) | $0 |
+| LLM fallback (OpenRouter / Gemini Flash 1.5) | ~$0.0005/arquivo |
 | Execução local | $0 |
 
 LLM só é chamado quando o parser falha. Em produção, estima-se uso do LLM em <20% dos arquivos.

@@ -22,3 +22,22 @@ output/
 logs/
 # Business documents (root-level only)
 PRD_Automacao_Pedidos.pdf
+
+# Firebird databases & backups (NEVER commit production data)
+*.fdb
+*.fbk
+*.gbk
+jaybird.jar
+backup Fire/
+bkp Fire/
+bkp fire/
+bkp Fire Novo/
+schema_report.txt
+
+# Local SQLite log
+*.sqlite
+*.sqlite3
+*.db
+
+# Plan files
+plans/
