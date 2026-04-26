@@ -102,23 +102,24 @@ input file
 
 ## Modelos de Dados
 
-**OrderItem** — campos relevantes: `description`, `product_code`, `ean`, `quantity`, `unit_price`, `total_price`, `obs`, `delivery_date`, `delivery_cnpj`, `delivery_name`
+**OrderItem** — campos relevantes: `description`, `product_code`, `ean`, `quantity`, `unit_price`, `total_price`, `obs`, `delivery_date`, `delivery_cnpj`, `delivery_name`, `delivery_ean`
 
-**ERPRow** — colunas do output: `PEDIDO`, `NOME_CLIENTE`, `CNPJ_CLIENTE`, `CODIGO_PRODUTO`, `EAN`, `DESCRICAO`, `QUANTIDADE`, `PRECO_UNITARIO`, `VALOR_TOTAL`, `OBS`, `DATA_ENTREGA`, `CNPJ_LOCAL_ENTREGA`
+**ERPRow** — colunas do output: `PEDIDO`, `NOME_CLIENTE`, `CNPJ_CLIENTE`, `CODIGO_PRODUTO`, `EAN`, `DESCRICAO`, `QUANTIDADE`, `PRECO_UNITARIO`, `VALOR_TOTAL`, `OBS`, `DATA_ENTREGA`, `CNPJ_LOCAL_ENTREGA`, `EAN_LOCAL_ENTREGA`
 
 ---
 
 ## Lógica de Desmembramento (split por loja)
 
-O `ERPExporter` agrupa itens por chave de entrega e gera um `.xlsx` por grupo:
+O `ERPExporter` agrupa itens por chave de entrega e gera um `.xlsx` por grupo. Prioridade da chave (`_delivery_key`):
 
-| Condição | Chave | Resultado |
-|----------|-------|-----------|
-| `delivery_cnpj` ≠ CNPJ do cliente | CNPJ da loja | Split por CNPJ (ex: Riachuelo) |
-| `delivery_cnpj` ausente + `delivery_name` preenchido | nome da loja | Split por nome (ex: NBA) |
-| Sem delivery | `""` | Arquivo único |
+| Prioridade | Condição | Chave | Resultado |
+|---|----------|-------|-----------|
+| 1 | `delivery_ean` presente | EAN da loja | Split por EAN (ex: Sam's GRADE) — único quando filial coincide com customer_cnpj |
+| 2 | `delivery_cnpj` ≠ CNPJ do cliente | CNPJ da loja | Split por CNPJ (ex: Riachuelo) |
+| 3 | `delivery_cnpj` ausente + `delivery_name` preenchido | nome da loja | Split por nome (ex: NBA) |
+| 4 | Sem delivery | `""` | Arquivo único |
 
-**Nomenclatura:** `{NOME_CLIENTE}_{CNPJ}_{PEDIDO}_{SUFIXO}.xlsx`
+**Nomenclatura:** `{NOME_CLIENTE}_{CNPJ}_{PEDIDO}_{SUFIXO}.xlsx`. Sufixos: `SAMS_LOJA_<filial>` (Sam's), nome sanitizado (NBA), índice numérico (default).
 
 ---
 

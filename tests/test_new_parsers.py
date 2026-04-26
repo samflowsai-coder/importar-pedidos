@@ -157,6 +157,90 @@ def test_sams_club_delivery_date():
     assert any("30/01/2026" in d for d in dates)
 
 
+# ── SamsClubParser GRADE (Cross Docking) ─────────────────────────────────────
+
+GRADE_FILE = "PEDIDO SAMS CLUB GRADE.pdf"
+GRADE_LOJA_EANS = {"7891737001698", "7891737012779", "7891737676568"}
+GRADE_LOJA_CNPJS = {
+    "00.063.960/0094-08",
+    "00.063.960/0570-46",
+    "00.063.960/0576-31",
+}
+
+
+def test_sams_grade_header():
+    order = _process(GRADE_FILE)
+    assert order.header.order_number == "06611415-0000"
+    assert order.header.customer_name is not None
+    assert "M.M" in order.header.customer_name
+
+
+def test_sams_grade_item_count():
+    """3 lojas decompondo 19 SKUs (uma loja não recebe 1 SKU) → 56 OrderItems."""
+    order = _process(GRADE_FILE)
+    assert len(order.items) == 56
+
+
+def test_sams_grade_delivery_ean_populated():
+    order = _process(GRADE_FILE)
+    eans = {i.delivery_ean for i in order.items}
+    assert eans == GRADE_LOJA_EANS
+
+
+def test_sams_grade_delivery_cnpj_populated():
+    order = _process(GRADE_FILE)
+    cnpjs = {i.delivery_cnpj for i in order.items}
+    assert cnpjs == GRADE_LOJA_CNPJS
+
+
+def test_sams_grade_qty_sum_matches_consolidated():
+    """Soma por SKU bate com a tabela superior (ex: 7898686876711 → 16+16+27=59)."""
+    order = _process(GRADE_FILE)
+    sums: dict[str, float] = {}
+    for it in order.items:
+        sums[it.ean] = sums.get(it.ean, 0.0) + it.quantity
+    assert sums["7898686876711"] == 59.0
+    assert sums["7898686876728"] == 153.0
+    assert sums["7898686876735"] == 234.0
+    # SKU com pack=36 → grade expressa em embalagens, multiplica por 36
+    assert sums["7898686879194"] == 72.0  # 1 + 1 embalagens × 36
+    assert sums["7898686879200"] == 144.0  # 1 + 2 + 1 embalagens × 36
+
+
+def test_sams_grade_unit_price_lookup():
+    """Preço unitário vem da tabela 'Itens do Pedido' via lookup pelo EAN do produto."""
+    order = _process(GRADE_FILE)
+    for it in order.items:
+        if it.ean == "7898686876711":
+            assert it.unit_price == 26.36
+        if it.ean == "7898686879194":
+            assert it.unit_price == 730.44
+
+
+def test_sams_grade_pack_size_multiplier():
+    """SKUs com pack > 1: cada item da grade deve refletir packs × pack_size."""
+    order = _process(GRADE_FILE)
+    pack36 = [i for i in order.items if i.ean == "7898686879194"]
+    # 2 lojas × 1 embalagem cada → 2 itens, todos com qty=36
+    assert len(pack36) == 2
+    assert all(i.quantity == 36.0 for i in pack36)
+
+
+def test_sams_grade_per_store_split():
+    """Cada loja recebe um arquivo XLSX próprio, identificado por SAMS_LOJA_<filial>."""
+    from app.exporters.erp_exporter import ERPExporter
+    import tempfile
+
+    order = _process(GRADE_FILE)
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = ERPExporter().export(order, tmp)
+        names = sorted(p.name for p in paths)
+        assert len(paths) == 3
+        assert any("SAMS_LOJA_0094_08" in n for n in names)
+        assert any("SAMS_LOJA_0570_46" in n for n in names)
+        assert any("SAMS_LOJA_0576_31" in n for n in names)
+
+
 # ── KallanXlsParser ──────────────────────────────────────────────────────────
 
 def test_kallan_item_count():

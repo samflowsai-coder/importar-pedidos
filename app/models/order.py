@@ -23,6 +23,7 @@ class OrderItem(BaseModel):
     delivery_date: Optional[str] = None
     delivery_cnpj: Optional[str] = None
     delivery_name: Optional[str] = None
+    delivery_ean: Optional[str] = None
 
 
 class Order(BaseModel):
@@ -44,3 +45,4 @@ class ERPRow(BaseModel):
     obs: Optional[str] = None
     data_entrega: Optional[str] = None
     cnpj_local_entrega: Optional[str] = None
+    ean_local_entrega: Optional[str] = None

@@ -23,10 +23,11 @@ HEADERS = [
     "OBS",
     "DATA_ENTREGA",
     "CNPJ_LOCAL_ENTREGA",
+    "EAN_LOCAL_ENTREGA",
 ]
 
 HEADER_COLOR = "1F4E79"
-COL_WIDTHS = [18, 40, 20, 18, 16, 50, 12, 16, 16, 35, 16, 22]
+COL_WIDTHS = [18, 40, 20, 18, 16, 50, 12, 16, 16, 35, 16, 22, 18]
 
 
 class ERPExporter:
@@ -40,14 +41,31 @@ class ERPExporter:
 
         paths = []
         for i, (key, items) in enumerate(sorted(groups.items()), 1):
-            # Name-based split (no CNPJ): use sanitized delivery_name as suffix
-            first = items[0] if items else None
-            if first and first.delivery_name and not first.delivery_cnpj:
-                suffix = re.sub(r"[^\w\s]", "_", first.delivery_name).strip("_")[:30]
-            else:
-                suffix = str(i)
+            suffix = self._suffix_for_group(items, fallback=str(i))
             paths.append(self._write_file(order, items, output_dir, suffix=suffix))
         return paths
+
+    def _suffix_for_group(self, items: list[OrderItem], fallback: str) -> str:
+        """Sufixo legível para o nome do arquivo de cada loja."""
+        first = items[0] if items else None
+        if not first:
+            return fallback
+
+        # Sam's Club: split por EAN do local de entrega → "SAMS_LOJA_<filial-cnpj>"
+        if first.delivery_ean:
+            cnpj_digits = re.sub(r"[^\d]", "", first.delivery_cnpj or "")
+            if len(cnpj_digits) >= 6:
+                # últimos 6 dígitos = "0094" + "08" → "0094_08"
+                tail = f"{cnpj_digits[-6:-2]}_{cnpj_digits[-2:]}"
+                return f"SAMS_LOJA_{tail}"
+            # sem CNPJ: usar últimos 4 do EAN
+            return f"SAMS_LOJA_{first.delivery_ean[-4:]}"
+
+        # Lojas só com nome (NBA): sanitizar delivery_name
+        if first.delivery_name and not first.delivery_cnpj:
+            return re.sub(r"[^\w\s]", "_", first.delivery_name).strip("_")[:30]
+
+        return fallback
 
     # ------------------------------------------------------------------
     # Grouping
@@ -75,7 +93,17 @@ class ERPExporter:
         return buckets
 
     def _delivery_key(self, item: OrderItem, customer_cnpj: Optional[str]) -> str:
-        """Return delivery CNPJ if distinct from customer; fall back to delivery_name; else empty."""
+        """Chave de agrupamento por destino.
+
+        Prioridade:
+        1. `delivery_ean` (Sam's GRADE) — cada loja tem EAN único, evita
+           ambiguidade quando a filial coincide com o CNPJ do customer.
+        2. `delivery_cnpj` distinto do customer (Riachuelo).
+        3. `delivery_name` (NBA, lojas identificadas só por nome).
+        4. vazio (sem split).
+        """
+        if item.delivery_ean:
+            return f"ean:{item.delivery_ean}"
         d = item.delivery_cnpj
         if d:
             d_digits = re.sub(r"[^\d]", "", d)
@@ -83,7 +111,6 @@ class ERPExporter:
             if d_digits and d_digits == c_digits:
                 return ""
             return d
-        # No CNPJ: use delivery_name as grouping key (NBA / name-only stores)
         return item.delivery_name or ""
 
     # ------------------------------------------------------------------
@@ -120,6 +147,7 @@ class ERPExporter:
             ws.cell(row=row_idx, column=10, value=row.obs)
             ws.cell(row=row_idx, column=11, value=row.data_entrega)
             ws.cell(row=row_idx, column=12, value=row.cnpj_local_entrega)
+            ws.cell(row=row_idx, column=13, value=row.ean_local_entrega)
 
         wb.save(path)
         logger.info(f"Exportado: {path.name} ({len(rows)} linha(s))")
@@ -139,7 +167,9 @@ class ERPExporter:
             cell.alignment = Alignment(horizontal="center")
             ws.column_dimensions[cell.column_letter].width = w
 
-    def _make_filename(self, order: Order, suffix: Optional[str], items: Optional[list] = None) -> str:
+    def _make_filename(
+        self, order: Order, suffix: Optional[str], items: Optional[list] = None
+    ) -> str:
         name = order.header.customer_name or "SEM_CLIENTE"
         cnpj = re.sub(r"[^\d]", "", order.header.customer_cnpj or "")
         # When no header CNPJ (Riachuelo), use first item's delivery CNPJ
@@ -178,18 +208,21 @@ class ERPExporter:
                 # Leave blank if same as customer or missing
                 delivery_cnpj_col = d if (d_digits and d_digits != customer_cnpj_digits) else None
 
-            rows.append(ERPRow(
-                pedido=order.header.order_number or "SEM_NUMERO",
-                nome_cliente=effective_customer_name,
-                cnpj_cliente=effective_customer_cnpj,
-                codigo_produto=item.product_code,
-                ean=item.ean,
-                descricao=item.description or "",
-                quantidade=item.quantity or 0.0,
-                preco_unitario=item.unit_price,
-                valor_total=item.total_price,
-                obs=item.obs,
-                data_entrega=item.delivery_date,
-                cnpj_local_entrega=delivery_cnpj_col,
-            ))
+            rows.append(
+                ERPRow(
+                    pedido=order.header.order_number or "SEM_NUMERO",
+                    nome_cliente=effective_customer_name,
+                    cnpj_cliente=effective_customer_cnpj,
+                    codigo_produto=item.product_code,
+                    ean=item.ean,
+                    descricao=item.description or "",
+                    quantidade=item.quantity or 0.0,
+                    preco_unitario=item.unit_price,
+                    valor_total=item.total_price,
+                    obs=item.obs,
+                    data_entrega=item.delivery_date,
+                    cnpj_local_entrega=delivery_cnpj_col,
+                    ean_local_entrega=item.delivery_ean,
+                )
+            )
         return rows
