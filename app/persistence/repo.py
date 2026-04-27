@@ -353,6 +353,43 @@ def set_client_override(
         )
 
 
+def list_pending_for_fire_poll(window_days: int = 7) -> list[dict]:
+    """Return imports eligible for Firebird status polling.
+
+    Criteria: sent_to_fire, no production started, fire_codigo present,
+    within the given time window. Ordered so least-recently-polled entries
+    come first (NULL treated as older than any timestamp).
+    """
+    with db.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, fire_codigo, trace_id, snapshot_json,
+                   fire_status_last_seen, fire_status_polled_at
+            FROM imports
+            WHERE portal_status = 'sent_to_fire'
+              AND production_status = 'none'
+              AND fire_codigo IS NOT NULL
+              AND imported_at >= datetime('now', '-' || ? || ' days')
+            ORDER BY fire_status_polled_at ASC
+            """,
+            (window_days,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_fire_poll_result(import_id: str, fire_status: str, polled_at: str) -> None:
+    """Stamp the latest Firebird status and poll timestamp. No state machine event."""
+    with db.connect() as conn:
+        conn.execute(
+            """
+            UPDATE imports
+            SET fire_status_last_seen = ?, fire_status_polled_at = ?
+            WHERE id = ?
+            """,
+            (fire_status, polled_at, import_id),
+        )
+
+
 def list_audit(import_id: str, limit: int = 200) -> list[dict]:
     limit = max(1, min(int(limit), _MAX_PAGE_SIZE))
     with db.connect() as conn:
