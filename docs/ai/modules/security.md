@@ -1,10 +1,12 @@
-# Módulo: security (HMAC, futuro: passwords/rate-limit)
+# Módulo: security (HMAC, passwords, rate-limit, secrets)
 
 ## Responsabilidade
-Primitivas de segurança usadas pelas integrações inbound e (Fase 4b) pela
-auth da UI. Hoje cobre apenas verificação HMAC de webhooks.
+Primitivas de segurança: verificação HMAC de webhooks, hash de senhas,
+rate-limit de login e abstração de secrets.
 
 ## Arquivos críticos
+
+### HMAC (webhooks)
 - `app/security/hmac_verify.py` — `verify_hmac_request(body, signature_header,
   timestamp_header, secrets, max_skew_seconds=300)`. Lança:
   - `SignatureRequiredError` (401) — header ausente ou nenhum secret configurado.
@@ -12,6 +14,24 @@ auth da UI. Hoje cobre apenas verificação HMAC de webhooks.
   - `ReplayedRequestError` (403) — timestamp fora da janela de 5 min.
   Aceita lista de secrets (suporte a rotação). `compute_signature` exposta
   para testes/CLIs gerarem assinaturas válidas.
+
+### Passwords
+- `app/security/passwords.py` — bcrypt rounds=12. `hash_password`, `verify_password`,
+  `hash_needs_rehash`. Rejeita <8 chars ou >72 bytes UTF-8. Rehash oportunístico
+  no login bem-sucedido se rounds < 12.
+
+### Rate-limit (token bucket)
+- `app/web/middleware/rate_limit.py` — `check_and_consume(key, capacity, refill_rate, cost=1.0) -> bool`.
+  Persiste estado em SQLite (`rate_limit_buckets`). Transação DEFERRED — safe para
+  requisições concorrentes sem lock externo.
+  - Env `RATE_LIMIT_ENABLED=false` bypassa completamente (dev/test).
+  - Aplicado como `Depends(_login_rate_limit)` em `POST /api/auth/login`:
+    capacity=10, refill_rate=10/900 (10 req/15 min/IP), 429 + `Retry-After: 900`.
+
+### Secrets
+- `app/security/secrets.py` — `get_secret(name, default=None)`. Lê de `os.environ`
+  hoje; troca de backend sem mudar chamadores (Protocol `SecretsBackend`).
+  `_set_backend(backend)` para testes.
 
 ## Wire format esperado (PLACEHOLDER — confirmar com Gestor)
 
@@ -53,19 +73,17 @@ Procedimento de rotação:
   byte-igualdade na assinatura.
 
 ## Testes
-`tests/test_hmac_verify.py` — 11 testes: aceita válida, rejeita inválida,
-header ausente, sem secret configurado, timestamp velho/futuro, garbage
-timestamp, rotação aceita previous, prefixo opcional `sha256=`,
-determinismo de `compute_signature`.
+- `tests/test_hmac_verify.py` — HMAC: válida, inválida, header ausente, sem secret,
+  timestamp velho/futuro, garbage, rotação, prefixo sha256=, determinismo.
+- `tests/test_passwords.py` — bcrypt: hash, verify, rehash detection, limites.
+- `tests/test_rate_limit.py` — token bucket: first request, esgotamento, isolamento
+  por IP, refill por tempo, bypass, 429 via TestClient.
+- `tests/test_secrets.py` — env var read, default, None, custom backend, Protocol.
 
-`.venv/bin/pytest tests/test_hmac_verify.py -v`
-
-## Roadmap
-
-- **Fase 4b** (próximo): `app/security/passwords.py` (bcrypt via passlib),
-  `app/web/auth.py` (cookie httpOnly + SameSite + sessions).
-- **Fase 6**: `app/security/rate_limit.py` (token bucket SQLite),
-  `app/security/secrets.py` (vault-pluggable).
+```bash
+.venv/bin/pytest tests/test_hmac_verify.py tests/test_passwords.py \
+  tests/test_rate_limit.py tests/test_secrets.py -v
+```
 
 ## Armadilhas
 

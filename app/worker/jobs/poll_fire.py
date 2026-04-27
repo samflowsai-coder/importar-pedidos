@@ -24,6 +24,7 @@ from app.erp.queries import GET_ORDER_STATUS_BY_CODE
 from app.integrations.gestor.client import GESTOR_TARGET_NAME
 from app.integrations.gestor.mapper import build_gestor_payload
 from app.models.order import Order
+from app.observability.metrics import poll_fire_duration_seconds
 from app.observability.trace import with_trace_id
 from app.persistence import outbox_repo, repo
 from app.persistence.outbox_repo import OutboxDuplicateError
@@ -40,6 +41,11 @@ def run_poll_fire() -> None:
     if not fire_conn.is_configured():
         return
 
+    with poll_fire_duration_seconds.time():
+        _do_poll(fire_conn)
+
+
+def _do_poll(fire_conn: FirebirdConnection) -> None:
     trigger = app_config.load().get("fire_trigger_status", "")
     pending = repo.list_pending_for_fire_poll(_WINDOW_DAYS)
     if not pending:

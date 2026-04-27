@@ -18,6 +18,9 @@
 | Integração Gestor de Produção (outbox, mapper, rota post-to-gestor) | `gestor` | `modules/gestor.md` |
 | Webhooks inbound, HMAC, replay protection, idempotency | `security` + `gestor` | `modules/security.md`, `modules/gestor.md` (seção webhooks) |
 | Login, sessão, cookie, proteger rota nova com auth, criar usuário via CLI | `auth` | `modules/auth.md` |
+| Rate-limit, token bucket, secrets abstraction, bcrypt, HMAC | `security` | `modules/security.md` |
+| Métricas Prometheus (/metrics), trace_id, observabilidade | `observability` | `modules/observability.md` |
+| Worker APScheduler, drain_outbox, poll_fire, retention, backup | `worker` | `modules/worker.md` |
 | LLM fallback (OpenRouter / Gemini / Haiku) | `llm` | `modules/llm.md` |
 | Geração de XLSX, split por loja, naming de arquivo | `exporters` | `modules/exporters.md` |
 | Orquestração (ordem dos parsers, fluxo geral) | `pipeline` | `modules/pipeline.md` |
@@ -39,6 +42,9 @@
 | security | `tests/test_hmac_verify.py` | `.venv/bin/pytest tests/test_hmac_verify.py -v` |
 | webhooks | `tests/test_webhooks.py`, `tests/test_idempotency_repo.py` | `.venv/bin/pytest tests/test_webhooks.py tests/test_idempotency_repo.py -v` |
 | auth | `tests/test_passwords.py`, `tests/test_users_repo.py`, `tests/test_sessions_repo.py`, `tests/test_auth_routes.py` | `.venv/bin/pytest tests/test_passwords.py tests/test_users_repo.py tests/test_sessions_repo.py tests/test_auth_routes.py -v` |
+| security (rate-limit, secrets) | `tests/test_rate_limit.py`, `tests/test_secrets.py`, `tests/test_hmac_verify.py` | `.venv/bin/pytest tests/test_rate_limit.py tests/test_secrets.py tests/test_hmac_verify.py -v` |
+| observability | `tests/test_metrics.py` | `.venv/bin/pytest tests/test_metrics.py -v` |
+| worker | `tests/test_worker_drain_outbox.py`, `tests/test_worker_poll_fire.py`, `tests/test_retention.py` | `.venv/bin/pytest tests/test_worker_drain_outbox.py tests/test_worker_poll_fire.py tests/test_retention.py -v` |
 | llm | `tests/test_smoke_llm_fallback.py`, `tests/test_outbound_client.py` | `.venv/bin/pytest tests/test_smoke_llm_fallback.py tests/test_outbound_client.py -v` |
 | web | `tests/test_web_server.py`, `tests/test_preview_cache.py` | `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py -v` |
 | Suite completa (antes de commit) | todos | `.venv/bin/pytest tests/ -v` |

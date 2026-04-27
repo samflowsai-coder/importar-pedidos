@@ -32,6 +32,7 @@ from app.integrations.gestor.webhook_schema import (
     GestorWebhookEvent,
     GestorWebhookEventType,
 )
+from app.observability.metrics import webhook_received_total
 from app.observability.trace import current_trace_id, with_trace_id
 from app.persistence import idempotency_repo, repo
 from app.security import (
@@ -124,6 +125,9 @@ async def gestor_webhook(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     except (InvalidSignatureError, ReplayedRequestError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    # Count after HMAC passes — unauthenticated noise is not a webhook.
+    webhook_received_total.labels(provider=GESTOR_PROVIDER).inc()
 
     # 2) Parse + validate
     try:

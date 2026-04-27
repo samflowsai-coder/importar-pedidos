@@ -26,6 +26,15 @@ def load() -> dict:
     # Fase 5: CAB_VENDAS.STATUS value that triggers automatic POST to Gestor.
     # Empty string = disabled (safe default until trigger status is confirmed).
     cfg["fire_trigger_status"] = os.environ.get("FIRE_TRIGGER_STATUS", "").strip()
+    # Fase 6: retention + backup settings.
+    # RETENTION_DAYS: lifecycle_events and audit_log rows older than this are purged.
+    # BACKUP_DIR: directory for daily VACUUM INTO backups; None = disabled.
+    try:
+        cfg["retention_days"] = int(os.environ.get("RETENTION_DAYS", "180"))
+    except ValueError:
+        cfg["retention_days"] = 180
+    raw_backup_dir = os.environ.get("BACKUP_DIR", "").strip()
+    cfg["backup_dir"] = raw_backup_dir if raw_backup_dir else None
 
     if _CONFIG_FILE.exists():
         try:

@@ -23,9 +23,11 @@ from app.persistence.db import init as db_init
 from app.utils.logger import logger
 from app.worker.jobs.drain_outbox import run_drain_outbox
 from app.worker.jobs.poll_fire import run_poll_fire
+from app.worker.jobs.retention import run_retention
 
 _DRAIN_INTERVAL_S = 15
 _POLL_INTERVAL_S = 60
+_RETENTION_HOUR = 3  # 03:00 local — low-traffic window
 
 
 def start() -> None:
@@ -57,6 +59,13 @@ def start() -> None:
         id="poll_fire",
         replace_existing=True,
     )
+    scheduler.add_job(
+        run_retention,
+        "cron",
+        hour=_RETENTION_HOUR,
+        id="retention",
+        replace_existing=True,
+    )
 
     def _shutdown(sig: Any, _frame: Any) -> None:
         logger.info("worker.shutdown signal={}", sig)
@@ -66,8 +75,9 @@ def start() -> None:
     signal.signal(signal.SIGINT, _shutdown)
 
     logger.info(
-        "worker.start drain_interval={}s poll_interval={}s",
+        "worker.start drain_interval={}s poll_interval={}s retention_hour={}",
         _DRAIN_INTERVAL_S,
         _POLL_INTERVAL_S,
+        _RETENTION_HOUR,
     )
     scheduler.start()

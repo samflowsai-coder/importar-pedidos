@@ -24,6 +24,7 @@ from app.integrations.gestor.client import (
     GestorClientError,
 )
 from app.integrations.gestor.schema import GestorOrderRequest
+from app.observability.metrics import update_outbox_metrics
 from app.observability.trace import with_trace_id
 from app.persistence import outbox_repo, repo
 from app.persistence.outbox_repo import OutboxRow
@@ -42,6 +43,7 @@ def run_drain_outbox() -> None:
         if row is None:
             break
         _process_row(row)
+    update_outbox_metrics()
 
 
 def _process_row(row: OutboxRow) -> None:

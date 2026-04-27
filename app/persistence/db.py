@@ -152,6 +152,17 @@ CREATE TABLE IF NOT EXISTS outbox (
     sent_at          TEXT,
     FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE
 );
+
+-- Token-bucket state for rate limiting (Fase 6).
+-- `tokens` is a float in [0, capacity]; `last_refill_at` is a unix
+-- timestamp (float seconds). Rows are written atomically inside a
+-- SQLite DEFERRED transaction — no external lock needed at our scale.
+-- Stale rows (inactive keys) are pruned by the retention job daily.
+CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+    key            TEXT PRIMARY KEY,
+    tokens         REAL NOT NULL,
+    last_refill_at REAL NOT NULL
+);
 """
 
 # Indexes applied AFTER migrations so new columns in older DBs already exist.

@@ -10,11 +10,14 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
 from app.observability.trace import current_trace_id, new_trace_id, with_trace_id
+from app.web.middleware.rate_limit import check_and_consume
 from app.persistence import invites_repo, sessions_repo, users_repo
 from app.security import (
     PasswordTooLongError,
@@ -240,7 +243,24 @@ def health() -> JSONResponse:
     return JSONResponse({"status": "ok", "service": "importar-pedidos"})
 
 
+@app.get("/metrics", include_in_schema=False)
+def metrics_endpoint() -> Response:
+    """Prometheus scrape endpoint. Restrict to internal network in production."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 # ── Auth (Fase 4b) ────────────────────────────────────────────────────────
+
+
+def _login_rate_limit(request: Request) -> None:
+    """FastAPI dependency: token-bucket per-IP rate limit on login attempts."""
+    ip = (request.client.host if request.client else None) or "unknown"
+    if not check_and_consume(key=f"login:{ip}", capacity=10, refill_rate=10 / 900):
+        raise HTTPException(
+            status_code=429,
+            detail="Muitas tentativas de login. Tente novamente em 15 minutos.",
+            headers={"Retry-After": "900"},
+        )
 
 
 class LoginRequest(BaseModel):
@@ -248,7 +268,7 @@ class LoginRequest(BaseModel):
     password: str
 
 
-@app.post("/api/auth/login")
+@app.post("/api/auth/login", dependencies=[Depends(_login_rate_limit)])
 def login(body: LoginRequest, request: Request) -> JSONResponse:
     """Authenticate by email + password. Sets HttpOnly session cookie.
 
