@@ -686,10 +686,11 @@ def test_override_cliente_happy_path(monkeypatch):
     assert got["cliente_override_codigo"] == 4242
     assert got["cliente_override_razao"] == "ACME COMERCIO LTDA"
     assert got["cliente_override_at"]
-    assert got["cliente_override_by"] is None  # v5: filled by auth
+    # TEST_AUTH_BYPASS substitui require_user pelo _TEST_USER (test@portal.local).
+    assert got["cliente_override_by"] == "test@portal.local"
 
 
-def test_override_cliente_appends_audit_with_user_placeholder(monkeypatch):
+def test_override_cliente_appends_audit_with_actor_email(monkeypatch):
     from app.persistence import repo
     entry_id = _seed_parsed_entry()
     _patch_fb_with_rows(monkeypatch, [(4242, "ACME LTDA", "11222333000144")])
@@ -703,7 +704,8 @@ def test_override_cliente_appends_audit_with_user_placeholder(monkeypatch):
     assert e["detail"]["cliente_codigo"] == 4242
     assert e["detail"]["cliente_razao"] == "ACME LTDA"
     assert e["detail"]["reason"] == "manual fix"
-    assert e["detail"]["user"] is None
+    assert e["detail"]["user_email"] == "test@portal.local"
+    assert e["detail"]["user_id"] == 0
     assert e["detail"]["previous_cnpj"] == "11.222.333/0001-44"
 
 

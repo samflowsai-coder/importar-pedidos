@@ -53,6 +53,6 @@ SQL e a integração com o exporter.
   opcional. Quando setado, pula `FIND_CLIENT_BY_CNPJ` e usa
   `_validate_client_id`. Falha com a mesma `FirebirdClientNotFoundError`
   do caminho clássico se o codigo for inválido.
-- Não há autenticação hoje; o `user` que aplicou o override é gravado em
-  `audit_log` e em `imports.cliente_override_by` como `None` — pronto
-  para v5 (OAuth Google).
+- O usuário que aplicou o override é gravado em `audit_log`
+  (`user_email`, `user_id`) e em `imports.cliente_override_by` (email),
+  vindo de `require_user` na rota `/api/imported/{id}/override-cliente`.

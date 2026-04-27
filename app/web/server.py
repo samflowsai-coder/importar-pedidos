@@ -1545,14 +1545,16 @@ def cancel_import(
 # When `FirebirdExporter` fails with skip_reason=CLIENT_NOT_FOUND, the user
 # can search CADASTRO and pick the right cliente manually. The selection is
 # stored as a sidecar on `imports` (não muta snapshot) and consumed by
-# `_send_one_to_fire` on the next attempt.
-#
-# v5: enforce auth — currently anonymous; `user` propagates as None and is
-# the single hook to fill once authentication lands.
+# `_send_one_to_fire` on the next attempt. Identificação do usuário que
+# aplicou o override fica em `audit_log` e em `imports.cliente_override_by`.
 
 
 @app.get("/api/clientes/search")
-def search_clientes(q: str, limit: int = 20) -> JSONResponse:
+def search_clientes(
+    q: str,
+    limit: int = 20,
+    _user: User = Depends(require_user),
+) -> JSONResponse:
     """Busca clientes ativos em CADASTRO por razão social ou CNPJ.
 
     `q`: ao menos 2 caracteres (após strip).
@@ -1608,12 +1610,13 @@ class ClienteOverrideRequest(BaseModel):
 def override_cliente(
     import_id: str,
     body: ClienteOverrideRequest,
-    _user: User = Depends(require_user),
+    user: User = Depends(require_user),
 ) -> JSONResponse:
     """Aplica seleção manual de cliente a um pedido em revisão.
 
     Não muda portal_status (override é metadado sidecar, não evento de SM).
-    Registra em `audit_log` com `user=None` — preparado para auth v5.
+    Registra em `audit_log` (`cliente_override_selected`) e em
+    `imports.cliente_override_by` o email do usuário autenticado.
     """
     from app.erp import queries
     from app.erp.connection import FirebirdConnection
@@ -1653,11 +1656,11 @@ def override_cliente(
         )
 
     razao = (row[1] or "").strip() if row[1] else ""
-    user: Optional[str] = None  # v5: derive from auth context
+    actor = user.email
 
     with with_trace_id(entry.get("trace_id")):
         repo.set_client_override(
-            import_id, codigo=int(row[0]), razao=razao, user=user,
+            import_id, codigo=int(row[0]), razao=razao, user=actor,
         )
         repo.append_audit(
             import_id,
@@ -1667,7 +1670,8 @@ def override_cliente(
                 "cliente_razao": razao,
                 "previous_cnpj": entry.get("customer_cnpj"),
                 "reason": body.reason,
-                "user": user,
+                "user_id": user.id,
+                "user_email": actor,
             },
         )
 

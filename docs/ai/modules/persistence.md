@@ -63,8 +63,9 @@ log humano de auditoria (`audit_log`) e log append-only do ciclo de vida
 - `imports.cliente_override_razao TEXT` — razão social denormalizada
   (evita re-query ao Fire só para mostrar na UI).
 - `imports.cliente_override_at TEXT` — ISO timestamp da seleção.
-- `imports.cliente_override_by TEXT` — usuário que aplicou. **NULL hoje**;
-  preenchido quando autenticação (v5) chegar.
+- `imports.cliente_override_by TEXT` — email do usuário autenticado que
+  aplicou (vem de `User.email` via `require_user`). NULL apenas em rows
+  legadas anteriores ao auth.
 - Mutação só via `repo.set_client_override(...)`; `insert_import` upsert
   NÃO clobbera essas colunas.
 - Override **não muda `portal_status`** — não há lifecycle event próprio;

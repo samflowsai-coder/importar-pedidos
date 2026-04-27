@@ -21,11 +21,12 @@ Interface humana de upload → preview → commit. Uvicorn em `:8000`.
 - `GET /api/fs?path=` → listagem auxiliar.
 - `GET /api/clientes/search?q=&limit=` → busca em `CADASTRO` (razão social ou
   CNPJ). Min 2 chars; clamp `limit` em [1, 50]. 503 se Fire não configurado.
-  Usado pelo picker manual de cliente (CLIENT_NOT_FOUND recovery).
+  Requer auth (`require_user`). Usado pelo picker manual de cliente
+  (CLIENT_NOT_FOUND recovery).
 - `POST /api/imported/{id}/override-cliente` body `{cliente_codigo, reason?}` →
   aplica seleção manual ao pedido (sidecar em `imports.cliente_override_*`).
-  Só permitido em `portal_status='parsed'`. Logs em `audit_log`
-  (`cliente_override_selected`) com `user=None` (preparado para auth v5).
+  Requer auth. Só permitido em `portal_status='parsed'`. Logs em `audit_log`
+  (`cliente_override_selected`) com `user_email`/`user_id` do autenticado.
 
 ## Segurança (não relaxar)
 - Whitelist de extensão: `.pdf`, `.xls`, `.xlsx`.
