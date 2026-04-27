@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portal de Pedidos — Entrar</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* Tokens shared with the portal (static/index.html) */
+    :root {
+      --bg:             #FFFFFF;
+      --surface:        #FAFAFA;
+      --surface-hover:  #F4F4F5;
+      --border:         #E4E4E7;
+      --border-subtle:  #EFEFF1;
+      --border-hover:   #D4D4D8;
+      --text:           #09090B;
+      --text-secondary: #52525B;
+      --text-muted:     #71717A;
+      --accent:         #6366F1;
+      --accent-hover:   #4F46E5;
+      --accent-bg:      rgba(99,102,241,.08);
+      --error:          #DC2626;
+      --error-bg:       rgba(220,38,38,.08);
+      --warn:           #D97706;
+      --warn-bg:        rgba(217,119,6,.08);
+      --success:        #16A34A;
+      --success-bg:     rgba(22,163,74,.08);
+      --radius-sm:      6px;
+      --radius:         8px;
+      --radius-lg:      12px;
+      --shadow-sm:      0 1px 2px rgba(0,0,0,.04), 0 1px 3px rgba(0,0,0,.06);
+      --shadow-md:      0 4px 10px rgba(0,0,0,.06), 0 2px 4px rgba(0,0,0,.04);
+    }
+
+    html, body {
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .frame {
+      width: 100%;
+      max-width: 400px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* Brand mark — same logo + name as the portal header */
+    .brand {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 32px;
+    }
+    .logo {
+      width: 32px; height: 32px; border-radius: 8px;
+      background: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .logo svg { width: 18px; height: 18px; color: #fff; }
+    .app-name {
+      font-size: 16px; font-weight: 600; letter-spacing: -.015em;
+    }
+
+    .card {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 32px;
+      box-shadow: var(--shadow-md);
+    }
+
+    .card-title {
+      font-size: 18px; font-weight: 600; letter-spacing: -.015em;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+    .card-subtitle {
+      font-size: 13px; color: var(--text-muted);
+      margin-bottom: 24px;
+    }
+
+    .field { margin-bottom: 16px; }
+    .field:last-of-type { margin-bottom: 8px; }
+    label {
+      display: block;
+      font-size: 12px; font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+    input[type="email"],
+    input[type="password"] {
+      width: 100%;
+      height: 38px;
+      padding: 0 12px;
+      font-size: 14px;
+      font-family: inherit;
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      outline: none;
+      transition: border-color 120ms, box-shadow 120ms;
+    }
+    input[type="email"]:hover,
+    input[type="password"]:hover {
+      border-color: var(--border-hover);
+    }
+    input[type="email"]:focus,
+    input[type="password"]:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-bg);
+    }
+
+    .btn-primary {
+      width: 100%;
+      height: 40px;
+      padding: 0 14px;
+      margin-top: 16px;
+      background: var(--accent);
+      color: #fff;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      font-size: 14px; font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 120ms;
+    }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-primary:disabled { opacity: .5; cursor: wait; }
+
+    .alert {
+      font-size: 13px;
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      margin-top: 16px;
+      display: none;
+    }
+    .alert.show { display: block; }
+    .alert.error {
+      color: var(--error);
+      background: var(--error-bg);
+      border: 1px solid rgba(220,38,38,.18);
+    }
+    .alert.success {
+      color: var(--success);
+      background: var(--success-bg);
+      border: 1px solid rgba(22,163,74,.18);
+    }
+
+    .bootstrap-banner {
+      display: none;
+      align-items: flex-start; gap: 10px;
+      padding: 12px 14px;
+      margin-bottom: 20px;
+      background: var(--warn-bg);
+      border: 1px solid rgba(217,119,6,.18);
+      border-radius: var(--radius);
+      color: var(--warn);
+      font-size: 12px; line-height: 1.45;
+    }
+    .bootstrap-banner.show { display: flex; }
+    .bootstrap-banner svg { flex-shrink: 0; margin-top: 1px; }
+    .bootstrap-banner strong { font-weight: 600; }
+
+    .footer {
+      margin-top: 24px;
+      font-size: 12px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+
+    /* small-screens */
+    @media (max-width: 480px) {
+      .card { padding: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 7h18l-2 11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L3 7z"/>
+          <path d="M8 7V5a4 4 0 0 1 8 0v2"/>
+        </svg>
+      </div>
+      <div class="app-name">Portal de Pedidos</div>
+    </div>
+
+    <form class="card" id="auth-form" novalidate>
+      <div id="bootstrap-banner" class="bootstrap-banner" role="status">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="8" x2="12" y2="12"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <div>
+          <strong>Primeira configuração.</strong>
+          Não há administradores cadastrados. Crie o primeiro acesso abaixo — depois, novos usuários só são criados pela área de administração.
+        </div>
+      </div>
+
+      <h1 class="card-title" id="card-title">Entrar</h1>
+      <p class="card-subtitle" id="card-subtitle">Use seu e-mail e senha para continuar.</p>
+
+      <div class="field">
+        <label for="email">E-mail</label>
+        <input type="email" id="email" name="email" required autocomplete="username" autofocus>
+      </div>
+      <div class="field">
+        <label for="password">Senha</label>
+        <input type="password" id="password" name="password" required autocomplete="current-password" minlength="8">
+      </div>
+
+      <button type="submit" class="btn-primary" id="submit-btn">Entrar</button>
+
+      <div id="alert" class="alert" role="alert"></div>
+    </form>
+
+    <p class="footer">Acesso restrito · use o e-mail cadastrado pela administração.</p>
+  </div>
+
+  <script>
+    const form    = document.getElementById('auth-form');
+    const banner  = document.getElementById('bootstrap-banner');
+    const title   = document.getElementById('card-title');
+    const subt    = document.getElementById('card-subtitle');
+    const submit  = document.getElementById('submit-btn');
+    const passEl  = document.getElementById('password');
+    const alertEl = document.getElementById('alert');
+
+    let mode = 'login';   // 'login' | 'bootstrap'
+
+    function showAlert(message, kind /* 'error' | 'success' */) {
+      alertEl.textContent = message;
+      alertEl.className = 'alert show ' + (kind || 'error');
+    }
+    function clearAlert() {
+      alertEl.className = 'alert';
+      alertEl.textContent = '';
+    }
+
+    async function detectMode() {
+      try {
+        const r = await fetch('/api/auth/bootstrap-status', { credentials: 'same-origin' });
+        if (!r.ok) return;
+        const data = await r.json();
+        if (data.required) {
+          mode = 'bootstrap';
+          banner.classList.add('show');
+          title.textContent = 'Criar primeiro administrador';
+          subt.textContent = 'Defina e-mail e senha. Mínimo 8 caracteres.';
+          submit.textContent = 'Criar conta e entrar';
+          passEl.setAttribute('autocomplete', 'new-password');
+        }
+      } catch { /* keep default login mode */ }
+    }
+
+    async function handleSubmit(e) {
+      e.preventDefault();
+      clearAlert();
+      submit.disabled = true;
+      const original = submit.textContent;
+      submit.textContent = mode === 'bootstrap' ? 'Criando...' : 'Entrando...';
+
+      const body = JSON.stringify({
+        email: document.getElementById('email').value.trim(),
+        password: passEl.value,
+      });
+      const url = mode === 'bootstrap' ? '/api/auth/bootstrap' : '/api/auth/login';
+
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          credentials: 'same-origin',
+        });
+        if (res.ok) {
+          window.location.href = '/';
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        showAlert(data.detail || 'Falha ao processar. Tente novamente.', 'error');
+      } catch {
+        showAlert('Erro de rede. Tente novamente.', 'error');
+      } finally {
+        submit.disabled = false;
+        submit.textContent = original;
+      }
+    }
+
+    form.addEventListener('submit', handleSubmit);
+    detectMode();
+  </script>
+</body>
+</html>

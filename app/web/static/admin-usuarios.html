@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portal de Pedidos — Usuários</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:             #FFFFFF;
+      --surface:        #FAFAFA;
+      --surface-hover:  #F4F4F5;
+      --border:         #E4E4E7;
+      --border-subtle:  #EFEFF1;
+      --border-hover:   #D4D4D8;
+      --text:           #09090B;
+      --text-secondary: #52525B;
+      --text-muted:     #71717A;
+      --accent:         #6366F1;
+      --accent-hover:   #4F46E5;
+      --accent-bg:      rgba(99,102,241,.08);
+      --error:          #DC2626;
+      --error-bg:       rgba(220,38,38,.08);
+      --success:        #16A34A;
+      --success-bg:     rgba(22,163,74,.08);
+      --warn:           #D97706;
+      --warn-bg:        rgba(217,119,6,.08);
+      --radius-sm:      6px;
+      --radius:         8px;
+      --radius-lg:      12px;
+      --header-bg:      rgba(255,255,255,.78);
+      --shadow-sm:      0 1px 2px rgba(0,0,0,.04), 0 1px 3px rgba(0,0,0,.06);
+      --shadow-md:      0 4px 10px rgba(0,0,0,.06), 0 2px 4px rgba(0,0,0,.04);
+    }
+
+    html, body {
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .header {
+      position: sticky; top: 0; z-index: 10;
+      height: 52px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--header-bg);
+      backdrop-filter: blur(12px);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 32px;
+    }
+    .header-left { display: flex; align-items: center; gap: 10px; }
+    .header-right { display: flex; align-items: center; gap: 8px; }
+    .logo {
+      width: 26px; height: 26px; border-radius: 6px;
+      background: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .logo svg { width: 14px; height: 14px; color: #fff; }
+    .app-name { font-size: 14px; font-weight: 600; letter-spacing: -.015em; }
+    .badge {
+      font-size: 10px; font-weight: 600; letter-spacing: .06em;
+      padding: 2px 7px; border-radius: 20px;
+      background: var(--accent-bg); color: var(--accent-hover);
+      text-transform: uppercase;
+    }
+    .user-pill {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 10px;
+      border: 1px solid var(--border); border-radius: 20px;
+      font-size: 12px; color: var(--text-secondary);
+    }
+    .icon-btn {
+      width: 32px; height: 32px;
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      background: transparent; color: var(--text-muted);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; flex-shrink: 0;
+      transition: background 120ms, color 120ms, border-color 120ms;
+    }
+    .icon-btn:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-hover); }
+
+    .main { display: flex; justify-content: center; padding: 32px 32px 96px; }
+    .container { width: 100%; max-width: 960px; }
+
+    .breadcrumb {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+    .breadcrumb a { color: var(--text-muted); text-decoration: none; transition: color 120ms; }
+    .breadcrumb a:hover { color: var(--text-secondary); }
+
+    .page-title { font-size: 22px; font-weight: 600; letter-spacing: -.015em; margin-bottom: 4px; }
+    .page-subtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 24px; }
+
+    /* Tabs */
+    .tabs {
+      display: flex; gap: 2px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 24px;
+    }
+    .tab-btn {
+      padding: 10px 16px;
+      background: transparent; border: none;
+      color: var(--text-muted); font-size: 13px; font-weight: 500;
+      font-family: inherit; cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      display: flex; align-items: center; gap: 7px;
+      transition: color 120ms;
+    }
+    .tab-btn:hover { color: var(--text-secondary); }
+    .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+    .tab-count {
+      font-size: 11px; font-weight: 600;
+      padding: 1px 6px; border-radius: 10px;
+      background: var(--border); color: var(--text-muted);
+      min-width: 18px; text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+    .tab-btn.active .tab-count { background: var(--accent-bg); color: var(--accent-hover); }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+    .toolbar .spacer { flex: 1; }
+
+    .btn {
+      height: 36px; padding: 0 14px;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--surface); color: var(--text-secondary);
+      font-size: 13px; font-weight: 500; font-family: inherit;
+      cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+      white-space: nowrap;
+      transition: background 120ms, color 120ms, border-color 120ms;
+    }
+    .btn:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-hover); }
+    .btn:disabled { opacity: .35; pointer-events: none; }
+    .btn-primary {
+      background: var(--accent); border-color: transparent; color: #fff;
+      font-weight: 600;
+    }
+    .btn-primary:hover { background: var(--accent-hover); border-color: transparent; color: #fff; }
+    .btn-sm { height: 30px; padding: 0 10px; font-size: 12px; }
+    .btn-danger { color: var(--error); border-color: var(--border); }
+    .btn-danger:hover { background: var(--error-bg); border-color: var(--error); color: var(--error); }
+
+    .table-wrap {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      background: var(--bg);
+    }
+    table { width: 100%; border-collapse: collapse; }
+    thead th {
+      text-align: left;
+      font-size: 11px; font-weight: 600;
+      letter-spacing: .04em;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      padding: 10px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    tbody td {
+      padding: 12px 16px;
+      font-size: 13px;
+      color: var(--text);
+      border-bottom: 1px solid var(--border-subtle);
+      vertical-align: middle;
+    }
+    tbody tr:last-child td { border-bottom: none; }
+
+    .role-pill {
+      display: inline-block;
+      font-size: 10px; font-weight: 600;
+      letter-spacing: .04em;
+      padding: 2px 8px;
+      border-radius: 20px;
+      text-transform: uppercase;
+    }
+    .role-admin    { background: var(--accent-bg); color: var(--accent-hover); }
+    .role-operator { background: var(--surface-hover); color: var(--text-secondary); }
+    .role-viewer   { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border-subtle); }
+
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11px; font-weight: 500;
+      padding: 2px 8px;
+      border-radius: 20px;
+    }
+    .status-active   { background: var(--success-bg); color: var(--success); }
+    .status-inactive { background: var(--surface-hover); color: var(--text-muted); }
+    .status-pending  { background: var(--warn-bg); color: var(--warn); }
+    .status-expired  { background: var(--error-bg); color: var(--error); }
+    .status-dot {
+      width: 5px; height: 5px; border-radius: 50%;
+      background: currentColor;
+    }
+    .row-self { background: var(--accent-bg) !important; }
+
+    .actions-cell { display: flex; gap: 6px; justify-content: flex-end; }
+
+    .empty {
+      padding: 48px 24px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    .muted { color: var(--text-muted); font-size: 12px; }
+    .mono  { font-family: ui-monospace, 'SF Mono', monospace; font-size: 12px; }
+
+    /* Modal */
+    .modal-backdrop {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(9, 9, 11, .5);
+      z-index: 100;
+      align-items: center; justify-content: center;
+      padding: 24px;
+    }
+    .modal-backdrop.show { display: flex; }
+    .modal {
+      width: 100%; max-width: 480px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-md);
+      padding: 24px;
+    }
+    .modal-title { font-size: 16px; font-weight: 600; letter-spacing: -.015em; margin-bottom: 4px; }
+    .modal-subtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 18px; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+    .field { margin-bottom: 14px; }
+    label {
+      display: block; font-size: 12px; font-weight: 500;
+      color: var(--text-secondary); margin-bottom: 6px;
+    }
+    input[type="email"],
+    input[type="password"],
+    input[type="text"],
+    select {
+      width: 100%; height: 38px;
+      padding: 0 12px;
+      font-size: 14px; font-family: inherit;
+      color: var(--text); background: var(--bg);
+      border: 1px solid var(--border); border-radius: var(--radius);
+      outline: none;
+      transition: border-color 120ms, box-shadow 120ms;
+    }
+    input:focus, select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-bg);
+    }
+
+    .alert { font-size: 13px; padding: 10px 12px; border-radius: var(--radius); margin-top: 14px; display: none; }
+    .alert.show { display: block; }
+    .alert.error { color: var(--error); background: var(--error-bg); border: 1px solid rgba(220,38,38,.18); }
+    .alert.success { color: var(--success); background: var(--success-bg); border: 1px solid rgba(22,163,74,.18); }
+
+    /* Invite link copy box */
+    .invite-link-box {
+      display: flex; align-items: stretch; gap: 0;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      overflow: hidden;
+      margin-top: 14px;
+    }
+    .invite-link-input {
+      flex: 1;
+      height: 38px; padding: 0 12px;
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 12px;
+      color: var(--text-secondary);
+      background: var(--surface);
+      border: none;
+    }
+    .invite-link-input:focus { box-shadow: none; }
+    .invite-link-copy {
+      height: 38px; padding: 0 14px;
+      background: var(--bg); color: var(--text-secondary);
+      border: none; border-left: 1px solid var(--border);
+      font-size: 12px; font-weight: 600; font-family: inherit;
+      cursor: pointer;
+      display: flex; align-items: center; gap: 5px;
+      transition: background 120ms, color 120ms;
+    }
+    .invite-link-copy:hover { background: var(--surface-hover); color: var(--text); }
+    .invite-link-copy.copied { color: var(--success); }
+    .invite-link-help {
+      font-size: 12px; color: var(--text-muted);
+      margin-top: 8px; line-height: 1.5;
+    }
+
+    .toast {
+      position: fixed; bottom: 24px; left: 50%;
+      transform: translateX(-50%);
+      padding: 10px 16px;
+      background: var(--text); color: var(--bg);
+      border-radius: var(--radius);
+      font-size: 13px; font-weight: 500;
+      box-shadow: var(--shadow-md);
+      opacity: 0; pointer-events: none;
+      transition: opacity 200ms;
+      z-index: 200;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="header-left">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 7h18l-2 11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L3 7z"/>
+          <path d="M8 7V5a4 4 0 0 1 8 0v2"/>
+        </svg>
+      </div>
+      <div class="app-name">Portal de Pedidos</div>
+      <span class="badge">Admin</span>
+    </div>
+    <div class="header-right">
+      <span class="user-pill" id="user-pill" title="Usuário logado"></span>
+      <button class="icon-btn" id="logout-btn" title="Sair">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="container">
+      <div class="breadcrumb">
+        <a href="/">Portal</a>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        <span>Usuários</span>
+      </div>
+
+      <h1 class="page-title">Usuários</h1>
+      <p class="page-subtitle">Gerencie quem pode acessar o portal. Apenas administradores podem convidar ou desativar contas.</p>
+
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="users">
+          <span>Ativos</span>
+          <span class="tab-count" id="count-users">0</span>
+        </button>
+        <button class="tab-btn" data-tab="invites">
+          <span>Convites pendentes</span>
+          <span class="tab-count" id="count-invites">0</span>
+        </button>
+      </div>
+
+      <!-- Users tab -->
+      <div class="tab-panel active" data-panel="users">
+        <div class="toolbar">
+          <div class="spacer"></div>
+          <button class="btn btn-primary" id="invite-user-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/>
+            </svg>
+            Convidar usuário
+          </button>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>E-mail</th>
+                <th>Papel</th>
+                <th>Status</th>
+                <th>Último acesso</th>
+                <th style="text-align:right">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="users-body"></tbody>
+          </table>
+          <div class="empty" id="users-empty" style="display:none">Nenhum usuário cadastrado ainda.</div>
+        </div>
+      </div>
+
+      <!-- Invites tab -->
+      <div class="tab-panel" data-panel="invites">
+        <div class="toolbar">
+          <div class="spacer"></div>
+          <button class="btn btn-primary" id="invite-user-btn-2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            Novo convite
+          </button>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>E-mail</th>
+                <th>Papel</th>
+                <th>Status</th>
+                <th>Expira em</th>
+                <th style="text-align:right">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="invites-body"></tbody>
+          </table>
+          <div class="empty" id="invites-empty" style="display:none">Nenhum convite pendente.</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Invite user modal (form) -->
+  <div class="modal-backdrop" id="invite-modal">
+    <div class="modal" role="dialog" aria-labelledby="invite-title">
+      <div class="modal-title" id="invite-title">Convidar usuário</div>
+      <div class="modal-subtitle">Defina e-mail e papel. O convite expira em 7 dias e o usuário define a própria senha ao aceitar.</div>
+      <form id="invite-form">
+        <div class="field">
+          <label for="inv-email">E-mail</label>
+          <input type="email" id="inv-email" required autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="inv-role">Papel</label>
+          <select id="inv-role">
+            <option value="operator">Operador (padrão)</option>
+            <option value="admin">Administrador</option>
+            <option value="viewer">Somente leitura</option>
+          </select>
+        </div>
+        <div class="alert" id="invite-alert"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn" id="invite-cancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary" id="invite-submit">Gerar convite</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Invite link result modal (after creation) -->
+  <div class="modal-backdrop" id="invite-link-modal">
+    <div class="modal" role="dialog" aria-labelledby="invite-link-title">
+      <div class="modal-title" id="invite-link-title">Convite gerado</div>
+      <div class="modal-subtitle">Copie e envie o link para o usuário (Slack, WhatsApp, e-mail). Ele expira em 7 dias.</div>
+      <div class="invite-link-box">
+        <input type="text" class="invite-link-input" id="invite-url" readonly>
+        <button type="button" class="invite-link-copy" id="invite-url-copy">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          Copiar
+        </button>
+      </div>
+      <div class="invite-link-help">
+        Importante: este link só será exibido uma vez. Se perder, revogue e gere um novo.
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" id="invite-link-close">Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reset password modal -->
+  <div class="modal-backdrop" id="reset-modal">
+    <div class="modal" role="dialog" aria-labelledby="reset-title">
+      <div class="modal-title" id="reset-title">Redefinir senha</div>
+      <div class="modal-subtitle" id="reset-subtitle"></div>
+      <form id="reset-form">
+        <div class="field">
+          <label for="reset-password">Nova senha (mín. 8 caracteres)</label>
+          <input type="password" id="reset-password" required minlength="8" autocomplete="new-password">
+        </div>
+        <div class="alert" id="reset-alert"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn" id="reset-cancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary" id="reset-submit">Redefinir</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    let me = null;
+    let users = [];
+    let invites = [];
+
+    function fmtDate(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      return d.toLocaleString('pt-BR', {
+        day: '2-digit', month: '2-digit', year: '2-digit',
+        hour: '2-digit', minute: '2-digit',
+      });
+    }
+    function fmtRelDays(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      const diffMs = d.getTime() - Date.now();
+      const days = Math.round(diffMs / (1000 * 60 * 60 * 24));
+      if (days < 0) return `expirou há ${-days} d`;
+      if (days === 0) return 'hoje';
+      if (days === 1) return 'amanhã';
+      return `em ${days} d`;
+    }
+
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2200);
+    }
+
+    async function api(method, url, body) {
+      const opts = { method, credentials: 'same-origin', headers: {} };
+      if (body) {
+        opts.headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(body);
+      }
+      const r = await fetch(url, opts);
+      const data = await r.json().catch(() => ({}));
+      return { ok: r.ok, status: r.status, data };
+    }
+
+    async function loadMe() {
+      const { data } = await api('GET', '/api/auth/me');
+      if (!data.user) {
+        window.location.href = '/login';
+        return false;
+      }
+      me = data.user;
+      if (me.role !== 'admin') {
+        document.body.innerHTML = '<main class="main"><div class="container">'
+          + '<h1 class="page-title">Acesso restrito</h1>'
+          + '<p class="page-subtitle">Apenas administradores podem ver esta página.</p>'
+          + '<a class="btn" href="/">Voltar ao portal</a></div></main>';
+        return false;
+      }
+      document.getElementById('user-pill').textContent = me.email;
+      return true;
+    }
+
+    function renderUserRow(u) {
+      const isMe = me && u.id === me.id;
+      const roleClass = `role-${u.role}`;
+      const roleLabel = { admin: 'Admin', operator: 'Operador', viewer: 'Visualizador' }[u.role] || u.role;
+      const statusClass = u.active ? 'status-active' : 'status-inactive';
+      const statusLabel = u.active ? 'Ativo' : 'Inativo';
+
+      const actions = [];
+      actions.push(`<button class="btn btn-sm" data-act="reset" data-id="${u.id}" data-email="${u.email}">Trocar senha</button>`);
+      if (u.active && !isMe) {
+        actions.push(`<button class="btn btn-sm btn-danger" data-act="deactivate" data-id="${u.id}" data-email="${u.email}">Desativar</button>`);
+      } else if (!u.active) {
+        actions.push(`<button class="btn btn-sm" data-act="reactivate" data-id="${u.id}" data-email="${u.email}">Reativar</button>`);
+      }
+
+      return `
+        <tr class="${isMe ? 'row-self' : ''}">
+          <td>${u.email}${isMe ? ' <span class="muted">(você)</span>' : ''}</td>
+          <td><span class="role-pill ${roleClass}">${roleLabel}</span></td>
+          <td><span class="status-pill ${statusClass}"><span class="status-dot"></span>${statusLabel}</span></td>
+          <td class="muted">${fmtDate(u.last_login_at)}</td>
+          <td><div class="actions-cell">${actions.join('')}</div></td>
+        </tr>`;
+    }
+
+    function renderInviteRow(inv) {
+      const roleClass = `role-${inv.role}`;
+      const roleLabel = { admin: 'Admin', operator: 'Operador', viewer: 'Visualizador' }[inv.role] || inv.role;
+      const isExpired = inv.expired;
+      const statusClass = isExpired ? 'status-expired' : 'status-pending';
+      const statusLabel = isExpired ? 'Expirado' : 'Pendente';
+
+      const actions = [];
+      if (!isExpired) {
+        actions.push(`<button class="btn btn-sm" data-act="copy-link" data-url="${inv.accept_url}">Copiar link</button>`);
+      }
+      actions.push(`<button class="btn btn-sm btn-danger" data-act="revoke" data-token="${inv.token}" data-email="${inv.email}">Revogar</button>`);
+
+      return `
+        <tr>
+          <td>${inv.email}</td>
+          <td><span class="role-pill ${roleClass}">${roleLabel}</span></td>
+          <td><span class="status-pill ${statusClass}"><span class="status-dot"></span>${statusLabel}</span></td>
+          <td class="muted">${fmtRelDays(inv.expires_at)}</td>
+          <td><div class="actions-cell">${actions.join('')}</div></td>
+        </tr>`;
+    }
+
+    async function loadUsers() {
+      const { ok, data } = await api('GET', '/api/admin/users');
+      if (!ok) return;
+      users = data.users;
+      const body = document.getElementById('users-body');
+      const empty = document.getElementById('users-empty');
+      document.getElementById('count-users').textContent = users.length;
+      if (users.length === 0) {
+        body.innerHTML = ''; empty.style.display = 'block';
+      } else {
+        empty.style.display = 'none';
+        body.innerHTML = users.map(renderUserRow).join('');
+      }
+    }
+
+    async function loadInvites() {
+      const { ok, data } = await api('GET', '/api/admin/invites');
+      if (!ok) return;
+      invites = data.invites;
+      const body = document.getElementById('invites-body');
+      const empty = document.getElementById('invites-empty');
+      document.getElementById('count-invites').textContent = invites.length;
+      if (invites.length === 0) {
+        body.innerHTML = ''; empty.style.display = 'block';
+      } else {
+        empty.style.display = 'none';
+        body.innerHTML = invites.map(renderInviteRow).join('');
+      }
+    }
+
+    function openModal(id) { document.getElementById(id).classList.add('show'); }
+    function closeModal(id) {
+      const m = document.getElementById(id);
+      m.classList.remove('show');
+      m.querySelectorAll('input').forEach(i => { if (i.type !== 'text') i.value = ''; });
+      m.querySelectorAll('.alert').forEach(a => a.className = 'alert');
+    }
+    function setAlert(id, msg, kind) {
+      const el = document.getElementById(id);
+      el.textContent = msg;
+      el.className = 'alert show ' + kind;
+    }
+
+    // Tabs
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.querySelector(`.tab-panel[data-panel="${btn.dataset.tab}"]`).classList.add('active');
+      });
+    });
+
+    // Open invite modal (two buttons)
+    function openInviteForm() { openModal('invite-modal'); }
+    document.getElementById('invite-user-btn').addEventListener('click', openInviteForm);
+    document.getElementById('invite-user-btn-2').addEventListener('click', openInviteForm);
+    document.getElementById('invite-cancel').addEventListener('click', () => closeModal('invite-modal'));
+
+    // Submit invite
+    document.getElementById('invite-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const submit = document.getElementById('invite-submit');
+      submit.disabled = true;
+      const body = {
+        email: document.getElementById('inv-email').value.trim(),
+        role:  document.getElementById('inv-role').value,
+      };
+      const { ok, data } = await api('POST', '/api/admin/invites', body);
+      submit.disabled = false;
+      if (!ok) {
+        setAlert('invite-alert', data.detail || 'Falha ao gerar convite', 'error');
+        return;
+      }
+      closeModal('invite-modal');
+      // Show the link
+      document.getElementById('invite-url').value = data.invite.accept_url;
+      const copyBtn = document.getElementById('invite-url-copy');
+      copyBtn.classList.remove('copied');
+      copyBtn.querySelector('svg').nextSibling && (copyBtn.lastChild.nodeValue = ' Copiar');
+      openModal('invite-link-modal');
+      await loadInvites();
+    });
+
+    // Copy invite URL (in result modal)
+    document.getElementById('invite-url-copy').addEventListener('click', async () => {
+      const url = document.getElementById('invite-url').value;
+      try {
+        await navigator.clipboard.writeText(url);
+        const btn = document.getElementById('invite-url-copy');
+        btn.classList.add('copied');
+        const svg = btn.querySelector('svg').outerHTML;
+        btn.innerHTML = svg + ' Copiado';
+      } catch {
+        // fallback: select the input
+        const input = document.getElementById('invite-url');
+        input.select();
+        document.execCommand('copy');
+      }
+    });
+    document.getElementById('invite-link-close').addEventListener('click', () => {
+      closeModal('invite-link-modal');
+    });
+
+    // Users actions (reset / deactivate / reactivate)
+    let resetTargetId = null;
+    document.getElementById('users-body').addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-act]');
+      if (!btn) return;
+      const act   = btn.dataset.act;
+      const id    = parseInt(btn.dataset.id, 10);
+      const email = btn.dataset.email;
+      if (act === 'reset') {
+        resetTargetId = id;
+        document.getElementById('reset-subtitle').textContent =
+          `Definir uma nova senha para ${email}. Sessões ativas desse usuário serão encerradas.`;
+        openModal('reset-modal');
+      } else if (act === 'deactivate') {
+        if (!confirm(`Desativar ${email}? O usuário não poderá mais entrar.`)) return;
+        const { ok, data } = await api('POST', `/api/admin/users/${id}/deactivate`);
+        if (!ok) { alert(data.detail || 'Falha'); return; }
+        showToast('Usuário desativado.');
+        await loadUsers();
+      } else if (act === 'reactivate') {
+        const { ok, data } = await api('POST', `/api/admin/users/${id}/reactivate`);
+        if (!ok) { alert(data.detail || 'Falha'); return; }
+        showToast('Usuário reativado.');
+        await loadUsers();
+      }
+    });
+
+    // Invites actions (copy / revoke)
+    document.getElementById('invites-body').addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-act]');
+      if (!btn) return;
+      const act = btn.dataset.act;
+      if (act === 'copy-link') {
+        try {
+          await navigator.clipboard.writeText(btn.dataset.url);
+          showToast('Link copiado.');
+        } catch {
+          showToast('Não foi possível copiar.');
+        }
+      } else if (act === 'revoke') {
+        if (!confirm(`Revogar convite para ${btn.dataset.email}?`)) return;
+        const { ok, data } = await api('DELETE', `/api/admin/invites/${btn.dataset.token}`);
+        if (!ok) { alert(data.detail || 'Falha'); return; }
+        showToast('Convite revogado.');
+        await loadInvites();
+      }
+    });
+
+    // Reset password modal
+    document.getElementById('reset-cancel').addEventListener('click', () => {
+      resetTargetId = null;
+      closeModal('reset-modal');
+    });
+    document.getElementById('reset-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!resetTargetId) return;
+      const submit = document.getElementById('reset-submit');
+      submit.disabled = true;
+      const body = { password: document.getElementById('reset-password').value };
+      const { ok, data } = await api('POST', `/api/admin/users/${resetTargetId}/reset-password`, body);
+      submit.disabled = false;
+      if (!ok) {
+        setAlert('reset-alert', data.detail || 'Falha ao trocar senha', 'error');
+        return;
+      }
+      closeModal('reset-modal');
+      resetTargetId = null;
+      showToast('Senha redefinida.');
+      await loadUsers();
+    });
+
+    // Logout
+    document.getElementById('logout-btn').addEventListener('click', async () => {
+      await api('POST', '/api/auth/logout');
+      window.location.href = '/login';
+    });
+
+    // Boot
+    (async () => {
+      const ok = await loadMe();
+      if (!ok) return;
+      await Promise.all([loadUsers(), loadInvites()]);
+    })();
+  </script>
+</body>
+</html>

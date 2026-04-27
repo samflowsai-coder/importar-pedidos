@@ -108,6 +108,35 @@ FIND_CLIENT_BY_CNPJ = """
     ROWS 1
 """
 
+# Client lookup by primary key (CADASTRO.CODIGO). Used to validate manual
+# overrides before passing the FK into CAB_VENDAS — guards against codigos
+# that were inactivated between selection (HTTP) and send-to-fire (button).
+FIND_CLIENT_BY_CODIGO = """
+    SELECT CODIGO, RAZAO_SOCIAL, CPF_CNPJ FROM CADASTRO
+    WHERE CODIGO = ?
+      AND RELAC_CLIENTE = 'Sim'
+    ROWS 1
+"""
+
+# Manual client picker search: matches RAZAO_SOCIAL substring (case-insensitive)
+# OR CPF_CNPJ digits substring. Bind:
+#   1. razao_pattern  — e.g. '%FOO%' (caller upper-cases)
+#   2. cnpj_pattern   — e.g. '%12345%' (caller strips non-digits; pass a
+#      sentinel like '%__never_matches__%' when q has no digits)
+# FIRST 50 baked in (Firebird is happier with constant LIMITs than parameterized
+# ROWS). TODO: add FANTASIA / CIDADE / UF columns once schema is reconfirmed
+# via tools/explore_firebird.py against a fresh production copy.
+SEARCH_CLIENTS = """
+    SELECT FIRST 50 CODIGO, RAZAO_SOCIAL, CPF_CNPJ
+    FROM CADASTRO
+    WHERE RELAC_CLIENTE = 'Sim'
+      AND (
+        UPPER(RAZAO_SOCIAL) LIKE ?
+        OR REPLACE(REPLACE(REPLACE(REPLACE(CPF_CNPJ, '.', ''), '/', ''), '-', ''), ' ', '') LIKE ?
+      )
+    ORDER BY RAZAO_SOCIAL
+"""
+
 # Product lookup by EAN-13
 FIND_PRODUCT_BY_EAN = """
     SELECT SEQ, DESCRICAO, PRECO_VENDA FROM PRODUTOS

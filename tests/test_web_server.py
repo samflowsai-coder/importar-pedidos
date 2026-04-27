@@ -375,7 +375,7 @@ def test_send_to_fire_inserts_when_success(monkeypatch):
         },
     })
 
-    def _fake_export(self, order):
+    def _fake_export(self, order, *, override_client_id=None):
         return fb_mod.FirebirdExportResult(
             order_number=order.header.order_number,
             items_inserted=1,
@@ -438,7 +438,7 @@ def test_batch_send_to_fire_mixed_outcomes(monkeypatch):
 
     fire_seq = iter([4001, 4002])
 
-    def _fake_export(self, order):
+    def _fake_export(self, order, *, override_client_id=None):
         return fb_mod.FirebirdExportResult(
             order_number=order.header.order_number,
             items_inserted=1,
@@ -536,6 +536,270 @@ def test_imported_filter_by_search_and_status():
     r2 = client.get("/api/imported?status=error")
     assert r2.status_code == 200
     assert r2.json()["total"] == 1
+
+
+# ── Manual cliente override (CLIENT_NOT_FOUND recovery) ──────────────────────
+
+def _seed_parsed_entry(**overrides):
+    from app.persistence import repo
+    import uuid
+    from datetime import datetime
+    entry_id = overrides.pop("id", str(uuid.uuid4()))
+    repo.insert_import({
+        "id": entry_id,
+        "source_filename": "ovr.pdf",
+        "imported_at": datetime.now().isoformat(timespec="seconds"),
+        "order_number": overrides.get("order_number", "OVR-1"),
+        "customer": overrides.get("customer", "ACME"),
+        "customer_cnpj": overrides.get("customer_cnpj", "11.222.333/0001-44"),
+        "status": "success",
+        "portal_status": overrides.get("portal_status", "parsed"),
+        "snapshot": {
+            "header": {
+                "order_number": "OVR-1",
+                "customer_name": "ACME",
+                "customer_cnpj": "11.222.333/0001-44",
+            },
+            "items": [{"description": "x", "quantity": 1.0}],
+            "source_file": "",
+        },
+        "check": {
+            "available": True,
+            "reason": None,
+            "client": {
+                "match": False, "fire_id": None,
+                "razao_social": None, "cnpj": "11.222.333/0001-44",
+            },
+            "items": [],
+            "summary": {
+                "items_total": 1, "items_matched": 0,
+                "items_missing": 1, "client_matched": False,
+            },
+        },
+    })
+    return entry_id
+
+
+class _FakeFbCursor:
+    """Minimal cursor double — replays a list of fetchone() rows in order."""
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+        self.executed: list[tuple] = []
+
+    def execute(self, sql, params=()):
+        self.executed.append((sql, params))
+
+    def fetchone(self):
+        return self._rows.pop(0) if self._rows else None
+
+    def fetchall(self):
+        out, self._rows = self._rows, []
+        return out
+
+    def close(self):
+        pass
+
+
+def _patch_fb_with_rows(monkeypatch, rows, *, configured=True):
+    """Patch FirebirdConnection so .is_configured() and .connect() return our fake."""
+    from app.erp import connection as conn_mod
+
+    def _ctor():
+        inst = conn_mod.FirebirdConnection.__new__(conn_mod.FirebirdConnection)
+        return inst
+
+    cursor = _FakeFbCursor(rows)
+
+    class _CtxConn:
+        def cursor(self):
+            return cursor
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    inst = _ctor()
+    monkeypatch.setattr(inst, "is_configured", lambda: configured, raising=False)
+    monkeypatch.setattr(inst, "connect", lambda: _CtxConn(), raising=False)
+
+    # Patch the constructor so server.py's `FirebirdConnection()` returns our instance
+    monkeypatch.setattr(conn_mod, "FirebirdConnection", lambda: inst)
+    return cursor
+
+
+def test_search_clientes_requires_min_length():
+    r = client.get("/api/clientes/search?q=a")
+    assert r.status_code == 400
+
+
+def test_search_clientes_returns_503_when_fb_not_configured(monkeypatch):
+    _patch_fb_with_rows(monkeypatch, [], configured=False)
+    r = client.get("/api/clientes/search?q=acme")
+    assert r.status_code == 503
+
+
+def test_search_clientes_happy_path_returns_results(monkeypatch):
+    cursor = _patch_fb_with_rows(monkeypatch, [
+        (101, "ACME COMERCIO LTDA", "11.222.333/0001-44"),
+        (102, "ACME INDUSTRIAS SA", "55.666.777/0001-88"),
+    ])
+    r = client.get("/api/clientes/search?q=acme")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total_returned"] == 2
+    assert body["results"][0]["codigo"] == 101
+    assert body["results"][0]["razao_social"] == "ACME COMERCIO LTDA"
+    # Must have run SEARCH_CLIENTS with razao + cnpj patterns.
+    sql, params = cursor.executed[0]
+    assert "CADASTRO" in sql and "RAZAO_SOCIAL" in sql
+    assert params[0] == "%ACME%"
+
+
+def test_search_clientes_strips_non_digits_for_cnpj_pattern(monkeypatch):
+    cursor = _patch_fb_with_rows(monkeypatch, [])
+    r = client.get("/api/clientes/search?q=11.222.333/0001-44")
+    assert r.status_code == 200
+    _sql, params = cursor.executed[0]
+    assert params[1] == "%11222333000144%"
+
+
+def test_override_cliente_happy_path(monkeypatch):
+    from app.persistence import repo
+    entry_id = _seed_parsed_entry()
+    _patch_fb_with_rows(monkeypatch, [
+        (4242, "ACME COMERCIO LTDA", "11222333000144"),  # FIND_CLIENT_BY_CODIGO
+    ])
+
+    r = client.post(
+        f"/api/imported/{entry_id}/override-cliente",
+        json={"cliente_codigo": 4242, "reason": "varejista mudou de razão social"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["cliente_override_codigo"] == 4242
+    assert body["cliente_override_razao"] == "ACME COMERCIO LTDA"
+
+    got = repo.get_import(entry_id)
+    assert got["cliente_override_codigo"] == 4242
+    assert got["cliente_override_razao"] == "ACME COMERCIO LTDA"
+    assert got["cliente_override_at"]
+    assert got["cliente_override_by"] is None  # v5: filled by auth
+
+
+def test_override_cliente_appends_audit_with_user_placeholder(monkeypatch):
+    from app.persistence import repo
+    entry_id = _seed_parsed_entry()
+    _patch_fb_with_rows(monkeypatch, [(4242, "ACME LTDA", "11222333000144")])
+
+    client.post(
+        f"/api/imported/{entry_id}/override-cliente",
+        json={"cliente_codigo": 4242, "reason": "manual fix"},
+    )
+    events = repo.list_audit(entry_id)
+    e = next(ev for ev in events if ev["event_type"] == "cliente_override_selected")
+    assert e["detail"]["cliente_codigo"] == 4242
+    assert e["detail"]["cliente_razao"] == "ACME LTDA"
+    assert e["detail"]["reason"] == "manual fix"
+    assert e["detail"]["user"] is None
+    assert e["detail"]["previous_cnpj"] == "11.222.333/0001-44"
+
+
+def test_override_cliente_rejects_non_parsed(monkeypatch):
+    entry_id = _seed_parsed_entry(portal_status="cancelled")
+    r = client.post(
+        f"/api/imported/{entry_id}/override-cliente",
+        json={"cliente_codigo": 4242},
+    )
+    assert r.status_code == 409
+    assert "revisão" in r.json()["detail"].lower()
+
+
+def test_override_cliente_rejects_unknown_codigo(monkeypatch):
+    entry_id = _seed_parsed_entry()
+    _patch_fb_with_rows(monkeypatch, [None])  # FIND_CLIENT_BY_CODIGO sem match
+    r = client.post(
+        f"/api/imported/{entry_id}/override-cliente",
+        json={"cliente_codigo": 99999999},
+    )
+    assert r.status_code == 422
+
+
+def test_override_cliente_returns_404_when_entry_missing():
+    r = client.post(
+        "/api/imported/does-not-exist/override-cliente",
+        json={"cliente_codigo": 1},
+    )
+    assert r.status_code == 404
+
+
+def test_override_cliente_returns_503_when_fb_not_configured(monkeypatch):
+    entry_id = _seed_parsed_entry()
+    _patch_fb_with_rows(monkeypatch, [], configured=False)
+    r = client.post(
+        f"/api/imported/{entry_id}/override-cliente",
+        json={"cliente_codigo": 4242},
+    )
+    assert r.status_code == 503
+
+
+def test_rehydrate_preview_injects_override_into_check_block(monkeypatch):
+    from app.persistence import repo
+    entry_id = _seed_parsed_entry()
+    repo.set_client_override(entry_id, codigo=4242, razao="ACME OVERRIDE LTDA")
+
+    r = client.get(f"/api/imported/{entry_id}/preview")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["check"]["client"]["match"] is True
+    assert body["check"]["client"]["fire_id"] == 4242
+    assert body["check"]["client"]["override"] is True
+    assert body["check"]["summary"]["client_matched"] is True
+    assert body["cliente_override"]["codigo"] == 4242
+    assert body["cliente_override"]["razao_social"] == "ACME OVERRIDE LTDA"
+    assert body["cliente_override"]["by"] is None
+
+
+def test_rehydrate_preview_omits_override_block_when_no_override():
+    entry_id = _seed_parsed_entry()
+    r = client.get(f"/api/imported/{entry_id}/preview")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cliente_override"] is None
+    # Original false-match preserved
+    assert body["check"]["client"]["match"] is False
+
+
+def test_send_to_fire_passes_override_to_exporter(monkeypatch):
+    """Override stored em imports é lido e passado ao FirebirdExporter."""
+    from app import config as app_config
+    from app.exporters import firebird_exporter as fb_mod
+    from app.persistence import repo
+
+    entry_id = _seed_parsed_entry()
+    repo.set_client_override(entry_id, codigo=4242, razao="ACME OVERRIDE")
+
+    captured = {}
+
+    def _fake_export(self, order, *, override_client_id=None):
+        captured["override"] = override_client_id
+        return fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number,
+            items_inserted=1,
+            fire_codigo=999,
+        )
+
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _fake_export)
+    monkeypatch.setattr(app_config, "load", lambda: {
+        "watch_dir": ".", "output_dir": ".", "export_mode": "db",
+    })
+
+    r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    assert r.status_code == 200, r.text
+    assert captured["override"] == 4242
+    assert r.json()["fire_codigo"] == 999
 
 
 @pytest.mark.skipif(not SAMPLES.exists(), reason="samples/ directory not found")

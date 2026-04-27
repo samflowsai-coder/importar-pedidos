@@ -1,6 +1,8 @@
 """Smoke tests for app.llm.fallback_parser.
 
-We do NOT call OpenRouter. Instead we mock the OpenAI client and verify:
+We do NOT call OpenRouter. The parser delegates to OpenRouterClient (the
+new httpx-based wrapper); we mock its `chat_completion(...)` method and
+verify:
 - Empty extracted text → returns None (no API call).
 - Markdown-wrapped JSON is parsed correctly.
 - Unknown fields in the JSON are ignored (forward-compat with model drift).
@@ -9,17 +11,11 @@ We do NOT call OpenRouter. Instead we mock the OpenAI client and verify:
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from app.llm.fallback_parser import LLMFallbackParser, _extract_json
+from app.llm.openrouter_client import LLMUnavailableError
 from app.models.order import Order
-
-
-def _fake_response(content: str):
-    return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
-    )
 
 
 def test_returns_none_when_no_text() -> None:
@@ -45,8 +41,8 @@ def test_parse_returns_order_on_success() -> None:
     }
     parser = LLMFallbackParser()
     fake_client = MagicMock()
-    fake_client.chat.completions.create.return_value = _fake_response(json.dumps(payload))
-    parser._client = fake_client  # bypass openai import
+    fake_client.chat_completion.return_value = json.dumps(payload)
+    parser._client = fake_client  # bypass network
 
     result = parser.parse({"text": "qualquer pedido"}, source_file="x.pdf")
 
@@ -55,6 +51,11 @@ def test_parse_returns_order_on_success() -> None:
     assert result.items[0].description == "Tenis"
     assert result.items[0].quantity == 2
     assert result.source_file == "x.pdf"
+    # Verify the parser passed our defaults through to the client
+    call = fake_client.chat_completion.call_args
+    assert call.kwargs["temperature"] == 0
+    assert call.kwargs["max_tokens"] == 2048
+    assert call.kwargs["response_format"] == {"type": "json_object"}
 
 
 def test_parse_ignores_unknown_fields_from_model() -> None:
@@ -64,7 +65,7 @@ def test_parse_ignores_unknown_fields_from_model() -> None:
     }
     parser = LLMFallbackParser()
     parser._client = MagicMock()
-    parser._client.chat.completions.create.return_value = _fake_response(json.dumps(payload))
+    parser._client.chat_completion.return_value = json.dumps(payload)
 
     result = parser.parse({"text": "..."})
     assert result is not None
@@ -75,9 +76,18 @@ def test_parse_ignores_unknown_fields_from_model() -> None:
 def test_parse_returns_none_on_provider_exception() -> None:
     parser = LLMFallbackParser()
     parser._client = MagicMock()
-    parser._client.chat.completions.create.side_effect = RuntimeError("rate limit")
+    parser._client.chat_completion.side_effect = LLMUnavailableError("rate limit")
 
     assert parser.parse({"text": "qualquer"}) is None  # never raises
+
+
+def test_parse_returns_none_on_unexpected_exception() -> None:
+    """Generic exceptions (e.g. malformed JSON from model) are still swallowed."""
+    parser = LLMFallbackParser()
+    parser._client = MagicMock()
+    parser._client.chat_completion.return_value = "not actually json {{{ invalid"
+
+    assert parser.parse({"text": "qualquer"}) is None
 
 
 def test_model_env_override(monkeypatch) -> None:

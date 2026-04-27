@@ -144,3 +144,59 @@ def test_audit_cascade_on_import_delete(sqlite_tmp):
     with db.connect() as conn:
         conn.execute("DELETE FROM imports WHERE id = ?", (e["id"],))
     assert repo.list_audit(e["id"]) == []
+
+
+def test_set_client_override_persists_and_get_returns_them(sqlite_tmp):
+    e = _entry()
+    repo.insert_import(e)
+
+    fresh = repo.get_import(e["id"])
+    assert fresh["cliente_override_codigo"] is None
+    assert fresh["cliente_override_razao"] is None
+    assert fresh["cliente_override_at"] is None
+    assert fresh["cliente_override_by"] is None
+
+    repo.set_client_override(e["id"], codigo=4242, razao="ACME COMERCIO LTDA")
+
+    got = repo.get_import(e["id"])
+    assert got["cliente_override_codigo"] == 4242
+    assert got["cliente_override_razao"] == "ACME COMERCIO LTDA"
+    assert got["cliente_override_at"]  # ISO timestamp present
+    assert got["cliente_override_by"] is None  # placeholder until v5 auth
+
+
+def test_set_client_override_appears_in_list_imports(sqlite_tmp):
+    e = _entry()
+    repo.insert_import(e)
+    repo.set_client_override(e["id"], codigo=99, razao="FOO LTDA")
+    rows = repo.list_imports(limit=10)
+    target = next(r for r in rows if r["id"] == e["id"])
+    assert target["cliente_override_codigo"] == 99
+    assert target["cliente_override_razao"] == "FOO LTDA"
+
+
+def test_insert_import_does_not_clobber_client_override(sqlite_tmp):
+    e = _entry()
+    repo.insert_import(e)
+    repo.set_client_override(e["id"], codigo=7777, razao="OVERRIDE LTDA", user="alice@example.com")
+
+    # Re-upsert (e.g. retry path) — must NOT wipe the override columns.
+    e_again = _entry(id=e["id"], customer="OUTRO NOME")
+    repo.insert_import(e_again)
+
+    got = repo.get_import(e["id"])
+    assert got["cliente_override_codigo"] == 7777
+    assert got["cliente_override_razao"] == "OVERRIDE LTDA"
+    assert got["cliente_override_by"] == "alice@example.com"
+    # Sanity: other clobberable column did update.
+    assert got["customer"] == "OUTRO NOME"
+
+
+def test_set_client_override_last_write_wins(sqlite_tmp):
+    e = _entry()
+    repo.insert_import(e)
+    repo.set_client_override(e["id"], codigo=1, razao="PRIMEIRA")
+    repo.set_client_override(e["id"], codigo=2, razao="SEGUNDA")
+    got = repo.get_import(e["id"])
+    assert got["cliente_override_codigo"] == 2
+    assert got["cliente_override_razao"] == "SEGUNDA"

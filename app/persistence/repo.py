@@ -11,7 +11,16 @@ _MAX_PAGE_SIZE = 500
 
 
 def insert_import(entry: dict) -> None:
-    """Upsert an import entry keyed by id. Idempotent for migration replays."""
+    """Upsert an import entry keyed by id. Idempotent for migration replays.
+
+    State fields (`portal_status`, `production_status`, `state_version`,
+    `sent_to_fire_at`, `released_at`, `released_by`) are owned by the
+    state machine (`app.state.transition`). On INSERT they're seeded from
+    the entry; on conflict they are NEVER clobbered — only the SM moves them.
+    `trace_id` is preserved across upserts (COALESCE keeps the original).
+    Cliente override fields (`cliente_override_*`) are owned by
+    `set_client_override()` — also never clobbered on upsert.
+    """
     snapshot = entry.get("snapshot")
     check = entry.get("check")
     output_files = entry.get("output_files")
@@ -42,6 +51,8 @@ def insert_import(entry: dict) -> None:
         entry.get("production_status", "none"),
         entry.get("released_at"),
         entry.get("released_by"),
+        entry.get("trace_id"),
+        int(entry.get("state_version", 1)),
     )
     with db.connect() as conn:
         conn.execute(
@@ -52,8 +63,9 @@ def insert_import(entry: dict) -> None:
                 snapshot_json, check_json, output_files_json, db_result_json,
                 status, error,
                 portal_status, sent_to_fire_at,
-                production_status, released_at, released_by
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                production_status, released_at, released_by,
+                trace_id, state_version
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 source_filename = excluded.source_filename,
                 imported_at     = excluded.imported_at,
@@ -67,11 +79,12 @@ def insert_import(entry: dict) -> None:
                 db_result_json  = excluded.db_result_json,
                 status          = excluded.status,
                 error           = excluded.error,
-                portal_status   = excluded.portal_status,
-                sent_to_fire_at = excluded.sent_to_fire_at,
-                production_status = excluded.production_status,
-                released_at     = excluded.released_at,
-                released_by     = excluded.released_by
+                trace_id        = COALESCE(imports.trace_id, excluded.trace_id)
+                -- portal_status, production_status, state_version,
+                -- sent_to_fire_at, released_at, released_by,
+                -- cliente_override_codigo, cliente_override_razao,
+                -- cliente_override_at, cliente_override_by are SM-owned
+                -- or set via dedicated helpers — never clobbered here.
             """,
             params,
         )
@@ -105,6 +118,14 @@ def _row_to_entry(row) -> dict:
         "production_status": row["production_status"],
         "released_at": row["released_at"],
         "released_by": row["released_by"],
+        "trace_id": _get("trace_id"),
+        "state_version": _get("state_version") or 1,
+        "gestor_order_id": _get("gestor_order_id"),
+        "apontae_order_id": _get("apontae_order_id"),
+        "cliente_override_codigo": _get("cliente_override_codigo"),
+        "cliente_override_razao": _get("cliente_override_razao"),
+        "cliente_override_at": _get("cliente_override_at"),
+        "cliente_override_by": _get("cliente_override_by"),
         "output_files": json.loads(row["output_files_json"]) if row["output_files_json"] else [],
         "db_result": json.loads(row["db_result_json"]) if row["db_result_json"] else None,
         "snapshot": json.loads(row["snapshot_json"]) if row["snapshot_json"] else None,
@@ -167,7 +188,10 @@ def list_imports(
                snapshot_json, check_json, output_files_json, db_result_json,
                status, error,
                portal_status, sent_to_fire_at,
-               production_status, released_at, released_by
+               production_status, released_at, released_by,
+               trace_id, state_version, gestor_order_id, apontae_order_id,
+               cliente_override_codigo, cliente_override_razao,
+               cliente_override_at, cliente_override_by
         FROM imports
         {clause}
         ORDER BY imported_at DESC
@@ -204,7 +228,10 @@ def get_import(import_id: str) -> Optional[dict]:
                    snapshot_json, check_json, output_files_json, db_result_json,
                    status, error,
                    portal_status, sent_to_fire_at,
-                   production_status, released_at, released_by
+                   production_status, released_at, released_by,
+                   trace_id, state_version, gestor_order_id, apontae_order_id,
+                   cliente_override_codigo, cliente_override_razao,
+                   cliente_override_at, cliente_override_by
             FROM imports WHERE id = ?
             """,
             (import_id,),
@@ -224,6 +251,104 @@ def append_audit(import_id: str, event_type: str, detail: Optional[dict] = None)
                 event_type,
                 json.dumps(detail, ensure_ascii=False) if detail is not None else None,
                 datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+
+
+def update_fire_metadata(
+    import_id: str,
+    *,
+    fire_codigo: Optional[int] = None,
+    db_result: Optional[dict] = None,
+    output_files: Optional[list[dict]] = None,
+    sent_to_fire_at: Optional[str] = None,
+) -> None:
+    """Update Fire-related auxiliary columns. Does NOT touch portal_status /
+    production_status — those mutations belong to `app.state.transition`.
+    Pass only the fields you want to update; others stay as they are.
+    """
+    sets: list[str] = []
+    params: list[Any] = []
+    if fire_codigo is not None:
+        sets.append("fire_codigo = ?")
+        params.append(fire_codigo)
+    if db_result is not None:
+        sets.append("db_result_json = ?")
+        params.append(json.dumps(db_result, ensure_ascii=False))
+    if output_files is not None:
+        sets.append("output_files_json = ?")
+        params.append(json.dumps(output_files, ensure_ascii=False))
+    if sent_to_fire_at is not None:
+        sets.append("sent_to_fire_at = ?")
+        params.append(sent_to_fire_at)
+    if not sets:
+        return
+    params.append(import_id)
+    with db.connect() as conn:
+        conn.execute(
+            f"UPDATE imports SET {', '.join(sets)} WHERE id = ?",
+            params,
+        )
+
+
+def set_gestor_order_id(import_id: str, gestor_order_id: str) -> None:
+    """Stamp the external id returned by Gestor de Produção on the order."""
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE imports SET gestor_order_id = ? WHERE id = ?",
+            (gestor_order_id, import_id),
+        )
+
+
+def set_apontae_order_id(import_id: str, apontae_order_id: str) -> None:
+    """Stamp the Apontaê id (first webhook event includes it)."""
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE imports SET apontae_order_id = ? WHERE id = ?",
+            (apontae_order_id, import_id),
+        )
+
+
+def find_import_id_by_gestor(gestor_order_id: str) -> Optional[str]:
+    """Reverse-lookup for webhooks that omit our external_id."""
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM imports WHERE gestor_order_id = ? LIMIT 1",
+            (gestor_order_id,),
+        ).fetchone()
+    return row["id"] if row else None
+
+
+def set_client_override(
+    import_id: str,
+    *,
+    codigo: int,
+    razao: str,
+    user: Optional[str] = None,
+) -> None:
+    """Persist a manual cliente selection for a parsed pedido.
+
+    Sidecar to the snapshot — never mutates `snapshot_json`. Read by
+    `_send_one_to_fire` and passed as `override_client_id` to the
+    FirebirdExporter. Last-write-wins; `audit_log` keeps every attempt.
+    `user` is None until auth (v5) lands.
+    """
+    with db.connect() as conn:
+        conn.execute(
+            """
+            UPDATE imports
+            SET cliente_override_codigo = ?,
+                cliente_override_razao  = ?,
+                cliente_override_at     = ?,
+                cliente_override_by     = ?
+            WHERE id = ?
+            """,
+            (
+                int(codigo),
+                razao,
+                datetime.now().isoformat(timespec="seconds"),
+                user,
+                import_id,
             ),
         )
 

@@ -51,6 +51,107 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at  TEXT NOT NULL,
     FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE
 );
+
+-- Append-only lifecycle log. The state machine is the only writer.
+-- (portal_status, production_status) on `imports` is a projection of this log.
+CREATE TABLE IF NOT EXISTS order_lifecycle_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    import_id    TEXT NOT NULL,
+    event_type   TEXT NOT NULL,
+    source       TEXT NOT NULL,
+    payload_json TEXT,
+    trace_id     TEXT,
+    occurred_at  TEXT NOT NULL,
+    ingested_at  TEXT NOT NULL,
+    FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE
+);
+
+-- Auth (Fase 4b). Roles: 'admin' | 'operator' | 'viewer' (informational
+-- today; Phase 4b only enforces "logged in"). bcrypt password_hash includes
+-- its own salt + cost — store as-is.
+CREATE TABLE IF NOT EXISTS users (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    email           TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash   TEXT NOT NULL,
+    role            TEXT NOT NULL DEFAULT 'operator',
+    active          INTEGER NOT NULL DEFAULT 1,
+    created_at      TEXT NOT NULL,
+    last_login_at   TEXT
+);
+
+-- One-shot invitation tokens. Admin issues one per email; invitee accepts
+-- by setting a password. After accept, `accepted_at` is stamped and the
+-- token cannot be used again.
+--
+-- Why a separate table from `users`: an invite can be revoked, can expire,
+-- and several can be issued for the same email over time (only one open
+-- at a time though — UNIQUE(email) WHERE accepted_at IS NULL would be
+-- ideal but SQLite partial-unique-index syntax is limited; we enforce
+-- "only one pending per email" in application code).
+CREATE TABLE IF NOT EXISTS user_invites (
+    token              TEXT PRIMARY KEY,
+    email              TEXT NOT NULL COLLATE NOCASE,
+    role               TEXT NOT NULL DEFAULT 'operator',
+    invited_by_user_id INTEGER NOT NULL,
+    created_at         TEXT NOT NULL,
+    expires_at         TEXT NOT NULL,
+    accepted_at        TEXT,
+    accepted_user_id   INTEGER,
+    revoked_at         TEXT,
+    FOREIGN KEY (invited_by_user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (accepted_user_id)   REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- Session cookie store. `token` is a high-entropy random string set as
+-- HttpOnly cookie. `expires_at` is the absolute hard cap (TTL). On every
+-- request we check it; expired sessions are deleted lazily.
+CREATE TABLE IF NOT EXISTS sessions (
+    token        TEXT PRIMARY KEY,
+    user_id      INTEGER NOT NULL,
+    created_at   TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    ip           TEXT,
+    user_agent   TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- Inbound webhook idempotency. Replayed webhooks (Gestor retrying, network
+-- blip) hit the same (provider, event_id) and short-circuit with the
+-- cached response. PRIMARY KEY enforces dedup at DB level.
+CREATE TABLE IF NOT EXISTS inbound_idempotency (
+    provider         TEXT NOT NULL,
+    event_id         TEXT NOT NULL,
+    received_at      TEXT NOT NULL,
+    response_status  INTEGER,
+    response_body    TEXT,
+    import_id        TEXT,            -- denormalized for debug; nullable
+    PRIMARY KEY (provider, event_id)
+);
+
+-- Durable outbox for outbound integrations (Gestor de Produção, future
+-- targets). The Portal writes to this table in the same SQLite transaction
+-- as the state machine event, then a worker (Phase 5) — or inline drain
+-- (Phase 3) — POSTs to the target with retries.
+--
+-- Idempotency: `idempotency_key` is UNIQUE; the target server uses it to
+-- dedupe replays caused by retries / restarts.
+CREATE TABLE IF NOT EXISTS outbox (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    import_id        TEXT NOT NULL,
+    target           TEXT NOT NULL,
+    endpoint         TEXT NOT NULL,
+    payload_json     TEXT NOT NULL,
+    idempotency_key  TEXT NOT NULL UNIQUE,
+    status           TEXT NOT NULL DEFAULT 'pending',
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at  TEXT,
+    last_error       TEXT,
+    response_json    TEXT,
+    trace_id         TEXT,
+    created_at       TEXT NOT NULL,
+    sent_at          TEXT,
+    FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE
+);
 """
 
 # Indexes applied AFTER migrations so new columns in older DBs already exist.
@@ -64,6 +165,25 @@ CREATE INDEX IF NOT EXISTS idx_imports_prod_status   ON imports(production_statu
 
 CREATE INDEX IF NOT EXISTS idx_audit_import_id ON audit_log(import_id);
 CREATE INDEX IF NOT EXISTS idx_audit_created   ON audit_log(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_lifecycle_import_id   ON order_lifecycle_events(import_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_lifecycle_trace_id    ON order_lifecycle_events(trace_id);
+CREATE INDEX IF NOT EXISTS idx_lifecycle_event_type  ON order_lifecycle_events(event_type, occurred_at DESC);
+
+-- Worker drain query in Phase 5 will be: WHERE status='pending' AND next_attempt_at <= NOW
+-- ORDER BY next_attempt_at. This index covers it.
+CREATE INDEX IF NOT EXISTS idx_outbox_pending       ON outbox(status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_outbox_import_id     ON outbox(import_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_inbound_received_at  ON inbound_idempotency(received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inbound_import_id    ON inbound_idempotency(import_id);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id     ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at  ON sessions(expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_invites_email_pending ON user_invites(email)
+    WHERE accepted_at IS NULL AND revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_invites_expires_at    ON user_invites(expires_at);
 """
 
 
@@ -100,6 +220,19 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("imports", "check_json",      "ALTER TABLE imports ADD COLUMN check_json TEXT"),
     ("imports", "portal_status",   "ALTER TABLE imports ADD COLUMN portal_status TEXT NOT NULL DEFAULT 'sent_to_fire'"),
     ("imports", "sent_to_fire_at", "ALTER TABLE imports ADD COLUMN sent_to_fire_at TEXT"),
+    # State machine fundation (Fase 1)
+    ("imports", "trace_id",        "ALTER TABLE imports ADD COLUMN trace_id TEXT"),
+    ("imports", "state_version",   "ALTER TABLE imports ADD COLUMN state_version INTEGER NOT NULL DEFAULT 1"),
+    # Outbox + Gestor de Produção integration (Fase 3)
+    ("imports", "gestor_order_id", "ALTER TABLE imports ADD COLUMN gestor_order_id TEXT"),
+    # Webhooks inbound + Apontaê correlation (Fase 4)
+    ("imports", "apontae_order_id", "ALTER TABLE imports ADD COLUMN apontae_order_id TEXT"),
+    # Manual cliente override after CLIENT_NOT_FOUND (sidecar — não muta snapshot).
+    # `cliente_override_by` fica NULL hoje; preenchido quando auth (v5) chegar.
+    ("imports", "cliente_override_codigo", "ALTER TABLE imports ADD COLUMN cliente_override_codigo INTEGER"),
+    ("imports", "cliente_override_razao",  "ALTER TABLE imports ADD COLUMN cliente_override_razao TEXT"),
+    ("imports", "cliente_override_at",     "ALTER TABLE imports ADD COLUMN cliente_override_at TEXT"),
+    ("imports", "cliente_override_by",     "ALTER TABLE imports ADD COLUMN cliente_override_by TEXT"),
 )
 
 
@@ -109,13 +242,18 @@ def _existing_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 
 def _apply_migrations(conn: sqlite3.Connection) -> None:
-    try:
-        cols = _existing_columns(conn, "imports")
-    except sqlite3.OperationalError:
-        return  # table not yet created — CREATE IF NOT EXISTS handles it
+    cols_by_table: dict[str, set[str]] = {}
     for table, col, ddl in _COLUMN_MIGRATIONS:
-        if table == "imports" and col not in cols:
+        if table not in cols_by_table:
+            try:
+                cols_by_table[table] = _existing_columns(conn, table)
+            except sqlite3.OperationalError:
+                # table not yet created — CREATE IF NOT EXISTS handles it
+                cols_by_table[table] = set()
+                continue
+        if col not in cols_by_table[table]:
             conn.execute(ddl)
+            cols_by_table[table].add(col)
 
 
 def _ensure_schema(path: Path) -> None:

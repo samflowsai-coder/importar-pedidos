@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portal de Pedidos — Aceitar convite</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:             #FFFFFF;
+      --surface:        #FAFAFA;
+      --surface-hover:  #F4F4F5;
+      --border:         #E4E4E7;
+      --border-hover:   #D4D4D8;
+      --text:           #09090B;
+      --text-secondary: #52525B;
+      --text-muted:     #71717A;
+      --accent:         #6366F1;
+      --accent-hover:   #4F46E5;
+      --accent-bg:      rgba(99,102,241,.08);
+      --error:          #DC2626;
+      --error-bg:       rgba(220,38,38,.08);
+      --success:        #16A34A;
+      --success-bg:     rgba(22,163,74,.08);
+      --radius:         8px;
+      --radius-lg:      12px;
+      --shadow-md:      0 4px 10px rgba(0,0,0,.06), 0 2px 4px rgba(0,0,0,.04);
+    }
+    html, body {
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    body { display: grid; place-items: center; padding: 24px; }
+    .frame { width: 100%; max-width: 420px; display: flex; flex-direction: column; align-items: center; }
+
+    .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 32px; }
+    .logo {
+      width: 32px; height: 32px; border-radius: 8px;
+      background: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .logo svg { width: 18px; height: 18px; color: #fff; }
+    .app-name { font-size: 16px; font-weight: 600; letter-spacing: -.015em; }
+
+    .card {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 32px;
+      box-shadow: var(--shadow-md);
+    }
+    .card-title { font-size: 18px; font-weight: 600; letter-spacing: -.015em; margin-bottom: 6px; }
+    .card-subtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 20px; }
+
+    .invite-info {
+      display: flex; flex-direction: column; gap: 6px;
+      padding: 12px 14px;
+      background: var(--accent-bg);
+      border: 1px solid rgba(99,102,241,.18);
+      border-radius: var(--radius);
+      margin-bottom: 20px;
+    }
+    .invite-info-row { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; }
+    .invite-info-key { color: var(--text-muted); }
+    .invite-info-val { color: var(--text); font-weight: 500; word-break: break-all; }
+    .role-pill {
+      display: inline-block;
+      font-size: 10px; font-weight: 600;
+      letter-spacing: .04em;
+      padding: 2px 8px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      background: var(--bg);
+      color: var(--accent-hover);
+    }
+
+    .field { margin-bottom: 16px; }
+    label { display: block; font-size: 12px; font-weight: 500; color: var(--text-secondary); margin-bottom: 6px; }
+    input[type="password"] {
+      width: 100%; height: 38px;
+      padding: 0 12px;
+      font-size: 14px; font-family: inherit;
+      color: var(--text); background: var(--bg);
+      border: 1px solid var(--border); border-radius: var(--radius);
+      outline: none;
+      transition: border-color 120ms, box-shadow 120ms;
+    }
+    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+
+    .hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+    .btn-primary {
+      width: 100%; height: 40px;
+      margin-top: 8px;
+      background: var(--accent); color: #fff;
+      border: 1px solid transparent; border-radius: var(--radius);
+      font-size: 14px; font-weight: 600; font-family: inherit;
+      cursor: pointer;
+      transition: background 120ms;
+    }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-primary:disabled { opacity: .5; cursor: wait; }
+
+    .alert {
+      font-size: 13px;
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      margin-top: 14px;
+      display: none;
+    }
+    .alert.show { display: block; }
+    .alert.error { color: var(--error); background: var(--error-bg); border: 1px solid rgba(220,38,38,.18); }
+
+    .empty-state {
+      text-align: center;
+      padding: 24px 0;
+    }
+    .empty-state-title { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+    .empty-state-text { font-size: 13px; color: var(--text-muted); margin-bottom: 20px; }
+    .btn-link {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 14px;
+      background: var(--surface); color: var(--text-secondary);
+      border: 1px solid var(--border); border-radius: var(--radius);
+      font-size: 13px; font-weight: 500; text-decoration: none;
+      transition: background 120ms, color 120ms, border-color 120ms;
+    }
+    .btn-link:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-hover); }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 7h18l-2 11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L3 7z"/>
+          <path d="M8 7V5a4 4 0 0 1 8 0v2"/>
+        </svg>
+      </div>
+      <div class="app-name">Portal de Pedidos</div>
+    </div>
+
+    <div class="card">
+      <!-- Loading state -->
+      <div id="loading" class="empty-state">
+        <div class="empty-state-text">Validando convite...</div>
+      </div>
+
+      <!-- Invalid / expired -->
+      <div id="invalid" class="empty-state" style="display:none">
+        <div class="empty-state-title" id="invalid-title">Convite inválido</div>
+        <div class="empty-state-text" id="invalid-text">Este link de convite não é mais válido.</div>
+        <a class="btn-link" href="/login">Ir para o login</a>
+      </div>
+
+      <!-- Accept form -->
+      <div id="form-wrap" style="display:none">
+        <h1 class="card-title">Definir senha</h1>
+        <p class="card-subtitle">Você foi convidado(a) para acessar o portal. Defina sua senha para concluir o cadastro.</p>
+
+        <div class="invite-info">
+          <div class="invite-info-row">
+            <span class="invite-info-key">E-mail</span>
+            <span class="invite-info-val" id="invite-email"></span>
+          </div>
+          <div class="invite-info-row">
+            <span class="invite-info-key">Papel</span>
+            <span><span class="role-pill" id="invite-role"></span></span>
+          </div>
+        </div>
+
+        <form id="accept-form" novalidate>
+          <div class="field">
+            <label for="password">Nova senha</label>
+            <input type="password" id="password" required minlength="8" autocomplete="new-password" autofocus>
+            <div class="hint">Mínimo 8 caracteres.</div>
+          </div>
+          <div class="field">
+            <label for="password2">Confirmar senha</label>
+            <input type="password" id="password2" required minlength="8" autocomplete="new-password">
+          </div>
+
+          <button type="submit" class="btn-primary" id="submit-btn">Definir senha e entrar</button>
+          <div class="alert" id="alert" role="alert"></div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const TOKEN = window.location.pathname.split('/').pop();
+    const ROLE_LABELS = { admin: 'Admin', operator: 'Operador', viewer: 'Visualizador' };
+
+    function show(id) { document.getElementById(id).style.display = ''; }
+    function hide(id) { document.getElementById(id).style.display = 'none'; }
+    function setAlert(msg) {
+      const el = document.getElementById('alert');
+      el.textContent = msg;
+      el.classList.add('show');
+    }
+    function clearAlert() { document.getElementById('alert').classList.remove('show'); }
+
+    async function load() {
+      try {
+        const r = await fetch(`/api/invites/${TOKEN}`, { credentials: 'same-origin' });
+        const data = await r.json().catch(() => ({}));
+        hide('loading');
+        if (r.status === 410) {
+          document.getElementById('invalid-title').textContent = 'Convite expirado';
+          document.getElementById('invalid-text').textContent = 'Peça um novo convite ao administrador.';
+          show('invalid');
+          return;
+        }
+        if (!r.ok) {
+          show('invalid');
+          return;
+        }
+        document.getElementById('invite-email').textContent = data.email;
+        document.getElementById('invite-role').textContent = ROLE_LABELS[data.role] || data.role;
+        show('form-wrap');
+      } catch {
+        hide('loading');
+        show('invalid');
+      }
+    }
+
+    document.getElementById('accept-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearAlert();
+      const pw  = document.getElementById('password').value;
+      const pw2 = document.getElementById('password2').value;
+      if (pw !== pw2) { setAlert('As senhas não conferem.'); return; }
+      if (pw.length < 8) { setAlert('A senha precisa ter ao menos 8 caracteres.'); return; }
+
+      const submit = document.getElementById('submit-btn');
+      submit.disabled = true;
+      submit.textContent = 'Definindo...';
+      try {
+        const r = await fetch(`/api/invites/${TOKEN}/accept`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ password: pw }),
+        });
+        if (r.ok) {
+          window.location.href = '/';
+          return;
+        }
+        const data = await r.json().catch(() => ({}));
+        setAlert(data.detail || 'Não foi possível concluir.');
+      } catch {
+        setAlert('Erro de rede. Tente novamente.');
+      } finally {
+        submit.disabled = false;
+        submit.textContent = 'Definir senha e entrar';
+      }
+    });
+
+    load();
+  </script>
+</body>
+</html>

@@ -35,3 +35,24 @@ FB_PASSWORD=masterkey
 - Nunca rodar `explore_firebird.py` no .fdb de produção.
 - Nunca commitar `.fdb`, `jaybird.jar`, `bkp Fire/`, `bkp Fire Novo/`, `backup Fire/`.
 - Charset errado quebra acentos silenciosamente.
+
+## Cliente override (CLIENT_NOT_FOUND recovery)
+Quando o CNPJ parseado não bate com `CADASTRO`, o usuário pode escolher
+manualmente o cliente via picker no portal. O override é metadado sidecar
+em `imports.cliente_override_*` (ver `persistence.md`); aqui mora o suporte
+SQL e a integração com o exporter.
+
+- `SEARCH_CLIENTS` — busca por razão social (`UPPER LIKE`) ou CNPJ digits-only
+  (`%LIKE%`), filtrada por `RELAC_CLIENTE='Sim'`, ordenada por `RAZAO_SOCIAL`,
+  `FIRST 50` baked-in (Firebird não gosta de `ROWS ?` parametrizado em todas
+  as versões).
+- `FIND_CLIENT_BY_CODIGO` — exact lookup por `CADASTRO.CODIGO`. Usada para
+  validar o override antes do INSERT (cliente pode ter sido inativado entre
+  seleção no portal e clique em "Cadastrar no Fire").
+- `FirebirdExporter.export(order, *, override_client_id=None)` — kwarg
+  opcional. Quando setado, pula `FIND_CLIENT_BY_CNPJ` e usa
+  `_validate_client_id`. Falha com a mesma `FirebirdClientNotFoundError`
+  do caminho clássico se o codigo for inválido.
+- Não há autenticação hoje; o `user` que aplicou o override é gravado em
+  `audit_log` e em `imports.cliente_override_by` como `None` — pronto
+  para v5 (OAuth Google).

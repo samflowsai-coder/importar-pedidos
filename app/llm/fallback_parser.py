@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Optional
 
+from app.llm.openrouter_client import LLMUnavailableError, OpenRouterClient
 from app.models.order import Order, OrderHeader, OrderItem
 from app.utils.logger import logger
 
@@ -64,24 +64,26 @@ def _extract_json(text: str) -> dict:
 
 
 class LLMFallbackParser:
+    """Last-resort parser. Lazy-instantiates OpenRouter client on first use.
+
+    Tests inject a fake by setting `parser._client` (an `OpenRouterClient`-like
+    object exposing `chat_completion(...)` -> str).
+    """
+
     def __init__(self) -> None:
-        self._client: Optional[object] = None
+        self._client: OpenRouterClient | None = None
 
     @property
     def model(self) -> str:
         return os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL)
 
     @property
-    def client(self):
+    def client(self) -> OpenRouterClient:
         if self._client is None:
-            import openai
-            self._client = openai.OpenAI(
-                base_url="https://openrouter.ai/api/v1",
-                api_key=os.environ["OPENROUTER_API_KEY"],
-            )
+            self._client = OpenRouterClient.from_env()
         return self._client
 
-    def parse(self, extracted: dict, source_file: str = "") -> Optional[Order]:
+    def parse(self, extracted: dict, source_file: str = "") -> Order | None:
         text = extracted.get("text", "")
         if not text.strip():
             return None
@@ -89,16 +91,14 @@ class LLMFallbackParser:
         logger.info(f"LLM fallback [{self.model}]: {source_file}")
 
         try:
-            response = self.client.chat.completions.create(
+            content = self.client.chat_completion(
                 model=self.model,
+                messages=[{"role": "user", "content": _PROMPT + text[:MAX_TEXT_CHARS]}],
+                response_format={"type": "json_object"},
                 max_tokens=2048,
                 temperature=0,
-                response_format={"type": "json_object"},
-                messages=[{"role": "user", "content": _PROMPT + text[:MAX_TEXT_CHARS]}],
-                extra_headers={"X-Title": "importar-pedidos"},
             )
-            content = response.choices[0].message.content or ""
-            data = _extract_json(content)
+            data = _extract_json(content or "")
 
             header = OrderHeader(**{
                 k: v for k, v in data.get("header", {}).items()
@@ -111,6 +111,9 @@ class LLMFallbackParser:
             ]
             return Order(header=header, items=items, source_file=source_file)
 
-        except Exception as e:
+        except LLMUnavailableError as e:
+            logger.error(f"LLM fallback indisponível [{source_file}]: {e}")
+            return None
+        except Exception as e:  # noqa: BLE001 — JSON parse errors, validation, etc.
             logger.error(f"LLM fallback falhou [{source_file}]: {e}")
             return None

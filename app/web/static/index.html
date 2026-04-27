@@ -691,10 +691,25 @@
       <span class="fb-dot" id="fbDot"></span>
       <span class="fb-label">FB</span>
     </div>
+    <a class="icon-btn" id="usersLink" href="/admin/usuarios" title="Gerenciar usuários" style="display:none; text-decoration:none">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+      </svg>
+    </a>
     <button class="icon-btn" id="configBtn" title="Configurações">
       <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
         <path d="M7.5 9.5a2 2 0 100-4 2 2 0 000 4z" stroke="currentColor" stroke-width="1.3"/>
         <path d="M12.2 7.5c0-.26.02-.52.06-.77l1.27-.74a.5.5 0 00.17-.68l-1.2-2.08a.5.5 0 00-.65-.18l-1.27.74a5 5 0 00-1.34-.77V1.5a.5.5 0 00-.5-.5H6.26a.5.5 0 00-.5.5v1.02a5 5 0 00-1.34.77l-1.27-.74a.5.5 0 00-.65.18L1.3 5.31a.5.5 0 00.17.68l1.27.74A5.1 5.1 0 002.8 7.5c0 .26-.02.52-.06.77l-1.27.74a.5.5 0 00-.17.68l1.2 2.08c.13.22.4.3.65.18l1.27-.74c.42.3.87.55 1.34.77v1.02c0 .28.22.5.5.5h2.44c.28 0 .5-.22.5-.5v-1.02a5 5 0 001.34-.77l1.27.74a.5.5 0 00.65-.18l1.2-2.08a.5.5 0 00-.17-.68l-1.27-.74c.04-.25.06-.51.06-.77z" stroke="currentColor" stroke-width="1.3"/>
+      </svg>
+    </button>
+    <span class="user-pill" id="userPill" title="Usuário logado" style="display:none;
+      align-items:center; gap:6px; padding:4px 10px;
+      border:1px solid var(--border); border-radius:20px;
+      font-size:12px; color:var(--text-secondary);"></span>
+    <button class="icon-btn" id="logoutBtn" title="Sair" style="display:none">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
       </svg>
     </button>
   </div>
@@ -995,6 +1010,35 @@
       <span class="modal-sel-path" id="browseSelPath"></span>
       <button class="btn btn-sm" onclick="closeBrowse()">Cancelar</button>
       <button class="btn btn-primary btn-sm" onclick="confirmBrowse()">Selecionar aqui</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Manual cliente picker (CLIENT_NOT_FOUND recovery) ── -->
+<div class="overlay" id="clientPickerOverlay">
+  <div class="modal" style="width: 640px; max-height: 75vh">
+    <div class="modal-header">
+      <span class="modal-title">Selecionar cliente do Fire</span>
+      <button class="icon-btn" onclick="closeClientPicker()">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <div style="padding: 14px 18px; border-bottom: 1px solid var(--border-subtle); flex-shrink: 0">
+      <input type="text" class="input" id="cpSearch"
+             placeholder="Razão social ou CNPJ (mín. 2 caracteres)"
+             autocomplete="off"
+             oninput="onClientSearchInput()"
+             style="width:100%">
+      <div id="cpStatus" style="margin-top:8px; font-size:11px; color: var(--text-muted); min-height:14px"></div>
+    </div>
+    <div class="modal-body" id="cpResults" style="padding: 4px 6px"></div>
+    <div class="modal-footer">
+      <span class="modal-sel-path" id="cpSelInfo"></span>
+      <button class="btn btn-sm" onclick="closeClientPicker()">Cancelar</button>
+      <button class="btn btn-primary btn-sm" id="cpConfirmBtn"
+              onclick="confirmClientOverride()" disabled>Confirmar</button>
     </div>
   </div>
 </div>
@@ -1589,6 +1633,133 @@ async function loadBrowseDir(path) {
   }
 }
 
+/* ── Manual cliente picker (CLIENT_NOT_FOUND recovery) ── */
+let cpState = {
+  importId: null,
+  selected: null,           // { codigo, razao_social, cpf_cnpj }
+  searchTimer: null,
+  searchAbort: null,
+};
+
+function openClientPicker(importId) {
+  cpState.importId = importId;
+  cpState.selected = null;
+  document.getElementById('cpSearch').value = '';
+  document.getElementById('cpStatus').textContent = '';
+  document.getElementById('cpResults').innerHTML = '';
+  document.getElementById('cpSelInfo').textContent = '';
+  document.getElementById('cpConfirmBtn').disabled = true;
+  document.getElementById('clientPickerOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('cpSearch').focus(), 80);
+}
+
+function closeClientPicker() {
+  document.getElementById('clientPickerOverlay').classList.remove('open');
+  if (cpState.searchAbort) { cpState.searchAbort.abort(); cpState.searchAbort = null; }
+  if (cpState.searchTimer) { clearTimeout(cpState.searchTimer); cpState.searchTimer = null; }
+  cpState = { importId: null, selected: null, searchTimer: null, searchAbort: null };
+}
+
+function onClientSearchInput() {
+  const q = (document.getElementById('cpSearch').value || '').trim();
+  if (cpState.searchTimer) clearTimeout(cpState.searchTimer);
+  if (q.length < 2) {
+    document.getElementById('cpStatus').textContent = q.length === 0 ? '' : 'Digite ao menos 2 caracteres…';
+    document.getElementById('cpResults').innerHTML = '';
+    return;
+  }
+  cpState.searchTimer = setTimeout(() => searchClientes(q), 250);
+}
+
+async function searchClientes(q) {
+  const statusEl = document.getElementById('cpStatus');
+  const resultsEl = document.getElementById('cpResults');
+  statusEl.textContent = 'Buscando…';
+  resultsEl.innerHTML = '';
+
+  if (cpState.searchAbort) cpState.searchAbort.abort();
+  const ctrl = new AbortController();
+  cpState.searchAbort = ctrl;
+
+  try {
+    const res = await fetch('/api/clientes/search?q=' + encodeURIComponent(q) + '&limit=20', {
+      signal: ctrl.signal,
+    });
+    if (res.status === 503) {
+      statusEl.innerHTML = '<span style="color:var(--error)">Fire não configurado — não dá para buscar clientes.</span>';
+      return;
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      statusEl.innerHTML = `<span style="color:var(--error)">${esc(body.detail || 'Erro HTTP ' + res.status)}</span>`;
+      return;
+    }
+    const data = await res.json();
+    if (!data.results || data.results.length === 0) {
+      statusEl.textContent = 'Nenhum cliente encontrado.';
+      return;
+    }
+    statusEl.textContent = `${data.results.length} cliente(s) encontrado(s).`;
+    resultsEl.innerHTML = data.results.map(c => `
+      <div class="dir-row" onclick="selectClienteRow(${c.codigo}, '${escJs(c.razao_social || '')}', '${escJs(c.cpf_cnpj || '')}')"
+           data-codigo="${c.codigo}">
+        <div style="flex:1; min-width:0">
+          <div style="font-size:13px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">
+            ${esc(c.razao_social || '(sem razão social)')}
+          </div>
+          <div style="font-size:11px; color:var(--text-muted); font-family: ui-monospace, 'SF Mono', monospace">
+            #${esc(c.codigo)} &middot; ${esc(c.cpf_cnpj || '—')}
+          </div>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    statusEl.innerHTML = `<span style="color:var(--error)">${esc(err.message || 'Falha na busca')}</span>`;
+  }
+}
+
+function selectClienteRow(codigo, razao, cnpj) {
+  cpState.selected = { codigo, razao_social: razao, cpf_cnpj: cnpj };
+  document.querySelectorAll('#cpResults .dir-row').forEach(el => {
+    if (Number(el.dataset.codigo) === Number(codigo)) {
+      el.style.background = 'var(--accent-bg)';
+      el.style.color = 'var(--accent-hover)';
+    } else {
+      el.style.background = '';
+      el.style.color = '';
+    }
+  });
+  document.getElementById('cpSelInfo').textContent = `Selecionado: #${codigo} · ${razao}`;
+  document.getElementById('cpConfirmBtn').disabled = false;
+}
+
+async function confirmClientOverride() {
+  if (!cpState.selected || !cpState.importId) return;
+  const btn = document.getElementById('cpConfirmBtn');
+  const statusEl = document.getElementById('cpStatus');
+  const importId = cpState.importId;
+  const codigo = cpState.selected.codigo;
+  btn.disabled = true;
+  const prev = btn.innerHTML;
+  btn.innerHTML = '<span class="spin"></span> Aplicando…';
+  try {
+    await api('/api/imported/' + encodeURIComponent(importId) + '/override-cliente', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cliente_codigo: codigo, reason: null }),
+    });
+    closeClientPicker();
+    // Re-fetch the preview so the banner reflects the override (verde).
+    await openImportDetail(importId);
+    await loadImported();
+  } catch (err) {
+    btn.disabled = false;
+    btn.innerHTML = prev;
+    statusEl.innerHTML = `<span style="color:var(--error)">${esc(err.message || 'Falha ao aplicar override')}</span>`;
+  }
+}
+
 /* ── Utils ── */
 async function api(url, opts) {
   const res = await fetch(url, opts);
@@ -1764,9 +1935,25 @@ function renderPreview(data) {
     banner.classList.remove('hidden');
     const s = check.summary;
     const client = check.client;
-    const clientBit = client.match
-      ? `<span style="color:var(--success)">✓ Cliente ${esc(client.razao_social || '')} (Fire #${esc(client.fire_id)})</span>`
-      : `<span style="color:var(--error)">✗ Cliente não encontrado no Fire (CNPJ ${esc(client.cnpj || '—')})</span>`;
+    // Identifier para o picker: dentro de openImportDetail temos o import_id
+    // como `data.preview_id`; numa preview fresca de upload o id ainda não existe,
+    // então o botão só aparece quando há um import_id estável.
+    const importId = data.preview_id;
+    const isCommitted = !!data.portal_status; // hidratado: já tem import_id em DB
+    let clientBit;
+    if (client.override) {
+      clientBit = `<span style="color:var(--success)">✓ Cliente selecionado manualmente: ${esc(client.razao_social || '')} (Fire #${esc(client.fire_id)})</span>`
+        + (isCommitted
+            ? ` <a href="#" onclick="event.preventDefault(); openClientPicker('${esc(importId)}')" style="font-size:11px;color:var(--text-muted);margin-left:6px">alterar</a>`
+            : '');
+    } else if (client.match) {
+      clientBit = `<span style="color:var(--success)">✓ Cliente ${esc(client.razao_social || '')} (Fire #${esc(client.fire_id)})</span>`;
+    } else {
+      const pickerBtn = isCommitted
+        ? ` <button class="btn btn-sm" onclick="openClientPicker('${esc(importId)}')" style="margin-left:8px;padding:2px 10px;font-size:11px">Selecionar cliente do Fire</button>`
+        : ' <span style="color:var(--text-muted);font-size:11px;margin-left:6px">(commit para destravar a seleção manual)</span>';
+      clientBit = `<span style="color:var(--error)">✗ Cliente não encontrado no Fire (CNPJ ${esc(client.cnpj || '—')})</span>${pickerBtn}`;
+    }
     const itemsBit = s.items_missing > 0
       ? `<span style="color:var(--warn)">⚠ ${s.items_matched}/${s.items_total} itens com match &middot; ${s.items_missing} sem correspondência</span>`
       : `<span style="color:var(--success)">✓ ${s.items_matched}/${s.items_total} itens com match no Fire</span>`;
@@ -1883,6 +2070,41 @@ async function commitPreview() {
 }
 
 init();
+
+// ── Auth gate (Phase 4b) ────────────────────────────────────────────────
+// Runs ASAP and redirects anon users to /login. Wires header pill / users
+// link / logout button. Idempotent — safe even if init() above already ran.
+(async () => {
+  try {
+    const r = await fetch('/api/auth/me', { credentials: 'same-origin' });
+    const data = await r.json().catch(() => ({}));
+    if (!data.user) {
+      window.location.href = '/login';
+      return;
+    }
+    const u = data.user;
+    const pill = document.getElementById('userPill');
+    if (pill) {
+      pill.textContent = u.email;
+      pill.style.display = 'inline-flex';
+    }
+    const logout = document.getElementById('logoutBtn');
+    if (logout) {
+      logout.style.display = '';
+      logout.addEventListener('click', async () => {
+        await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+        window.location.href = '/login';
+      });
+    }
+    if (u.role === 'admin') {
+      const link = document.getElementById('usersLink');
+      if (link) link.style.display = '';
+    }
+  } catch (err) {
+    // Network / server down — leave the page as-is rather than redirect-loop.
+    console.warn('auth check failed', err);
+  }
+})();
 </script>
 </body>
 </html>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -8,11 +9,34 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from app.observability.trace import current_trace_id, new_trace_id, with_trace_id
+from app.persistence import invites_repo, sessions_repo, users_repo
+from app.security import (
+    PasswordTooLongError,
+    WeakPasswordError,
+    hash_needs_rehash,
+    hash_password,
+    verify_password,
+)
+from app.state import (
+    EventSource,
+    InvalidTransitionError,
+    LifecycleEvent,
+    transition,
+)
+from app.web.auth import (
+    User,
+    clear_session_cookie,
+    current_user,
+    require_admin,
+    require_user,
+    set_session_cookie,
+)
 from app.web.preview_cache import PreviewConsumedError, PreviewNotFoundError, get_cache
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -23,6 +47,11 @@ MAX_PAGE_SIZE = 500
 
 app = FastAPI(title="Portal de Pedidos", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# Inbound webhooks (Fase 4 — Gestor de Produção status updates)
+from app.web.webhooks import router as webhooks_router  # noqa: E402
+
+app.include_router(webhooks_router)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────
@@ -49,6 +78,7 @@ def _make_log_entry(
     snapshot: Optional[dict] = None,
     fire_codigo: Optional[int] = None,
     db_result: Optional[dict] = None,
+    trace_id: Optional[str] = None,
 ) -> dict:
     return {
         "id": str(uuid.uuid4()),
@@ -62,6 +92,7 @@ def _make_log_entry(
         "snapshot": snapshot,
         "fire_codigo": fire_codigo,
         "db_result": db_result,
+        "trace_id": trace_id or current_trace_id() or new_trace_id(),
     }
 
 
@@ -191,9 +222,434 @@ def index() -> FileResponse:
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 
+@app.get("/login")
+def login_page() -> FileResponse:
+    """Static login form. Talks to /api/auth/login via fetch + sets cookie."""
+    return FileResponse(str(STATIC_DIR / "login.html"))
+
+
+@app.get("/admin/usuarios")
+def admin_users_page() -> FileResponse:
+    """User-management UI. Auth is enforced by the API endpoints it calls;
+    the page itself is static and redirects to /login if /api/auth/me returns null."""
+    return FileResponse(str(STATIC_DIR / "admin-usuarios.html"))
+
+
 @app.get("/health")
 def health() -> JSONResponse:
     return JSONResponse({"status": "ok", "service": "importar-pedidos"})
+
+
+# ── Auth (Fase 4b) ────────────────────────────────────────────────────────
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/api/auth/login")
+def login(body: LoginRequest, request: Request) -> JSONResponse:
+    """Authenticate by email + password. Sets HttpOnly session cookie.
+
+    Always responds with the same generic message on failure to avoid
+    enumeration of registered emails.
+    """
+    user = users_repo.find_by_email(body.email)
+    # Run verify_password unconditionally (with a dummy hash if user is None)
+    # to keep timing identical between "no such user" and "wrong password".
+    _DUMMY_HASH = "$2b$12$ChXp.TS9Wq8pTNNGxN3lT.LYsVVJrAvZBwR9NLfKMKzVsC9ATcz9G"
+    is_valid = verify_password(body.password, user.password_hash if user else _DUMMY_HASH)
+
+    if user is None or not user.active or not is_valid:
+        raise HTTPException(status_code=401, detail="email ou senha inválidos")
+
+    # Opportunistic rehash if rounds changed
+    if hash_needs_rehash(user.password_hash):
+        try:
+            users_repo.update_password_hash(user.id, hash_password(body.password))
+        except (WeakPasswordError, PasswordTooLongError):
+            # User has a legacy weak/long password we no longer accept;
+            # leave the existing hash and let them keep logging in.
+            pass
+
+    users_repo.update_last_login(user.id)
+    sess = sessions_repo.create_session(
+        user_id=user.id,
+        ip=(request.client.host if request.client else None),
+        user_agent=(request.headers.get("user-agent") or "")[:500],
+    )
+    response = JSONResponse({
+        "user": {"id": user.id, "email": user.email, "role": user.role},
+        "session_expires_at": sess.expires_at,
+    })
+    set_session_cookie(response, sess.token)
+    return response
+
+
+@app.post("/api/auth/logout")
+def logout(
+    request: Request,
+    user: User = Depends(require_user),  # noqa: ARG001 — enforce auth
+) -> JSONResponse:
+    """Delete the current session. Cookie cleared on response.
+
+    Reads the cookie directly from request.cookies because the dependency
+    only exposes the validated User, not the raw token.
+    """
+    token = request.cookies.get("portal_session")
+    if token:
+        sessions_repo.delete(token)
+    response = JSONResponse({"ok": True})
+    clear_session_cookie(response)
+    return response
+
+
+@app.get("/api/auth/me")
+def auth_me(user: User | None = Depends(current_user)) -> JSONResponse:
+    """Whoami — returns the user or null. Used by the SPA to decide whether
+    to render the login page or the main UI.
+    """
+    if user is None:
+        return JSONResponse({"user": None})
+    return JSONResponse({
+        "user": {"id": user.id, "email": user.email, "role": user.role},
+    })
+
+
+# ── Bootstrap (first-admin signup; closes after first user) ──────────────
+
+
+@app.get("/api/auth/bootstrap-status")
+def bootstrap_status() -> JSONResponse:
+    """Tells the login page whether to show the 'create first admin' form.
+
+    Open as long as the `users` table has zero ACTIVE rows. Once the first
+    admin exists, this returns `required: false` and `/api/auth/bootstrap`
+    starts rejecting with 403.
+    """
+    return JSONResponse({"required": users_repo.count_active_users() == 0})
+
+
+class BootstrapRequest(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/api/auth/bootstrap")
+def bootstrap_admin(body: BootstrapRequest, request: Request) -> JSONResponse:
+    """Create the first admin. ONLY works if no active user exists yet.
+
+    Re-checks the users count under the same connection lifetime to avoid
+    a TOCTOU where two simultaneous bootstrap calls each create an admin.
+    The UNIQUE(email) constraint helps too if the same email is used.
+    """
+    if users_repo.count_active_users() > 0:
+        raise HTTPException(
+            status_code=403,
+            detail="bootstrap fechado — já existe administrador ativo",
+        )
+    try:
+        user = users_repo.create_user(
+            email=body.email, password=body.password, role="admin",
+        )
+    except WeakPasswordError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PasswordTooLongError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except users_repo.DuplicateEmailError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    users_repo.update_last_login(user.id)
+    sess = sessions_repo.create_session(
+        user_id=user.id,
+        ip=(request.client.host if request.client else None),
+        user_agent=(request.headers.get("user-agent") or "")[:500],
+    )
+    response = JSONResponse({
+        "user": {"id": user.id, "email": user.email, "role": user.role},
+        "session_expires_at": sess.expires_at,
+    })
+    set_session_cookie(response, sess.token)
+    return response
+
+
+# ── Admin user management (admin-only) ───────────────────────────────────
+
+
+def _user_dto(u: users_repo.User) -> dict:
+    return {
+        "id": u.id,
+        "email": u.email,
+        "role": u.role,
+        "active": u.active,
+        "created_at": u.created_at,
+        "last_login_at": u.last_login_at,
+    }
+
+
+@app.get("/api/admin/users")
+def admin_list_users(
+    _admin: User = Depends(require_admin),
+) -> JSONResponse:
+    return JSONResponse({
+        "users": [_user_dto(u) for u in users_repo.list_users(limit=500)],
+    })
+
+
+class AdminCreateUserRequest(BaseModel):
+    email: str
+    password: str
+    role: str = "operator"
+
+
+@app.post("/api/admin/users")
+def admin_create_user(
+    body: AdminCreateUserRequest,
+    _admin: User = Depends(require_admin),
+) -> JSONResponse:
+    try:
+        user = users_repo.create_user(
+            email=body.email, password=body.password, role=body.role,
+        )
+    except WeakPasswordError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PasswordTooLongError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except users_repo.DuplicateEmailError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except users_repo.InvalidRoleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return JSONResponse({"user": _user_dto(user)}, status_code=201)
+
+
+class AdminResetPasswordRequest(BaseModel):
+    password: str
+
+
+@app.post("/api/admin/users/{user_id}/reset-password")
+def admin_reset_password(
+    user_id: int,
+    body: AdminResetPasswordRequest,
+    _admin: User = Depends(require_admin),
+) -> JSONResponse:
+    target = users_repo.find_by_id(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="usuário não encontrado")
+    try:
+        new_hash = hash_password(body.password)
+    except WeakPasswordError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PasswordTooLongError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    users_repo.update_password_hash(target.id, new_hash)
+    # Sign target out everywhere — they must log in with the new password.
+    sessions_repo.delete_all_for_user(target.id)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/admin/users/{user_id}/deactivate")
+def admin_deactivate(
+    user_id: int,
+    admin_user: User = Depends(require_admin),
+) -> JSONResponse:
+    if user_id == admin_user.id:
+        raise HTTPException(
+            status_code=409, detail="você não pode desativar a si mesmo",
+        )
+    target = users_repo.find_by_id(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="usuário não encontrado")
+    users_repo.deactivate(user_id)
+    sessions_repo.delete_all_for_user(user_id)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/admin/users/{user_id}/reactivate")
+def admin_reactivate(
+    user_id: int,
+    _admin: User = Depends(require_admin),
+) -> JSONResponse:
+    target = users_repo.find_by_id(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="usuário não encontrado")
+    users_repo.reactivate(user_id)
+    return JSONResponse({"ok": True})
+
+
+# ── Invitations (admin issues, invitee accepts) ──────────────────────────
+
+
+def _invite_dto(inv: invites_repo.Invite, request: Request | None = None) -> dict:
+    """Public-safe view of an invite. Builds the absolute URL when a request
+    is in scope, so the admin UI can show a copy-paste link.
+    """
+    base = ""
+    if request is not None:
+        base = f"{request.url.scheme}://{request.url.netloc}"
+    return {
+        "token": inv.token,
+        "email": inv.email,
+        "role": inv.role,
+        "invited_by_user_id": inv.invited_by_user_id,
+        "created_at": inv.created_at,
+        "expires_at": inv.expires_at,
+        "expired": inv.is_expired(),
+        "accepted_at": inv.accepted_at,
+        "revoked_at": inv.revoked_at,
+        "accept_url": f"{base}/invite/{inv.token}",
+    }
+
+
+class CreateInviteRequest(BaseModel):
+    email: str
+    role: str = "operator"
+    ttl_hours: int | None = None  # None → repo default (7d)
+
+
+@app.post("/api/admin/invites")
+def admin_create_invite(
+    body: CreateInviteRequest,
+    request: Request,
+    admin_user: User = Depends(require_admin),
+) -> JSONResponse:
+    # Refuse if there's already an active user with this email (vs creating
+    # a confusing duplicate-then-fail-on-accept).
+    existing_user = users_repo.find_by_email(body.email)
+    if existing_user is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"já existe usuário com este e-mail (id={existing_user.id})",
+        )
+    try:
+        ttl = body.ttl_hours if body.ttl_hours and body.ttl_hours > 0 else invites_repo.DEFAULT_TTL_HOURS
+        inv = invites_repo.create(
+            email=body.email,
+            role=body.role,
+            invited_by_user_id=admin_user.id,
+            ttl_hours=ttl,
+        )
+    except users_repo.InvalidRoleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except invites_repo.OpenInviteExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return JSONResponse({"invite": _invite_dto(inv, request)}, status_code=201)
+
+
+@app.get("/api/admin/invites")
+def admin_list_invites(
+    request: Request,
+    _admin: User = Depends(require_admin),
+) -> JSONResponse:
+    return JSONResponse({
+        "invites": [_invite_dto(inv, request) for inv in invites_repo.list_pending()],
+    })
+
+
+@app.delete("/api/admin/invites/{token}")
+def admin_revoke_invite(
+    token: str,
+    _admin: User = Depends(require_admin),
+) -> JSONResponse:
+    inv = invites_repo.get_by_token(token)
+    if inv is None:
+        raise HTTPException(status_code=404, detail="convite não encontrado")
+    changed = invites_repo.revoke(token)
+    if not changed:
+        # already accepted or already revoked — return idempotent OK
+        return JSONResponse({"ok": True, "noop": True})
+    return JSONResponse({"ok": True})
+
+
+# Public endpoints — invitee uses these. NO auth dependency. They are
+# guarded entirely by the secret token in the URL.
+
+@app.get("/api/invites/{token}")
+def public_get_invite(token: str) -> JSONResponse:
+    """Returns minimal info to render the accept page. 404 if invalid."""
+    inv = invites_repo.get_by_token(token)
+    if inv is None or inv.is_revoked or inv.is_accepted:
+        raise HTTPException(status_code=404, detail="convite inválido ou já utilizado")
+    if inv.is_expired():
+        raise HTTPException(status_code=410, detail="convite expirado")
+    return JSONResponse({
+        "email": inv.email,
+        "role": inv.role,
+        "expires_at": inv.expires_at,
+    })
+
+
+class AcceptInviteRequest(BaseModel):
+    password: str
+
+
+@app.post("/api/invites/{token}/accept")
+def public_accept_invite(
+    token: str,
+    body: AcceptInviteRequest,
+    request: Request,
+) -> JSONResponse:
+    """Accept the invite: create user with the chosen password, mark invite
+    used, log the new user in.
+    """
+    inv = invites_repo.get_by_token(token)
+    if inv is None or inv.is_revoked or inv.is_accepted:
+        raise HTTPException(status_code=404, detail="convite inválido ou já utilizado")
+    if inv.is_expired():
+        raise HTTPException(status_code=410, detail="convite expirado")
+
+    # Edge case: someone (admin manually) created a user with this email
+    # between issue and accept — refuse rather than collide.
+    if users_repo.find_by_email(inv.email) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="usuário com este e-mail já existe; revogue o convite",
+        )
+
+    try:
+        user = users_repo.create_user(
+            email=inv.email, password=body.password, role=inv.role,
+        )
+    except WeakPasswordError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PasswordTooLongError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except users_repo.DuplicateEmailError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        invites_repo.accept_for_user(token, accepted_user_id=user.id)
+    except invites_repo.InviteUnusableError as exc:
+        # Lost the race: someone consumed the same token concurrently.
+        users_repo.deactivate(user.id)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    users_repo.update_last_login(user.id)
+    sess = sessions_repo.create_session(
+        user_id=user.id,
+        ip=(request.client.host if request.client else None),
+        user_agent=(request.headers.get("user-agent") or "")[:500],
+    )
+    response = JSONResponse({
+        "user": {"id": user.id, "email": user.email, "role": user.role},
+        "session_expires_at": sess.expires_at,
+    }, status_code=201)
+    set_session_cookie(response, sess.token)
+    return response
+
+
+@app.get("/invite/{token}")
+def invite_accept_page(token: str) -> FileResponse:  # noqa: ARG001 — token used by frontend
+    """Public page where invitee sets password. JS reads token from URL."""
+    return FileResponse(str(STATIC_DIR / "invite.html"))
 
 
 @app.get("/api/config")
@@ -214,7 +670,10 @@ class ConfigUpdate(BaseModel):
 
 
 @app.post("/api/config")
-def update_config(body: ConfigUpdate) -> JSONResponse:
+def update_config(
+    body: ConfigUpdate,
+    _user: User = Depends(require_user),
+) -> JSONResponse:
     from app import config as app_config
     watch_dir = str(Path(body.watchDir).expanduser().resolve()) if body.watchDir else None
     output_dir = str(Path(body.outputDir).expanduser().resolve()) if body.outputDir else None
@@ -264,7 +723,10 @@ class ImportRequest(BaseModel):
 
 
 @app.post("/api/import")
-def import_files(body: ImportRequest) -> JSONResponse:
+def import_files(
+    body: ImportRequest,
+    _user: User = Depends(require_user),
+) -> JSONResponse:
     from app import config as app_config
     cfg = _get_cfg()
     watch = Path(cfg["watch_dir"])
@@ -390,7 +852,10 @@ class ReimportRequest(BaseModel):
 
 
 @app.post("/api/reimport")
-def reimport_file(body: ReimportRequest) -> JSONResponse:
+def reimport_file(
+    body: ReimportRequest,
+    _user: User = Depends(require_user),
+) -> JSONResponse:
     from app import config as app_config
     cfg = _get_cfg()
     imp = app_config.imported_dir(cfg)
@@ -491,7 +956,10 @@ def browse_filesystem(path: str = "~") -> JSONResponse:
 # ── Preview → Commit flow ─────────────────────────────────────────────────
 
 @app.post("/api/preview")
-async def preview_file(file: UploadFile = File(...)) -> JSONResponse:
+async def preview_file(
+    file: UploadFile = File(...),
+    _user: User = Depends(require_user),
+) -> JSONResponse:
     from app.ingestion.file_loader import LoadedFile
     from app.pipeline import process
 
@@ -540,7 +1008,10 @@ class PreviewPendingRequest(BaseModel):
 
 
 @app.post("/api/preview-pending")
-def preview_pending(body: PreviewPendingRequest) -> JSONResponse:
+def preview_pending(
+    body: PreviewPendingRequest,
+    _user: User = Depends(require_user),
+) -> JSONResponse:
     """Preview a file already in the watch folder (no upload)."""
     from app.ingestion.file_loader import LoadedFile
     from app.pipeline import process
@@ -584,7 +1055,10 @@ class CommitRequest(BaseModel):
 
 
 @app.post("/api/commit")
-def commit_preview(body: CommitRequest) -> JSONResponse:
+def commit_preview(
+    body: CommitRequest,
+    _user: User = Depends(require_user),
+) -> JSONResponse:
     """Salva o pedido no portal como 'em revisão'. NÃO grava no Fire.
     O usuário revisa o match na aba Pedidos e só depois clica em 'Cadastrar no Fire'.
     """
@@ -598,51 +1072,65 @@ def commit_preview(body: CommitRequest) -> JSONResponse:
 
     order = entry.order
 
-    log_entry = _make_log_entry(
-        source_filename=entry.source_filename,
-        order_number=order.header.order_number,
-        customer=order.header.customer_name,
-        output_files=[],
-        status="success",
-        snapshot=order.model_dump(),
-    )
-    log_entry["portal_status"] = "parsed"
-    log_entry["check"] = entry.check
+    # Trace_id is minted at this boundary and travels with the pedido for life.
+    with with_trace_id() as trace_id:
+        log_entry = _make_log_entry(
+            source_filename=entry.source_filename,
+            order_number=order.header.order_number,
+            customer=order.header.customer_name,
+            output_files=[],
+            status="success",
+            snapshot=order.model_dump(),
+            trace_id=trace_id,
+        )
+        log_entry["portal_status"] = "parsed"
+        log_entry["check"] = entry.check
 
-    # DB first — if this fails, the file stays in the watch folder and user
-    # can retry without losing the original document.
-    from app.persistence import repo
-    repo.insert_import(log_entry)
-    repo.append_audit(
-        log_entry["id"],
-        "imported_to_portal",
-        {
-            "source": "preview_commit",
-            "items": len(order.items),
-            "from_watch": entry.source_path is not None,
-            "check": entry.check.get("summary") if entry.check else None,
-        },
-    )
+        # DB first — if this fails, the file stays in the watch folder and user
+        # can retry without losing the original document.
+        from app.persistence import repo
+        repo.insert_import(log_entry)
+        repo.append_audit(
+            log_entry["id"],
+            "imported_to_portal",
+            {
+                "source": "preview_commit",
+                "items": len(order.items),
+                "from_watch": entry.source_path is not None,
+                "check": entry.check.get("summary") if entry.check else None,
+            },
+        )
+        transition(
+            log_entry["id"],
+            LifecycleEvent.IMPORTED,
+            source=EventSource.PORTAL,
+            payload={
+                "items": len(order.items),
+                "from_watch": entry.source_path is not None,
+                "check_summary": entry.check.get("summary") if entry.check else None,
+            },
+        )
 
-    # Only move the source after persistence succeeded.
-    if entry.source_path:
-        from app import config as app_config
-        src = Path(entry.source_path)
-        if src.exists():
-            imp = app_config.imported_dir(cfg)
-            imp.mkdir(parents=True, exist_ok=True)
-            dest = imp / src.name
-            if dest.exists():
-                stem, suffix = src.stem, src.suffix
-                dest = imp / f"{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}"
-            shutil.move(str(src), str(dest))
+        # Only move the source after persistence succeeded.
+        if entry.source_path:
+            from app import config as app_config
+            src = Path(entry.source_path)
+            if src.exists():
+                imp = app_config.imported_dir(cfg)
+                imp.mkdir(parents=True, exist_ok=True)
+                dest = imp / src.name
+                if dest.exists():
+                    stem, suffix = src.stem, src.suffix
+                    dest = imp / f"{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}"
+                shutil.move(str(src), str(dest))
 
-    return JSONResponse({
-        "entry_id": log_entry["id"],
-        "order": order.header.order_number or "—",
-        "customer": order.header.customer_name or "—",
-        "portal_status": "parsed",
-    })
+        return JSONResponse({
+            "entry_id": log_entry["id"],
+            "order": order.header.order_number or "—",
+            "customer": order.header.customer_name or "—",
+            "portal_status": "parsed",
+            "trace_id": trace_id,
+        })
 
 
 # ── Per-order actions ───────────────────────────────────────────────────
@@ -670,7 +1158,12 @@ class _FireSendOutcome:
 
 def _send_one_to_fire(import_id: str, cfg: dict) -> _FireSendOutcome:
     """Insert a parsed order into Fire. Returns structured outcome (no HTTP exceptions)
-    so batch callers can aggregate per-item results."""
+    so batch callers can aggregate per-item results.
+
+    State mutation contract:
+        - On Fire failure: log SEND_TO_FIRE_FAILED (state stays PARSED).
+        - On Fire success: update aux fields then transition SEND_TO_FIRE_SUCCEEDED.
+    """
     from app.exporters.firebird_exporter import FirebirdExporter
     from app.persistence import repo
     from app.models.order import Order
@@ -698,54 +1191,93 @@ def _send_one_to_fire(import_id: str, cfg: dict) -> _FireSendOutcome:
             False, reason="invalid_snapshot", http_status=422, detail=f"Snapshot inválido: {exc}"
         )
 
-    output_path = Path(cfg["output_dir"]).expanduser().resolve()
-    output_path.mkdir(parents=True, exist_ok=True)
-    export_mode = cfg.get("export_mode", "xlsx")
-    output_files: list[dict] = []
-    if export_mode in ("xlsx", "both"):
-        from app.exporters.erp_exporter import ERPExporter
-        paths = ERPExporter().export(order, str(output_path))
-        output_files = [{"name": p.name, "path": str(p)} for p in paths]
+    # Reuse the trace_id minted on commit so logs across commit→send-to-fire
+    # are correlated for the same pedido.
+    with with_trace_id(entry.get("trace_id")):
+        output_path = Path(cfg["output_dir"]).expanduser().resolve()
+        output_path.mkdir(parents=True, exist_ok=True)
+        export_mode = cfg.get("export_mode", "xlsx")
+        output_files: list[dict] = []
+        if export_mode in ("xlsx", "both"):
+            from app.exporters.erp_exporter import ERPExporter
+            paths = ERPExporter().export(order, str(output_path))
+            output_files = [{"name": p.name, "path": str(p)} for p in paths]
 
-    result = FirebirdExporter().export(order)
-    db_result = result.to_dict()
+        override = entry.get("cliente_override_codigo")
+        result = FirebirdExporter().export(order, override_client_id=override)
+        db_result = result.to_dict()
 
-    if result.skipped or result.fire_codigo is None:
+        if result.skipped or result.fire_codigo is None:
+            repo.append_audit(
+                import_id,
+                "send_to_fire_failed",
+                {
+                    "skip_reason": result.skip_reason,
+                    "items_inserted": result.items_inserted,
+                    "cliente_override_codigo": override,
+                },
+            )
+            try:
+                transition(
+                    import_id,
+                    LifecycleEvent.SEND_TO_FIRE_FAILED,
+                    source=EventSource.PORTAL,
+                    payload={
+                        "skip_reason": result.skip_reason,
+                        "items_inserted": result.items_inserted,
+                        "cliente_override_codigo": override,
+                    },
+                )
+            except InvalidTransitionError:
+                # State already moved; lifecycle log captured by audit_log.
+                pass
+            return _FireSendOutcome(
+                False,
+                reason=result.skip_reason or "no_fire_codigo",
+                http_status=409,
+                detail=f"Fire rejeitou o pedido: {result.skip_reason or 'sem fire_codigo'}",
+            )
+
+        now = datetime.now().isoformat(timespec="seconds")
+        repo.update_fire_metadata(
+            import_id,
+            fire_codigo=result.fire_codigo,
+            db_result=db_result,
+            output_files=output_files or entry.get("output_files") or [],
+            sent_to_fire_at=now,
+        )
         repo.append_audit(
             import_id,
-            "send_to_fire_failed",
-            {"skip_reason": result.skip_reason, "items_inserted": result.items_inserted},
+            "sent_to_fire",
+            {
+                "fire_codigo": result.fire_codigo,
+                "items_inserted": result.items_inserted,
+                "cliente_override_codigo": override,
+            },
         )
+        transition(
+            import_id,
+            LifecycleEvent.SEND_TO_FIRE_SUCCEEDED,
+            source=EventSource.PORTAL,
+            payload={
+                "fire_codigo": result.fire_codigo,
+                "items_inserted": result.items_inserted,
+                "cliente_override_codigo": override,
+            },
+        )
+
         return _FireSendOutcome(
-            False,
-            reason=result.skip_reason or "no_fire_codigo",
-            http_status=409,
-            detail=f"Fire rejeitou o pedido: {result.skip_reason or 'sem fire_codigo'}",
+            True,
+            fire_codigo=result.fire_codigo,
+            items_inserted=result.items_inserted,
         )
-
-    now = datetime.now().isoformat(timespec="seconds")
-    updated = dict(entry)
-    updated["portal_status"] = "sent_to_fire"
-    updated["sent_to_fire_at"] = now
-    updated["fire_codigo"] = result.fire_codigo
-    updated["db_result"] = db_result
-    updated["output_files"] = output_files or entry.get("output_files") or []
-    repo.insert_import(updated)
-    repo.append_audit(
-        import_id,
-        "sent_to_fire",
-        {"fire_codigo": result.fire_codigo, "items_inserted": result.items_inserted},
-    )
-
-    return _FireSendOutcome(
-        True,
-        fire_codigo=result.fire_codigo,
-        items_inserted=result.items_inserted,
-    )
 
 
 @app.post("/api/imported/{import_id}/send-to-fire")
-def send_to_fire(import_id: str) -> JSONResponse:
+def send_to_fire(
+    import_id: str,
+    _user: User = Depends(require_user),
+) -> JSONResponse:
     cfg = _get_cfg()
     outcome = _send_one_to_fire(import_id, cfg)
     if not outcome.ok:
@@ -763,7 +1295,10 @@ class BatchSendRequest(BaseModel):
 
 
 @app.post("/api/batch/send-to-fire")
-def batch_send_to_fire(body: BatchSendRequest) -> JSONResponse:
+def batch_send_to_fire(
+    body: BatchSendRequest,
+    _user: User = Depends(require_user),
+) -> JSONResponse:
     """Send multiple parsed orders to Fire. Tolerates partial failures — each id is
     attempted independently; response lists per-id outcome."""
     if not body.ids:
@@ -806,8 +1341,160 @@ class CancelRequest(BaseModel):
     reason: Optional[str] = None
 
 
+# ── Gestor de Produção (Fase 3, gatilho manual + drain inline) ──────────
+
+
+@app.post("/api/imported/{import_id}/post-to-gestor")
+def post_to_gestor(
+    import_id: str,
+    _user: User = Depends(require_user),
+) -> JSONResponse:
+    """Envia pedido (já em Fire) para o Gestor de Produção.
+
+    Phase 3 wiring: enqueue outbox → transition REQUESTED → drain inline.
+    Phase 5 substitutes inline drain by background worker.
+    """
+    from app.integrations.gestor import (
+        GESTOR_TARGET_NAME,
+        GestorClient,
+        GestorClientError,
+        build_gestor_payload,
+    )
+    from app.models.order import Order
+    from app.persistence import outbox_repo, repo
+
+    entry = repo.get_import(import_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    if entry.get("portal_status") != "sent_to_fire":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Pedido precisa estar em Fire antes do Gestor "
+                f"(status atual: {entry.get('portal_status')})"
+            ),
+        )
+    if entry.get("production_status") != "none":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Pedido já enviado ao Gestor "
+                f"(production_status: {entry.get('production_status')})"
+            ),
+        )
+
+    snapshot = entry.get("snapshot")
+    if not snapshot:
+        raise HTTPException(status_code=422, detail="Snapshot indisponível")
+    try:
+        order = Order.model_validate(snapshot)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=422, detail=f"Snapshot inválido: {exc}"
+        ) from exc
+
+    with with_trace_id(entry.get("trace_id")) as trace_id:
+        payload_request = build_gestor_payload(
+            import_id=import_id,
+            order=order,
+            metadata={
+                "fire_codigo": entry.get("fire_codigo"),
+                "trace_id": trace_id,
+            },
+        )
+        idempotency_key = str(uuid.uuid4())
+
+        # 1) Enqueue durably FIRST. If something blows up next, the row is
+        #    in DB and a retry is straightforward.
+        try:
+            row = outbox_repo.enqueue(
+                import_id=import_id,
+                target=GESTOR_TARGET_NAME,
+                endpoint="/v1/orders",
+                payload=payload_request.model_dump(),
+                idempotency_key=idempotency_key,
+            )
+        except outbox_repo.OutboxDuplicateError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"Idempotency key collision: {exc}"
+            ) from exc
+
+        # 2) State transition: this is the audit-grade record of the request.
+        try:
+            transition(
+                import_id,
+                LifecycleEvent.POST_TO_GESTOR_REQUESTED,
+                source=EventSource.PORTAL,
+                payload={"outbox_id": row.id, "idempotency_key": idempotency_key},
+            )
+        except InvalidTransitionError as exc:
+            outbox_repo.mark_failed(
+                row.id, error=f"transition_invalid: {exc}", dead=True
+            )
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        # 3) Drain inline. Phase 5 worker will own this.
+        try:
+            client = GestorClient()
+        except GestorClientError as exc:
+            outbox_repo.mark_failed(row.id, error=str(exc))
+            transition(
+                import_id,
+                LifecycleEvent.POST_TO_GESTOR_FAILED,
+                source=EventSource.PORTAL,
+                payload={"reason": str(exc)},
+            )
+            raise HTTPException(
+                status_code=503, detail=f"Gestor não configurado: {exc}"
+            ) from exc
+
+        try:
+            try:
+                response = client.create_order(
+                    payload_request, idempotency_key=idempotency_key,
+                )
+            except GestorClientError as exc:
+                outbox_repo.mark_failed(row.id, error=str(exc))
+                transition(
+                    import_id,
+                    LifecycleEvent.POST_TO_GESTOR_FAILED,
+                    source=EventSource.PORTAL,
+                    payload={"reason": str(exc), "status_code": exc.status_code},
+                )
+                raise HTTPException(
+                    status_code=502, detail=f"Gestor rejeitou: {exc}"
+                ) from exc
+
+            # 4) Success: persist correlation, mark outbox, transition SENT.
+            outbox_repo.mark_sent(row.id, response=response.model_dump())
+            repo.set_gestor_order_id(import_id, response.id)
+            result = transition(
+                import_id,
+                LifecycleEvent.POST_TO_GESTOR_SENT,
+                source=EventSource.PORTAL,
+                payload={
+                    "gestor_order_id": response.id,
+                    "outbox_id": row.id,
+                },
+            )
+        finally:
+            client.close()
+
+        return JSONResponse({
+            "entry_id": import_id,
+            "gestor_order_id": response.id,
+            "production_status": result.production_status.value,
+            "outbox_id": row.id,
+            "trace_id": trace_id,
+        })
+
+
 @app.post("/api/imported/{import_id}/cancel")
-def cancel_import(import_id: str, body: CancelRequest | None = None) -> JSONResponse:
+def cancel_import(
+    import_id: str,
+    body: CancelRequest | None = None,
+    _user: User = Depends(require_user),
+) -> JSONResponse:
     from app.persistence import repo
     entry = repo.get_import(import_id)
     if entry is None:
@@ -815,15 +1502,160 @@ def cancel_import(import_id: str, body: CancelRequest | None = None) -> JSONResp
     if entry.get("portal_status") == "sent_to_fire":
         raise HTTPException(status_code=409, detail="Pedido já foi enviado ao Fire — não pode ser cancelado pelo portal")
 
-    updated = dict(entry)
-    updated["portal_status"] = "cancelled"
-    repo.insert_import(updated)
-    repo.append_audit(
-        import_id,
-        "cancelled",
-        {"reason": (body.reason if body else None)},
-    )
-    return JSONResponse({"entry_id": import_id, "portal_status": "cancelled"})
+    reason = body.reason if body else None
+    with with_trace_id(entry.get("trace_id")):
+        repo.append_audit(import_id, "cancelled", {"reason": reason})
+        try:
+            result = transition(
+                import_id,
+                LifecycleEvent.CANCELLED,
+                source=EventSource.PORTAL,
+                payload={"reason": reason},
+            )
+        except InvalidTransitionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return JSONResponse({
+        "entry_id": import_id,
+        "portal_status": result.portal_status.value,
+    })
+
+
+# ── Manual cliente override (CLIENT_NOT_FOUND recovery) ─────────────────
+#
+# When `FirebirdExporter` fails with skip_reason=CLIENT_NOT_FOUND, the user
+# can search CADASTRO and pick the right cliente manually. The selection is
+# stored as a sidecar on `imports` (não muta snapshot) and consumed by
+# `_send_one_to_fire` on the next attempt.
+#
+# v5: enforce auth — currently anonymous; `user` propagates as None and is
+# the single hook to fill once authentication lands.
+
+
+@app.get("/api/clientes/search")
+def search_clientes(q: str, limit: int = 20) -> JSONResponse:
+    """Busca clientes ativos em CADASTRO por razão social ou CNPJ.
+
+    `q`: ao menos 2 caracteres (após strip).
+    `limit`: clamp em [1, 50].
+    503 se Firebird não configurado.
+    """
+    from app.erp import queries
+    from app.erp.connection import FirebirdConnection
+
+    needle = (q or "").strip()
+    if len(needle) < 2:
+        raise HTTPException(status_code=400, detail="Informe ao menos 2 caracteres")
+    limit = max(1, min(int(limit), 50))
+
+    conn_mgr = FirebirdConnection()
+    if not conn_mgr.is_configured():
+        raise HTTPException(status_code=503, detail="FB_DATABASE não configurado")
+
+    razao_pattern = f"%{needle.upper()}%"
+    cnpj_digits = re.sub(r"\D", "", needle)
+    # Sentinel pattern that LIKE never matches: avoids OR-injection of
+    # rows when the query has no digits at all.
+    cnpj_pattern = f"%{cnpj_digits}%" if cnpj_digits else "%__never_matches__%"
+
+    try:
+        with conn_mgr.connect() as conn:
+            cur = conn.cursor()
+            cur.execute(queries.SEARCH_CLIENTS, (razao_pattern, cnpj_pattern))
+            rows = cur.fetchall()
+            cur.close()
+    except Exception as exc:  # noqa: BLE001
+        from app.utils.logger import logger
+        logger.warning(f"clientes/search falhou ({type(exc).__name__}): {exc}")
+        raise HTTPException(status_code=502, detail="Falha consultando o Fire") from exc
+
+    results = [
+        {
+            "codigo": int(r[0]) if r[0] is not None else None,
+            "razao_social": (r[1] or "").strip() if r[1] else None,
+            "cpf_cnpj": (r[2] or "").strip() if r[2] else None,
+        }
+        for r in rows[:limit]
+    ]
+    return JSONResponse({"results": results, "total_returned": len(results)})
+
+
+class ClienteOverrideRequest(BaseModel):
+    cliente_codigo: int
+    reason: Optional[str] = None
+
+
+@app.post("/api/imported/{import_id}/override-cliente")
+def override_cliente(
+    import_id: str,
+    body: ClienteOverrideRequest,
+    _user: User = Depends(require_user),
+) -> JSONResponse:
+    """Aplica seleção manual de cliente a um pedido em revisão.
+
+    Não muda portal_status (override é metadado sidecar, não evento de SM).
+    Registra em `audit_log` com `user=None` — preparado para auth v5.
+    """
+    from app.erp import queries
+    from app.erp.connection import FirebirdConnection
+    from app.persistence import repo
+
+    entry = repo.get_import(import_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    if entry.get("portal_status") != "parsed":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Override só é permitido em pedidos em revisão "
+                f"(status atual: {entry.get('portal_status')})"
+            ),
+        )
+
+    conn_mgr = FirebirdConnection()
+    if not conn_mgr.is_configured():
+        raise HTTPException(status_code=503, detail="FB_DATABASE não configurado")
+
+    try:
+        with conn_mgr.connect() as conn:
+            cur = conn.cursor()
+            cur.execute(queries.FIND_CLIENT_BY_CODIGO, (body.cliente_codigo,))
+            row = cur.fetchone()
+            cur.close()
+    except Exception as exc:  # noqa: BLE001
+        from app.utils.logger import logger
+        logger.warning(f"override-cliente falhou ({type(exc).__name__}): {exc}")
+        raise HTTPException(status_code=502, detail="Falha consultando o Fire") from exc
+
+    if row is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Cliente CODIGO={body.cliente_codigo} não encontrado em CADASTRO ou inativo",
+        )
+
+    razao = (row[1] or "").strip() if row[1] else ""
+    user: Optional[str] = None  # v5: derive from auth context
+
+    with with_trace_id(entry.get("trace_id")):
+        repo.set_client_override(
+            import_id, codigo=int(row[0]), razao=razao, user=user,
+        )
+        repo.append_audit(
+            import_id,
+            "cliente_override_selected",
+            {
+                "cliente_codigo": int(row[0]),
+                "cliente_razao": razao,
+                "previous_cnpj": entry.get("customer_cnpj"),
+                "reason": body.reason,
+                "user": user,
+            },
+        )
+
+    return JSONResponse({
+        "entry_id": import_id,
+        "cliente_override_codigo": int(row[0]),
+        "cliente_override_razao": razao,
+    })
 
 
 @app.get("/api/imported/{import_id}/preview")
@@ -847,12 +1679,37 @@ def rehydrate_preview(import_id: str) -> JSONResponse:
     payload = _build_preview_payload(import_id, entry.get("source_filename", ""), order, check)
     payload["portal_status"] = entry.get("portal_status")
     payload["fire_codigo"] = entry.get("fire_codigo")
+
+    # Surface the manual cliente override into the check banner so the UI shows
+    # it in green instead of the original "✗ Cliente não encontrado" red flag.
+    override_codigo = entry.get("cliente_override_codigo")
+    if override_codigo and payload.get("check"):
+        payload["check"]["client"] = {
+            "match": True,
+            "fire_id": override_codigo,
+            "razao_social": entry.get("cliente_override_razao"),
+            "cnpj": entry.get("customer_cnpj"),
+            "override": True,
+        }
+        if "summary" in payload["check"]:
+            payload["check"]["summary"]["client_matched"] = True
+    payload["cliente_override"] = (
+        {
+            "codigo": override_codigo,
+            "razao_social": entry.get("cliente_override_razao"),
+            "at": entry.get("cliente_override_at"),
+            "by": entry.get("cliente_override_by"),
+        }
+        if override_codigo
+        else None
+    )
     return JSONResponse(payload)
 
 
 # Keep /api/process for backward compat (drag-drop upload flow)
 @app.post("/api/process")
 async def process_files(
+    _user: User = Depends(require_user),
     files: List[UploadFile] = File(...),
     output_dir: str = Form("output"),
 ) -> JSONResponse:

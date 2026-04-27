@@ -77,7 +77,19 @@ class FirebirdExporter:
         self._conn = FirebirdConnection()
         self._mapper = FireSistemasMapper()
 
-    def export(self, order: Order) -> FirebirdExportResult:
+    def export(
+        self,
+        order: Order,
+        *,
+        override_client_id: int | None = None,
+    ) -> FirebirdExportResult:
+        """Insere o pedido em CAB_VENDAS / CORPO_VENDAS.
+
+        `override_client_id`: quando o usuário escolheu manualmente o cliente
+        no portal (recovery do CLIENT_NOT_FOUND), pula o lookup por CNPJ e
+        usa esse codigo direto — mas ainda valida via FIND_CLIENT_BY_CODIGO
+        para evitar FK quebrada caso o cliente tenha sido inativado.
+        """
         if not self._conn.is_configured():
             logger.warning("FB_DATABASE não configurado — exportação Firebird ignorada.")
             return FirebirdExportResult(
@@ -89,7 +101,7 @@ class FirebirdExporter:
 
         try:
             with _insert_lock, self._conn.connect() as conn:
-                return self._insert_order(conn, order)
+                return self._insert_order(conn, order, override_client_id)
         except FirebirdOrderAlreadyExistsError as exc:
             logger.warning(str(exc))
             return FirebirdExportResult(
@@ -112,11 +124,21 @@ class FirebirdExporter:
 
     # ── Internal ─────────────────────────────────────────────────────────────
 
-    def _insert_order(self, conn, order: Order) -> FirebirdExportResult:
+    def _insert_order(
+        self,
+        conn,
+        order: Order,
+        override_client_id: int | None = None,
+    ) -> FirebirdExportResult:
         cur = conn.cursor()
 
-        # 1. Resolve client FK first — production data requires CLIENTE; skip if missing.
-        client_id = self._find_client(cur, order.header.customer_cnpj)
+        # 1. Resolve client FK. Prefer manual override if set; still validate
+        #    against CADASTRO so a stale codigo (cliente inativado entre
+        #    seleção e envio) surfaces como CLIENT_NOT_FOUND, não FK error.
+        if override_client_id is not None:
+            client_id = self._validate_client_id(cur, override_client_id)
+        else:
+            client_id = self._find_client(cur, order.header.customer_cnpj)
         if client_id is None:
             raise FirebirdClientNotFoundError(
                 order.header.customer_cnpj or "",
@@ -171,6 +193,12 @@ class FirebirdExporter:
         if not digits:
             return None
         cur.execute(queries.FIND_CLIENT_BY_CNPJ, (digits,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+    def _validate_client_id(self, cur, codigo: int) -> Optional[int]:
+        """Confirma que o codigo ainda existe e está ativo em CADASTRO."""
+        cur.execute(queries.FIND_CLIENT_BY_CODIGO, (int(codigo),))
         row = cur.fetchone()
         return row[0] if row else None
 
