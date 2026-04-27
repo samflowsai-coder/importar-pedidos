@@ -2,7 +2,20 @@ services:
   app:
     build: .
     env_file: .env
+    ports:
+      - "8000:8000"
     volumes:
       - ./input:/app/input:ro
       - ./output:/app/output
       - ./logs:/app/logs
+
+  worker:
+    build: .
+    command: python -m app.worker
+    env_file: .env
+    volumes:
+      - ./output:/app/output   # shared host-mount — both services access the same app_state.db
+      - ./logs:/app/logs
+    depends_on:
+      - app
+    restart: on-failure

@@ -184,6 +184,11 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires_at  ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_invites_email_pending ON user_invites(email)
     WHERE accepted_at IS NULL AND revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_invites_expires_at    ON user_invites(expires_at);
+
+-- Fase 5: worker poll — cobre a query list_pending_for_fire_poll
+CREATE INDEX IF NOT EXISTS idx_imports_fire_poll
+    ON imports(portal_status, production_status, fire_status_polled_at)
+    WHERE fire_codigo IS NOT NULL;
 """
 
 
@@ -233,6 +238,9 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("imports", "cliente_override_razao",  "ALTER TABLE imports ADD COLUMN cliente_override_razao TEXT"),
     ("imports", "cliente_override_at",     "ALTER TABLE imports ADD COLUMN cliente_override_at TEXT"),
     ("imports", "cliente_override_by",     "ALTER TABLE imports ADD COLUMN cliente_override_by TEXT"),
+    # Poll worker (Fase 5): rastrear último status visto no Firebird e quando foi polled.
+    ("imports", "fire_status_last_seen", "ALTER TABLE imports ADD COLUMN fire_status_last_seen TEXT"),
+    ("imports", "fire_status_polled_at", "ALTER TABLE imports ADD COLUMN fire_status_polled_at TEXT"),
 )
 
 

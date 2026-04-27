@@ -172,6 +172,18 @@ INSERT_CAB_VENDAS = """
     )
 """
 
+# ── Poll Worker (Fase 5) ──────────────────────────────────────────────────────
+
+# Fetch current STATUS for a single order by its CODIGO (PK in CAB_VENDAS).
+# Called once per order per poll cycle — individual queries avoid dynamic
+# IN-clause generation and are well within latency budget (<100 orders/day).
+GET_ORDER_STATUS_BY_CODE = """
+    SELECT CODIGO, STATUS
+    FROM CAB_VENDAS
+    WHERE CODIGO = ?
+    ROWS 1
+"""
+
 # Insert order item (CORPO_VENDAS)
 INSERT_CORPO_VENDAS = """
     INSERT INTO CORPO_VENDAS (

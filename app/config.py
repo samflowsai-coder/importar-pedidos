@@ -23,6 +23,9 @@ def load() -> dict:
     raw_mode = os.environ.get("EXPORT_MODE", "").lower()
     if raw_mode in _VALID_EXPORT_MODES:
         cfg["export_mode"] = raw_mode
+    # Fase 5: CAB_VENDAS.STATUS value that triggers automatic POST to Gestor.
+    # Empty string = disabled (safe default until trigger status is confirmed).
+    cfg["fire_trigger_status"] = os.environ.get("FIRE_TRIGGER_STATUS", "").strip()
 
     if _CONFIG_FILE.exists():
         try:
