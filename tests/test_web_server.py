@@ -819,3 +819,57 @@ def test_process_sbf_centauro(tmp_path):
     data = r.json()
     assert len(data["results"]) == 1
     assert data["results"][0]["order"] == "29852483"
+
+
+# ── Regressão: salvar config preserva sessão ─────────────────────────────────
+# Antes do fix, o `app_state.db` era resolvido a partir de `watch_dir`, então
+# `POST /api/config` movia o arquivo do banco e deixava a sessão órfã (cookie
+# válido apontando para token em DB que o app não enxergava mais). O fix em
+# `app/persistence/db.py` pinou o caminho em local estável independente de
+# `watch_dir`.
+
+def test_save_config_preserves_session(real_auth, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import config as app_config
+    from app.persistence import users_repo
+    from app.web.server import app as fastapi_app
+
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    # Isolar config.json para não contaminar outros testes.
+    monkeypatch.setattr(app_config, "_CONFIG_FILE", tmp_path / "config.json")
+    db.set_db_path(tmp_path / "app_state.db")
+    db.reset_init_cache()
+    db.init()
+
+    users_repo.create_user(
+        email="cfg@portal.local", password="strongpass1", role="admin",
+    )
+
+    c = TestClient(fastapi_app)
+    r = c.post(
+        "/api/auth/login",
+        json={"email": "cfg@portal.local", "password": "strongpass1"},
+    )
+    assert r.status_code == 200, r.text
+    cookie = r.cookies.get("portal_session")
+    assert cookie
+
+    headers = {"Cookie": f"portal_session={cookie}"}
+
+    for i in range(3):
+        new_watch = tmp_path / f"watch{i}"
+        new_out = tmp_path / f"out{i}"
+        r = c.post(
+            "/api/config",
+            json={
+                "watchDir": str(new_watch),
+                "outputDir": str(new_out),
+                "exportMode": "xlsx",
+            },
+            headers=headers,
+        )
+        assert r.status_code == 200, f"save #{i} falhou: {r.text}"
+
+    me = c.get("/api/auth/me", headers=headers)
+    assert me.status_code == 200, me.text
+    assert me.json()["user"]["email"] == "cfg@portal.local"

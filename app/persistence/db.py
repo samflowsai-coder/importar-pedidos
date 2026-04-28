@@ -13,6 +13,7 @@ Design:
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -208,13 +209,51 @@ _initialized_paths: set[str] = set()
 _init_lock = threading.Lock()
 
 
+def _default_data_dir() -> Path:
+    """Stable location for app operational state (sessions, users, audit, imports).
+
+    Decoupled from `watch_dir` on purpose: changing the user-configurable input
+    directory must NOT move the auth/session DB out from under live sessions.
+    Override via `APP_DATA_DIR` env var; default is `<repo_root>/data/`.
+    """
+    raw = os.environ.get("APP_DATA_DIR", "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return Path(__file__).resolve().parents[2] / "data"
+
+
 def db_path() -> Path:
     if _db_path_override is not None:
         return _db_path_override
-    cfg = app_config.load()
-    base = app_config.imported_dir(cfg)
+    base = _default_data_dir()
     base.mkdir(parents=True, exist_ok=True)
-    return base / "app_state.db"
+    target = base / "app_state.db"
+    _migrate_legacy_db_if_present(target)
+    return target
+
+
+def _migrate_legacy_db_if_present(target: Path) -> None:
+    """One-shot move of legacy DB at `<watch_dir>/Pedidos importados/app_state.db`
+    into the new stable location. Includes WAL/SHM sidecars. Idempotent: once the
+    target exists this function returns immediately.
+    """
+    if target.exists():
+        return
+    try:
+        cfg = app_config.load()
+        legacy = app_config.imported_dir(cfg) / "app_state.db"
+    except Exception:
+        return
+    try:
+        if not legacy.exists() or legacy.resolve() == target.resolve():
+            return
+    except OSError:
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    for suffix in ("", "-wal", "-shm"):
+        src = legacy.with_name(legacy.name + suffix)
+        if src.exists():
+            src.replace(target.with_name(target.name + suffix))
 
 
 def set_db_path(path: Optional[Path]) -> None:
