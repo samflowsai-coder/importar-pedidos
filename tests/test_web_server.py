@@ -473,6 +473,83 @@ def test_batch_send_to_fire_mixed_outcomes(monkeypatch):
         assert got["portal_status"] == "sent_to_fire"
 
 
+def test_export_xlsx_generates_files_without_calling_firebird(monkeypatch, tmp_path):
+    """xlsx-only flow: ERPExporter runs, FirebirdExporter is NEVER instantiated/called."""
+    from app.persistence import repo
+    from app.exporters import erp_exporter as erp_mod
+    from app.exporters import firebird_exporter as fb_mod
+    from app import config as app_config
+    import uuid
+    from datetime import datetime
+
+    entry_id = str(uuid.uuid4())
+    repo.insert_import({
+        "id": entry_id,
+        "source_filename": "pedido.pdf",
+        "imported_at": datetime.now().isoformat(timespec="seconds"),
+        "order_number": "XLSX-OK",
+        "customer": "ACME",
+        "status": "success",
+        "portal_status": "parsed",
+        "snapshot": {
+            "header": {"order_number": "XLSX-OK", "customer_name": "ACME"},
+            "items": [{"description": "x", "quantity": 1.0}],
+            "source_file": "",
+        },
+    })
+
+    # Stub ERPExporter to return predictable file paths without touching disk.
+    erp_calls: list[str] = []
+
+    def _fake_erp_export(self, order, output_dir):
+        erp_calls.append(order.header.order_number or "?")
+        out = Path(output_dir) / "ACME_XLSX-OK.xlsx"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.touch()
+        return [out]
+    monkeypatch.setattr(erp_mod.ERPExporter, "export", _fake_erp_export)
+
+    # Hard-fail if Firebird is touched.
+    def _explode(self, order, *, override_client_id=None):
+        raise AssertionError("FirebirdExporter.export must not be called in xlsx mode")
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _explode)
+
+    monkeypatch.setattr(app_config, "load", lambda: {
+        "watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx",
+    })
+
+    r = client.post(f"/api/imported/{entry_id}/export-xlsx")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["entry_id"] == entry_id
+    assert body["portal_status"] == "parsed"
+    assert body["output_files"] and body["output_files"][0]["name"].endswith(".xlsx")
+    assert erp_calls == ["XLSX-OK"]
+
+    # State unchanged: still 'parsed', no fire_codigo set.
+    got = repo.get_import(entry_id)
+    assert got["portal_status"] == "parsed"
+    assert got.get("fire_codigo") in (None, 0)
+
+
+def test_export_xlsx_rejects_wrong_portal_status():
+    from app.persistence import repo
+    import uuid
+    from datetime import datetime
+    entry_id = str(uuid.uuid4())
+    repo.insert_import({
+        "id": entry_id,
+        "source_filename": "x.pdf",
+        "imported_at": datetime.now().isoformat(timespec="seconds"),
+        "order_number": "XLSX-WRONG",
+        "status": "success",
+        "portal_status": "cancelled",
+        "snapshot": {"header": {"order_number": "XLSX-WRONG"}, "items": []},
+    })
+    r = client.post(f"/api/imported/{entry_id}/export-xlsx")
+    assert r.status_code == 409
+
+
 def test_batch_send_to_fire_rejects_empty_and_oversized():
     r = client.post("/api/batch/send-to-fire", json={"ids": []})
     assert r.status_code == 400

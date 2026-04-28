@@ -45,6 +45,8 @@ API pública para páginas-filho:
 - `POST /api/firebird/config` → salva config + chama `apply_to_env` (`require_admin`). Body: `{path, host, port, user, charset, password?}`. Senha omitida = mantém atual; vazia = limpa.
 - `POST /api/firebird/test` → testa conexão com config salva ou payload ad-hoc (`require_admin`). Retorna `{ok: bool, error?, traceId}` (`current_trace_id()` injetado).
 - `POST /api/process` → upload + parse + cache de preview.
+- `POST /api/imported/{id}/export-xlsx` → gera XLSX do pedido `parsed` **sem** tocar Firebird (`require_user`). Mantém `portal_status='parsed'`. Retorna `{entry_id, output_files, portal_status}`. Usado quando `EXPORT_MODE='xlsx'`.
+- `POST /api/batch/export-xlsx` → versão lote do anterior (mesmo limite 1..100).
 - `GET /api/download?path=` → download xlsx (whitelisted, path traversal bloqueado).
 - `GET /api/fs?path=` → listagem de pastas (usado pelo browser de `/configuracoes/diretorios`).
 - `GET /api/clientes/search?q=&limit=` → busca em `CADASTRO` (razão social ou
@@ -70,9 +72,23 @@ API pública para páginas-filho:
 - `tests/test_firebird_config_api.py` — endpoints `/api/firebird/*`, redirect legacy, gating por role.
 - Comando: `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py tests/test_firebird_config_api.py -v`
 
+## Reatividade de config (exportMode)
+O botão de ação principal (`#pvCommitBtn` no preview e `#batchSendBtn` no log)
+é dirigido por `cfg.exportMode` — fonte: `GET /api/config`. Mapeamento:
+`xlsx` → "Gerar XLS" (chama `/api/imported/{id}/export-xlsx`); `db` → "Cadastrar
+no Fire" (`/send-to-fire`); `both` → "Cadastrar no Fire + XLS" (`/send-to-fire`,
+backend gera XLSX adicionalmente).
+
+Quando o modo é alterado em `/configuracoes/diretorios`, a aba Pedidos atualiza
+label/handler **sem reload** via `BroadcastChannel('app-config')` com payload
+`{type:'config-changed', exportMode}`. Fallback p/ navegadores sem
+BroadcastChannel: chave `app:config:bumped` em `localStorage` + `storage`
+event listener.
+
 ## Armadilhas
 - Não cachear bytes do arquivo original (vazamento de memória); só o `Order` parseado.
 - Toda mudança de rota: atualizar este arquivo + a página relevante.
+- `app_state.db` vive em `<repo_root>/data/` (override: `APP_DATA_DIR`). NÃO depende de `watch_dir` — mudar diretórios via `POST /api/config` não move sessões nem dados operacionais.
 - Sidebar gating é client-side (escondemos o item para não-admin no shell.js); a fonte de verdade
   é o backend — `require_admin` em todos os writes. Nunca confie só na UI para gating.
 - Páginas em `/configuracoes/*` carregam para qualquer usuário logado (estáticas). Acesso real é

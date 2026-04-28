@@ -891,6 +891,27 @@ async function init() {
   await loadConfig();
   loadPending();
   loadImported();
+  subscribeConfigChanges();
+}
+
+function subscribeConfigChanges() {
+  const onChange = async () => {
+    await loadConfig();
+    // Refresh dynamic surfaces tied to exportMode.
+    updateBatchBar();
+    if (currentPreview && document.getElementById('previewModal')?.classList.contains('show')) {
+      renderPreviewFooter(currentPreview);
+    }
+  };
+  try {
+    const ch = new BroadcastChannel('app-config');
+    ch.onmessage = (ev) => {
+      if (ev?.data?.type === 'config-changed') onChange();
+    };
+  } catch (_) { /* BroadcastChannel unavailable; fallback below */ }
+  window.addEventListener('storage', (ev) => {
+    if (ev.key === 'app:config:bumped') onChange();
+  });
 }
 
 async function loadConfig() {
@@ -903,6 +924,13 @@ async function loadConfig() {
     // Firebird status indicator is owned by the app shell now.
     if (window.appShell && window.appShell.refreshFb) window.appShell.refreshFb();
   } catch (_) {}
+}
+
+/* ── Primary action mapping (driven by exportMode) ── */
+function primaryActionFor(mode) {
+  if (mode === 'db')   return { label: 'Cadastrar no Fire',       fn: 'sendToFire', batchPrefix: 'Cadastrar', batchSuffix: 'no Fire' };
+  if (mode === 'both') return { label: 'Cadastrar no Fire + XLS', fn: 'sendToFire', batchPrefix: 'Cadastrar', batchSuffix: 'no Fire + XLS' };
+  return                       { label: 'Gerar XLS',              fn: 'exportXlsx', batchPrefix: 'Gerar XLS de', batchSuffix: 'pedido' };
 }
 
 function setExportMode(mode) {
@@ -1117,37 +1145,54 @@ function updateBatchBar() {
     document.getElementById('batchSelectionCount').textContent = `${cnt} selecionado${cnt > 1 ? 's' : ''}`;
     const btn = document.getElementById('batchSendBtn');
     btn.disabled = false;
-    btn.textContent = `Cadastrar ${cnt} no Fire`;
+    const action = primaryActionFor(cfg.exportMode);
+    const plural = cnt > 1 ? 's' : '';
+    if (action.fn === 'exportXlsx') {
+      btn.textContent = `Gerar XLS de ${cnt} pedido${plural}`;
+    } else if (cfg.exportMode === 'both') {
+      btn.textContent = `Cadastrar ${cnt} no Fire + XLS`;
+    } else {
+      btn.textContent = `Cadastrar ${cnt} no Fire`;
+    }
   } else {
     bar.classList.add('hidden');
   }
 }
 
-async function doBatchSendToFire() {
+async function doBatchSendToFire() { return doBatchPrimary(); }
+
+async function doBatchPrimary() {
   const ids = [...batchSelection];
   if (!ids.length) return;
   const btn = document.getElementById('batchSendBtn');
   btn.disabled = true;
   const prev = btn.innerHTML;
-  btn.innerHTML = '<span class="spin"></span> Cadastrando…';
+  const action = primaryActionFor(cfg.exportMode);
+  const isXlsxOnly = action.fn === 'exportXlsx';
+  btn.innerHTML = isXlsxOnly
+    ? '<span class="spin"></span> Gerando XLS…'
+    : '<span class="spin"></span> Cadastrando…';
   try {
-    const res = await api('/api/batch/send-to-fire', {
+    const endpoint = isXlsxOnly ? '/api/batch/export-xlsx' : '/api/batch/send-to-fire';
+    const res = await api(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids }),
     });
     batchSelection = new Set();
-    // surface summary
+    const verb = isXlsxOnly
+      ? 'XLS gerado(s)'
+      : (cfg.exportMode === 'both' ? 'cadastrado(s) no Fire + XLS' : 'cadastrado(s) no Fire');
     const msg = res.failed
-      ? `${res.ok} cadastrado(s) no Fire, ${res.failed} com erro.`
-      : `${res.ok} pedido(s) cadastrado(s) no Fire.`;
+      ? `${res.ok} ${verb}, ${res.failed} com erro.`
+      : `${res.ok} pedido(s) ${verb}.`;
     alert(msg + (res.failed ? '\n\nDetalhes no console.' : ''));
     if (res.failed) {
-      console.warn('Batch send-to-fire failures:', res.results.filter(r => !r.ok));
+      console.warn('Batch primary action failures:', res.results.filter(r => !r.ok));
     }
     await loadImported();
   } catch (err) {
-    alert('Falha ao cadastrar em lote: ' + (err.message || err));
+    alert('Falha na ação em lote: ' + (err.message || err));
   } finally {
     btn.innerHTML = prev;
   }
@@ -1276,10 +1321,39 @@ async function sendToFire(importId) {
     closePreviewModal();
     await loadImported();
     switchTab('imported');
+    if (window.appShell?.showSuccess) {
+      const codigo = res?.fire_codigo ? ` (CAB_VENDAS.CODIGO=${res.fire_codigo})` : '';
+      const suffix = cfg.exportMode === 'both' ? ' + XLS gerado' : '';
+      window.appShell.showSuccess(`Cadastrado no Fire${codigo}${suffix}.`);
+    }
   } catch (err) {
     btn.disabled = false;
     btn.innerHTML = prev;
     showPreviewError(err.message || 'Falha ao cadastrar no Fire');
+  }
+}
+
+async function exportXlsx(importId) {
+  const btn = document.getElementById('pvCommitBtn');
+  btn.disabled = true;
+  const prev = btn.innerHTML;
+  btn.innerHTML = '<span class="spin"></span> Gerando XLS…';
+  hidePreviewError();
+  try {
+    const res = await api('/api/imported/' + encodeURIComponent(importId) + '/export-xlsx', {
+      method: 'POST',
+    });
+    closePreviewModal();
+    await loadImported();
+    switchTab('imported');
+    if (window.appShell?.showSuccess) {
+      const names = (res?.output_files || []).map(f => f.name).join(', ');
+      window.appShell.showSuccess(names ? `XLS gerado: ${names}` : 'XLS gerado.');
+    }
+  } catch (err) {
+    btn.disabled = false;
+    btn.innerHTML = prev;
+    showPreviewError(err.message || 'Falha ao gerar XLS');
   }
 }
 
@@ -1724,25 +1798,36 @@ function renderPreview(data) {
     tbody.innerHTML = rows.join('');
   }
 
-  // Contextual footer buttons based on portal_status
+  renderPreviewFooter(data, items.length);
+}
+
+function renderPreviewFooter(data, itemsCount) {
+  const items = data.items || [];
+  if (typeof itemsCount !== 'number') itemsCount = items.length;
   const ps = data.portal_status; // undefined for fresh preview
   const actions = document.getElementById('pvFooterActions');
   const note = document.getElementById('pvFooterNote');
+  if (!actions || !note) return;
   if (!ps) {
     // Fresh preview from file — save for review
     note.innerHTML = 'Clique em <strong>Importar para revisão</strong>. O pedido não vai para o Fire ainda — você confere o match e envia depois.';
     actions.innerHTML = `
       <button class="btn" onclick="closePreviewModal()">Cancelar</button>
-      <button class="btn btn-primary" id="pvCommitBtn" onclick="commitPreview()" ${items.length ? '' : 'disabled'}>
+      <button class="btn btn-primary" id="pvCommitBtn" onclick="commitPreview()" ${itemsCount ? '' : 'disabled'}>
         Importar para revisão
       </button>`;
   } else if (ps === 'parsed') {
-    note.innerHTML = 'Pedido <strong>em revisão</strong>. Confira o match com o Fire e envie quando estiver OK.';
+    const action = primaryActionFor(cfg.exportMode);
+    const noteSuffix = action.fn === 'exportXlsx'
+      ? 'Confira o match e gere o XLS quando estiver OK.'
+      : 'Confira o match com o Fire e envie quando estiver OK.';
+    note.innerHTML = `Pedido <strong>em revisão</strong>. ${noteSuffix}`;
     actions.innerHTML = `
       <button class="btn" onclick="cancelImport('${esc(data.preview_id)}')" style="color:var(--error)">Cancelar pedido</button>
       <button class="btn" onclick="closePreviewModal()">Fechar</button>
-      <button class="btn btn-primary" id="pvCommitBtn" onclick="sendToFire('${esc(data.preview_id)}')">
-        Cadastrar no Fire
+      <button class="btn btn-primary" id="pvCommitBtn" data-primary-btn
+              onclick="${action.fn}('${esc(data.preview_id)}')">
+        ${action.label}
       </button>`;
   } else if (ps === 'sent_to_fire') {
     note.innerHTML = `Pedido <strong>cadastrado no Fire</strong>${data.fire_codigo ? ` (CAB_VENDAS.CODIGO = ${esc(data.fire_codigo)})` : ''}. Status deve ser validado diretamente no Fire.`;

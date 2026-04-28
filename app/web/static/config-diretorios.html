@@ -305,6 +305,12 @@
       $('fldWatch').value  = data.watchDir;
       $('fldOutput').value = data.outputDir;
       setMode(data.exportMode || currentMode);
+      try {
+        const ch = new BroadcastChannel('app-config');
+        ch.postMessage({ type: 'config-changed', exportMode: data.exportMode || currentMode });
+        ch.close();
+      } catch (_) { /* fallback below */ }
+      try { localStorage.setItem('app:config:bumped', String(Date.now())); } catch (_) {}
       if (window.appShell) window.appShell.showSuccess('Configuração salva.');
     } finally {
       btn.disabled = false;

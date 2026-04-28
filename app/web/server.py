@@ -1466,6 +1466,86 @@ def send_to_fire(
     })
 
 
+class _XlsxExportOutcome:
+    """Internal result of _export_one_xlsx. HTTP layer translates to status."""
+    __slots__ = ("ok", "reason", "http_status", "output_files", "detail")
+
+    def __init__(
+        self,
+        ok: bool,
+        reason: Optional[str] = None,
+        http_status: int = 200,
+        output_files: Optional[list[dict]] = None,
+        detail: Optional[str] = None,
+    ) -> None:
+        self.ok = ok
+        self.reason = reason
+        self.http_status = http_status
+        self.output_files = output_files or []
+        self.detail = detail
+
+
+def _export_one_xlsx(import_id: str, cfg: dict) -> _XlsxExportOutcome:
+    """Generate XLSX for a parsed order WITHOUT touching Firebird.
+
+    Used when EXPORT_MODE='xlsx'. Audit-only side effect; portal_status stays
+    'parsed' so the operator can still cancel or re-export.
+    """
+    from app.exporters.erp_exporter import ERPExporter
+    from app.persistence import repo
+    from app.models.order import Order
+
+    entry = repo.get_import(import_id)
+    if entry is None:
+        return _XlsxExportOutcome(False, reason="not_found", http_status=404, detail="Pedido não encontrado")
+    if entry.get("portal_status") != "parsed":
+        return _XlsxExportOutcome(
+            False,
+            reason="wrong_status",
+            http_status=409,
+            detail=f"Pedido não está 'em revisão' (status atual: {entry.get('portal_status')})",
+        )
+    snapshot = entry.get("snapshot")
+    if not snapshot:
+        return _XlsxExportOutcome(
+            False, reason="no_snapshot", http_status=422, detail="Snapshot do pedido indisponível"
+        )
+
+    try:
+        order = Order.model_validate(snapshot)
+    except Exception as exc:  # noqa: BLE001
+        return _XlsxExportOutcome(
+            False, reason="invalid_snapshot", http_status=422, detail=f"Snapshot inválido: {exc}"
+        )
+
+    with with_trace_id(entry.get("trace_id")):
+        output_path = Path(cfg["output_dir"]).expanduser().resolve()
+        output_path.mkdir(parents=True, exist_ok=True)
+        paths = ERPExporter().export(order, str(output_path))
+        output_files = [{"name": p.name, "path": str(p)} for p in paths]
+
+        repo.update_fire_metadata(import_id, output_files=output_files)
+        repo.append_audit(import_id, "xlsx_exported", {"files": output_files})
+
+        return _XlsxExportOutcome(True, output_files=output_files)
+
+
+@app.post("/api/imported/{import_id}/export-xlsx")
+def export_xlsx(
+    import_id: str,
+    _user: User = Depends(require_user),
+) -> JSONResponse:
+    cfg = _get_cfg()
+    outcome = _export_one_xlsx(import_id, cfg)
+    if not outcome.ok:
+        raise HTTPException(status_code=outcome.http_status, detail=outcome.detail)
+    return JSONResponse({
+        "entry_id": import_id,
+        "output_files": outcome.output_files,
+        "portal_status": "parsed",
+    })
+
+
 class BatchSendRequest(BaseModel):
     ids: List[str]
 
@@ -1495,6 +1575,47 @@ def batch_send_to_fire(
                 "ok": True,
                 "fire_codigo": outcome.fire_codigo,
                 "items_inserted": outcome.items_inserted,
+            })
+        else:
+            fail_count += 1
+            results.append({
+                "id": import_id,
+                "ok": False,
+                "reason": outcome.reason,
+                "detail": outcome.detail,
+            })
+
+    return JSONResponse({
+        "total": len(body.ids),
+        "ok": ok_count,
+        "failed": fail_count,
+        "results": results,
+    })
+
+
+@app.post("/api/batch/export-xlsx")
+def batch_export_xlsx(
+    body: BatchSendRequest,
+    _user: User = Depends(require_user),
+) -> JSONResponse:
+    """Generate XLSX for multiple parsed orders WITHOUT touching Firebird."""
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="Lista de ids vazia")
+    if len(body.ids) > 100:
+        raise HTTPException(status_code=400, detail="Máximo 100 pedidos por lote")
+
+    cfg = _get_cfg()
+    results: list[dict] = []
+    ok_count = 0
+    fail_count = 0
+    for import_id in body.ids:
+        outcome = _export_one_xlsx(import_id, cfg)
+        if outcome.ok:
+            ok_count += 1
+            results.append({
+                "id": import_id,
+                "ok": True,
+                "output_files": outcome.output_files,
             })
         else:
             fail_count += 1
