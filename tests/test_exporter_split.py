@@ -106,3 +106,53 @@ def test_sams_consolidated_still_single_file():
     with tempfile.TemporaryDirectory() as tmp:
         paths = ERPExporter().export(order, tmp)
         assert len(paths) == 1
+
+
+def test_export_has_no_workbook_protection():
+    """XLSX gerado nunca deve ter senha, lockStructure, lockWindows ou lockRevision."""
+    from app.exporters.erp_exporter import ERPExporter
+
+    order = _process("PEDIDO SAMS CLUB GRADE.pdf")
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = ERPExporter().export(order, tmp)
+        for p in paths:
+            wb = openpyxl.load_workbook(p)
+            sec = wb.security
+            assert not sec.workbookPassword
+            assert not sec.lockStructure
+            assert not sec.lockWindows
+            assert not sec.lockRevision
+            assert not sec.revisionsPassword
+            assert wb.read_only is False
+
+
+def test_export_has_no_sheet_protection():
+    """Cada sheet do XLSX gerado deve estar destravada (sem senha, sem sheet=True)."""
+    from app.exporters.erp_exporter import ERPExporter
+
+    order = _process("PEDIDO SAMS CLUB GRADE.pdf")
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = ERPExporter().export(order, tmp)
+        for p in paths:
+            wb = openpyxl.load_workbook(p)
+            for ws in wb.worksheets:
+                assert ws.protection.sheet is False
+                assert ws.protection.enabled is False
+                assert not ws.protection.hashValue
+                assert not ws.protection.saltValue
+
+
+def test_export_has_no_read_only_recommended():
+    """Não deve haver fileSharing/readOnlyRecommended no XML do workbook."""
+    import zipfile
+
+    from app.exporters.erp_exporter import ERPExporter
+
+    order = _process("PEDIDO SAMS CLUB GRADE.pdf")
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = ERPExporter().export(order, tmp)
+        for p in paths:
+            with zipfile.ZipFile(p) as z:
+                xml = z.read("xl/workbook.xml").decode("utf-8")
+                assert "fileSharing" not in xml
+                assert "readOnlyRecommended" not in xml

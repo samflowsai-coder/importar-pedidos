@@ -6,6 +6,7 @@ from typing import Optional
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.workbook.protection import WorkbookProtection
 
 from app.models.order import ERPRow, Order, OrderItem
 from app.utils.logger import logger
@@ -149,6 +150,7 @@ class ERPExporter:
             ws.cell(row=row_idx, column=12, value=row.cnpj_local_entrega)
             ws.cell(row=row_idx, column=13, value=row.ean_local_entrega)
 
+        self._unlock_workbook(wb)
         wb.save(path)
         logger.info(f"Exportado: {path.name} ({len(rows)} linha(s))")
         return path
@@ -156,6 +158,21 @@ class ERPExporter:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _unlock_workbook(wb) -> None:
+        """Garante que o XLSX gerado fique totalmente livre: sem senha, sem
+        lockStructure/lockWindows/lockRevision, sem proteção de sheet e sem
+        read-only-recommended (fileSharing). Defensivo contra regressões."""
+        wb.security = WorkbookProtection()
+        for ws in wb.worksheets:
+            ws.protection.disable()
+            ws.protection.sheet = False
+            ws.protection.enabled = False
+            ws.protection.hashValue = None
+            ws.protection.saltValue = None
+            ws.protection.algorithmName = None
+            ws.protection.spinCount = None
 
     def _write_header(self, ws) -> None:
         fill = PatternFill(start_color=HEADER_COLOR, end_color=HEADER_COLOR, fill_type="solid")
