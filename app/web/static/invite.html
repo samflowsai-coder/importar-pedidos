@@ -7,38 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=1">
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    :root {
-      --bg:             #FFFFFF;
-      --surface:        #FAFAFA;
-      --surface-hover:  #F4F4F5;
-      --border:         #E4E4E7;
-      --border-hover:   #D4D4D8;
-      --text:           #09090B;
-      --text-secondary: #52525B;
-      --text-muted:     #71717A;
-      --accent:         #6366F1;
-      --accent-hover:   #4F46E5;
-      --accent-bg:      rgba(99,102,241,.08);
-      --error:          #DC2626;
-      --error-bg:       rgba(220,38,38,.08);
-      --success:        #16A34A;
-      --success-bg:     rgba(22,163,74,.08);
-      --radius:         8px;
-      --radius-lg:      12px;
-      --shadow-md:      0 4px 10px rgba(0,0,0,.06), 0 2px 4px rgba(0,0,0,.04);
-    }
-    html, body {
-      min-height: 100vh;
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-      font-size: 14px;
-      line-height: 1.5;
-      -webkit-font-smoothing: antialiased;
-    }
+    /* Tokens, base typography and reset come from /static/css/tokens.css */
     body { display: grid; place-items: center; padding: 24px; }
     .frame { width: 100%; max-width: 420px; display: flex; flex-direction: column; align-items: center; }
 

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -50,6 +50,12 @@ MAX_PAGE_SIZE = 500
 
 app = FastAPI(title="Portal de Pedidos", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# Inject UI-saved Firebird config into os.environ so connection.py picks it up
+# without restart. Saved config takes precedence over .env (documented).
+from app import firebird_config  # noqa: E402
+
+firebird_config.apply_to_env()
 
 # Inbound webhooks (Fase 4 — Gestor de Produção status updates)
 from app.web.webhooks import router as webhooks_router  # noqa: E402
@@ -232,10 +238,28 @@ def login_page() -> FileResponse:
 
 
 @app.get("/admin/usuarios")
+def admin_users_legacy() -> RedirectResponse:
+    """Legacy URL — moved under /configuracoes/usuarios with the redesign."""
+    return RedirectResponse(url="/configuracoes/usuarios", status_code=301)
+
+
+@app.get("/configuracoes/usuarios")
 def admin_users_page() -> FileResponse:
     """User-management UI. Auth is enforced by the API endpoints it calls;
     the page itself is static and redirects to /login if /api/auth/me returns null."""
     return FileResponse(str(STATIC_DIR / "admin-usuarios.html"))
+
+
+@app.get("/configuracoes/banco")
+def config_banco_page() -> FileResponse:
+    """Firebird connection settings (admin-only — gated client-side by the shell)."""
+    return FileResponse(str(STATIC_DIR / "config-banco.html"))
+
+
+@app.get("/configuracoes/diretorios")
+def config_diretorios_page() -> FileResponse:
+    """Watch/output directories + export mode (replaces the old in-page modal)."""
+    return FileResponse(str(STATIC_DIR / "config-diretorios.html"))
 
 
 @app.get("/health")
@@ -679,7 +703,9 @@ def get_config() -> JSONResponse:
         "watchDir": cfg["watch_dir"],
         "outputDir": cfg["output_dir"],
         "exportMode": cfg.get("export_mode", "xlsx"),
-        "firebirdConfigured": bool(os.environ.get("FB_DATABASE")),
+        "firebirdConfigured": (
+            firebird_config.is_configured() or bool(os.environ.get("FB_DATABASE"))
+        ),
     })
 
 
@@ -703,6 +729,136 @@ def update_config(
         "outputDir": cfg["output_dir"],
         "exportMode": cfg.get("export_mode", "xlsx"),
     })
+
+
+# ── Firebird connection config (admin-managed via UI) ────────────────────
+
+
+class FirebirdConfigUpdate(BaseModel):
+    path: Optional[str] = None
+    host: Optional[str] = None
+    port: Optional[str] = None
+    user: Optional[str] = None
+    charset: Optional[str] = None
+    # Omit `password` to keep current; empty string clears it.
+    password: Optional[str] = None
+
+
+@app.get("/api/firebird/config")
+def get_firebird_config(
+    _user: User = Depends(require_user),
+) -> JSONResponse:
+    """Public view — never returns the password (encrypted or otherwise)."""
+    cfg = firebird_config.public_view()
+    cfg["configured"] = firebird_config.is_configured()
+    cfg["passwordSet"] = bool(firebird_config.load()["password_enc"])
+    return JSONResponse(cfg)
+
+
+@app.post("/api/firebird/config")
+def save_firebird_config(
+    body: FirebirdConfigUpdate,
+    _admin: User = Depends(require_admin),
+) -> JSONResponse:
+    payload = {
+        "path": body.path or "",
+        "host": body.host or "",
+        "port": body.port or "",
+        "user": body.user or "",
+        "charset": body.charset or "",
+    }
+    firebird_config.save(payload, password=body.password)
+    firebird_config.apply_to_env()
+    out = firebird_config.public_view()
+    out["configured"] = firebird_config.is_configured()
+    out["passwordSet"] = bool(firebird_config.load()["password_enc"])
+    return JSONResponse(out)
+
+
+@app.post("/api/firebird/test")
+def test_firebird_connection(
+    body: FirebirdConfigUpdate,
+    _admin: User = Depends(require_admin),
+) -> JSONResponse:
+    """Try to open a Firebird connection with either the saved config or the
+    payload (if any field is provided). Returns ok/error + trace_id for debug.
+
+    The payload's password, when present, is used as-is and not persisted.
+    """
+    from app.erp.connection import FirebirdConnection
+    from app.erp.exceptions import FirebirdConnectionError
+
+    saved = firebird_config.load()
+    has_payload_field = any(
+        getattr(body, k) not in (None, "")
+        for k in ("path", "host", "port", "user", "charset", "password")
+    )
+
+    # Resolve effective values (payload field overrides saved when provided).
+    def pick(field: str) -> str:
+        v = getattr(body, field)
+        return v if (v is not None and v != "") else saved.get(field, "") or ""
+
+    eff_path = pick("path")
+    eff_host = pick("host")
+    eff_port = pick("port") or "3050"
+    eff_user = pick("user") or "SYSDBA"
+    eff_charset = pick("charset") or "WIN1252"
+    if body.password is not None:
+        eff_password = body.password
+    else:
+        eff_password = firebird_config.get_password() or os.environ.get("FB_PASSWORD", "masterkey")
+
+    if not eff_path:
+        return JSONResponse(
+            {"ok": False, "error": "Caminho do banco (path) é obrigatório.",
+             "traceId": current_trace_id()},
+            status_code=400,
+        )
+
+    # Temporarily mutate os.environ for the duration of the test only when
+    # the request supplied overrides — otherwise just use the saved/env state.
+    saved_env: dict[str, str | None] = {}
+    env_keys = {
+        "FB_DATABASE": eff_path,
+        "FB_HOST": eff_host,
+        "FB_PORT": eff_port,
+        "FB_USER": eff_user,
+        "FB_CHARSET": eff_charset,
+        "FB_PASSWORD": eff_password,
+    }
+    if has_payload_field:
+        for k, v in env_keys.items():
+            saved_env[k] = os.environ.get(k)
+            if v:
+                os.environ[k] = v
+            elif k in os.environ:
+                del os.environ[k]
+
+    try:
+        with FirebirdConnection().connect() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM RDB$DATABASE")
+            cur.fetchone()
+        return JSONResponse({"ok": True, "traceId": current_trace_id()})
+    except FirebirdConnectionError as exc:
+        return JSONResponse(
+            {"ok": False, "error": str(exc), "traceId": current_trace_id()},
+            status_code=400,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface any driver error
+        return JSONResponse(
+            {"ok": False, "error": f"Erro inesperado: {exc}",
+             "traceId": current_trace_id()},
+            status_code=500,
+        )
+    finally:
+        if has_payload_field:
+            for k, prev in saved_env.items():
+                if prev is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = prev
 
 
 @app.get("/api/pending")

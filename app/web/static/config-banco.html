@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portal de Pedidos — Banco de dados</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=1">
+  <link rel="stylesheet" href="/static/css/shell.css?v=1">
+  <script src="/static/js/shell.js?v=1" defer></script>
+  <style>
+    .main { padding: 32px 32px 96px; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 720px; }
+
+    .breadcrumb {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+    .breadcrumb a { color: var(--text-muted); text-decoration: none; }
+    .breadcrumb a:hover { color: var(--text-secondary); }
+
+    .page-title {
+      font-size: 24px; font-weight: 600; letter-spacing: -.02em;
+      margin-bottom: 6px;
+    }
+    .page-subtitle {
+      font-size: 13.5px; color: var(--text-muted);
+      margin-bottom: 28px; line-height: 1.6;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 24px 26px;
+      box-shadow: var(--shadow-md);
+    }
+    .card + .card { margin-top: 18px; }
+    .card-title {
+      font-size: 14px; font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .card-desc {
+      font-size: 12.5px; color: var(--text-muted);
+      margin-bottom: 18px; line-height: 1.55;
+    }
+
+    .field { margin-bottom: 14px; }
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .field label {
+      display: block;
+      font-size: 12px; font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+    .field-hint {
+      font-size: 11.5px; color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .input {
+      width: 100%; height: 36px;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 0 12px;
+      font-size: 13px;
+      font-family: var(--font-sans);
+      transition: border-color 120ms, box-shadow 120ms;
+    }
+    .input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-bg);
+    }
+    .input.mono { font-family: var(--font-mono); }
+
+    .password-row {
+      display: flex; gap: 8px; align-items: stretch;
+    }
+    .password-row .input { flex: 1; }
+    .password-row .btn {
+      white-space: nowrap;
+    }
+
+    .btn {
+      height: 36px; padding: 0 14px;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--surface); color: var(--text-secondary);
+      font-size: 13px; font-weight: 500; font-family: inherit;
+      cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+      white-space: nowrap;
+      transition: background 120ms, color 120ms, border-color 120ms;
+    }
+    .btn:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-hover); }
+    .btn:disabled { opacity: .4; pointer-events: none; }
+    .btn-primary {
+      background: var(--accent); border-color: transparent; color: #FFFFFF;
+      font-weight: 600;
+    }
+    .btn-primary:hover { background: var(--accent-hover); color: #FFFFFF; }
+
+    .actions {
+      display: flex; align-items: center; gap: 8px;
+      padding-top: 18px; margin-top: 6px;
+      border-top: 1px solid var(--border-subtle);
+    }
+    .actions .spacer { flex: 1; }
+
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      font-size: 12px; font-weight: 500;
+      color: var(--text-muted);
+    }
+    .status-pill .dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--text-muted);
+    }
+    .status-pill.connected { color: var(--success); border-color: rgba(52,211,153,.3); }
+    .status-pill.connected .dot { background: var(--success); box-shadow: 0 0 6px var(--success); }
+    .status-pill.testing  { color: var(--warn); border-color: rgba(251,191,36,.35); }
+    .status-pill.testing  .dot { background: var(--warn); }
+    .status-pill.error    { color: var(--error); border-color: rgba(248,113,113,.35); }
+    .status-pill.error    .dot { background: var(--error); }
+
+    .mode-tabs {
+      display: inline-flex; padding: 3px;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .mode-tab {
+      background: transparent; border: 0;
+      color: var(--text-muted);
+      padding: 6px 14px;
+      font-size: 12px; font-weight: 500; font-family: inherit;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background 120ms, color 120ms;
+    }
+    .mode-tab:hover { color: var(--text); }
+    .mode-tab.active { background: var(--surface); color: var(--text); }
+
+    .err-box {
+      margin-top: 12px;
+      padding: 10px 12px;
+      background: var(--error-bg);
+      border: 1px solid rgba(248,113,113,.35);
+      border-radius: var(--radius-sm);
+      font-size: 12.5px; color: var(--error);
+      font-family: var(--font-mono); white-space: pre-wrap;
+    }
+    .ok-box {
+      margin-top: 12px;
+      padding: 10px 12px;
+      background: var(--success-bg);
+      border: 1px solid rgba(52,211,153,.3);
+      border-radius: var(--radius-sm);
+      font-size: 12.5px; color: var(--success);
+    }
+
+    .spin {
+      display: inline-block; width: 12px; height: 12px;
+      border: 1.5px solid currentColor; border-right-color: transparent;
+      border-radius: 50%; animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<div id="app-shell"></div>
+
+<main class="main">
+  <div class="container">
+    <div class="breadcrumb">
+      <a href="/">Pedidos</a>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      <span>Configurações</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      <span>Banco de dados</span>
+    </div>
+
+    <h1 class="page-title">Banco de dados</h1>
+    <p class="page-subtitle">
+      Conexão com o ERP Fire Sistemas (Firebird). Use o modo <strong>embedded</strong> para apontar
+      para um arquivo <code>.fdb</code> local, ou <strong>TCP</strong> para conectar a um servidor remoto.
+      A senha é armazenada criptografada e nunca devolvida em chamadas de API.
+    </p>
+
+    <!-- Connection card -->
+    <div class="card">
+      <div class="card-title" style="display:flex; align-items:center; justify-content:space-between">
+        <span>Conexão</span>
+        <span class="status-pill" id="statusPill" data-status="unknown">
+          <span class="dot"></span>
+          <span id="statusLabel">Verificando…</span>
+        </span>
+      </div>
+      <div class="card-desc">
+        O modo é detectado automaticamente: se o campo <em>host</em> estiver preenchido, usamos TCP.
+      </div>
+
+      <div class="field">
+        <label for="fldPath">Caminho do banco (.fdb)</label>
+        <input class="input mono" id="fldPath" type="text"
+               placeholder="/path/para/empresa.fdb  ou  C:\Fire\empresa.fdb"
+               autocomplete="off" spellcheck="false">
+        <div class="field-hint">No modo TCP, é o caminho do arquivo no servidor.</div>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label for="fldHost">Host (opcional)</label>
+          <input class="input" id="fldHost" type="text"
+                 placeholder="ex.: 192.168.1.10  (vazio = embedded)"
+                 autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="fldPort">Porta</label>
+          <input class="input mono" id="fldPort" type="text"
+                 placeholder="3050" autocomplete="off">
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label for="fldUser">Usuário</label>
+          <input class="input mono" id="fldUser" type="text"
+                 placeholder="SYSDBA" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="fldCharset">Charset</label>
+          <input class="input mono" id="fldCharset" type="text"
+                 placeholder="WIN1252" autocomplete="off">
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="fldPassword">Senha</label>
+        <div class="password-row">
+          <input class="input mono" id="fldPassword" type="password"
+                 placeholder="••••••••" autocomplete="new-password">
+          <button class="btn" type="button" id="btnPwToggle" title="Mostrar/ocultar senha">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
+        <div class="field-hint" id="pwHint">Deixe em branco para manter a senha atual.</div>
+      </div>
+
+      <div id="resultBox" hidden></div>
+
+      <div class="actions">
+        <button class="btn" type="button" id="btnTest">
+          <span id="btnTestLabel">Testar conexão</span>
+        </button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" id="btnReload">Descartar alterações</button>
+        <button class="btn btn-primary" type="button" id="btnSave">Salvar configurações</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+  let initialState = null;
+
+  async function api(method, url, body) {
+    const opts = { method, credentials: 'same-origin', headers: {} };
+    if (body !== undefined) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(body);
+    }
+    const r = await fetch(url, opts);
+    const data = await r.json().catch(() => ({}));
+    return { ok: r.ok, status: r.status, data };
+  }
+
+  function $(id) { return document.getElementById(id); }
+
+  function readForm() {
+    return {
+      path:    $('fldPath').value.trim(),
+      host:    $('fldHost').value.trim(),
+      port:    $('fldPort').value.trim(),
+      user:    $('fldUser').value.trim(),
+      charset: $('fldCharset').value.trim(),
+    };
+  }
+
+  function fillForm(cfg) {
+    $('fldPath').value    = cfg.path    || '';
+    $('fldHost').value    = cfg.host    || '';
+    $('fldPort').value    = cfg.port    || '';
+    $('fldUser').value    = cfg.user    || '';
+    $('fldCharset').value = cfg.charset || '';
+    $('fldPassword').value = '';
+    $('pwHint').textContent = cfg.passwordSet
+      ? 'Há uma senha salva. Deixe em branco para mantê-la.'
+      : 'Nenhuma senha definida ainda.';
+    initialState = cfg;
+    setStatus(cfg.configured ? 'connected' : 'unknown',
+              cfg.configured ? 'Configurado' : 'Não configurado');
+  }
+
+  function setStatus(state, label) {
+    const pill = $('statusPill');
+    pill.classList.remove('connected', 'testing', 'error');
+    if (state !== 'unknown') pill.classList.add(state);
+    $('statusLabel').textContent = label;
+  }
+
+  function showResult(kind, message, traceId) {
+    const box = $('resultBox');
+    box.hidden = false;
+    box.className = kind === 'error' ? 'err-box' : 'ok-box';
+    box.textContent = message + (traceId ? `\n\ntrace ${traceId}` : '');
+  }
+
+  function clearResult() { $('resultBox').hidden = true; }
+
+  async function reload() {
+    const { ok, data } = await api('GET', '/api/firebird/config');
+    if (!ok) {
+      if (window.appShell) window.appShell.showError('Falha ao carregar configuração.');
+      return;
+    }
+    fillForm(data);
+    clearResult();
+  }
+
+  async function testConnection() {
+    clearResult();
+    setStatus('testing', 'Testando…');
+    const btn = $('btnTest');
+    const lbl = $('btnTestLabel');
+    btn.disabled = true;
+    lbl.innerHTML = '<span class="spin"></span> Testando…';
+    try {
+      const payload = readForm();
+      // Only include password in test payload if user typed one this session.
+      const pw = $('fldPassword').value;
+      if (pw) payload.password = pw;
+      const { ok, data } = await api('POST', '/api/firebird/test', payload);
+      if (ok && data.ok) {
+        setStatus('connected', 'Conectado');
+        showResult('ok', 'Conexão estabelecida com sucesso.');
+      } else {
+        setStatus('error', 'Falhou');
+        showResult('error', data.error || 'Falha desconhecida ao conectar.', data.traceId);
+      }
+    } catch (e) {
+      setStatus('error', 'Falhou');
+      showResult('error', e.message || String(e));
+    } finally {
+      btn.disabled = false;
+      lbl.textContent = 'Testar conexão';
+    }
+  }
+
+  async function save() {
+    clearResult();
+    const btn = $('btnSave');
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin"></span> Salvando…';
+    try {
+      const payload = readForm();
+      const pw = $('fldPassword').value;
+      // Send password only when user typed something. Empty omitted -> keep current.
+      if (pw) payload.password = pw;
+      const { ok, status, data } = await api('POST', '/api/firebird/config', payload);
+      if (!ok) {
+        showResult('error',
+          data.detail || data.error || `Erro ${status} ao salvar.`,
+          data.traceId);
+        if (window.appShell) window.appShell.showError('Falha ao salvar configuração.');
+        return;
+      }
+      fillForm(data);
+      if (window.appShell) {
+        window.appShell.showSuccess('Configuração salva.');
+        window.appShell.refreshFb();
+      }
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = original;
+    }
+  }
+
+  function bind() {
+    $('btnTest').addEventListener('click', testConnection);
+    $('btnSave').addEventListener('click', save);
+    $('btnReload').addEventListener('click', reload);
+    $('btnPwToggle').addEventListener('click', () => {
+      const i = $('fldPassword');
+      i.type = i.type === 'password' ? 'text' : 'password';
+    });
+  }
+
+  bind();
+  reload();
+</script>
+</body>
+</html>

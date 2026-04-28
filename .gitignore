@@ -41,3 +41,7 @@ schema_report.txt
 
 # Plan files
 plans/
+
+# Local UI-editable config + Fernet key (NEVER commit)
+app/firebird.json
+app/.secret.key

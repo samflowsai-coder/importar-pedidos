@@ -31,7 +31,21 @@ rate-limit de login e abstração de secrets.
 ### Secrets
 - `app/security/secrets.py` — `get_secret(name, default=None)`. Lê de `os.environ`
   hoje; troca de backend sem mudar chamadores (Protocol `SecretsBackend`).
-  `_set_backend(backend)` para testes.
+  `_set_backend(backend)` para testes. **Read-only**: usar para tokens / API keys
+  que continuam vindo de env.
+
+### Secret store (UI-editable, cifrado em disco)
+- `app/security/secret_store.py` — Fernet (cryptography) para secrets que o admin
+  edita via UI (hoje: senha do Firebird).
+  - `encrypt(plaintext: str) -> str`, `decrypt(token: str) -> str | None`.
+  - Chave gerada lazy em `app/.secret.key` (chmod 600, gitignored). Perda da chave
+    invalida ciphertexts → `decrypt()` retorna `None`, log de erro, admin re-salva.
+  - Consumido por `app/firebird_config.py:save/get_password`.
+  - **Por que separado de `secrets.py`?** `secrets.py` é leitura abstrata para
+    tokens/secrets injetados pelo deploy. `secret_store.py` é storage local
+    cifrado para config editável pelo usuário em runtime — escopos diferentes,
+    superfícies de teste diferentes.
+- Tests: `tests/test_secret_store.py`.
 
 ## Wire format esperado (PLACEHOLDER — confirmar com Gestor)
 

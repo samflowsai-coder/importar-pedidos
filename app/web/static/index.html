@@ -7,49 +7,13 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=1">
+  <link rel="stylesheet" href="/static/css/shell.css?v=1">
+  <script src="/static/js/shell.js?v=1" defer></script>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    /* Tokens, base typography and reset come from /static/css/tokens.css (dark-first). */
 
-    /* ── Tokens: light first ── */
-    :root {
-      --bg:             #FFFFFF;
-      --surface:        #FAFAFA;
-      --surface-hover:  #F4F4F5;
-      --border:         #E4E4E7;
-      --border-subtle:  #EFEFF1;
-      --border-hover:   #D4D4D8;
-      --text:           #09090B;
-      --text-secondary: #52525B;
-      --text-muted:     #71717A;
-      --accent:         #6366F1;
-      --accent-hover:   #4F46E5;
-      --accent-bg:      rgba(99,102,241,.08);
-      --success:        #16A34A;
-      --success-bg:     rgba(22,163,74,.08);
-      --error:           #DC2626;
-      --error-bg:       rgba(220,38,38,.08);
-      --warn:           #D97706;
-      --warn-bg:        rgba(217,119,6,.08);
-      --radius-sm:      6px;
-      --radius:         8px;
-      --radius-lg:      12px;
-      --header-bg:      rgba(255,255,255,.78);
-      --bar-bg:         rgba(255,255,255,.92);
-      --shadow-sm:      0 1px 2px rgba(0,0,0,.04), 0 1px 3px rgba(0,0,0,.06);
-      --shadow-md:      0 4px 10px rgba(0,0,0,.06), 0 2px 4px rgba(0,0,0,.04);
-    }
-
-    html, body {
-      min-height: 100vh;
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-      font-size: 14px;
-      line-height: 1.5;
-      -webkit-font-smoothing: antialiased;
-    }
-
-    /* ── Header ── */
+    /* ── Header (legacy — left intact for compat with helper modals; sidebar shell injects its own) ── */
     .header {
       position: sticky; top: 0; z-index: 10;
       height: 52px;
@@ -675,45 +639,8 @@
 </head>
 <body>
 
-<!-- ── Header ─────────────────────────────────────────────────────── -->
-<header class="header">
-  <div class="header-left">
-    <div class="logo">
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-        <path d="M1.5 3.5h11M1.5 7h7M1.5 10.5h9" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
-      </svg>
-    </div>
-    <span class="app-name">Portal de Pedidos</span>
-    <span class="badge">ERP</span>
-  </div>
-  <div class="header-right">
-    <div class="fb-indicator" id="fbIndicator" title="Firebird não configurado">
-      <span class="fb-dot" id="fbDot"></span>
-      <span class="fb-label">FB</span>
-    </div>
-    <a class="icon-btn" id="usersLink" href="/admin/usuarios" title="Gerenciar usuários" style="display:none; text-decoration:none">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
-        <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-      </svg>
-    </a>
-    <button class="icon-btn" id="configBtn" title="Configurações">
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M7.5 9.5a2 2 0 100-4 2 2 0 000 4z" stroke="currentColor" stroke-width="1.3"/>
-        <path d="M12.2 7.5c0-.26.02-.52.06-.77l1.27-.74a.5.5 0 00.17-.68l-1.2-2.08a.5.5 0 00-.65-.18l-1.27.74a5 5 0 00-1.34-.77V1.5a.5.5 0 00-.5-.5H6.26a.5.5 0 00-.5.5v1.02a5 5 0 00-1.34.77l-1.27-.74a.5.5 0 00-.65.18L1.3 5.31a.5.5 0 00.17.68l1.27.74A5.1 5.1 0 002.8 7.5c0 .26-.02.52-.06.77l-1.27.74a.5.5 0 00-.17.68l1.2 2.08c.13.22.4.3.65.18l1.27-.74c.42.3.87.55 1.34.77v1.02c0 .28.22.5.5.5h2.44c.28 0 .5-.22.5-.5v-1.02a5 5 0 001.34-.77l1.27.74a.5.5 0 00.65-.18l1.2-2.08a.5.5 0 00-.17-.68l-1.27-.74c.04-.25.06-.51.06-.77z" stroke="currentColor" stroke-width="1.3"/>
-      </svg>
-    </button>
-    <span class="user-pill" id="userPill" title="Usuário logado" style="display:none;
-      align-items:center; gap:6px; padding:4px 10px;
-      border:1px solid var(--border); border-radius:20px;
-      font-size:12px; color:var(--text-secondary);"></span>
-    <button class="icon-btn" id="logoutBtn" title="Sair" style="display:none">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
-      </svg>
-    </button>
-  </div>
-</header>
+<!-- App shell (sidebar + topbar) is injected by /static/js/shell.js -->
+<div id="app-shell"></div>
 
 <!-- ── Main ───────────────────────────────────────────────────────── -->
 <div class="main">
@@ -759,7 +686,7 @@
           </div>
           <p class="empty-title">Nenhum pedido pendente</p>
           <p class="empty-sub" id="pendingEmptySub">Adicione arquivos PDF, XLS ou XLSX na pasta configurada.</p>
-          <button class="btn btn-sm hidden" id="emptyCfgBtn" onclick="document.getElementById('configBtn').click()">
+          <button class="btn btn-sm hidden" id="emptyCfgBtn" onclick="window.location.href='/configuracoes/diretorios'">
             Configurar pasta
           </button>
         </div>
@@ -922,97 +849,7 @@
 </div>
 
 <!-- ── Config Modal ────────────────────────────────────────────────── -->
-<div class="overlay" id="cfgOverlay">
-  <div class="modal" style="max-height:unset">
-    <div class="modal-header">
-      <span class="modal-title">Configurações</span>
-      <button class="icon-btn" onclick="closeCfgModal()">
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-          <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-      </button>
-    </div>
-    <div class="cfg-body">
-
-      <!-- Pastas -->
-      <div class="cfg-section">
-        <div class="cfg-section-title">Pastas</div>
-        <div class="cfg-field">
-          <label>Entrada (watch folder)</label>
-          <div class="field-row">
-            <input class="input" id="cfgWatchDir" type="text" placeholder="Caminho da pasta…">
-            <button class="btn" onclick="openBrowse('watchDir')">
-              <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-                <path d="M1 3.5a1 1 0 011-1h2.5l1.5 2H11a1 1 0 011 1V10a1 1 0 01-1 1H2a1 1 0 01-1-1V3.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-              </svg>
-              Selecionar
-            </button>
-          </div>
-        </div>
-        <div class="cfg-field">
-          <label>Saída (XLS do ERP)</label>
-          <div class="field-row">
-            <input class="input" id="cfgOutputDir" type="text" placeholder="Caminho da pasta…">
-            <button class="btn" onclick="openBrowse('outputDir')">
-              <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-                <path d="M1 3.5a1 1 0 011-1h2.5l1.5 2H11a1 1 0 011 1V10a1 1 0 01-1 1H2a1 1 0 01-1-1V3.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-              </svg>
-              Selecionar
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Exportação -->
-      <div class="cfg-section">
-        <div class="cfg-section-title">Exportação</div>
-        <div class="cfg-field">
-          <label>Modo</label>
-          <div class="seg-ctrl">
-            <button class="seg-btn active" data-mode="xlsx" onclick="setExportMode('xlsx')">XLSX</button>
-            <button class="seg-btn" data-mode="db" onclick="setExportMode('db')">Banco DB</button>
-            <button class="seg-btn" data-mode="both" onclick="setExportMode('both')">Ambos</button>
-          </div>
-        </div>
-        <div class="cfg-field">
-          <label>Firebird</label>
-          <div class="fb-status-row">
-            <span class="fb-dot" id="cfgFbDot"></span>
-            <span id="cfgFbText">Verificando…</span>
-          </div>
-        </div>
-      </div>
-
-    </div>
-    <div class="cfg-footer">
-      <button class="btn" onclick="closeCfgModal()">Cancelar</button>
-      <button class="btn btn-primary" onclick="saveConfig()">Salvar configurações</button>
-    </div>
-  </div>
-</div>
-
-<!-- ── Folder Browser Modal ──────────────────────────────────────── -->
-<div class="overlay" id="browseOverlay">
-  <div class="modal">
-    <div class="modal-header">
-      <span class="modal-title">Selecionar pasta</span>
-      <button class="icon-btn" onclick="closeBrowse()">
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-          <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-      </button>
-    </div>
-    <div class="modal-path" id="browsePath">—</div>
-    <div class="modal-body" id="browseBody">
-      <div style="padding:24px;text-align:center;color:var(--text-muted)">Carregando…</div>
-    </div>
-    <div class="modal-footer">
-      <span class="modal-sel-path" id="browseSelPath"></span>
-      <button class="btn btn-sm" onclick="closeBrowse()">Cancelar</button>
-      <button class="btn btn-primary btn-sm" onclick="confirmBrowse()">Selecionar aqui</button>
-    </div>
-  </div>
-</div>
+<!-- Configurações migrated to /configuracoes/diretorios (linked from sidebar). -->
 
 <!-- ── Manual cliente picker (CLIENT_NOT_FOUND recovery) ── -->
 <div class="overlay" id="clientPickerOverlay">
@@ -1047,8 +884,6 @@
 /* ── State ── */
 let cfg = { watchDir: '', outputDir: '', exportMode: 'xlsx', firebirdConfigured: false };
 let pendingFiles = [];
-let browseTarget = 'watchDir';
-let browseCurrentPath = null;
 let currentExportMode = 'xlsx';
 
 /* ── Init ── */
@@ -1062,33 +897,12 @@ async function loadConfig() {
   try {
     const data = await api('/api/config');
     cfg = data;
-    document.getElementById('cfgWatchDir').value = cfg.watchDir || '';
-    document.getElementById('cfgOutputDir').value = cfg.outputDir || '';
-    document.getElementById('watchDirLabel').textContent = cfg.watchDir || 'Pasta não configurada';
+    const lbl = document.getElementById('watchDirLabel');
+    if (lbl) lbl.textContent = cfg.watchDir || 'Pasta não configurada';
     currentExportMode = cfg.exportMode || 'xlsx';
-    updateFbIndicator(cfg.firebirdConfigured);
+    // Firebird status indicator is owned by the app shell now.
+    if (window.appShell && window.appShell.refreshFb) window.appShell.refreshFb();
   } catch (_) {}
-}
-
-function updateFbIndicator(configured) {
-  const dot    = document.getElementById('fbDot');
-  const ind    = document.getElementById('fbIndicator');
-  const cfgDot = document.getElementById('cfgFbDot');
-  const cfgTxt = document.getElementById('cfgFbText');
-
-  if (configured) {
-    dot.classList.add('connected');
-    ind.title = 'Firebird conectado';
-    cfgDot.classList.add('connected');
-    cfgTxt.textContent = 'Configurado via FB_DATABASE';
-    cfgTxt.style.color = 'var(--success)';
-  } else {
-    dot.classList.remove('connected');
-    ind.title = 'Firebird não configurado';
-    cfgDot.classList.remove('connected');
-    cfgTxt.textContent = 'Não configurado — defina FB_DATABASE no ambiente';
-    cfgTxt.style.color = 'var(--text-muted)';
-  }
 }
 
 function setExportMode(mode) {
@@ -1528,110 +1342,7 @@ async function doReimport(filename, entryId) {
   }
 }
 
-/* ── Config modal ── */
-document.getElementById('configBtn').addEventListener('click', () => {
-  document.getElementById('cfgWatchDir').value = cfg.watchDir || '';
-  document.getElementById('cfgOutputDir').value = cfg.outputDir || '';
-  setExportMode(currentExportMode);
-  updateFbIndicator(cfg.firebirdConfigured);
-  document.getElementById('cfgOverlay').classList.add('open');
-});
-
-function closeCfgModal() {
-  document.getElementById('cfgOverlay').classList.remove('open');
-}
-
-document.getElementById('cfgOverlay').addEventListener('click', e => {
-  if (e.target === document.getElementById('cfgOverlay')) closeCfgModal();
-});
-
-async function saveConfig() {
-  const watchDir  = document.getElementById('cfgWatchDir').value.trim();
-  const outputDir = document.getElementById('cfgOutputDir').value.trim();
-  if (!watchDir || !outputDir) return;
-  try {
-    const data = await api('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ watchDir, outputDir, exportMode: currentExportMode }),
-    });
-    cfg = data;
-    document.getElementById('watchDirLabel').textContent = cfg.watchDir;
-    updateFbIndicator(cfg.firebirdConfigured);
-    closeCfgModal();
-    loadPending();
-    loadImported();
-  } catch (e) {
-    alert('Erro ao salvar: ' + e.message);
-  }
-}
-
-/* ── Folder browser ── */
-function openBrowse(target) {
-  browseTarget = target;
-  const currentVal = target === 'watchDir'
-    ? document.getElementById('cfgWatchDir').value.trim()
-    : document.getElementById('cfgOutputDir').value.trim();
-  document.getElementById('browseOverlay').classList.add('open');
-  loadBrowseDir(currentVal || '~');
-}
-
-function closeBrowse() {
-  document.getElementById('browseOverlay').classList.remove('open');
-}
-
-document.getElementById('browseOverlay').addEventListener('click', e => {
-  if (e.target === document.getElementById('browseOverlay')) closeBrowse();
-});
-
-function confirmBrowse() {
-  if (browseCurrentPath) {
-    if (browseTarget === 'watchDir') {
-      document.getElementById('cfgWatchDir').value = browseCurrentPath;
-    } else {
-      document.getElementById('cfgOutputDir').value = browseCurrentPath;
-    }
-  }
-  closeBrowse();
-}
-
-async function loadBrowseDir(path) {
-  document.getElementById('browseBody').innerHTML =
-    '<div style="padding:20px;text-align:center;color:var(--text-muted)">Carregando…</div>';
-  try {
-    const data = await api('/api/fs?path=' + encodeURIComponent(path));
-    if (data.error) throw new Error(data.error);
-
-    browseCurrentPath = data.current;
-    document.getElementById('browsePath').textContent = data.current;
-    document.getElementById('browseSelPath').textContent = data.current;
-
-    let html = '';
-    if (data.parent) {
-      html += `<div class="dir-row up" onclick="loadBrowseDir('${escPath(data.parent)}')">
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-          <path d="M7.5 9.5L3.5 6l4-3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <span>Voltar</span>
-      </div>`;
-    }
-    if (!data.entries.length) {
-      html += '<div style="padding:14px 12px;font-size:13px;color:var(--text-muted)">Nenhuma subpasta</div>';
-    } else {
-      html += data.entries.map(e => `
-        <div class="dir-row" onclick="loadBrowseDir('${escPath(e.path)}')">
-          <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-            <path d="M1 3.5a1 1 0 011-1h2.5l1.5 2H11a1 1 0 011 1V10a1 1 0 01-1 1H2a1 1 0 01-1-1V3.5z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/>
-          </svg>
-          ${esc(e.name)}
-        </div>`).join('');
-    }
-    document.getElementById('browseBody').innerHTML = html;
-  } catch (err) {
-    document.getElementById('browseBody').innerHTML =
-      `<div style="padding:14px 12px;font-size:13px;color:var(--error)">${esc(err.message)}</div>`;
-  }
-}
+/* Configuration UI moved to /configuracoes/* (linked from sidebar). */
 
 /* ── Manual cliente picker (CLIENT_NOT_FOUND recovery) ── */
 let cpState = {
@@ -2070,41 +1781,8 @@ async function commitPreview() {
 }
 
 init();
-
-// ── Auth gate (Phase 4b) ────────────────────────────────────────────────
-// Runs ASAP and redirects anon users to /login. Wires header pill / users
-// link / logout button. Idempotent — safe even if init() above already ran.
-(async () => {
-  try {
-    const r = await fetch('/api/auth/me', { credentials: 'same-origin' });
-    const data = await r.json().catch(() => ({}));
-    if (!data.user) {
-      window.location.href = '/login';
-      return;
-    }
-    const u = data.user;
-    const pill = document.getElementById('userPill');
-    if (pill) {
-      pill.textContent = u.email;
-      pill.style.display = 'inline-flex';
-    }
-    const logout = document.getElementById('logoutBtn');
-    if (logout) {
-      logout.style.display = '';
-      logout.addEventListener('click', async () => {
-        await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
-        window.location.href = '/login';
-      });
-    }
-    if (u.role === 'admin') {
-      const link = document.getElementById('usersLink');
-      if (link) link.style.display = '';
-    }
-  } catch (err) {
-    // Network / server down — leave the page as-is rather than redirect-loop.
-    console.warn('auth check failed', err);
-  }
-})();
+// Auth gating + user pill + logout are owned by /static/js/shell.js now.
+// The shell will redirect anonymous users to /login before rendering.
 </script>
 </body>
 </html>

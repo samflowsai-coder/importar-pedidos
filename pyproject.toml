@@ -17,6 +17,7 @@ dependencies = [
     "loguru>=0.7",
     "firebird-driver>=2.0",
     "bcrypt>=4.1",
+    "cryptography>=42",
     "apscheduler>=3.10,<4.0",
     "sqlalchemy>=2.0",
     "prometheus_client>=0.20",

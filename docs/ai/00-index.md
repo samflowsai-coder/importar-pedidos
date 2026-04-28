@@ -11,7 +11,8 @@
 | Adicionar/ajustar parser de cliente novo (PDF ou XLS) | `parsers` | `modules/parsers.md` |
 | Bug em parser específico (Riachuelo, Centauro, Kolosh, etc.) | `parsers` | `modules/parsers.md` |
 | Importação no Firebird, queries SQL, mapper de colunas | `erp` | `modules/erp.md` |
-| Rotas FastAPI, preview, upload, download | `web` | `modules/web.md` |
+| Configurar caminho/host/credenciais do Firebird via UI (`/configuracoes/banco`) | `erp` + `security` | `modules/erp.md`, `modules/security.md` (seção secret_store) |
+| Rotas FastAPI, preview, upload, download, app shell | `web` | `modules/web.md` |
 | Log de execuções em SQLite, repositório de pedidos processados | `persistence` | `modules/persistence.md` |
 | Mudar status de pedido, adicionar evento ao ciclo de vida, propagar trace_id | `state` | `modules/state.md` |
 | Chamada HTTP de saída (Gestor, OpenRouter, qualquer API externa) | `http` | `modules/http.md` |
@@ -56,7 +57,9 @@
 - `app/parsers/base_parser.py` — `_find(text, pattern)`, `_parse_br_number(value)`
 - `app/utils/logger.py` — logger loguru singleton
 - `app/models/order.py` — `Order`, `OrderHeader`, `OrderItem`, `ERPRow`
-- `app/config.py` — leitura de env vars
+- `app/config.py` — leitura de env vars (diretórios, modo de exportação)
+- `app/firebird_config.py` — config Firebird editável via UI (`load`, `save`, `apply_to_env`); senha cifrada via `app/security/secret_store.py`
+- `app/web/static/css/tokens.css`, `shell.css`, `app/web/static/js/shell.js` — app shell compartilhado entre páginas autenticadas
 
 ## Fluxos completos
 

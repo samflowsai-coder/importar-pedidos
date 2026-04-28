@@ -1,0 +1,74 @@
+/* tokens.css — Portal de Pedidos design tokens (light-first).
+ * Linear / Vercel / Stripe sensibility. Editorial typography.
+ * Nomes idênticos aos legados de index.html / admin-usuarios.html.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg:             #FFFFFF;
+  --surface:        #FAFAFA;
+  --surface-hover:  #F4F4F5;
+  --surface-raised: #FFFFFF;
+  --border:         #E4E4E7;
+  --border-subtle:  #EFEFF1;
+  --border-hover:   #D4D4D8;
+
+  /* Text */
+  --text:           #09090B;
+  --text-secondary: #52525B;
+  --text-muted:     #71717A;
+
+  /* Accent — indigo, padrão histórico */
+  --accent:         #6366F1;
+  --accent-hover:   #4F46E5;
+  --accent-bg:      rgba(99,102,241,.08);
+
+  /* Status */
+  --success:        #16A34A;
+  --success-bg:     rgba(22,163,74,.08);
+  --error:          #DC2626;
+  --error-bg:       rgba(220,38,38,.08);
+  --warn:           #D97706;
+  --warn-bg:        rgba(217,119,6,.08);
+
+  /* Geometry */
+  --radius-sm:      6px;
+  --radius:         8px;
+  --radius-lg:      12px;
+  --radius-xl:      16px;
+
+  /* Glass / overlay */
+  --header-bg:      rgba(255,255,255,.78);
+  --bar-bg:         rgba(255,255,255,.92);
+  --overlay:        rgba(15,15,18,.42);
+
+  /* Elevation */
+  --shadow-sm:      0 1px 2px rgba(0,0,0,.04), 0 1px 3px rgba(0,0,0,.06);
+  --shadow-md:      0 4px 10px rgba(0,0,0,.06), 0 2px 4px rgba(0,0,0,.04);
+  --shadow-lg:      0 12px 32px rgba(15,23,42,.08), 0 4px 12px rgba(15,23,42,.06);
+
+  /* Typography scale */
+  --font-sans:      'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono:      ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+}
+
+* , *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection { background: var(--accent-bg); color: var(--text); }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); }

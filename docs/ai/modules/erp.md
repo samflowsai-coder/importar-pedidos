@@ -28,6 +28,22 @@ FB_USER=SYSDBA
 FB_PASSWORD=masterkey
 ```
 
+## Configuração via UI (`/configuracoes/banco`)
+A partir do redesign do shell, o admin pode editar `FB_*` pela página
+`/configuracoes/banco` sem reiniciar o app:
+
+- Persistência: `app/firebird_config.py` lê/grava `app/firebird.json` (campos plaintext +
+  `password_enc`). Senha cifrada via `app/security/secret_store.py` (Fernet, chave em
+  `app/.secret.key`).
+- Aplicação imediata: `firebird_config.apply_to_env()` é chamada no startup do FastAPI **e**
+  ao final de `POST /api/firebird/config`. Como `connection.py:_get_env` lê `os.environ` a
+  cada conexão (sem cache), a próxima operação de import já usa a credencial nova.
+- **Precedência**: config da UI > `.env`. Quando `firebird.json` tem um campo preenchido,
+  ele sobrescreve `os.environ`. Campos vazios em `firebird.json` deixam o que já estava no
+  ambiente intacto.
+- API: `GET /api/firebird/config` (any user, sem senha), `POST /api/firebird/config` (admin),
+  `POST /api/firebird/test` (admin, retorna `traceId` em erros).
+
 ## Testes
 **Sem testes isolados.** Validar com `.fdb` de cópia + sample real, `EXPORT_MODE=both`.
 

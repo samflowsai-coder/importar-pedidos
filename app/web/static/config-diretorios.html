@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portal de Pedidos — Diretórios</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=1">
+  <link rel="stylesheet" href="/static/css/shell.css?v=1">
+  <script src="/static/js/shell.js?v=1" defer></script>
+  <style>
+    .main { padding: 32px 32px 96px; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 720px; }
+
+    .breadcrumb {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+    .breadcrumb a { color: var(--text-muted); text-decoration: none; }
+    .breadcrumb a:hover { color: var(--text-secondary); }
+
+    .page-title {
+      font-size: 24px; font-weight: 600; letter-spacing: -.02em;
+      margin-bottom: 6px;
+    }
+    .page-subtitle {
+      font-size: 13.5px; color: var(--text-muted);
+      margin-bottom: 28px; line-height: 1.6;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 24px 26px;
+      box-shadow: var(--shadow-md);
+    }
+    .card + .card { margin-top: 18px; }
+    .card-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .card-desc {
+      font-size: 12.5px; color: var(--text-muted);
+      margin-bottom: 18px; line-height: 1.55;
+    }
+
+    .field { margin-bottom: 14px; }
+    .field label {
+      display: block;
+      font-size: 12px; font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+    .input {
+      width: 100%; height: 36px;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 0 12px;
+      font-size: 13px;
+      font-family: var(--font-mono);
+    }
+    .input:focus {
+      outline: none; border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-bg);
+    }
+    .field-row { display: flex; gap: 8px; align-items: stretch; }
+    .field-row .input { flex: 1; }
+
+    .btn {
+      height: 36px; padding: 0 14px;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--surface); color: var(--text-secondary);
+      font-size: 13px; font-weight: 500; font-family: inherit;
+      cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+      white-space: nowrap;
+      transition: background 120ms, color 120ms, border-color 120ms;
+    }
+    .btn:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-hover); }
+    .btn:disabled { opacity: .4; pointer-events: none; }
+    .btn-primary {
+      background: var(--accent); border-color: transparent; color: #FFFFFF;
+      font-weight: 600;
+    }
+    .btn-primary:hover { background: var(--accent-hover); color: #FFFFFF; }
+
+    .actions {
+      display: flex; align-items: center; gap: 8px;
+      padding-top: 18px; margin-top: 6px;
+      border-top: 1px solid var(--border-subtle);
+    }
+    .actions .spacer { flex: 1; }
+
+    .seg-ctrl {
+      display: inline-flex; padding: 3px;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .seg-btn {
+      background: transparent; border: 0;
+      color: var(--text-muted);
+      padding: 6px 14px;
+      font-size: 12px; font-weight: 500; font-family: inherit;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background 120ms, color 120ms;
+    }
+    .seg-btn:hover { color: var(--text); }
+    .seg-btn.active { background: var(--surface); color: var(--text); }
+
+    /* Folder browser modal */
+    .overlay {
+      position: fixed; inset: 0;
+      background: var(--overlay);
+      display: none; align-items: center; justify-content: center;
+      z-index: 200;
+      backdrop-filter: blur(4px);
+    }
+    .overlay.open { display: flex; }
+    .modal {
+      width: 480px; max-width: calc(100vw - 32px);
+      max-height: 80vh; overflow: hidden;
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-lg);
+      display: flex; flex-direction: column;
+    }
+    .modal-header {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .modal-title { font-size: 14px; font-weight: 600; }
+    .modal-close {
+      background: transparent; border: 0; color: var(--text-muted);
+      cursor: pointer; padding: 4px; border-radius: 4px;
+    }
+    .modal-close:hover { color: var(--text); background: var(--surface-hover); }
+    .modal-path {
+      padding: 8px 18px;
+      font-family: var(--font-mono); font-size: 11.5px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border-subtle);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .modal-body {
+      flex: 1; overflow-y: auto;
+      padding: 6px;
+    }
+    .dir-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 12px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .dir-row:hover { background: var(--surface-hover); }
+    .dir-row.up { color: var(--text-muted); }
+    .modal-footer {
+      padding: 14px 18px;
+      border-top: 1px solid var(--border-subtle);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .modal-footer .spacer { flex: 1; }
+  </style>
+</head>
+<body>
+
+<div id="app-shell"></div>
+
+<main class="main">
+  <div class="container">
+    <div class="breadcrumb">
+      <a href="/">Pedidos</a>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      <span>Configurações</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      <span>Diretórios</span>
+    </div>
+
+    <h1 class="page-title">Diretórios</h1>
+    <p class="page-subtitle">
+      Pastas que o portal vigia para receber pedidos novos e onde grava os arquivos
+      <code>.xlsx</code> de exportação. Mudanças aqui passam a valer no próximo ciclo de leitura.
+    </p>
+
+    <div class="card">
+      <div class="card-title">Pastas</div>
+      <div class="card-desc">
+        Caminhos absolutos. Use o seletor para navegar pelo sistema de arquivos do servidor.
+      </div>
+
+      <div class="field">
+        <label for="fldWatch">Entrada (watch folder)</label>
+        <div class="field-row">
+          <input class="input" id="fldWatch" type="text" placeholder="Caminho da pasta…" autocomplete="off" spellcheck="false">
+          <button class="btn" type="button" data-browse="watchDir">Selecionar</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="fldOutput">Saída (XLS do ERP)</label>
+        <div class="field-row">
+          <input class="input" id="fldOutput" type="text" placeholder="Caminho da pasta…" autocomplete="off" spellcheck="false">
+          <button class="btn" type="button" data-browse="outputDir">Selecionar</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Modo de exportação</div>
+      <div class="card-desc">Define o destino dos pedidos confirmados.</div>
+      <div class="seg-ctrl" id="modeCtrl">
+        <button class="seg-btn active" type="button" data-mode="xlsx">XLSX</button>
+        <button class="seg-btn" type="button" data-mode="db">Banco DB</button>
+        <button class="seg-btn" type="button" data-mode="both">Ambos</button>
+      </div>
+    </div>
+
+    <div class="actions">
+      <span class="spacer"></span>
+      <button class="btn" type="button" id="btnReload">Descartar alterações</button>
+      <button class="btn btn-primary" type="button" id="btnSave">Salvar configurações</button>
+    </div>
+  </div>
+</main>
+
+<!-- Folder browser -->
+<div class="overlay" id="browseOverlay">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Selecionar pasta</span>
+      <button class="modal-close" type="button" id="browseClose" aria-label="Fechar">
+        <svg width="14" height="14" viewBox="0 0 12 12" fill="none">
+          <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-path" id="browsePath">—</div>
+    <div class="modal-body" id="browseBody">
+      <div style="padding:24px;text-align:center;color:var(--text-muted)">Carregando…</div>
+    </div>
+    <div class="modal-footer">
+      <span class="spacer" style="font-size:11px; color:var(--text-muted); font-family:var(--font-mono)" id="browseSelPath"></span>
+      <button class="btn" type="button" id="browseCancel">Cancelar</button>
+      <button class="btn btn-primary" type="button" id="browseConfirm">Selecionar aqui</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let currentMode = 'xlsx';
+  let browseTarget = null;
+  let browseCurrentPath = null;
+
+  async function api(method, url, body) {
+    const opts = { method, credentials: 'same-origin', headers: {} };
+    if (body !== undefined) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(body);
+    }
+    const r = await fetch(url, opts);
+    const data = await r.json().catch(() => ({}));
+    return { ok: r.ok, status: r.status, data };
+  }
+
+  function $(id) { return document.getElementById(id); }
+
+  function setMode(mode) {
+    currentMode = mode;
+    document.querySelectorAll('#modeCtrl .seg-btn').forEach((b) => {
+      b.classList.toggle('active', b.dataset.mode === mode);
+    });
+  }
+
+  async function reload() {
+    const { ok, data } = await api('GET', '/api/config');
+    if (!ok) return;
+    $('fldWatch').value  = data.watchDir || '';
+    $('fldOutput').value = data.outputDir || '';
+    setMode(data.exportMode || 'xlsx');
+  }
+
+  async function save() {
+    const btn = $('btnSave');
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.textContent = 'Salvando…';
+    try {
+      const payload = {
+        watchDir: $('fldWatch').value.trim(),
+        outputDir: $('fldOutput').value.trim(),
+        exportMode: currentMode,
+      };
+      const { ok, status, data } = await api('POST', '/api/config', payload);
+      if (!ok) {
+        if (window.appShell) {
+          window.appShell.showError(data.detail || `Erro ${status} ao salvar.`);
+        }
+        return;
+      }
+      $('fldWatch').value  = data.watchDir;
+      $('fldOutput').value = data.outputDir;
+      setMode(data.exportMode || currentMode);
+      if (window.appShell) window.appShell.showSuccess('Configuração salva.');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = original;
+    }
+  }
+
+  function escAttr(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+  function escJs(s)  { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+
+  function openBrowse(target) {
+    browseTarget = target;
+    const start = target === 'watchDir'
+      ? $('fldWatch').value.trim()
+      : $('fldOutput').value.trim();
+    $('browseOverlay').classList.add('open');
+    loadBrowseDir(start || '~');
+  }
+
+  function closeBrowse() { $('browseOverlay').classList.remove('open'); }
+
+  function confirmBrowse() {
+    if (browseCurrentPath) {
+      if (browseTarget === 'watchDir') $('fldWatch').value = browseCurrentPath;
+      else $('fldOutput').value = browseCurrentPath;
+    }
+    closeBrowse();
+  }
+
+  async function loadBrowseDir(path) {
+    $('browseBody').innerHTML =
+      '<div style="padding:20px;text-align:center;color:var(--text-muted)">Carregando…</div>';
+    try {
+      const { ok, data } = await api('GET', '/api/fs?path=' + encodeURIComponent(path));
+      if (!ok || data.error) throw new Error(data.error || 'Erro ao listar pasta');
+      browseCurrentPath = data.current;
+      $('browsePath').textContent = data.current;
+      $('browseSelPath').textContent = data.current;
+
+      let html = '';
+      if (data.parent) {
+        html += `<div class="dir-row up" data-path="${escAttr(data.parent)}">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M7.5 9.5L3.5 6l4-3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>Voltar</span>
+        </div>`;
+      }
+      if (!data.entries.length) {
+        html += '<div style="padding:14px 12px;font-size:13px;color:var(--text-muted)">Nenhuma subpasta</div>';
+      } else {
+        html += data.entries.map((e) => `
+          <div class="dir-row" data-path="${escAttr(e.path)}">
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+              <path d="M1 3.5a1 1 0 011-1h2.5l1.5 2H11a1 1 0 011 1V10a1 1 0 01-1 1H2a1 1 0 01-1-1V3.5z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/>
+            </svg>
+            ${escAttr(e.name)}
+          </div>`).join('');
+      }
+      $('browseBody').innerHTML = html;
+      $('browseBody').querySelectorAll('.dir-row').forEach((row) => {
+        row.addEventListener('click', () => loadBrowseDir(row.dataset.path));
+      });
+    } catch (err) {
+      $('browseBody').innerHTML =
+        `<div style="padding:14px 12px;font-size:13px;color:var(--error)">${escAttr(err.message)}</div>`;
+    }
+  }
+
+  function bind() {
+    $('btnReload').addEventListener('click', reload);
+    $('btnSave').addEventListener('click', save);
+    document.querySelectorAll('#modeCtrl .seg-btn').forEach((b) => {
+      b.addEventListener('click', () => setMode(b.dataset.mode));
+    });
+    document.querySelectorAll('[data-browse]').forEach((b) => {
+      b.addEventListener('click', () => openBrowse(b.dataset.browse));
+    });
+    $('browseClose').addEventListener('click', closeBrowse);
+    $('browseCancel').addEventListener('click', closeBrowse);
+    $('browseConfirm').addEventListener('click', confirmBrowse);
+    $('browseOverlay').addEventListener('click', (e) => {
+      if (e.target === $('browseOverlay')) closeBrowse();
+    });
+  }
+
+  bind();
+  reload();
+</script>
+</body>
+</html>
