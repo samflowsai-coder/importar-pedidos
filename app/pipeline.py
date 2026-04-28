@@ -9,6 +9,7 @@ from app.ingestion.file_loader import LoadedFile
 from app.llm.fallback_parser import LLMFallbackParser
 from app.models.order import Order
 from app.normalizers.order_normalizer import OrderNormalizer
+from app.parsers.authentic_feet_parser import AuthenticFeetParser
 from app.parsers.beira_rio_parser import BeiranRioParser
 from app.parsers.desmembramento_xls_parser import DesmembramentoXlsParser
 from app.parsers.generic_parser import GenericParser
@@ -32,6 +33,7 @@ _parsers = [
     KoloshParser(),
     SamsClubParser(),
     KallanXlsParser(),
+    AuthenticFeetParser(),
     DesmembramentoXlsParser(),
     GenericParser(),
 ]

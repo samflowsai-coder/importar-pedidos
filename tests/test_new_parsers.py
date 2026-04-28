@@ -291,6 +291,49 @@ def test_authentic_feet_items():
         assert item.product_code is not None
 
 
+# ── AuthenticFeetParser (single-customer "Pedido") ──────────────────────────
+
+def test_authentic_fit_basic():
+    order = _process("Pedido Authentic Fit.xlsx")
+    assert order is not None
+    assert len(order.items) == 12
+    assert order.header.customer_cnpj == "62.513.076/0001-78"
+    assert order.header.customer_name and "MULTIX" in order.header.customer_name.upper()
+    # Soma dos TOTAL KITS deve bater com totalizador da linha 25 (540)
+    assert sum(int(it.quantity) for it in order.items) == 540
+
+
+def test_authentic_fit_first_item():
+    order = _process("Pedido Authentic Fit.xlsx")
+    item = order.items[0]
+    assert item.product_code == "AFK3S-A-100-3338"
+    assert item.quantity == 50
+    assert item.unit_price == 11.96
+    assert item.total_price == 598
+    desc = (item.description or "").upper()
+    assert "SAPATILHA" in desc
+    assert "BRANCO" in desc
+
+
+def test_authentic_fit_does_not_match_desmembramento():
+    """Não-regressão: o sample de desmembramento continua indo para
+    DesmembramentoXlsParser, mesmo com AuthenticFeetParser registrado antes."""
+    order = _process("Desmembramento Authentic feet (1).xlsx")
+    assert order is not None
+    assert any(it.delivery_cnpj or it.delivery_name for it in order.items)
+
+
+def test_authentic_fit_single_output_file():
+    """Pedido single-customer → exportador gera 1 arquivo (sem split)."""
+    order = _process("Pedido Authentic Fit.xlsx")
+    assert order is not None
+    from app.exporters.erp_exporter import ERPExporter
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = ERPExporter().export(order, tmp)
+        assert len(paths) == 1
+
+
 def test_nba_item_count():
     order = _process("PEDIDO NBA 3.xlsx")
     assert order is not None
