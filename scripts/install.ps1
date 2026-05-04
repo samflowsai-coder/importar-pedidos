@@ -209,6 +209,9 @@ if (Test-Path $EnvFile) {
     $lines.Add("PORTAL_HOST=127.0.0.1")
     $lines.Add("PORTAL_PORT=$Port")
     $lines.Add("PORTAL_RELOAD=false")
+    # Portal serve em HTTP local; cookie Secure=true bloqueia o login.
+    # Trocar para 1 ao colocar TLS reverso (nginx/IIS) na frente.
+    $lines.Add("PORTAL_COOKIE_SECURE=0")
 
     if ($ExportMode -in @("db", "both")) {
         Write-Host ""
