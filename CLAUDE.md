@@ -142,20 +142,43 @@ O `ERPExporter` agrupa itens por chave de entrega e gera um `.xlsx` por grupo. P
 
 ---
 
+## Multi-ambiente (MM, Nasmar e além)
+
+O Portal opera N empresas em paralelo. Cada **ambiente** tem pastas próprias e
+banco Firebird próprio, configurados em `/admin/ambientes`. Pedidos da MM
+nunca aparecem em listagens da Nasmar — cada empresa tem seu SQLite
+(`app_state_<slug>.db`); auth e metadata vivem em `app_shared.db`.
+
+Fluxo: admin cria ambientes → operador loga → escolhe ambiente em
+`/selecionar-ambiente` → cookie `portal_env` ativo → toda navegação dele é
+naquela empresa até trocar.
+
+Detalhes em [docs/ai/modules/environments.md](docs/ai/modules/environments.md).
+
 ## Variáveis de Ambiente
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-...   # obrigatório para LLM fallback
-INPUT_DIR=input/               # CLI: diretório de entrada
-OUTPUT_DIR=output/             # CLI: diretório de saída
+APP_DATA_DIR=data/             # onde ficam app_shared.db + app_state_<slug>.db
 
-# Firebird / Fire Sistemas ERP
+# Modo de exportação (global — pode ficar por ambiente no futuro)
 EXPORT_MODE=xlsx               # xlsx | db | both
+
+# Firebird singleton (LEGADO — só usado se NÃO houver ambiente ativo;
+# em deploy multi-empresa configurar via UI /admin/ambientes)
 FB_DATABASE=/path/to/emp.fdb   # arquivo .fdb (embedded) ou path no servidor
 FB_HOST=192.168.1.10           # host TCP (omitir para embedded)
-FB_PORT=3050                   # porta TCP (padrão)
-FB_USER=SYSDBA                 # padrão Firebird
-FB_PASSWORD=masterkey          # padrão Firebird
+FB_PORT=3050
+FB_USER=SYSDBA
+FB_PASSWORD=masterkey
+
+# Sessão/segurança
+PORTAL_COOKIE_SECURE=1         # 0 em dev/HTTP local
+SESSION_TTL_HOURS=24
+
+# Retention/backup do worker
+RETENTION_DAYS=180
+BACKUP_DIR=backups/            # vazio = desligado
 ```
 
 Copiar de `.env.example`. Nunca commitar `.env`.
