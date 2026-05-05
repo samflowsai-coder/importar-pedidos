@@ -89,6 +89,26 @@
       border-radius: 8px;
       margin-bottom: 1rem;
     }
+    .hint {
+      font-size: .8em;
+      color: var(--text-muted);
+      line-height: 1.55;
+      margin: -.4rem 0 1rem;
+      padding: .65rem .8rem;
+      background: var(--bg-elev);
+      border-left: 2px solid var(--border);
+      border-radius: 4px;
+    }
+    .hint code {
+      font-family: var(--font-mono, monospace);
+      font-size: .9em;
+      padding: .05em .35em;
+      background: rgba(0,0,0,.15);
+      border-radius: 3px;
+    }
+    .hint strong { color: var(--text); font-weight: 600; }
+    .file-row { font-size: 13px; }
+    .file-row.selected { background: color-mix(in srgb, var(--accent, #3b82f6) 18%, transparent); }
 
     /* Folder browser modal */
     .overlay {
@@ -188,15 +208,24 @@
         <legend>Firebird (Fire Sistemas)</legend>
         <label>
           <span>Caminho do .fdb</span>
-          <input name="fb_path" required placeholder="C:\Fire\empresa.fdb">
+          <div class="field-row">
+            <input name="fb_path" required placeholder="C:\Fire\empresa.fdb">
+            <button type="button" class="btn btn-secondary" data-browse-file="fb_path" data-ext=".fdb">Selecionar</button>
+          </div>
         </label>
+        <p class="hint">
+          <strong>Embedded</strong> (Portal e .fdb no mesmo PC): deixe Host e Porta vazios.
+          <strong>TCP</strong> (Firebird Server em outro servidor da rede): preencha Host
+          (ex: <code>192.168.1.10</code>) e Porta (padrão <code>3050</code>) — o
+          caminho do .fdb deve ser como o servidor remoto enxerga.
+        </p>
         <div class="row">
           <label>
-            <span>Host (vazio para embedded)</span>
+            <span>Host (vazio = embedded local)</span>
             <input name="fb_host" placeholder="192.168.1.10">
           </label>
           <label>
-            <span>Porta</span>
+            <span>Porta (padrão 3050)</span>
             <input name="fb_port" placeholder="3050">
           </label>
         </div>
@@ -341,29 +370,62 @@
       showError('Falha ao desativar (' + r.status + ')');
     });
 
-    // ── Folder browser ──────────────────────────────────────────────
-    let browseTargetField = null;  // 'watch_dir' | 'output_dir'
+    // ── Filesystem browser (pastas e arquivos) ─────────────────────
+    // Modo "dir": clica em "Selecionar aqui" pra escolher o diretório atual
+    // Modo "file": clica num arquivo (filtrado por extensão) pra escolher
+    let browseTargetField = null;
+    let browseMode = 'dir';   // 'dir' | 'file'
+    let browseFileExt = '';   // ex: '.fdb'
     let browseCurrentPath = null;
+    let browseSelectedFile = null;
 
     const overlay = document.getElementById('browseOverlay');
     const browseBody = document.getElementById('browseBody');
     const browsePath = document.getElementById('browsePath');
     const browseSelPath = document.getElementById('browseSelPath');
+    const browseConfirm = document.getElementById('browseConfirm');
+    const browseTitleEl = document.querySelector('#browseOverlay .modal-title');
 
     function escAttr(s) {
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     }
 
-    function openBrowse(targetField) {
+    function openBrowseDir(targetField) {
       browseTargetField = targetField;
+      browseMode = 'dir';
+      browseFileExt = '';
+      browseSelectedFile = null;
+      browseTitleEl.textContent = 'Selecionar pasta';
+      browseConfirm.textContent = 'Selecionar aqui';
+      browseConfirm.disabled = false;
       const start = (f.elements[targetField].value || '').trim();
+      const startDir = start ? start.replace(/[\\/][^\\/]*$/, '') || start : '';
       overlay.classList.add('open');
-      loadBrowseDir(start || '~');
+      loadBrowseDir(startDir || start || '~');
     }
+
+    function openBrowseFile(targetField, ext) {
+      browseTargetField = targetField;
+      browseMode = 'file';
+      browseFileExt = ext;
+      browseSelectedFile = null;
+      browseTitleEl.textContent = 'Selecionar arquivo (' + ext + ')';
+      browseConfirm.textContent = 'Selecionar arquivo';
+      browseConfirm.disabled = true;  // só ativa quando um arquivo for clicado
+      const start = (f.elements[targetField].value || '').trim();
+      const startDir = start ? start.replace(/[\\/][^\\/]*$/, '') || start : '';
+      overlay.classList.add('open');
+      loadBrowseDir(startDir || start || '~');
+    }
+
     function closeBrowse() { overlay.classList.remove('open'); }
+
     function confirmBrowse() {
-      if (browseCurrentPath && browseTargetField) {
-        f.elements[browseTargetField].value = browseCurrentPath;
+      let chosen = null;
+      if (browseMode === 'dir') chosen = browseCurrentPath;
+      else chosen = browseSelectedFile;
+      if (chosen && browseTargetField) {
+        f.elements[browseTargetField].value = chosen;
       }
       closeBrowse();
     }
@@ -371,27 +433,55 @@
     async function loadBrowseDir(p) {
       browseBody.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted)">Carregando…</div>';
       try {
-        const r = await fetch('/api/fs?path=' + encodeURIComponent(p), { credentials: 'same-origin' });
+        const url = '/api/fs?path=' + encodeURIComponent(p) +
+          (browseMode === 'file' ? '&file_ext=' + encodeURIComponent(browseFileExt) : '');
+        const r = await fetch(url, { credentials: 'same-origin' });
         const data = await r.json().catch(() => ({}));
         if (!r.ok || data.error) throw new Error(data.error || ('Erro ' + r.status));
         browseCurrentPath = data.current;
         browsePath.textContent = data.current;
-        browseSelPath.textContent = data.current;
+        browseSelPath.textContent = browseMode === 'dir'
+          ? data.current
+          : (browseSelectedFile || 'Selecione um arquivo ' + browseFileExt);
 
         let html = '';
         if (data.parent) {
           html += '<div class="dir-row up" data-path="' + escAttr(data.parent) + '">↑ Voltar</div>';
         }
-        if (!data.entries.length) {
-          html += '<div style="padding:14px 12px;font-size:13px;color:var(--text-muted)">Nenhuma subpasta</div>';
-        } else {
+        if (data.entries.length) {
           html += data.entries.map(e =>
             '<div class="dir-row" data-path="' + escAttr(e.path) + '">📁 ' + escAttr(e.name) + '</div>'
           ).join('');
         }
+        if (browseMode === 'file') {
+          if (data.files && data.files.length) {
+            html += data.files.map(e =>
+              '<div class="dir-row file-row" data-file="' + escAttr(e.path) + '">📄 ' + escAttr(e.name) + '</div>'
+            ).join('');
+          } else if (!data.entries.length) {
+            html += '<div style="padding:14px 12px;font-size:13px;color:var(--text-muted)">' +
+                    'Nenhum arquivo ' + escAttr(browseFileExt) + ' nesta pasta.</div>';
+          }
+        } else if (!data.entries.length) {
+          html += '<div style="padding:14px 12px;font-size:13px;color:var(--text-muted)">Nenhuma subpasta</div>';
+        }
         browseBody.innerHTML = html;
-        browseBody.querySelectorAll('.dir-row').forEach(row => {
+
+        browseBody.querySelectorAll('.dir-row[data-path]').forEach(row => {
           row.addEventListener('click', () => loadBrowseDir(row.dataset.path));
+        });
+        browseBody.querySelectorAll('.file-row[data-file]').forEach(row => {
+          row.addEventListener('click', () => {
+            browseBody.querySelectorAll('.file-row.selected').forEach(r => r.classList.remove('selected'));
+            row.classList.add('selected');
+            browseSelectedFile = row.dataset.file;
+            browseSelPath.textContent = browseSelectedFile;
+            browseConfirm.disabled = false;
+          });
+          row.addEventListener('dblclick', () => {
+            browseSelectedFile = row.dataset.file;
+            confirmBrowse();
+          });
         });
       } catch (err) {
         browseBody.innerHTML =
@@ -401,11 +491,14 @@
     }
 
     document.querySelectorAll('[data-browse]').forEach(b => {
-      b.addEventListener('click', () => openBrowse(b.dataset.browse));
+      b.addEventListener('click', () => openBrowseDir(b.dataset.browse));
+    });
+    document.querySelectorAll('[data-browse-file]').forEach(b => {
+      b.addEventListener('click', () => openBrowseFile(b.dataset.browseFile, b.dataset.ext || ''));
     });
     document.getElementById('browseClose').addEventListener('click', closeBrowse);
     document.getElementById('browseCancel').addEventListener('click', closeBrowse);
-    document.getElementById('browseConfirm').addEventListener('click', confirmBrowse);
+    browseConfirm.addEventListener('click', confirmBrowse);
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) closeBrowse();
     });

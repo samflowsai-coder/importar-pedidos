@@ -1186,7 +1186,11 @@ def download_file(path: str) -> FileResponse:
 
 
 @app.get("/api/fs")
-def browse_filesystem(path: str = "~") -> JSONResponse:
+def browse_filesystem(path: str = "~", file_ext: str = "") -> JSONResponse:
+    """Lista subpastas. Quando `file_ext` (ex: '.fdb') é passado, também lista
+    arquivos com essa extensão na pasta atual — útil para pickers de arquivo.
+    Sem `file_ext`, comportamento histórico (apenas pastas).
+    """
     try:
         p = Path(path).expanduser().resolve()
         while not p.exists() or not p.is_dir():
@@ -1195,16 +1199,36 @@ def browse_filesystem(path: str = "~") -> JSONResponse:
                 p = Path.home()
                 break
             p = parent
-        entries = sorted(
+        dirs = sorted(
             [
-                {"name": e.name, "path": str(e)}
+                {"name": e.name, "path": str(e), "type": "dir"}
                 for e in p.iterdir()
                 if e.is_dir() and not e.name.startswith(".")
             ],
             key=lambda x: x["name"].lower(),
         )
+        files: list[dict] = []
+        if file_ext:
+            ext = file_ext.lower().strip()
+            if not ext.startswith("."):
+                ext = "." + ext
+            files = sorted(
+                [
+                    {"name": e.name, "path": str(e), "type": "file"}
+                    for e in p.iterdir()
+                    if e.is_file()
+                    and e.suffix.lower() == ext
+                    and not e.name.startswith(".")
+                ],
+                key=lambda x: x["name"].lower(),
+            )
         parent = str(p.parent) if p != p.parent else None
-        return JSONResponse({"current": str(p), "parent": parent, "entries": entries})
+        return JSONResponse({
+            "current": str(p),
+            "parent": parent,
+            "entries": dirs,         # mantém shape antigo (só dirs) p/ chamadas legadas
+            "files": files,           # adicional, vazio quando file_ext não foi passado
+        })
     except PermissionError:
         return JSONResponse({"error": "Sem permissão para acessar este diretório"}, status_code=403)
     except Exception as exc:
