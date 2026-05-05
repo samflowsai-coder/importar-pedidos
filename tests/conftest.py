@@ -14,6 +14,8 @@ Auth bypass for legacy tests:
 from __future__ import annotations
 
 import os
+import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -31,3 +33,25 @@ def real_auth(monkeypatch):
     """Disable auth bypass — caller will exercise the real login flow."""
     monkeypatch.delenv("TEST_AUTH_BYPASS", raising=False)
     yield
+
+
+@pytest.fixture
+def tmp_shared_db(tmp_path: Path):
+    """Empty SQLite for shared-DB schema/repo tests (future app_shared.db)."""
+    db_file = tmp_path / "app_shared.db"
+    conn = sqlite3.connect(db_file, isolation_level="DEFERRED")
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    yield conn
+    conn.close()
+
+
+@pytest.fixture
+def tmp_env_db(tmp_path: Path):
+    """Empty SQLite for per-env schema/repo tests (future app_state_<slug>.db)."""
+    db_file = tmp_path / "app_state_test.db"
+    conn = sqlite3.connect(db_file, isolation_level="DEFERRED")
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    yield conn
+    conn.close()
