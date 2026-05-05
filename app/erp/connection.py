@@ -40,18 +40,43 @@ class FirebirdConnection:
 
     @contextmanager
     def connect(self) -> Generator:
+        """Conexão usando env vars (legado)."""
+        cfg = {
+            "path": _get_env("FB_DATABASE"),
+            "host": _get_env("FB_HOST"),
+            "port": _get_env("FB_PORT", "3050"),
+            "user": _get_env("FB_USER", "SYSDBA"),
+            "password": _get_env("FB_PASSWORD", "masterkey"),
+            "charset": _get_env("FB_CHARSET", "WIN1252"),
+        }
+        with self._connect_with(cfg) as conn:
+            yield conn
+
+    @contextmanager
+    def connect_with_config(self, cfg: dict) -> Generator:
+        """Conexão usando config explícita (multi-ambiente).
+
+        cfg: dict com keys path, host, port, user, password, charset.
+        Strings vazias em host/port viram embedded.
+        """
+        with self._connect_with(cfg) as conn:
+            yield conn
+
+    @contextmanager
+    def _connect_with(self, cfg: dict) -> Generator:
         from firebird.driver import connect  # type: ignore[import]
         self._configure_library()
 
-        database = _get_env("FB_DATABASE")
+        database = (cfg.get("path") or "").strip()
         if not database:
-            raise FirebirdConnectionError("FB_DATABASE não configurado.")
+            raise FirebirdConnectionError("Caminho do Firebird (.fdb) não configurado.")
 
-        host = _get_env("FB_HOST")
-        port = int(_get_env("FB_PORT", "3050"))
-        user = _get_env("FB_USER", "SYSDBA")
-        password = _get_env("FB_PASSWORD", "masterkey")
-        charset = _get_env("FB_CHARSET", "WIN1252")
+        host = (cfg.get("host") or "").strip()
+        port_raw = (cfg.get("port") or "3050").strip()
+        port = int(port_raw) if port_raw else 3050
+        user = (cfg.get("user") or "SYSDBA").strip()
+        password = cfg.get("password") or ""
+        charset = (cfg.get("charset") or "WIN1252").strip()
 
         mode = f"TCP {host}" if host else "embedded"
         logger.debug(f"Conectando ao Firebird: {mode} → {database} [charset={charset}]")

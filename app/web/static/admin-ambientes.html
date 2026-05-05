@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ambientes — Portal de Pedidos</title>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/shell.css">
+  <script defer src="/static/js/shell.js"></script>
+  <style>
+    .content {
+      max-width: 1100px;
+      margin: 2rem auto;
+      padding: 0 1.5rem;
+    }
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+    }
+    h1 { font-size: 1.6rem; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+    .btn {
+      padding: .55rem 1.1rem;
+      background: var(--accent, #3b82f6);
+      color: #fff;
+      border: 0;
+      border-radius: 8px;
+      font: inherit;
+      font-weight: 500;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+    }
+    .btn:hover { filter: brightness(1.05); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: .9rem 1rem; text-align: left; border-bottom: 1px solid var(--border); }
+    th {
+      font-weight: 500;
+      color: var(--text-muted);
+      font-size: .75rem;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    code {
+      background: var(--bg-elev);
+      padding: .15rem .45rem;
+      border-radius: 4px;
+      font-size: .85em;
+    }
+    .badge { font-size: .8em; font-weight: 500; }
+    .badge.active   { color: var(--success, #22c55e); }
+    .badge.inactive { color: var(--text-muted); }
+    .actions a { color: var(--accent, #3b82f6); text-decoration: none; margin-right: 1rem; }
+    .actions a:hover { text-decoration: underline; }
+    .empty {
+      text-align: center;
+      padding: 4rem 1rem;
+      color: var(--text-muted);
+    }
+    .empty p { margin: .25rem 0; }
+  </style>
+</head>
+<body>
+  <main class="content">
+    <div class="page-header">
+      <h1>Ambientes</h1>
+      <a href="/admin/ambientes/novo" class="btn">+ Novo ambiente</a>
+    </div>
+    <table id="tbl" hidden>
+      <thead>
+        <tr>
+          <th>Nome</th>
+          <th>Slug</th>
+          <th>Pasta de entrada</th>
+          <th>Banco Firebird</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="empty" id="empty" hidden>
+      <p>Nenhum ambiente configurado.</p>
+      <p style="margin-top: 1rem"><a href="/admin/ambientes/novo" class="btn">Criar o primeiro ambiente</a></p>
+    </div>
+  </main>
+  <script>
+    fetch('/api/admin/environments').then(r => {
+      if (r.status === 401) { location.href = '/login'; return; }
+      if (r.status === 403) { document.body.innerHTML = '<p style="text-align:center;padding:4rem">Acesso restrito a administradores.</p>'; return; }
+      return r.json();
+    }).then(envs => {
+      if (!envs) return;
+      if (!envs.length) { document.getElementById('empty').hidden = false; return; }
+      document.getElementById('tbl').hidden = false;
+      const tbody = document.getElementById('rows');
+      envs.forEach(env => {
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td></td><td><code></code></td><td><code></code></td>' +
+          '<td><code></code></td><td></td>' +
+          '<td class="actions"><a href="">editar</a></td>';
+        tr.children[0].textContent = env.name;
+        tr.children[1].querySelector('code').textContent = env.slug;
+        tr.children[2].querySelector('code').textContent = env.watch_dir;
+        tr.children[3].querySelector('code').textContent = env.fb_path;
+        tr.children[4].innerHTML = env.is_active
+          ? '<span class="badge active">ativo</span>'
+          : '<span class="badge inactive">inativo</span>';
+        tr.children[5].querySelector('a').href = '/admin/ambientes/' + env.id;
+        tbody.appendChild(tr);
+      });
+    });
+  </script>
+</body>
+</html>

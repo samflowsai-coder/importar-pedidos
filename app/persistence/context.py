@@ -17,9 +17,10 @@ Tentar usar `db.connect()` sem ambiente ativo levanta `NoActiveEnvironmentError`
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Iterator, TypedDict
+from typing import TypedDict
 
 
 class ActiveEnv(TypedDict):

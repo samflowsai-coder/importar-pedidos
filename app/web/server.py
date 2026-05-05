@@ -80,6 +80,11 @@ from app.web.routes_env_select import router as env_select_router  # noqa: E402
 
 app.include_router(env_select_router)
 
+# Multi-ambiente: CRUD admin.
+from app.web.routes_environments import router as environments_router  # noqa: E402
+
+app.include_router(environments_router)
+
 
 # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -269,6 +274,28 @@ def select_environment_page(request: Request):
     if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
         return RedirectResponse(url="/login")
     return FileResponse(str(STATIC_DIR / "selecionar-ambiente.html"))
+
+
+@app.get("/admin/ambientes")
+def admin_envs_page(request: Request):
+    """Lista CRUD de ambientes (admin-only). API enforce o role."""
+    if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
+        return RedirectResponse(url="/login")
+    return FileResponse(str(STATIC_DIR / "admin-ambientes.html"))
+
+
+@app.get("/admin/ambientes/novo")
+def admin_env_new_page(request: Request):
+    if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
+        return RedirectResponse(url="/login")
+    return FileResponse(str(STATIC_DIR / "admin-ambiente-edit.html"))
+
+
+@app.get("/admin/ambientes/{env_id}")
+def admin_env_edit_page(env_id: str, request: Request):  # noqa: ARG001 — env_id consumed in client
+    if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
+        return RedirectResponse(url="/login")
+    return FileResponse(str(STATIC_DIR / "admin-ambiente-edit.html"))
 
 
 @app.get("/admin/usuarios")

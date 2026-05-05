@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ambiente — Portal de Pedidos</title>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/shell.css">
+  <script defer src="/static/js/shell.js"></script>
+  <style>
+    .content { max-width: 720px; margin: 2rem auto; padding: 0 1.5rem; }
+    h1 { font-size: 1.6rem; font-weight: 600; margin: 0 0 2rem; letter-spacing: -0.01em; }
+    fieldset {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.5rem 1.5rem 1.25rem;
+      margin: 0 0 1.25rem;
+    }
+    legend {
+      padding: 0 .6rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      font-size: .8rem;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    label { display: block; margin-bottom: 1rem; }
+    label > span {
+      display: block;
+      font-size: .85em;
+      color: var(--text-muted);
+      margin-bottom: .35rem;
+    }
+    input {
+      width: 100%;
+      padding: .65rem .8rem;
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 7px;
+      font: inherit;
+      box-sizing: border-box;
+    }
+    input:focus {
+      outline: none;
+      border-color: var(--accent, #3b82f6);
+    }
+    input[readonly] { opacity: .6; cursor: not-allowed; }
+    .row { display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; }
+    .actions {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      margin-top: 1.5rem;
+    }
+    .btn {
+      padding: .6rem 1.3rem;
+      border: 0;
+      border-radius: 8px;
+      font: inherit;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .btn-primary { background: var(--accent, #3b82f6); color: #fff; }
+    .btn-secondary { background: var(--bg-elev); color: var(--text); border: 1px solid var(--border); }
+    .btn-danger { background: transparent; color: var(--danger, #ef4444); border: 1px solid var(--danger, #ef4444); }
+    .btn:disabled { opacity: .5; cursor: progress; }
+    a.cancel { color: var(--text-muted); text-decoration: none; margin-left: auto; }
+    a.cancel:hover { text-decoration: underline; }
+    .test-result {
+      font-family: var(--font-mono, monospace);
+      font-size: .85em;
+      padding: 1rem;
+      background: var(--bg-elev);
+      border-radius: 8px;
+      margin-top: 1rem;
+      white-space: pre-wrap;
+      line-height: 1.5;
+    }
+    .ok  { color: var(--success, #22c55e); }
+    .err { color: var(--danger, #ef4444); }
+    .err-banner {
+      padding: .8rem 1rem;
+      background: color-mix(in srgb, var(--danger, #ef4444) 15%, transparent);
+      color: var(--danger, #ef4444);
+      border-radius: 8px;
+      margin-bottom: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <main class="content">
+    <h1 id="title">Novo ambiente</h1>
+    <div id="err-banner" class="err-banner" hidden></div>
+    <form id="f" autocomplete="off">
+      <fieldset>
+        <legend>Identificação</legend>
+        <label>
+          <span>Slug (somente minúsculas, dígitos e hífen — imutável após criar)</span>
+          <input name="slug" required pattern="[a-z0-9][a-z0-9-]{0,30}" placeholder="mm">
+        </label>
+        <label>
+          <span>Nome</span>
+          <input name="name" required placeholder="MM Calçados">
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Pastas</legend>
+        <label>
+          <span>Pasta de entrada (watch_dir)</span>
+          <input name="watch_dir" required placeholder="C:\MM\Pedidos">
+        </label>
+        <label>
+          <span>Pasta de saída (output_dir)</span>
+          <input name="output_dir" required placeholder="C:\MM\XLS">
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Firebird (Fire Sistemas)</legend>
+        <label>
+          <span>Caminho do .fdb</span>
+          <input name="fb_path" required placeholder="C:\Fire\empresa.fdb">
+        </label>
+        <div class="row">
+          <label>
+            <span>Host (vazio para embedded)</span>
+            <input name="fb_host" placeholder="192.168.1.10">
+          </label>
+          <label>
+            <span>Porta</span>
+            <input name="fb_port" placeholder="3050">
+          </label>
+        </div>
+        <div class="row">
+          <label>
+            <span>Usuário</span>
+            <input name="fb_user" value="SYSDBA">
+          </label>
+          <label>
+            <span>Charset</span>
+            <input name="fb_charset" value="WIN1252">
+          </label>
+        </div>
+        <label>
+          <span>Senha (em modo edição, deixe vazio para manter a atual)</span>
+          <input name="fb_password" type="password">
+        </label>
+      </fieldset>
+
+      <div class="actions">
+        <button type="submit" class="btn btn-primary">Salvar</button>
+        <button type="button" id="btn-test" class="btn btn-secondary" hidden>Testar conexão</button>
+        <button type="button" id="btn-delete" class="btn btn-danger" hidden>Desativar</button>
+        <a class="cancel" href="/admin/ambientes">Cancelar</a>
+      </div>
+      <div id="test-result" class="test-result" hidden></div>
+    </form>
+  </main>
+
+  <script>
+    const path = location.pathname;
+    const isEdit = !path.endsWith('/novo');
+    const envId = isEdit ? path.split('/').pop() : null;
+    const f = document.getElementById('f');
+    const errBanner = document.getElementById('err-banner');
+    const testBtn = document.getElementById('btn-test');
+    const deleteBtn = document.getElementById('btn-delete');
+    const testResult = document.getElementById('test-result');
+
+    function showError(msg) {
+      errBanner.textContent = msg;
+      errBanner.hidden = false;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    function clearError() { errBanner.hidden = true; }
+
+    if (isEdit) {
+      document.getElementById('title').textContent = 'Editar ambiente';
+      testBtn.hidden = false;
+      deleteBtn.hidden = false;
+      fetch('/api/admin/environments/' + envId).then(r => {
+        if (r.status === 401) { location.href = '/login'; return; }
+        if (!r.ok) throw new Error('Falha ao carregar (' + r.status + ')');
+        return r.json();
+      }).then(env => {
+        if (!env) return;
+        for (const k of Object.keys(env)) {
+          const inp = f.elements[k];
+          if (inp && k !== 'fb_password') inp.value = env[k] ?? '';
+        }
+        f.elements['slug'].readOnly = true;
+      }).catch(e => showError(e.message));
+    }
+
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearError();
+      const data = Object.fromEntries(new FormData(f));
+      // Senha em PATCH: vazio = manter atual (None no payload)
+      if (isEdit && data.fb_password === '') delete data.fb_password;
+      // host/port vazios viram null no servidor
+      const url = isEdit ? '/api/admin/environments/' + envId : '/api/admin/environments';
+      const method = isEdit ? 'PATCH' : 'POST';
+      const r = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (r.ok) { location.href = '/admin/ambientes'; return; }
+      const text = await r.text();
+      try { showError(JSON.parse(text).detail || text); }
+      catch { showError(text || ('Erro ' + r.status)); }
+    });
+
+    testBtn.addEventListener('click', async () => {
+      clearError();
+      testBtn.disabled = true;
+      try {
+        const r = await fetch('/api/admin/environments/' + envId + '/test', { method: 'POST' });
+        if (!r.ok) throw new Error('Falha ao testar (' + r.status + ')');
+        const body = await r.json();
+        const lines = [
+          (body.watch_dir_ok ? '✓' : '✗') + ' watch_dir: ' + body.watch_dir,
+          (body.output_dir_ok ? '✓' : '✗') + ' output_dir: ' + body.output_dir,
+          (body.firebird_ok ? '✓' : '✗') + ' firebird' + (body.firebird_error ? ': ' + body.firebird_error : ''),
+        ];
+        testResult.hidden = false;
+        testResult.innerHTML = lines.map(l =>
+          '<div class="' + (l.startsWith('✓') ? 'ok' : 'err') + '">' +
+          l.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])) +
+          '</div>'
+        ).join('');
+      } catch (e) {
+        showError(e.message);
+      } finally {
+        testBtn.disabled = false;
+      }
+    });
+
+    deleteBtn.addEventListener('click', async () => {
+      if (!confirm('Desativar este ambiente? Pedidos antigos permanecem intactos, mas ele somem da lista de seleção.')) return;
+      const r = await fetch('/api/admin/environments/' + envId, { method: 'DELETE' });
+      if (r.ok) { location.href = '/admin/ambientes'; return; }
+      showError('Falha ao desativar (' + r.status + ')');
+    });
+  </script>
+</body>
+</html>

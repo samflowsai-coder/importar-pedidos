@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from app.persistence import router
@@ -37,7 +37,7 @@ class SlugTaken(Exception):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:

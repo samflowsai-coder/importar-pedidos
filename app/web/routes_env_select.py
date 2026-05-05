@@ -13,8 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from app.persistence import environments_repo
-from app.web.auth import set_env_cookie
-from app.web.auth import require_user
+from app.web.auth import require_user, set_env_cookie
 
 router = APIRouter()
 
