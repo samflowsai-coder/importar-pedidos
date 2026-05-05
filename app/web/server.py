@@ -33,13 +33,20 @@ from app.state import (
     transition,
 )
 from app.web.auth import (
+    COOKIE_NAME,
     User,
+    clear_env_cookie,
     clear_session_cookie,
     current_user,
     require_admin,
     require_user,
     set_session_cookie,
 )
+
+
+def _is_test_bypass() -> bool:
+    return os.environ.get("TEST_AUTH_BYPASS", "").strip() == "1"
+
 from app.web.preview_cache import PreviewConsumedError, PreviewNotFoundError, get_cache
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -57,10 +64,21 @@ from app import firebird_config  # noqa: E402
 
 firebird_config.apply_to_env()
 
+# Multi-ambiente: middleware lê cookie `portal_env` e ativa env no contexto
+# para todo o handler. Repos por-ambiente herdam o env via contextvar.
+from app.web.middleware.environment import EnvironmentMiddleware  # noqa: E402
+
+app.add_middleware(EnvironmentMiddleware)
+
 # Inbound webhooks (Fase 4 — Gestor de Produção status updates)
 from app.web.webhooks import router as webhooks_router  # noqa: E402
 
 app.include_router(webhooks_router)
+
+# Multi-ambiente: rotas de seleção de ambiente.
+from app.web.routes_env_select import router as env_select_router  # noqa: E402
+
+app.include_router(env_select_router)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────
@@ -227,7 +245,15 @@ def _process_file(file_path: Path, output_path: Path) -> dict:
 # ── Routes ────────────────────────────────────────────────────────────────
 
 @app.get("/")
-def index() -> FileResponse:
+def index(request: Request):
+    """Dashboard. Redireciona para login se não autenticado, e para
+    seleção de ambiente se logado mas sem env ativo (cookie portal_env
+    ausente ou inválido — middleware não hidrata request.state.environment).
+    """
+    if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
+        return RedirectResponse(url="/login")
+    if getattr(request.state, "environment", None) is None and not _is_test_bypass():
+        return RedirectResponse(url="/selecionar-ambiente")
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 
@@ -235,6 +261,14 @@ def index() -> FileResponse:
 def login_page() -> FileResponse:
     """Static login form. Talks to /api/auth/login via fetch + sets cookie."""
     return FileResponse(str(STATIC_DIR / "login.html"))
+
+
+@app.get("/selecionar-ambiente")
+def select_environment_page(request: Request):
+    """Página estática para escolher o ambiente ativo. Auth é exigida via fetch."""
+    if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
+        return RedirectResponse(url="/login")
+    return FileResponse(str(STATIC_DIR / "selecionar-ambiente.html"))
 
 
 @app.get("/admin/usuarios")
@@ -336,28 +370,31 @@ def logout(
     request: Request,
     user: User = Depends(require_user),  # noqa: ARG001 — enforce auth
 ) -> JSONResponse:
-    """Delete the current session. Cookie cleared on response.
-
-    Reads the cookie directly from request.cookies because the dependency
-    only exposes the validated User, not the raw token.
-    """
+    """Delete the current session. Cookies (sessão e ambiente) cleared on response."""
     token = request.cookies.get("portal_session")
     if token:
         sessions_repo.delete(token)
     response = JSONResponse({"ok": True})
     clear_session_cookie(response)
+    clear_env_cookie(response)
     return response
 
 
 @app.get("/api/auth/me")
-def auth_me(user: User | None = Depends(current_user)) -> JSONResponse:
-    """Whoami — returns the user or null. Used by the SPA to decide whether
-    to render the login page or the main UI.
-    """
+def auth_me(
+    request: Request,
+    user: User | None = Depends(current_user),
+) -> JSONResponse:
+    """Whoami — usuário + ambiente atual. SPA usa pra renderizar shell."""
     if user is None:
-        return JSONResponse({"user": None})
+        return JSONResponse({"user": None, "environment": None})
+    env = getattr(request.state, "environment", None)
+    env_payload = (
+        {"id": env["id"], "slug": env["slug"], "name": env["name"]} if env else None
+    )
     return JSONResponse({
         "user": {"id": user.id, "email": user.email, "role": user.role},
+        "environment": env_payload,
     })
 
 

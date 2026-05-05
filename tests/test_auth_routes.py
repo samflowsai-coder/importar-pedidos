@@ -123,7 +123,7 @@ def test_me_returns_null_without_cookie(isolated_app):
     c = TestClient(app)
     r = c.get("/api/auth/me")
     assert r.status_code == 200
-    assert r.json() == {"user": None}
+    assert r.json() == {"user": None, "environment": None}
 
 
 def test_me_returns_user_after_login(isolated_app):
