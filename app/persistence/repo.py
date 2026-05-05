@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 from typing import Any, Optional
 
+from app.persistence import context as env_context
 from app.persistence import db
 
 _MAX_PAGE_SIZE = 500
@@ -32,8 +33,10 @@ def insert_import(entry: dict) -> None:
     if not portal_status:
         portal_status = "sent_to_fire" if entry.get("fire_codigo") else "parsed"
 
+    environment_id = entry.get("environment_id") or env_context.current_env_id()
     params = (
         entry["id"],
+        environment_id,
         entry["source_filename"],
         entry["imported_at"],
         entry.get("order_number"),
@@ -58,14 +61,14 @@ def insert_import(entry: dict) -> None:
         conn.execute(
             """
             INSERT INTO imports (
-                id, source_filename, imported_at, order_number,
+                id, environment_id, source_filename, imported_at, order_number,
                 customer_cnpj, customer_name, fire_codigo,
                 snapshot_json, check_json, output_files_json, db_result_json,
                 status, error,
                 portal_status, sent_to_fire_at,
                 production_status, released_at, released_by,
                 trace_id, state_version
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 source_filename = excluded.source_filename,
                 imported_at     = excluded.imported_at,
@@ -240,13 +243,15 @@ def get_import(import_id: str) -> Optional[dict]:
 
 
 def append_audit(import_id: str, event_type: str, detail: Optional[dict] = None) -> None:
+    environment_id = env_context.current_env_id()
     with db.connect() as conn:
         conn.execute(
             """
-            INSERT INTO audit_log (import_id, event_type, detail_json, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO audit_log (environment_id, import_id, event_type, detail_json, created_at)
+            VALUES (?, ?, ?, ?, ?)
             """,
             (
+                environment_id,
                 import_id,
                 event_type,
                 json.dumps(detail, ensure_ascii=False) if detail is not None else None,

@@ -65,7 +65,7 @@ def create_session(
     now = _now()
     token = new_token()
     expires_at = now + timedelta(hours=ttl_hours)
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         conn.execute(
             """
             INSERT INTO sessions (token, user_id, created_at, expires_at, ip, user_agent)
@@ -87,7 +87,7 @@ def get_active(token: str) -> Session | None:
     """Return the session if not expired; else lazily delete and return None."""
     if not token:
         return None
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         row = conn.execute(
             "SELECT * FROM sessions WHERE token = ?", (token,)
         ).fetchone()
@@ -104,20 +104,20 @@ def get_active(token: str) -> Session | None:
 def delete(token: str) -> None:
     if not token:
         return
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
 
 
 def delete_all_for_user(user_id: int) -> int:
     """Sign out everywhere — used for password change, account suspension, etc."""
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         cur = conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
     return cur.rowcount
 
 
 def prune_expired() -> int:
     """Bulk delete expired sessions. Worker calls this periodically (Phase 5)."""
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         cur = conn.execute(
             "DELETE FROM sessions WHERE expires_at <= ?", (_iso(_now()),)
         )

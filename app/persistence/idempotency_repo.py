@@ -57,7 +57,7 @@ def record_attempt(
     caller can decide to wait, return 202, or echo back the cached value.
     """
     try:
-        with db.connect() as conn:
+        with db.connect_shared() as conn:
             conn.execute(
                 """
                 INSERT INTO inbound_idempotency
@@ -74,7 +74,7 @@ def record_attempt(
 
 
 def get(provider: str, event_id: str) -> CachedResponse | None:
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         row = conn.execute(
             """
             SELECT provider, event_id, received_at, response_status,
@@ -109,7 +109,7 @@ def finalize(
     `import_id` overwrites the placeholder set in `record_attempt` if the
     correlation was determined later (e.g. lookup by gestor_order_id).
     """
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         conn.execute(
             """
             UPDATE inbound_idempotency
@@ -124,7 +124,7 @@ def finalize(
 
 def list_for_import(import_id: str, limit: int = 100) -> list[CachedResponse]:
     limit = max(1, min(int(limit), 500))
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         rows = conn.execute(
             """
             SELECT provider, event_id, received_at, response_status,

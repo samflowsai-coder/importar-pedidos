@@ -55,6 +55,14 @@ def test_metrics_response_contains_expected_names(client):
 
 
 def test_update_outbox_metrics_sets_gauges(sqlite_tmp):
+    # Cadastra ambiente "test" no env-table para que update_outbox_metrics()
+    # itere sua DB.
+    from app.persistence import environments_repo  # noqa: PLC0415
+    environments_repo.create(
+        slug="test", name="Test", watch_dir="/tmp/in", output_dir="/tmp/out",
+        fb_path="/tmp/x.fdb",
+    )
+
     # Seed one pending and one dead outbox row.
     iid = str(uuid.uuid4())
     repo.insert_import({
@@ -71,16 +79,18 @@ def test_update_outbox_metrics_sets_gauges(sqlite_tmp):
     with connect() as conn:
         conn.execute(
             """INSERT INTO outbox
-               (import_id, target, endpoint, payload_json, idempotency_key,
-                status, created_at)
-               VALUES (?, 'gestor', '/v1/orders', '{}', ?, 'pending', ?)""",
+               (environment_id, import_id, target, endpoint, payload_json,
+                idempotency_key, status, created_at)
+               VALUES ('test-env-id', ?, 'gestor', '/v1/orders', '{}', ?,
+                       'pending', ?)""",
             (iid, str(uuid.uuid4()), datetime.now().isoformat()),
         )
         conn.execute(
             """INSERT INTO outbox
-               (import_id, target, endpoint, payload_json, idempotency_key,
-                status, created_at)
-               VALUES (?, 'gestor', '/v1/orders', '{}', ?, 'dead', ?)""",
+               (environment_id, import_id, target, endpoint, payload_json,
+                idempotency_key, status, created_at)
+               VALUES ('test-env-id', ?, 'gestor', '/v1/orders', '{}', ?,
+                       'dead', ?)""",
             (iid, str(uuid.uuid4()), datetime.now().isoformat()),
         )
 

@@ -139,7 +139,7 @@ def test_repo_expired_invite_not_pending(sqlite_tmp):
     # Insert directly with expired timestamp
     past = (datetime.now() - timedelta(hours=1)).isoformat(timespec="seconds")
     now  = datetime.now().isoformat(timespec="seconds")
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         conn.execute(
             """
             INSERT INTO user_invites
@@ -316,7 +316,7 @@ def test_public_get_invite_410_for_expired(isolated_app):
     # Insert expired invite directly
     past = (datetime.now() - timedelta(hours=1)).isoformat(timespec="seconds")
     now  = datetime.now().isoformat(timespec="seconds")
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         conn.execute(
             """
             INSERT INTO user_invites
@@ -416,7 +416,7 @@ def test_public_accept_expired_token_410(isolated_app):
     admin = users_repo.find_by_email("admin@x.com")
     past = (datetime.now() - timedelta(hours=1)).isoformat(timespec="seconds")
     now  = datetime.now().isoformat(timespec="seconds")
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         conn.execute(
             """
             INSERT INTO user_invites

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.persistence import db, repo
-from app.persistence.db import connect
+from app.persistence.db import connect, connect_shared
 from app.worker.jobs.retention import (
     _purge_audit_log,
     _purge_expired_sessions,
@@ -55,14 +55,14 @@ def test_purge_lifecycle_events_removes_old_rows(sqlite_tmp):
     with connect() as conn:
         conn.execute(
             "INSERT INTO order_lifecycle_events "
-            "(import_id, event_type, source, occurred_at, ingested_at) "
-            "VALUES (?, 'TEST', 'PORTAL', ?, ?)",
+            "(environment_id, import_id, event_type, source, occurred_at, ingested_at) "
+            "VALUES ('test-env-id', ?, 'TEST', 'PORTAL', ?, ?)",
             (iid, _iso(200), _iso(200)),
         )
         conn.execute(
             "INSERT INTO order_lifecycle_events "
-            "(import_id, event_type, source, occurred_at, ingested_at) "
-            "VALUES (?, 'TEST', 'PORTAL', ?, ?)",
+            "(environment_id, import_id, event_type, source, occurred_at, ingested_at) "
+            "VALUES ('test-env-id', ?, 'TEST', 'PORTAL', ?, ?)",
             (iid, _iso(10), _iso(10)),
         )
 
@@ -83,11 +83,13 @@ def test_purge_audit_log_removes_old_rows(sqlite_tmp):
     iid = _seed_import()
     with connect() as conn:
         conn.execute(
-            "INSERT INTO audit_log (import_id, event_type, created_at) VALUES (?, 'E', ?)",
+            "INSERT INTO audit_log (environment_id, import_id, event_type, created_at) "
+            "VALUES ('test-env-id', ?, 'E', ?)",
             (iid, _iso(200)),
         )
         conn.execute(
-            "INSERT INTO audit_log (import_id, event_type, created_at) VALUES (?, 'E', ?)",
+            "INSERT INTO audit_log (environment_id, import_id, event_type, created_at) "
+            "VALUES ('test-env-id', ?, 'E', ?)",
             (iid, _iso(5)),
         )
 
@@ -100,7 +102,7 @@ def test_purge_audit_log_removes_old_rows(sqlite_tmp):
 # ── sessions ──────────────────────────────────────────────────────────────
 
 def test_purge_expired_sessions(sqlite_tmp):
-    with connect() as conn:
+    with connect_shared() as conn:
         # Seed a user first (FK constraint).
         conn.execute(
             "INSERT INTO users (email, password_hash, role, active, created_at) "
@@ -120,7 +122,7 @@ def test_purge_expired_sessions(sqlite_tmp):
             (uid, _iso(1), (datetime.now(UTC) + timedelta(days=7)).isoformat()),
         )
 
-    with connect() as conn:
+    with connect_shared() as conn:
         deleted = _purge_expired_sessions(conn)
 
     assert deleted == 1
@@ -132,7 +134,7 @@ def test_purge_stale_rate_limit_buckets(sqlite_tmp):
     stale_ts = time.time() - 90_000  # 25 h ago
     fresh_ts = time.time() - 1_800   # 30 min ago
 
-    with connect() as conn:
+    with connect_shared() as conn:
         conn.execute(
             "INSERT INTO rate_limit_buckets (key, tokens, last_refill_at) VALUES (?, 5, ?)",
             ("stale", stale_ts),
@@ -142,11 +144,11 @@ def test_purge_stale_rate_limit_buckets(sqlite_tmp):
             ("fresh", fresh_ts),
         )
 
-    with connect() as conn:
+    with connect_shared() as conn:
         deleted = _purge_stale_rate_limit_buckets(conn)
 
     assert deleted == 1
-    with connect() as conn:
+    with connect_shared() as conn:
         remaining_keys = [
             r[0] for r in conn.execute("SELECT key FROM rate_limit_buckets").fetchall()
         ]
@@ -159,22 +161,26 @@ def test_vacuum_backup_creates_file(sqlite_tmp):
     backup_dir = sqlite_tmp / "backups"
     _vacuum_backup(str(backup_dir))
 
-    files = list(backup_dir.glob("app_state_*.db"))
+    # Multi-ambiente: backup gera 1 arquivo por DB (shared + 1 por env).
+    # No fixture sqlite_tmp, não há environments cadastrados, então só
+    # app_shared.db é backupeado.
+    files = list(backup_dir.glob("app_*_????????.db"))
     assert len(files) == 1, f"Expected 1 backup file, got {files}"
+    assert files[0].name.startswith("app_shared_")
 
 
 def test_vacuum_backup_keeps_last_7(sqlite_tmp, tmp_path):
     backup_dir = tmp_path / "bkp"
     backup_dir.mkdir()
-    # Pre-create 10 fake backups.
+    # Pre-create 10 fake app_shared backups (mesmo "stem" do que vai ser gerado).
     for i in range(10):
-        (backup_dir / f"app_state_2025010{i:01d}.db").write_bytes(b"")
+        (backup_dir / f"app_shared_2025010{i:01d}.db").write_bytes(b"")
 
     _vacuum_backup(str(backup_dir))
 
-    files = sorted(backup_dir.glob("app_state_*.db"))
-    # 7 old + 1 new = 8 maximum before pruning the oldest.
-    # After pruning: 7 most recent kept.
+    files = sorted(backup_dir.glob("app_shared_????????.db"))
+    # 7 antigos + 1 novo = 8 máximo antes de podar o mais antigo.
+    # Após poda: 7 mais recentes mantidos.
     assert len(files) == 7
 
 
