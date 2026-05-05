@@ -57,6 +57,9 @@ def create(
     fb_charset: str = "WIN1252",
     fb_password: str | None = None,
 ) -> dict[str, Any]:
+    # Normaliza slug para lowercase antes de validar — UX permissiva.
+    if isinstance(slug, str):
+        slug = slug.strip().lower()
     if not isinstance(slug, str) or not SLUG_RE.match(slug):
         raise ValueError(
             f"slug inválido: {slug!r} — use [a-z0-9-], 1-31 chars, começa com alfanum"

@@ -37,18 +37,36 @@ def test_create_and_get(fresh_shared):
 
 
 def test_create_rejects_invalid_slug(fresh_shared):
-    with pytest.raises(ValueError):
-        environments_repo.create(
-            slug="MM",  # uppercase
-            name="MM",
-            watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
-        )
+    # Espaços não são aceitos
     with pytest.raises(ValueError):
         environments_repo.create(
             slug="mm prod",
             name="MM",
             watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
         )
+    # Caracteres especiais
+    with pytest.raises(ValueError):
+        environments_repo.create(
+            slug="mm@prod",
+            name="MM",
+            watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        )
+
+
+def test_create_normalizes_uppercase_slug_to_lowercase(fresh_shared):
+    """Slug com maiúscula é normalizado, não rejeitado — UX permissiva."""
+    env = environments_repo.create(
+        slug="MM",
+        name="MM",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+    )
+    assert env["slug"] == "mm"
+    env2 = environments_repo.create(
+        slug="  Nasmar  ",
+        name="Nasmar",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+    )
+    assert env2["slug"] == "nasmar"
 
 
 def test_create_requires_name(fresh_shared):
