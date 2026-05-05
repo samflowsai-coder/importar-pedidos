@@ -209,8 +209,12 @@ def _build_preview_payload(preview_id: str, source_filename: str, order, check: 
     }
 
 
-def _run_exporters(order, output_path: Path) -> dict:
-    """Execute XLSX + Firebird exporters per export_mode; return summary dict."""
+def _run_exporters(order, output_path: Path, *, env: Optional[dict] = None) -> dict:
+    """Execute XLSX + Firebird exporters per export_mode; return summary dict.
+
+    `env`: ambiente ativo (dict de environments_repo). Se passado, o
+    FirebirdExporter usa as creds do ambiente em vez das env vars FB_*.
+    """
     from app import config as app_config
     from app.exporters.erp_exporter import ERPExporter
     from app.exporters.firebird_exporter import FirebirdExporter
@@ -228,7 +232,7 @@ def _run_exporters(order, output_path: Path) -> dict:
         output_files = [{"name": p.name, "path": str(p)} for p in paths]
 
     if export_mode in ("db", "both"):
-        db_exp = FirebirdExporter()
+        db_exp = FirebirdExporter(env=env)
         db_result = db_exp.export(order)
         db_result_dict = db_result.to_dict()
         fire_codigo = db_result.fire_codigo
@@ -1410,9 +1414,13 @@ class _FireSendOutcome:
         self.detail = detail
 
 
-def _send_one_to_fire(import_id: str, cfg: dict) -> _FireSendOutcome:
+def _send_one_to_fire(import_id: str, cfg: dict, *, request_env: Optional[dict] = None) -> _FireSendOutcome:
     """Insert a parsed order into Fire. Returns structured outcome (no HTTP exceptions)
     so batch callers can aggregate per-item results.
+
+    `request_env`: ambiente atual hidratado pelo middleware. Quando presente,
+    o FirebirdExporter conecta com as creds do env (multi-ambiente). Quando
+    None, cai no fallback de env vars FB_* (legado).
 
     State mutation contract:
         - On Fire failure: log SEND_TO_FIRE_FAILED (state stays PARSED).
@@ -1458,7 +1466,8 @@ def _send_one_to_fire(import_id: str, cfg: dict) -> _FireSendOutcome:
             output_files = [{"name": p.name, "path": str(p)} for p in paths]
 
         override = entry.get("cliente_override_codigo")
-        result = FirebirdExporter().export(order, override_client_id=override)
+        # Multi-ambiente: usa creds do env atual em vez de env vars FB_*.
+        result = FirebirdExporter(env=request_env).export(order, override_client_id=override)
         db_result = result.to_dict()
 
         if result.skipped or result.fire_codigo is None:
@@ -1530,10 +1539,12 @@ def _send_one_to_fire(import_id: str, cfg: dict) -> _FireSendOutcome:
 @app.post("/api/imported/{import_id}/send-to-fire")
 def send_to_fire(
     import_id: str,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     cfg = _get_cfg()
-    outcome = _send_one_to_fire(import_id, cfg)
+    request_env = getattr(request.state, "environment", None)
+    outcome = _send_one_to_fire(import_id, cfg, request_env=request_env)
     if not outcome.ok:
         raise HTTPException(status_code=outcome.http_status, detail=outcome.detail)
     return JSONResponse({
@@ -1631,6 +1642,7 @@ class BatchSendRequest(BaseModel):
 @app.post("/api/batch/send-to-fire")
 def batch_send_to_fire(
     body: BatchSendRequest,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     """Send multiple parsed orders to Fire. Tolerates partial failures — each id is
@@ -1641,11 +1653,12 @@ def batch_send_to_fire(
         raise HTTPException(status_code=400, detail="Máximo 100 pedidos por lote")
 
     cfg = _get_cfg()
+    request_env = getattr(request.state, "environment", None)
     results: list[dict] = []
     ok_count = 0
     fail_count = 0
     for import_id in body.ids:
-        outcome = _send_one_to_fire(import_id, cfg)
+        outcome = _send_one_to_fire(import_id, cfg, request_env=request_env)
         if outcome.ok:
             ok_count += 1
             results.append({

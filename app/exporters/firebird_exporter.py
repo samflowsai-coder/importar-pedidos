@@ -73,9 +73,27 @@ class FirebirdExporter:
     Schema verified against BKP_MM2_CONFECCAO_TERCA.fbk (April 2026).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, env: dict | None = None) -> None:
+        """env: ambiente atual (dict de environments_repo). Quando presente,
+        usa connect_with_config(to_fb_config(env)). Quando None, cai no
+        comportamento legado (env vars FB_*) para compatibilidade.
+        """
         self._conn = FirebirdConnection()
         self._mapper = FireSistemasMapper()
+        self._env = env
+
+    def _open(self):
+        """Context manager para conexão FB do ambiente correto."""
+        if self._env is not None:
+            from app.persistence import environments_repo  # avoid cycle
+            cfg = environments_repo.to_fb_config(self._env)
+            return self._conn.connect_with_config(cfg)
+        return self._conn.connect()
+
+    def _is_configured(self) -> bool:
+        if self._env is not None:
+            return bool((self._env.get("fb_path") or "").strip())
+        return self._conn.is_configured()
 
     def export(
         self,
@@ -90,8 +108,8 @@ class FirebirdExporter:
         usa esse codigo direto — mas ainda valida via FIND_CLIENT_BY_CODIGO
         para evitar FK quebrada caso o cliente tenha sido inativado.
         """
-        if not self._conn.is_configured():
-            logger.warning("FB_DATABASE não configurado — exportação Firebird ignorada.")
+        if not self._is_configured():
+            logger.warning("Firebird não configurado para o ambiente — exportação ignorada.")
             return FirebirdExportResult(
                 order_number=order.header.order_number,
                 items_inserted=0,
@@ -100,7 +118,7 @@ class FirebirdExporter:
             )
 
         try:
-            with _insert_lock, self._conn.connect() as conn:
+            with _insert_lock, self._open() as conn:
                 return self._insert_order(conn, order, override_client_id)
         except FirebirdOrderAlreadyExistsError as exc:
             logger.warning(str(exc))
