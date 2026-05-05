@@ -26,7 +26,8 @@ from app.integrations.gestor.client import (
 from app.integrations.gestor.schema import GestorOrderRequest
 from app.observability.metrics import update_outbox_metrics
 from app.observability.trace import with_trace_id
-from app.persistence import outbox_repo, repo
+from app.persistence import context as env_context
+from app.persistence import environments_repo, outbox_repo, repo, router
 from app.persistence.outbox_repo import OutboxRow
 from app.state.events import append_event, transition
 from app.state.machine import EventSource, LifecycleEvent
@@ -37,12 +38,17 @@ _BATCH = 20  # max rows per invocation to avoid blocking the thread indefinitely
 
 
 def run_drain_outbox() -> None:
-    """Drain up to _BATCH pending outbox rows."""
-    for _ in range(_BATCH):
-        row = outbox_repo.claim_next(target=GESTOR_TARGET_NAME)
-        if row is None:
-            break
-        _process_row(row)
+    """Drain pending outbox rows em CADA ambiente ativo (até _BATCH por env)."""
+    for slug in router.list_env_slugs():
+        env = environments_repo.get_by_slug(slug)
+        if env is None:
+            continue
+        with env_context.active_env(env["id"], env["slug"]):
+            for _ in range(_BATCH):
+                row = outbox_repo.claim_next(target=GESTOR_TARGET_NAME)
+                if row is None:
+                    break
+                _process_row(row)
     update_outbox_metrics()
 
 

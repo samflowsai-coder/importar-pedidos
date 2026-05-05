@@ -70,6 +70,20 @@ from app.web.middleware.environment import EnvironmentMiddleware  # noqa: E402
 
 app.add_middleware(EnvironmentMiddleware)
 
+
+# Multi-ambiente: traduz NoActiveEnvironmentError em 412 estruturado para
+# que o cliente HTTP possa redirecionar para /selecionar-ambiente em vez
+# de quebrar com 500.
+from app.persistence.context import NoActiveEnvironmentError  # noqa: E402
+
+
+@app.exception_handler(NoActiveEnvironmentError)
+async def _no_env_handler(_request, _exc):
+    return JSONResponse(
+        status_code=412,
+        content={"detail": "Selecione um ambiente para continuar.", "code": "no_active_env"},
+    )
+
 # Inbound webhooks (Fase 4 — Gestor de Produção status updates)
 from app.web.webhooks import router as webhooks_router  # noqa: E402
 

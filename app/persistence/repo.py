@@ -56,6 +56,8 @@ def insert_import(entry: dict) -> None:
         entry.get("released_by"),
         entry.get("trace_id"),
         int(entry.get("state_version", 1)),
+        entry.get("file_sha256"),
+        entry.get("original_path"),
     )
     with db.connect() as conn:
         conn.execute(
@@ -67,8 +69,9 @@ def insert_import(entry: dict) -> None:
                 status, error,
                 portal_status, sent_to_fire_at,
                 production_status, released_at, released_by,
-                trace_id, state_version
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                trace_id, state_version,
+                file_sha256, original_path
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 source_filename = excluded.source_filename,
                 imported_at     = excluded.imported_at,
@@ -82,7 +85,9 @@ def insert_import(entry: dict) -> None:
                 db_result_json  = excluded.db_result_json,
                 status          = excluded.status,
                 error           = excluded.error,
-                trace_id        = COALESCE(imports.trace_id, excluded.trace_id)
+                trace_id        = COALESCE(imports.trace_id, excluded.trace_id),
+                file_sha256     = COALESCE(imports.file_sha256, excluded.file_sha256),
+                original_path   = COALESCE(imports.original_path, excluded.original_path)
                 -- portal_status, production_status, state_version,
                 -- sent_to_fire_at, released_at, released_by,
                 -- cliente_override_codigo, cliente_override_razao,
