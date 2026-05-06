@@ -182,10 +182,10 @@ if (Test-Path $EnvFile) {
 
     # EXPORT_MODE
     Write-Host ""
-    Write-Host "  Modo de exportacao:" -ForegroundColor White
-    Write-Host "    [1] xlsx  — gera arquivo .xlsx (recomendado para inicio)" -ForegroundColor Gray
-    Write-Host "    [2] db    — importa diretamente no ERP Firebird" -ForegroundColor Gray
-    Write-Host "    [3] both  — gera .xlsx E importa no ERP" -ForegroundColor Gray
+    Write-Host "  Modo de exportacao (vale para todas as empresas):" -ForegroundColor White
+    Write-Host "    [1] xlsx  — gera arquivo .xlsx para importar no ERP (recomendado)" -ForegroundColor Gray
+    Write-Host "    [2] db    — escreve direto no Firebird (avancado)" -ForegroundColor Gray
+    Write-Host "    [3] both  — gera .xlsx E escreve no Firebird" -ForegroundColor Gray
     $modeInput = (Read-Host "  Escolha [1/2/3] (Enter = 1)").Trim()
     $ExportMode = switch ($modeInput) { "2" { "db" } "3" { "both" } default { "xlsx" } }
 
@@ -196,14 +196,18 @@ if (Test-Path $EnvFile) {
 
     # Construir .env
     $lines = [System.Collections.Generic.List[string]]::new()
-    $lines.Add("# Portal de Pedidos — gerado por instalar.bat em $(Get-Date -Format 'yyyy-MM-dd HH:mm')")
+    $lines.Add("# Portal de Pedidos - gerado por instalar.bat em $(Get-Date -Format 'yyyy-MM-dd HH:mm')")
     $lines.Add("# Para alterar: edite este arquivo e reinicie o servidor.")
+    $lines.Add("#")
+    $lines.Add("# Multi-ambiente (MM, Nasmar, ...): pastas e Firebird de cada empresa")
+    $lines.Add("# sao configurados no Portal apos o primeiro login, em")
+    $lines.Add("# /admin/ambientes -- nao precisa preencher nada aqui.")
     $lines.Add("")
     $lines.Add("OPENROUTER_API_KEY=$ApiKey")
     $lines.Add("EXPORT_MODE=$ExportMode")
     $lines.Add("")
-    $lines.Add("INPUT_DIR=input/")
-    $lines.Add("OUTPUT_DIR=output/")
+    $lines.Add("# APP_DATA_DIR: onde ficam os SQLite (app_shared.db + app_state_<slug>.db)")
+    $lines.Add("APP_DATA_DIR=data/")
     $lines.Add("LOG_DIR=logs/")
     $lines.Add("")
     $lines.Add("PORTAL_HOST=127.0.0.1")
@@ -212,28 +216,10 @@ if (Test-Path $EnvFile) {
     # Portal serve em HTTP local; cookie Secure=true bloqueia o login.
     # Trocar para 1 ao colocar TLS reverso (nginx/IIS) na frente.
     $lines.Add("PORTAL_COOKIE_SECURE=0")
-
-    if ($ExportMode -in @("db", "both")) {
-        Write-Host ""
-        Write-Host "  Configuracao do ERP Firebird:" -ForegroundColor White
-        $FbHost     = (Read-Host "  FB_HOST (IP do servidor Firebird)").Trim()
-        $FbDatabase = (Read-Host "  FB_DATABASE (caminho do .fdb no servidor)").Trim()
-        $FbUserIn   = (Read-Host "  FB_USER [SYSDBA]").Trim()
-        $FbUser     = if ($FbUserIn) { $FbUserIn } else { "SYSDBA" }
-        $FbPwSec    = Read-Host "  FB_PASSWORD" -AsSecureString
-        $FbPassword = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-                          [Runtime.InteropServices.Marshal]::SecureStringToBSTR($FbPwSec))
-        $FbCodeIn   = (Read-Host "  FB_CODEMPRESA [1]").Trim()
-        $FbCode     = if ($FbCodeIn -match "^\d+$") { $FbCodeIn } else { "1" }
-
-        $lines.Add("")
-        $lines.Add("FB_HOST=$FbHost")
-        $lines.Add("FB_DATABASE=$FbDatabase")
-        $lines.Add("FB_USER=$FbUser")
-        $lines.Add("FB_PASSWORD=$FbPassword")
-        $lines.Add("FB_CHARSET=WIN1252")
-        $lines.Add("FB_CODEMPRESA=$FbCode")
-    }
+    $lines.Add("")
+    $lines.Add("# Sessao e retencao")
+    $lines.Add("SESSION_TTL_HOURS=24")
+    $lines.Add("RETENTION_DAYS=180")
 
     $lines | Set-Content -Path $EnvFile -Encoding UTF8
     Write-OK ".env criado com modo '$ExportMode' na porta $Port."
@@ -243,13 +229,15 @@ if (Test-Path $EnvFile) {
 
 Write-Step "5/6" "Verificando diretorios..."
 
+# input/ e output/ ficam aqui apenas como exemplo. Cada empresa configura
+# suas proprias pastas em /admin/ambientes apos o primeiro login.
 foreach ($d in @("input", "output", "logs", "data")) {
     $p = Join-Path $AppDir $d
     if (-not (Test-Path $p)) {
         New-Item -ItemType Directory -Path $p | Out-Null
     }
 }
-Write-OK "input\  output\  logs\  data\  presentes."
+Write-OK "data\  logs\  presentes (input\ e output\ servem so como exemplo)."
 
 # ── [6/6] Primeiro usuario admin ──────────────────────────────────────────────
 
@@ -335,6 +323,14 @@ Write-Host ""
 Write-Host "  Para iniciar o sistema:" -ForegroundColor White
 Write-Host "    Duplo-clique em  iniciar.bat" -ForegroundColor White
 Write-Host "    Acesso em        http://localhost:$port" -ForegroundColor White
+Write-Host ""
+Write-Host "  Proximos passos no navegador:" -ForegroundColor White
+Write-Host "    1. Login com o admin recem-criado" -ForegroundColor Gray
+Write-Host "    2. Configuracoes -> Ambientes -> + Novo ambiente" -ForegroundColor Gray
+Write-Host "       Cadastre uma entrada para CADA empresa (ex: MM, Nasmar)" -ForegroundColor Gray
+Write-Host "       informando pastas e dados do Firebird de cada uma." -ForegroundColor Gray
+Write-Host "    3. Apos sair, ao logar de novo o sistema pede para escolher" -ForegroundColor Gray
+Write-Host "       o ambiente ativo da sessao." -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Para iniciar automaticamente com o Windows (recomendado):" -ForegroundColor Gray
 Write-Host "    Execute  setup-service.bat  como Administrador." -ForegroundColor Gray

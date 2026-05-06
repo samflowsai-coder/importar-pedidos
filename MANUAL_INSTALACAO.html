@@ -119,6 +119,7 @@
     }
     .code-block .comment { color: #71717A; }
     .code-block .value { color: #4ADE80; }
+    .code-block .prompt { color: #A78BFA; }
 
     /* Callouts */
     .callout {
@@ -186,7 +187,7 @@
       <span class="logo-name">Importar Pedidos</span>
     </div>
     <h1 class="doc-title">Manual de Instalação</h1>
-    <p class="doc-sub">Guia completo para configurar o sistema em uma máquina Windows.</p>
+    <p class="doc-sub">Guia rápido para instalar e operar o sistema em uma máquina Windows. Versão multi-empresa.</p>
   </div>
 
   <!-- TOC -->
@@ -194,9 +195,10 @@
     <p class="toc-title">Índice</p>
     <ol>
       <li><a href="#prereqs">Pré-requisitos</a></li>
-      <li><a href="#install">Instalação do sistema</a></li>
-      <li><a href="#config">Configuração inicial</a></li>
+      <li><a href="#install">Instalação</a></li>
+      <li><a href="#first-run">Primeiro acesso e cadastro de empresas</a></li>
       <li><a href="#uso">Uso diário</a></li>
+      <li><a href="#manutencao">Atualização e desinstalação</a></li>
       <li><a href="#faq">Dúvidas frequentes</a></li>
     </ol>
   </div>
@@ -205,198 +207,364 @@
   <div class="section" id="prereqs">
     <p class="section-num">Seção 1</p>
     <h2>Pré-requisitos</h2>
-    <p>Antes de instalar, o computador precisa ter o Python instalado. É um programa gratuito, feito uma única vez.</p>
+    <p>Tudo o que o instalador não consegue fazer sozinho.</p>
 
-    <div class="steps">
-      <div class="step">
-        <div class="step-num">1</div>
-        <div class="step-body">
-          <p class="step-title">Abrir o site do Python</p>
-          <p class="step-desc">Acesse <strong>python.org/downloads</strong> no navegador e clique no botão amarelo de download (versão 3.11 ou superior).</p>
-        </div>
-      </div>
-      <div class="step">
-        <div class="step-num">2</div>
-        <div class="step-body">
-          <p class="step-title">Executar o instalador</p>
-          <p class="step-desc">Abra o arquivo baixado. <strong>Importante:</strong> na primeira tela do instalador, marque a opção <code>Add Python to PATH</code> antes de clicar em "Install Now".</p>
-        </div>
-      </div>
-      <div class="step">
-        <div class="step-num">3</div>
-        <div class="step-body">
-          <p class="step-title">Confirmar a instalação</p>
-          <p class="step-desc">Abra o Prompt de Comando (tecla Windows → digite <code>cmd</code> → Enter) e execute <code>python --version</code>. Se aparecer um número de versão, está pronto.</p>
-        </div>
-      </div>
-    </div>
+    <table>
+      <thead>
+        <tr><th>Item</th><th>Necessário</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Sistema</strong></td><td>Windows 10 ou superior</td></tr>
+        <tr><td><strong>Permissão</strong></td><td>Conta de administrador local na primeira instalação</td></tr>
+        <tr><td><strong>Internet</strong></td><td>Apenas durante a instalação (para baixar dependências)</td></tr>
+        <tr><td><strong>Chave OpenRouter</strong></td><td>Fornecida pelo suporte. Usada como auxílio para formatos novos.</td></tr>
+      </tbody>
+    </table>
 
-    <div class="callout warn" style="margin-top:16px">
-      <span class="callout-icon">⚠️</span>
-      <span class="callout-text"><strong>Se já tiver Python instalado:</strong> pule esta seção. O sistema funciona com qualquer versão 3.9 ou superior.</span>
+    <div class="callout info">
+      <span class="callout-icon">💡</span>
+      <span class="callout-text"><strong>Não precisa instalar Python manualmente.</strong> O instalador detecta a versão correta (3.11+) e, se faltar, baixa e instala automaticamente via <code>winget</code>.</span>
     </div>
   </div>
 
   <!-- 2. Instalação -->
   <div class="section" id="install">
     <p class="section-num">Seção 2</p>
-    <h2>Instalação do sistema</h2>
-    <p>Com o Python instalado, a instalação do Importar Pedidos é feita em um único clique.</p>
+    <h2>Instalação</h2>
+    <p>Três passos. Cinco a dez minutos no total.</p>
 
     <div class="steps">
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
           <p class="step-title">Copiar a pasta do sistema</p>
-          <p class="step-desc">Copie a pasta <strong>importar pedidos</strong> para um local fixo no computador — por exemplo, <code>C:\SamFlowsAI\importar pedidos</code>. Não coloque na Área de Trabalho.</p>
+          <p class="step-desc">Copie a pasta <strong>importar pedidos</strong> para um local fixo — por exemplo <code>C:\SamFlowsAI\importar pedidos</code>. <strong>Não</strong> coloque na Área de Trabalho nem em pastas sincronizadas com OneDrive.</p>
         </div>
       </div>
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
           <p class="step-title">Executar o instalador</p>
-          <p class="step-desc">Dentro da pasta, dê duplo-clique em <strong>instalar.bat</strong>. Uma janela preta vai abrir e mostrar o progresso. Aguarde até aparecer a mensagem <em>"Instalação concluída com sucesso"</em>.</p>
+          <p class="step-desc">Dentro da pasta, dê duplo-clique em <strong>instalar.bat</strong>. Uma janela vai abrir e fazer perguntas. Responda conforme o quadro abaixo.</p>
         </div>
       </div>
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
           <p class="step-title">Criar atalho na Área de Trabalho</p>
-          <p class="step-desc">Clique com o botão direito em <strong>iniciar.bat</strong> → <em>Enviar para</em> → <em>Área de Trabalho (criar atalho)</em>. É por este atalho que o operador abrirá o sistema todo dia.</p>
+          <p class="step-desc">Clique com o botão direito em <strong>iniciar.bat</strong> → <em>Mostrar mais opções</em> → <em>Enviar para</em> → <em>Área de Trabalho (criar atalho)</em>. É por esse atalho que o operador abre o sistema todo dia.</p>
         </div>
       </div>
     </div>
 
-    <div class="callout ok" style="margin-top:16px">
-      <span class="callout-icon">✅</span>
-      <span class="callout-text">O <code>instalar.bat</code> precisa ser executado apenas uma vez. A partir daí, o operador usa somente o <code>iniciar.bat</code>.</span>
-    </div>
-  </div>
-
-  <!-- 3. Configuração -->
-  <div class="section" id="config">
-    <p class="section-num">Seção 3</p>
-    <h2>Configuração inicial</h2>
-
-    <h3>3.1 — Chave de API</h3>
-    <p>O sistema utiliza inteligência artificial como recurso auxiliar. Para isso, é necessário configurar uma chave de acesso no arquivo <code>.env</code>.</p>
-    <p>Abra a pasta do sistema, clique com o botão direito no arquivo <code>.env</code> → <em>Abrir com</em> → <em>Bloco de Notas</em>.</p>
-
-    <div class="code-block">
-      <span class="comment"># Substitua pelo valor fornecido pelo suporte</span><br>
-      OPENROUTER_API_KEY=<span class="value">sua-chave-aqui</span>
-    </div>
-
-    <div class="callout warn">
-      <span class="callout-icon">⚠️</span>
-      <span class="callout-text">Não compartilhe este arquivo nem envie a chave por e-mail ou WhatsApp. Em caso de dúvida, entre em contato com o suporte.</span>
-    </div>
-
-    <h3>3.2 — Pastas de trabalho</h3>
-    <p>Após abrir o sistema pela primeira vez, clique no ícone de <strong>configurações</strong> (engrenagem, canto superior direito) e defina:</p>
+    <h3>Perguntas do instalador</h3>
+    <p>O <code>instalar.bat</code> faz cinco perguntas. Use os valores abaixo:</p>
 
     <table>
       <thead>
-        <tr>
-          <th>Campo</th>
-          <th>O que configurar</th>
-          <th>Exemplo</th>
-        </tr>
+        <tr><th>Pergunta</th><th>Resposta</th></tr>
       </thead>
       <tbody>
         <tr>
-          <td><strong>Pasta de entrada</strong></td>
-          <td>Onde os PDFs e planilhas dos fornecedores serão colocados</td>
-          <td><code>C:\Pedidos\Entrada</code></td>
+          <td><strong>OPENROUTER_API_KEY</strong></td>
+          <td>Cole a chave fornecida pelo suporte (começa com <code>sk-or-v1-...</code>)</td>
         </tr>
         <tr>
-          <td><strong>Pasta de saída</strong></td>
-          <td>Onde os arquivos prontos para o ERP serão salvos</td>
-          <td><code>C:\Pedidos\ERP</code></td>
+          <td><strong>Modo de exportação</strong></td>
+          <td>Digite <code>1</code> (xlsx) — gera planilha pronta para importar no ERP</td>
+        </tr>
+        <tr>
+          <td><strong>Porta do servidor</strong></td>
+          <td>Apertar <em>Enter</em> aceita o padrão <code>3636</code></td>
+        </tr>
+        <tr>
+          <td><strong>E-mail do administrador</strong></td>
+          <td>O e-mail que será usado para entrar no sistema</td>
+        </tr>
+        <tr>
+          <td><strong>Senha</strong></td>
+          <td>Mínimo 8 caracteres. <strong>Anote em local seguro</strong> — não há recuperação por e-mail.</td>
         </tr>
       </tbody>
     </table>
 
     <div class="callout info">
       <span class="callout-icon">💡</span>
-      <span class="callout-text">Crie as pastas antes de configurar. A pasta de entrada pode ser a mesma onde hoje os pedidos são salvos ao serem recebidos por e-mail.</span>
+      <span class="callout-text"><strong>O instalador NÃO pede dados do Firebird.</strong> Cada empresa (MM, Nasmar, ...) tem seu próprio Firebird, e isso é configurado depois, no navegador, em <strong>Configurações → Ambientes</strong>. Veja a Seção 3.</span>
     </div>
 
-    <h3>3.3 — Conexão com a internet</h3>
-    <p>O sistema funciona <strong>sem internet</strong> para os fornecedores já cadastrados (Riachuelo, Centauro, Beira Rio, Kolosh, Sam's Club, etc.). A internet é necessária apenas para processar formatos novos ou desconhecidos, que são enviados para análise automática.</p>
+    <div class="callout ok" style="margin-top:16px">
+      <span class="callout-icon">✅</span>
+      <span class="callout-text">Ao final, a janela mostra <em>"Instalação concluída"</em> e a URL de acesso. O <code>instalar.bat</code> só roda uma vez. A partir daí o operador usa só o <code>iniciar.bat</code>.</span>
+    </div>
+
+    <div class="callout warn">
+      <span class="callout-icon">⚠️</span>
+      <span class="callout-text">Não compartilhe a chave OpenRouter por e-mail nem WhatsApp. Em caso de dúvida, fale com o suporte.</span>
+    </div>
   </div>
 
-  <!-- 4. Uso diário -->
-  <div class="section" id="uso">
-    <p class="section-num">Seção 4</p>
-    <h2>Uso diário</h2>
-    <p>O fluxo de trabalho é simples e acontece inteiramente no navegador.</p>
+  <!-- 3. Primeiro acesso -->
+  <div class="section" id="first-run">
+    <p class="section-num">Seção 3</p>
+    <h2>Primeiro acesso e cadastro de empresas</h2>
+    <p>O Portal trabalha com <strong>uma instalação que atende N empresas</strong>. Cada empresa do grupo (MM, Nasmar, e quantas mais houver) é cadastrada como um <em>ambiente</em>: pasta de pedidos própria e banco Firebird próprio.</p>
 
     <div class="steps">
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
           <p class="step-title">Iniciar o sistema</p>
-          <p class="step-desc">Dê duplo-clique no atalho <strong>Importar Pedidos</strong> da Área de Trabalho. O navegador abre automaticamente com o sistema. A janela preta que aparece não deve ser fechada.</p>
+          <p class="step-desc">Duplo-clique no atalho <strong>Importar Pedidos</strong> da Área de Trabalho. Uma janela escura abre — <strong>não a feche</strong>. Em seguida o navegador abre em <code>http://localhost:3636</code>.</p>
         </div>
       </div>
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <p class="step-title">Colocar os pedidos na pasta de entrada</p>
-          <p class="step-desc">Salve os arquivos PDF ou XLS recebidos dos fornecedores na <strong>pasta de entrada</strong> configurada. Podem ser vários arquivos de uma vez.</p>
+          <p class="step-title">Entrar com o e-mail e senha do administrador</p>
+          <p class="step-desc">Use exatamente o e-mail e a senha definidos no passo 2 do instalador. Após 10 tentativas falhas, o sistema bloqueia o IP por 15 minutos.</p>
         </div>
       </div>
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <p class="step-title">Selecionar e importar</p>
-          <p class="step-desc">Na aba <strong>Pendentes</strong>, clique em <em>Atualizar</em> para ver os arquivos. Marque os que deseja processar e clique em <em>Importar</em>. O sistema gera os arquivos XLS para o ERP automaticamente.</p>
+          <p class="step-title">Cadastrar a primeira empresa</p>
+          <p class="step-desc">Menu <strong>Configurações → Ambientes</strong> → botão <strong>+ Novo ambiente</strong>. Preencha conforme o quadro abaixo e clique em <em>Salvar</em>.</p>
+        </div>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th>Campo</th><th>O que preencher</th><th>Exemplo MM</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Slug</strong></td>
+          <td>Apelido curto, em minúsculas. Imutável após criar.</td>
+          <td><code>mm</code></td>
+        </tr>
+        <tr>
+          <td><strong>Nome</strong></td>
+          <td>Nome amigável que aparece pro operador.</td>
+          <td><code>MM Calçados</code></td>
+        </tr>
+        <tr>
+          <td><strong>Pasta de entrada</strong></td>
+          <td>Use o botão <em>Selecionar</em>. Onde os PDFs/XLS dessa empresa chegam.</td>
+          <td><code>C:\MM\Pedidos</code></td>
+        </tr>
+        <tr>
+          <td><strong>Pasta de saída</strong></td>
+          <td>Onde o XLSX gerado será gravado.</td>
+          <td><code>C:\MM\XLS</code></td>
+        </tr>
+        <tr>
+          <td><strong>Caminho do .fdb</strong></td>
+          <td>Use o botão <em>Selecionar</em>. Caminho do banco Firebird dessa empresa.</td>
+          <td><code>C:\Fire\MM\empresa.fdb</code></td>
+        </tr>
+        <tr>
+          <td><strong>Host</strong></td>
+          <td>Como o Portal alcança o Firebird. Use <code>localhost</code> quando o Fire roda no mesmo servidor.</td>
+          <td><code>localhost</code></td>
+        </tr>
+        <tr>
+          <td><strong>Porta</strong></td>
+          <td>Padrão Firebird.</td>
+          <td><code>3050</code></td>
+        </tr>
+        <tr>
+          <td><strong>Usuário</strong></td>
+          <td>SYSDBA é o padrão.</td>
+          <td><code>SYSDBA</code></td>
+        </tr>
+        <tr>
+          <td><strong>Charset</strong></td>
+          <td>WIN1252 é o padrão do Fire Sistemas.</td>
+          <td><code>WIN1252</code></td>
+        </tr>
+        <tr>
+          <td><strong>Senha</strong></td>
+          <td>Senha do SYSDBA (não confunde com senha do operador no Fire).</td>
+          <td>—</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout info" style="margin-top:16px">
+      <span class="callout-icon">💡</span>
+      <span class="callout-text"><strong>Por que <code>localhost</code> e não embedded?</strong> O Fire Sistemas já mantém o .fdb aberto via Firebird Server. O Portal entra pela mesma via TCP (<code>localhost:3050</code>) — o servidor coordena os acessos sem conflito. Se deixar Host vazio, modo embedded tenta abrir o arquivo direto e dá erro de lock.</span>
+    </div>
+
+    <div class="step" style="margin-top:16px">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <p class="step-title">Testar a conexão</p>
+        <p class="step-desc">Após salvar, abra o ambiente recém-criado e clique em <strong>Testar conexão</strong>. Deve aparecer três <code>✓</code>: pasta de entrada, pasta de saída, Firebird. Se algum aparecer <code>✗</code>, corrija antes de continuar (pasta inexistente, senha errada, Firebird Server parado, etc.).</p>
+      </div>
+    </div>
+
+    <div class="step" style="margin-top:16px">
+      <div class="step-num">5</div>
+      <div class="step-body">
+        <p class="step-title">Cadastrar a próxima empresa</p>
+        <p class="step-desc">Volte para <strong>Ambientes</strong> e repita o passo 3 para a próxima empresa do grupo (Nasmar, etc.). Cada uma com seu slug, suas pastas e seu .fdb.</p>
+      </div>
+    </div>
+
+    <div class="step" style="margin-top:16px">
+      <div class="step-num">6</div>
+      <div class="step-body">
+        <p class="step-title">Selecionar o ambiente ativo</p>
+        <p class="step-desc">Vá para a página inicial. Como é a primeira vez, o sistema mostra a tela <strong>Selecionar ambiente</strong> com todas as empresas cadastradas. Clique na que vai operar agora. Para trocar depois, use o botão <em>trocar</em> no topo.</p>
+      </div>
+    </div>
+
+    <div class="callout warn" style="margin-top:16px">
+      <span class="callout-icon">⚠️</span>
+      <span class="callout-text"><strong>Cada pedido fica gravado no ambiente em que foi importado.</strong> Trocar o ambiente ativo não move pedido entre empresas — o histórico de cada empresa é separado.</span>
+    </div>
+
+    <h3>Cadastrar mais usuários (opcional)</h3>
+    <p>Em <strong>Configurações → Usuários</strong>, o administrador gera convites com link único. Cada novo usuário acessa o link, define a própria senha e entra. Papéis disponíveis: <code>admin</code> (gerencia usuários e ambientes), <code>operator</code> (uso normal), <code>viewer</code> (somente leitura). Qualquer usuário logado escolhe livremente entre os ambientes cadastrados.</p>
+  </div>
+
+  <!-- 4. Uso diário -->
+  <div class="section" id="uso">
+    <p class="section-num">Seção 4</p>
+    <h2>Uso diário</h2>
+    <p>O fluxo de trabalho acontece inteiramente no navegador.</p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <p class="step-title">Iniciar o sistema</p>
+          <p class="step-desc">Duplo-clique no atalho da Área de Trabalho. O navegador abre automaticamente. Se já estiver logado dentro de 24h, vai direto para a tela principal.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <p class="step-title">Escolher a empresa da sessão</p>
+          <p class="step-desc">Após o login, o Portal pergunta em qual empresa você vai operar (MM, Nasmar, etc.). Clique no card desejado. Para trocar a qualquer momento, use o botão <em>trocar</em> que aparece no canto superior direito.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <p class="step-title">Salvar os pedidos na pasta de entrada</p>
+          <p class="step-desc">Coloque os PDFs ou XLS recebidos dos fornecedores na pasta de entrada <strong>daquela empresa</strong> (a que aparece nos detalhes do ambiente). Pode ser vários arquivos de uma vez.</p>
         </div>
       </div>
       <div class="step">
         <div class="step-num">4</div>
         <div class="step-body">
-          <p class="step-title">Baixar e importar no ERP</p>
-          <p class="step-desc">Após o processamento, os links de download aparecem na tela. Clique para baixar cada arquivo XLS e importe normalmente no ERP. Os pedidos originais são movidos automaticamente para a pasta <em>Pedidos importados</em>.</p>
+          <p class="step-title">Selecionar e importar</p>
+          <p class="step-desc">Na aba <strong>Pendentes</strong>, clique em <em>Atualizar</em> para listar os arquivos da empresa selecionada. Marque os que quer processar e clique em <em>Importar</em>. O sistema gera os XLSX para o ERP e move o original para <em>Pedidos importados</em>.</p>
         </div>
       </div>
       <div class="step">
         <div class="step-num">5</div>
         <div class="step-body">
+          <p class="step-title">Baixar e importar no ERP</p>
+          <p class="step-desc">Os links de download aparecem na tela. Clique em cada um para baixar o XLSX e importe normalmente no Fire Sistemas <strong>da empresa correspondente</strong>.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <p class="step-title">Trocar de empresa (se necessário)</p>
+          <p class="step-desc">Para operar a próxima empresa, clique em <em>trocar</em> no topo, escolha o ambiente da outra empresa e repita o fluxo. As listagens, preview e validação seguem sempre a empresa selecionada — sem risco de misturar.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
           <p class="step-title">Encerrar o sistema</p>
-          <p class="step-desc">Feche a janela preta (ou pressione <code>Ctrl+C</code> dentro dela) quando terminar o uso do dia.</p>
+          <p class="step-desc">Feche a janela escura (ou aperte <code>Ctrl+C</code> dentro dela) ao final do dia.</p>
         </div>
       </div>
     </div>
 
+    <div class="callout info">
+      <span class="callout-icon">💡</span>
+      <span class="callout-text"><strong>O Portal monitora as pastas em paralelo.</strong> Mesmo sem você estar com a tela aberta, a cada 30 segundos ele varre a pasta de entrada de cada empresa configurada e pré-processa os arquivos novos. Quando você entra, eles já aparecem em <em>Pendentes</em>.</span>
+    </div>
+
     <h3>Aba Importados</h3>
-    <p>A aba <strong>Importados</strong> mostra o histórico de todos os pedidos processados — com data, número do pedido, cliente e links para baixar novamente os arquivos gerados.</p>
-    <p>Caso precise reprocessar um pedido (por exemplo, se o arquivo do ERP for perdido), clique em <strong>Reimportar</strong> na entrada correspondente.</p>
+    <p>Mostra o histórico da empresa atualmente selecionada: data, número do pedido, cliente, status e link para baixar de novo o XLSX gerado. Use <strong>Reimportar</strong> se o arquivo do ERP foi perdido — o pedido original é processado outra vez sem precisar voltar a colocar na pasta. <strong>Trocar de ambiente faz a lista mudar</strong>: você só vê pedidos da empresa selecionada.</p>
   </div>
 
-  <!-- 5. FAQ -->
-  <div class="section" id="faq">
+  <!-- 5. Manutenção -->
+  <div class="section" id="manutencao">
     <p class="section-num">Seção 5</p>
+    <h2>Atualização e desinstalação</h2>
+
+    <h3>Atualizar para uma nova versão</h3>
+    <p>Quando o suporte enviar atualização:</p>
+    <ol style="padding-left:20px; margin:8px 0 12px; color:#3F3F46;">
+      <li style="margin-bottom:6px">Substituir os arquivos da pasta atual pelos novos (ou colar por cima sobrescrevendo).</li>
+      <li style="margin-bottom:6px">Duplo-clique em <strong>atualizar.bat</strong>.</li>
+    </ol>
+    <p>O <code>.env</code>, o histórico, os usuários e as configurações são preservados.</p>
+
+    <h3>Inicialização automática (opcional)</h3>
+    <p>Para que o sistema suba sozinho ao ligar a máquina, executar uma vez como administrador:</p>
+    <div class="code-block">
+      <span class="prompt">&gt;</span> setup-service.bat
+    </div>
+    <p>Isso registra uma tarefa no <em>Agendador de Tarefas</em> do Windows que inicia o portal no boot. Útil em servidores que ficam ligados 24/7.</p>
+
+    <h3>Desinstalar</h3>
+    <p>Duplo-clique em <strong>desinstalar.bat</strong>. Remove o ambiente Python (<code>.venv</code>) e a tarefa agendada. <strong>Preserva</strong> os dados em <code>data/</code>, <code>input/</code>, <code>output/</code> e <code>logs/</code>. Para apagar tudo, deletar a pasta inteira.</p>
+  </div>
+
+  <!-- 6. FAQ -->
+  <div class="section" id="faq">
+    <p class="section-num">Seção 6</p>
     <h2>Dúvidas frequentes</h2>
 
-    <h3>O navegador não abriu automaticamente</h3>
-    <p>Abra o navegador manualmente e acesse <code>http://localhost:3636</code>.</p>
+    <h3>Esqueci a senha do administrador</h3>
+    <p>Não há recuperação por e-mail. Pelo Prompt de Comando, dentro da pasta do sistema, executar:</p>
+    <div class="code-block">
+      <span class="prompt">&gt;</span> .venv\Scripts\python.exe tools\create_user.py seu@email.com --reset
+    </div>
+    <p>O comando vai pedir a nova senha duas vezes (digitação oculta).</p>
+
+    <h3>O navegador não abriu sozinho</h3>
+    <p>Abrir manualmente em <code>http://localhost:3636</code>.</p>
 
     <h3>Apareceu "Formato não reconhecido"</h3>
-    <p>O arquivo é de um fornecedor ainda não cadastrado no sistema. Envie o arquivo para o suporte para que seja adicionado. O sistema já cobre: Riachuelo, Centauro, Beira Rio, Kolosh / Dakota, Sam's Club, Kallan, Magic Feet, Authentic Feet e NBA.</p>
+    <p>O arquivo é de um fornecedor ainda não cadastrado. Envie o arquivo para o suporte. Hoje o sistema reconhece: <strong>Riachuelo</strong>, <strong>Centauro</strong>, <strong>Beira Rio</strong>, <strong>Kolosh / Dakota</strong>, <strong>Sam's Club</strong>, <strong>Kallan</strong>, <strong>Magic Feet</strong>, <strong>Authentic Feet</strong>, <strong>NBA</strong> e formatos genéricos de Pedido de Compras.</p>
 
-    <h3>O sistema ficou lento ou travou</h3>
-    <p>Feche a janela preta e abra o sistema novamente pelo atalho da Área de Trabalho.</p>
+    <h3>Quero acessar de outra máquina na rede</h3>
+    <p>Editar o arquivo <code>.env</code> da pasta do sistema, trocar <code>PORTAL_HOST=127.0.0.1</code> por <code>PORTAL_HOST=0.0.0.0</code>, salvar e reiniciar. Liberar a porta no firewall do Windows. Acesso passa a ser <code>http://&lt;ip-da-máquina&gt;:3636</code>.</p>
 
-    <h3>Preciso processar um pedido de novo</h3>
-    <p>Acesse a aba <strong>Importados</strong>, encontre o pedido e clique em <strong>Reimportar</strong>.</p>
+    <h3>Esqueci ou errei a senha do Firebird de uma empresa</h3>
+    <p>Menu <strong>Configurações → Ambientes</strong> → editar a empresa → preencher o campo <em>Senha</em> com a nova e salvar. (Deixar vazio em modo edição mantém a senha atual.) Use o botão <em>Testar conexão</em> para confirmar.</p>
 
-    <h3>Esqueci qual pasta está configurada</h3>
-    <p>Clique na engrenagem (canto superior direito) para ver e alterar as pastas configuradas.</p>
+    <h3>"Muitas tentativas de login"</h3>
+    <p>Limite anti-força-bruta: 10 tentativas em 15 minutos por IP. Aguardar e tentar de novo. Se for emergência, reiniciar o servidor zera o contador.</p>
 
-    <h3>Atualizações do sistema</h3>
-    <p>Quando houver atualização, o suporte vai enviar uma nova versão da pasta. Substitua a pasta antiga pela nova e execute <code>instalar.bat</code> novamente. As configurações e histórico de importações são preservados.</p>
+    <h3>Como reprocesso um pedido</h3>
+    <p>Aba <strong>Importados</strong>, encontrar o pedido, clicar em <strong>Reimportar</strong>.</p>
+
+    <h3>Como vejo qual pasta está configurada para cada empresa</h3>
+    <p>Menu lateral → <strong>Configurações → Ambientes</strong>. A lista mostra todas as empresas cadastradas com pasta de entrada, .fdb e status. Clique em <em>editar</em> em qualquer linha para ver/alterar.</p>
+
+    <h3>Como adiciono uma terceira empresa depois</h3>
+    <p>Menu lateral → <strong>Configurações → Ambientes</strong> → botão <strong>+ Novo ambiente</strong>. Mesmo formulário do passo inicial. A nova empresa fica disponível na próxima vez que alguém entrar e escolher o ambiente.</p>
+
+    <h3>Como removo uma empresa</h3>
+    <p>Editar o ambiente e clicar em <strong>Desativar</strong>. Os pedidos antigos dela continuam preservados, mas ela some da lista de seleção. Essa operação é reversível por SQL no banco interno do Portal — fale com o suporte se for o caso.</p>
+
+    <h3>Por que o Host é <code>localhost</code> se o Firebird está no mesmo servidor</h3>
+    <p>Porque o Fire Sistemas já mantém o .fdb aberto via Firebird Server (serviço Windows). Embedded mode (deixar Host vazio) tenta abrir o arquivo direto e dá erro de lock. <code>localhost:3050</code> entra pela mesma via TCP que o próprio Fire usa — sem conflito.</p>
+
+    <h3>O sistema travou ou ficou lento</h3>
+    <p>Fechar a janela escura e abrir o sistema de novo pelo atalho.</p>
   </div>
 
   <hr>
