@@ -975,10 +975,8 @@ def test_firebird_connection(
 
 @app.get("/api/pending")
 def list_pending(request: Request) -> JSONResponse:
-    from app import config as app_config
     cfg = _get_cfg_for_request(request)
     watch = Path(cfg["watch_dir"])
-    imp = app_config.imported_dir(cfg)
 
     if not watch.exists():
         return JSONResponse({"files": [], "watchDir": cfg["watch_dir"], "exists": False})

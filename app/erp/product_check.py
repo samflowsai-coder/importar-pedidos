@@ -59,7 +59,9 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
         fb_cfg = environments_repo.to_fb_config(env)
         if not fb_cfg.get("path"):
             return unavailable
-        open_conn = lambda: conn_mgr.connect_with_config(fb_cfg)
+
+        def open_conn():
+            return conn_mgr.connect_with_config(fb_cfg)
     elif conn_mgr.is_configured():
         open_conn = conn_mgr.connect
     else:
