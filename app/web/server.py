@@ -107,6 +107,36 @@ def _get_cfg() -> dict:
     return app_config.load()
 
 
+def _request_environment(request: Request) -> dict | None:
+    return getattr(request.state, "environment", None)
+
+
+def _get_cfg_for_request(request: Request) -> dict:
+    """Return legacy config, overridden by selected environment dirs when present."""
+    cfg = _get_cfg()
+    env = _request_environment(request)
+    if env is None:
+        return cfg
+    out = dict(cfg)
+    out["watch_dir"] = env["watch_dir"]
+    out["output_dir"] = env["output_dir"]
+    return out
+
+
+def _firebird_open_for_request(request: Request, conn_mgr):
+    """Return a Firebird connection opener for selected env, or legacy fallback."""
+    env = _request_environment(request)
+    if env is not None:
+        from app.persistence import environments_repo
+        fb_cfg = environments_repo.to_fb_config(env)
+        if not fb_cfg.get("path"):
+            raise HTTPException(status_code=503, detail="FB_DATABASE não configurado")
+        return lambda: conn_mgr.connect_with_config(fb_cfg)
+    if not conn_mgr.is_configured():
+        raise HTTPException(status_code=503, detail="FB_DATABASE não configurado")
+    return conn_mgr.connect
+
+
 def _append_log(cfg: dict, entry: dict) -> None:
     """Persist to SQLite. `cfg` kept for signature compatibility."""
     del cfg  # unused — repo resolves db path on its own
@@ -244,7 +274,7 @@ def _run_exporters(order, output_path: Path, *, env: Optional[dict] = None) -> d
     }
 
 
-def _process_file(file_path: Path, output_path: Path) -> dict:
+def _process_file(file_path: Path, output_path: Path, *, env: Optional[dict] = None) -> dict:
     from app.ingestion.file_loader import LoadedFile
     from app.pipeline import process
 
@@ -255,7 +285,7 @@ def _process_file(file_path: Path, output_path: Path) -> dict:
     if not order:
         raise ValueError("Formato não reconhecido ou pedido sem itens")
 
-    exported = _run_exporters(order, output_path)
+    exported = _run_exporters(order, output_path, env=env)
 
     return {
         "order_number": order.header.order_number,
@@ -944,9 +974,9 @@ def test_firebird_connection(
 
 
 @app.get("/api/pending")
-def list_pending() -> JSONResponse:
+def list_pending(request: Request) -> JSONResponse:
     from app import config as app_config
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
     watch = Path(cfg["watch_dir"])
     imp = app_config.imported_dir(cfg)
 
@@ -983,10 +1013,12 @@ class ImportRequest(BaseModel):
 @app.post("/api/import")
 def import_files(
     body: ImportRequest,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     from app import config as app_config
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
+    request_env = _request_environment(request)
     watch = Path(cfg["watch_dir"])
     imp = app_config.imported_dir(cfg)
 
@@ -1017,7 +1049,7 @@ def import_files(
             continue
 
         try:
-            result = _process_file(src, output_path)
+            result = _process_file(src, output_path, env=request_env)
 
             dest = imp / name
             if dest.exists():
@@ -1112,10 +1144,12 @@ class ReimportRequest(BaseModel):
 @app.post("/api/reimport")
 def reimport_file(
     body: ReimportRequest,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     from app import config as app_config
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
+    request_env = _request_environment(request)
     imp = app_config.imported_dir(cfg)
 
     name = Path(body.filename).name
@@ -1138,7 +1172,7 @@ def reimport_file(
         raise HTTPException(status_code=500, detail=f"Erro ao criar diretório de saída: {exc}")
 
     try:
-        result = _process_file(src, output_path)
+        result = _process_file(src, output_path, env=request_env)
         entry = _make_log_entry(
             source_filename=name,
             order_number=result["order_number"],
@@ -1186,7 +1220,11 @@ def download_file(path: str) -> FileResponse:
 
 
 @app.get("/api/fs")
-def browse_filesystem(path: str = "~", file_ext: str = "") -> JSONResponse:
+def browse_filesystem(
+    path: str = "~",
+    file_ext: str = "",
+    _admin: User = Depends(require_admin),
+) -> JSONResponse:
     """Lista subpastas. Quando `file_ext` (ex: '.fdb') é passado, também lista
     arquivos com essa extensão na pasta atual — útil para pickers de arquivo.
     Sem `file_ext`, comportamento histórico (apenas pastas).
@@ -1239,6 +1277,7 @@ def browse_filesystem(path: str = "~", file_ext: str = "") -> JSONResponse:
 
 @app.post("/api/preview")
 async def preview_file(
+    request: Request,
     file: UploadFile = File(...),
     _user: User = Depends(require_user),
 ) -> JSONResponse:
@@ -1277,7 +1316,7 @@ async def preview_file(
         )
 
     from app.erp.product_check import check_order
-    check = check_order(order)
+    check = check_order(order, env=_request_environment(request))
     entry = get_cache().put(
         order=order, source_filename=filename, source_bytes=raw, source_ext=ext, check=check,
     )
@@ -1292,13 +1331,14 @@ class PreviewPendingRequest(BaseModel):
 @app.post("/api/preview-pending")
 def preview_pending(
     body: PreviewPendingRequest,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     """Preview a file already in the watch folder (no upload)."""
     from app.ingestion.file_loader import LoadedFile
     from app.pipeline import process
 
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
     watch = Path(cfg["watch_dir"])
 
     name = Path(body.filename).name  # strip path components
@@ -1319,7 +1359,7 @@ def preview_pending(
         raise HTTPException(status_code=422, detail="Formato não reconhecido ou pedido sem itens")
 
     from app.erp.product_check import check_order
-    check = check_order(order)
+    check = check_order(order, env=_request_environment(request))
     entry = get_cache().put(
         order=order,
         source_filename=name,
@@ -1339,12 +1379,13 @@ class CommitRequest(BaseModel):
 @app.post("/api/commit")
 def commit_preview(
     body: CommitRequest,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     """Salva o pedido no portal como 'em revisão'. NÃO grava no Fire.
     O usuário revisa o match na aba Pedidos e só depois clica em 'Cadastrar no Fire'.
     """
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
     try:
         entry = get_cache().consume(body.preview_id)
     except PreviewNotFoundError:
@@ -1566,7 +1607,7 @@ def send_to_fire(
     request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
     request_env = getattr(request.state, "environment", None)
     outcome = _send_one_to_fire(import_id, cfg, request_env=request_env)
     if not outcome.ok:
@@ -1646,9 +1687,10 @@ def _export_one_xlsx(import_id: str, cfg: dict) -> _XlsxExportOutcome:
 @app.post("/api/imported/{import_id}/export-xlsx")
 def export_xlsx(
     import_id: str,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
     outcome = _export_one_xlsx(import_id, cfg)
     if not outcome.ok:
         raise HTTPException(status_code=outcome.http_status, detail=outcome.detail)
@@ -1676,7 +1718,7 @@ def batch_send_to_fire(
     if len(body.ids) > 100:
         raise HTTPException(status_code=400, detail="Máximo 100 pedidos por lote")
 
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
     request_env = getattr(request.state, "environment", None)
     results: list[dict] = []
     ok_count = 0
@@ -1711,6 +1753,7 @@ def batch_send_to_fire(
 @app.post("/api/batch/export-xlsx")
 def batch_export_xlsx(
     body: BatchSendRequest,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     """Generate XLSX for multiple parsed orders WITHOUT touching Firebird."""
@@ -1719,7 +1762,7 @@ def batch_export_xlsx(
     if len(body.ids) > 100:
         raise HTTPException(status_code=400, detail="Máximo 100 pedidos por lote")
 
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
     results: list[dict] = []
     ok_count = 0
     fail_count = 0
@@ -1944,6 +1987,7 @@ def cancel_import(
 @app.get("/api/clientes/search")
 def search_clientes(
     q: str,
+    request: Request,
     limit: int = 20,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
@@ -1962,17 +2006,15 @@ def search_clientes(
     limit = max(1, min(int(limit), 50))
 
     conn_mgr = FirebirdConnection()
-    if not conn_mgr.is_configured():
-        raise HTTPException(status_code=503, detail="FB_DATABASE não configurado")
-
     razao_pattern = f"%{needle.upper()}%"
     cnpj_digits = re.sub(r"\D", "", needle)
     # Sentinel pattern that LIKE never matches: avoids OR-injection of
     # rows when the query has no digits at all.
     cnpj_pattern = f"%{cnpj_digits}%" if cnpj_digits else "%__never_matches__%"
+    open_conn = _firebird_open_for_request(request, conn_mgr)
 
     try:
-        with conn_mgr.connect() as conn:
+        with open_conn() as conn:
             cur = conn.cursor()
             cur.execute(queries.SEARCH_CLIENTS, (razao_pattern, cnpj_pattern))
             rows = cur.fetchall()
@@ -2002,6 +2044,7 @@ class ClienteOverrideRequest(BaseModel):
 def override_cliente(
     import_id: str,
     body: ClienteOverrideRequest,
+    request: Request,
     user: User = Depends(require_user),
 ) -> JSONResponse:
     """Aplica seleção manual de cliente a um pedido em revisão.
@@ -2027,11 +2070,9 @@ def override_cliente(
         )
 
     conn_mgr = FirebirdConnection()
-    if not conn_mgr.is_configured():
-        raise HTTPException(status_code=503, detail="FB_DATABASE não configurado")
-
+    open_conn = _firebird_open_for_request(request, conn_mgr)
     try:
-        with conn_mgr.connect() as conn:
+        with open_conn() as conn:
             cur = conn.cursor()
             cur.execute(queries.FIND_CLIENT_BY_CODIGO, (body.cliente_codigo,))
             row = cur.fetchone()

@@ -107,6 +107,12 @@ def test_fs_handles_nonexistent_path():
     assert r.status_code == 200  # falls back to parent
 
 
+def test_fs_requires_admin_auth_without_bypass(real_auth):
+    c = TestClient(app)
+    r = c.get("/api/fs?path=~&file_ext=.fdb")
+    assert r.status_code == 401
+
+
 # ── End-to-end: real PDFs ────────────────────────────────────────────────────
 
 @pytest.mark.skipif(not SAMPLES.exists(), reason="samples/ directory not found")
@@ -265,6 +271,43 @@ def test_preview_pending_reads_from_watch_folder(tmp_path, monkeypatch):
     # File must have been moved from watch to imported folder
     assert not seeded.exists()
     assert (imp / sample.name).exists()
+
+
+@pytest.mark.skipif(not SAMPLES.exists(), reason="samples/ directory not found")
+def test_preview_pending_uses_selected_environment_watch_dir(tmp_path, monkeypatch):
+    from app.persistence import environments_repo
+
+    sample = SAMPLES / "2600009562-2026-02-25.pdf"
+    if not sample.exists():
+        pytest.skip("Sample PDF not available")
+
+    legacy_watch = tmp_path / "legacy-watch"
+    env_watch = tmp_path / "env-watch"
+    legacy_watch.mkdir()
+    env_watch.mkdir()
+    seeded = env_watch / sample.name
+    seeded.write_bytes(sample.read_bytes())
+
+    env = environments_repo.create(
+        slug="mm",
+        name="MM",
+        watch_dir=str(env_watch),
+        output_dir=str(tmp_path / "env-out"),
+        fb_path="",
+    )
+    monkeypatch.setattr("app.config.load", lambda: {
+        "watch_dir": str(legacy_watch),
+        "output_dir": str(tmp_path / "legacy-out"),
+        "export_mode": "xlsx",
+    })
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post("/api/preview-pending", json={"filename": sample.name})
+    finally:
+        client.cookies.clear()
+    assert r.status_code == 200, r.text
+    assert r.json()["header"]["order_number"] == "2600009562"
 
 
 def test_preview_pending_rejects_missing_file(tmp_path, monkeypatch):
@@ -733,6 +776,62 @@ def test_search_clientes_happy_path_returns_results(monkeypatch):
     sql, params = cursor.executed[0]
     assert "CADASTRO" in sql and "RAZAO_SOCIAL" in sql
     assert params[0] == "%ACME%"
+
+
+def test_search_clientes_uses_selected_environment_firebird(monkeypatch, tmp_path):
+    from app.erp import connection as conn_mod
+    from app.persistence import environments_repo
+
+    env = environments_repo.create(
+        slug="mm",
+        name="MM",
+        watch_dir=str(tmp_path / "in"),
+        output_dir=str(tmp_path / "out"),
+        fb_path=str(tmp_path / "mm.fdb"),
+        fb_host="127.0.0.1",
+        fb_port="3051",
+        fb_user="SYSDBA",
+        fb_charset="WIN1252",
+        fb_password="secret",
+    )
+    cursor = _FakeFbCursor([(101, "ACME COMERCIO LTDA", "11.222.333/0001-44")])
+    seen_cfg: dict = {}
+
+    class _CtxConn:
+        def cursor(self):
+            return cursor
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    inst = conn_mod.FirebirdConnection.__new__(conn_mod.FirebirdConnection)
+    monkeypatch.setattr(inst, "is_configured", lambda: False, raising=False)
+    monkeypatch.setattr(
+        inst,
+        "connect",
+        lambda: (_ for _ in ()).throw(AssertionError("legacy connect must not be used")),
+        raising=False,
+    )
+
+    def _connect_with_config(cfg):
+        seen_cfg.update(cfg)
+        return _CtxConn()
+
+    monkeypatch.setattr(inst, "connect_with_config", _connect_with_config, raising=False)
+    monkeypatch.setattr(conn_mod, "FirebirdConnection", lambda: inst)
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.get("/api/clientes/search?q=acme")
+    finally:
+        client.cookies.clear()
+    assert r.status_code == 200, r.text
+    assert r.json()["results"][0]["codigo"] == 101
+    assert seen_cfg["path"] == str(tmp_path / "mm.fdb")
+    assert seen_cfg["host"] == "127.0.0.1"
 
 
 def test_search_clientes_strips_non_digits_for_cnpj_pattern(monkeypatch):

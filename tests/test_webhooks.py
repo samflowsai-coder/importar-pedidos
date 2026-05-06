@@ -15,7 +15,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.persistence import db, idempotency_repo, repo
+from app.persistence import context as env_context
+from app.persistence import db, environments_repo, idempotency_repo, repo
 from app.security.hmac_verify import compute_signature
 from app.state import EventSource, LifecycleEvent, list_events, transition
 
@@ -166,6 +167,34 @@ def test_correlates_via_external_id(isolated_app):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["import_id"] == iid
+
+
+def test_correlates_external_id_without_portal_env_cookie(isolated_app, tmp_path):
+    """Provider webhooks do not carry portal_env; handler must resolve env itself."""
+    env = environments_repo.create(
+        slug="mm",
+        name="MM",
+        watch_dir=str(tmp_path / "mm-in"),
+        output_dir=str(tmp_path / "mm-out"),
+        fb_path=str(tmp_path / "mm.fdb"),
+    )
+    with env_context.active_env(env["id"], env["slug"]):
+        iid = _seed_in_production(gestor_id="g-mm")
+    env_context.clear_active_env()
+
+    from app.web.server import app
+    c = TestClient(app)
+    r = _signed_post(c, {
+        "event_id": str(uuid.uuid4()),
+        "event_type": "production_update",
+        "external_id": iid,
+        "payload": {"pares_produzidos": 100},
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["import_id"] == iid
+
+    with env_context.active_env(env["id"], env["slug"]):
+        assert repo.get_import(iid)["production_status"] == "in_production"
 
 
 def test_correlates_via_gestor_order_id_fallback(isolated_app):
