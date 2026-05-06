@@ -35,7 +35,7 @@ def _empty_item_result(product_code: Optional[str], ean: Optional[str]) -> dict:
     }
 
 
-def check_order(order: Order) -> dict:
+def check_order(order: Order, *, env: dict | None = None) -> dict:
     """Return match report for the order. Safe to call without Fire configured."""
     conn_mgr = FirebirdConnection()
 
@@ -54,11 +54,19 @@ def check_order(order: Order) -> dict:
         },
     }
 
-    if not conn_mgr.is_configured():
+    if env is not None:
+        from app.persistence import environments_repo  # avoid import cycle
+        fb_cfg = environments_repo.to_fb_config(env)
+        if not fb_cfg.get("path"):
+            return unavailable
+        open_conn = lambda: conn_mgr.connect_with_config(fb_cfg)
+    elif conn_mgr.is_configured():
+        open_conn = conn_mgr.connect
+    else:
         return unavailable
 
     try:
-        with conn_mgr.connect() as conn:
+        with open_conn() as conn:
             cur = conn.cursor()
 
             # Client lookup

@@ -35,16 +35,17 @@
     pedidos: { label: 'Pedidos', href: '/', icon: ICONS.pedidos, route: 'pedidos' },
     config:  { label: 'Configurações', icon: ICONS.settings, route: 'config', adminOnly: true,
       children: [
-        { label: 'Banco de dados', href: '/configuracoes/banco', icon: ICONS.db, route: 'config-banco' },
-        { label: 'Diretórios',    href: '/configuracoes/diretorios', icon: ICONS.folder, route: 'config-diretorios' },
-        { label: 'Usuários',      href: '/configuracoes/usuarios', icon: ICONS.users, route: 'config-usuarios' },
+        { label: 'Ambientes',      href: '/admin/ambientes',         icon: ICONS.db, route: 'admin-ambientes' },
+        { label: 'Diretórios',     href: '/configuracoes/diretorios', icon: ICONS.folder, route: 'config-diretorios' },
+        { label: 'Usuários',       href: '/configuracoes/usuarios',   icon: ICONS.users, route: 'config-usuarios' },
       ],
     },
   };
 
   const ACTIVE_BY_PATH = {
     '/':                          'pedidos',
-    '/configuracoes/banco':       'config-banco',
+    '/admin/ambientes':           'admin-ambientes',
+    '/admin/ambientes/novo':      'admin-ambientes',
     '/configuracoes/diretorios':  'config-diretorios',
     '/configuracoes/usuarios':    'config-usuarios',
   };
@@ -97,7 +98,7 @@
       </a>`);
 
     if (showConfig) {
-      const expanded = ['config-banco', 'config-diretorios', 'config-usuarios'].includes(active);
+      const expanded = ['admin-ambientes', 'config-diretorios', 'config-usuarios'].includes(active);
       const childLinks = NAV_DEF.config.children.map((c) => `
         <a class="app-nav-link ${active === c.route ? 'active' : ''}"
            href="${c.href}" data-route="${c.route}">

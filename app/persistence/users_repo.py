@@ -70,7 +70,7 @@ def create_user(
         raise ValueError("invalid email")
     pwd_hash = _hash(password)
     try:
-        with db.connect() as conn:
+        with db.connect_shared() as conn:
             cur = conn.execute(
                 """
                 INSERT INTO users (email, password_hash, role, active, created_at)
@@ -89,7 +89,7 @@ def create_user(
 
 def find_by_email(email: str) -> User | None:
     norm = _norm_email(email)
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         row = conn.execute(
             "SELECT * FROM users WHERE email = ? COLLATE NOCASE",
             (norm,),
@@ -98,7 +98,7 @@ def find_by_email(email: str) -> User | None:
 
 
 def find_by_id(user_id: int) -> User | None:
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         row = conn.execute(
             "SELECT * FROM users WHERE id = ?", (user_id,)
         ).fetchone()
@@ -106,7 +106,7 @@ def find_by_id(user_id: int) -> User | None:
 
 
 def update_last_login(user_id: int) -> None:
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         conn.execute(
             "UPDATE users SET last_login_at = ? WHERE id = ?",
             (_now(), user_id),
@@ -115,7 +115,7 @@ def update_last_login(user_id: int) -> None:
 
 def update_password_hash(user_id: int, new_hash: str) -> None:
     """Used by opportunistic rehash-on-login (rounds upgrade)."""
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         conn.execute(
             "UPDATE users SET password_hash = ? WHERE id = ?",
             (new_hash, user_id),
@@ -123,7 +123,7 @@ def update_password_hash(user_id: int, new_hash: str) -> None:
 
 
 def deactivate(user_id: int) -> None:
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         conn.execute(
             "UPDATE users SET active = 0 WHERE id = ?", (user_id,)
         )
@@ -131,7 +131,7 @@ def deactivate(user_id: int) -> None:
 
 def list_users(limit: int = 100) -> list[User]:
     limit = max(1, min(int(limit), 500))
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         rows = conn.execute(
             "SELECT * FROM users ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
@@ -140,7 +140,7 @@ def list_users(limit: int = 100) -> list[User]:
 
 def count_active_users() -> int:
     """Used by bootstrap flow: 0 active users → first-admin signup is open."""
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         row = conn.execute(
             "SELECT COUNT(*) AS n FROM users WHERE active = 1"
         ).fetchone()
@@ -148,7 +148,7 @@ def count_active_users() -> int:
 
 
 def reactivate(user_id: int) -> None:
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         conn.execute(
             "UPDATE users SET active = 1 WHERE id = ?", (user_id,)
         )

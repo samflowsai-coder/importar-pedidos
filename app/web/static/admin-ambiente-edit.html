@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ambiente — Portal de Pedidos</title>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/shell.css">
+  <script defer src="/static/js/shell.js"></script>
+  <style>
+    .content { max-width: 720px; margin: 2rem auto; padding: 0 1.5rem; }
+    h1 { font-size: 1.6rem; font-weight: 600; margin: 0 0 2rem; letter-spacing: -0.01em; }
+    fieldset {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.5rem 1.5rem 1.25rem;
+      margin: 0 0 1.25rem;
+    }
+    legend {
+      padding: 0 .6rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      font-size: .8rem;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    label { display: block; margin-bottom: 1rem; }
+    label > span {
+      display: block;
+      font-size: .85em;
+      color: var(--text-muted);
+      margin-bottom: .35rem;
+    }
+    input {
+      width: 100%;
+      padding: .65rem .8rem;
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 7px;
+      font: inherit;
+      box-sizing: border-box;
+    }
+    input:focus {
+      outline: none;
+      border-color: var(--accent, #3b82f6);
+    }
+    input[readonly] { opacity: .6; cursor: not-allowed; }
+    .row { display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; }
+    .field-row { display: flex; gap: .5rem; align-items: stretch; }
+    .field-row > input { flex: 1; }
+    .field-row > .btn { white-space: nowrap; }
+    .actions {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      margin-top: 1.5rem;
+    }
+    .btn {
+      padding: .6rem 1.3rem;
+      border: 0;
+      border-radius: 8px;
+      font: inherit;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .btn-primary { background: var(--accent, #3b82f6); color: #fff; }
+    .btn-secondary { background: var(--bg-elev); color: var(--text); border: 1px solid var(--border); }
+    .btn-danger { background: transparent; color: var(--danger, #ef4444); border: 1px solid var(--danger, #ef4444); }
+    .btn:disabled { opacity: .5; cursor: progress; }
+    a.cancel { color: var(--text-muted); text-decoration: none; margin-left: auto; }
+    a.cancel:hover { text-decoration: underline; }
+    .test-result {
+      font-family: var(--font-mono, monospace);
+      font-size: .85em;
+      padding: 1rem;
+      background: var(--bg-elev);
+      border-radius: 8px;
+      margin-top: 1rem;
+      white-space: pre-wrap;
+      line-height: 1.5;
+    }
+    .ok  { color: var(--success, #22c55e); }
+    .err { color: var(--danger, #ef4444); }
+    .err-banner {
+      padding: .8rem 1rem;
+      background: color-mix(in srgb, var(--danger, #ef4444) 15%, transparent);
+      color: var(--danger, #ef4444);
+      border-radius: 8px;
+      margin-bottom: 1rem;
+    }
+    .hint {
+      font-size: .8em;
+      color: var(--text-muted);
+      line-height: 1.55;
+      margin: -.4rem 0 1rem;
+      padding: .65rem .8rem;
+      background: var(--bg-elev);
+      border-left: 2px solid var(--border);
+      border-radius: 4px;
+    }
+    .hint code {
+      font-family: var(--font-mono, monospace);
+      font-size: .9em;
+      padding: .05em .35em;
+      background: rgba(0,0,0,.15);
+      border-radius: 3px;
+    }
+    .hint strong { color: var(--text); font-weight: 600; }
+    .file-row { font-size: 13px; }
+    .file-row.selected { background: color-mix(in srgb, var(--accent, #3b82f6) 18%, transparent); }
+
+    /* Folder browser modal */
+    .overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.55);
+      display: none; align-items: center; justify-content: center;
+      z-index: 200;
+      backdrop-filter: blur(4px);
+    }
+    .overlay.open { display: flex; }
+    .modal {
+      width: 480px; max-width: calc(100vw - 32px);
+      max-height: 80vh; overflow: hidden;
+      background: var(--surface-raised, var(--bg-elev));
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.4);
+      display: flex; flex-direction: column;
+    }
+    .modal-header {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .modal-title { font-size: 14px; font-weight: 600; }
+    .modal-close {
+      background: transparent; border: 0; color: var(--text-muted);
+      cursor: pointer; padding: 4px; border-radius: 4px;
+      width: auto;
+    }
+    .modal-close:hover { color: var(--text); }
+    .modal-path {
+      padding: 8px 18px;
+      font-family: var(--font-mono, monospace); font-size: 11.5px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .modal-body { flex: 1; overflow-y: auto; padding: 6px; }
+    .dir-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .dir-row:hover { background: var(--bg-elev); }
+    .dir-row.up { color: var(--text-muted); }
+    .modal-footer {
+      padding: 14px 18px;
+      border-top: 1px solid var(--border);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .modal-footer .spacer {
+      flex: 1; font-family: var(--font-mono, monospace); font-size: 11px;
+      color: var(--text-muted);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <main class="content">
+    <h1 id="title">Novo ambiente</h1>
+    <div id="err-banner" class="err-banner" hidden></div>
+    <form id="f" autocomplete="off">
+      <fieldset>
+        <legend>Identificação</legend>
+        <label>
+          <span>Slug (somente minúsculas, dígitos e hífen — imutável após criar)</span>
+          <input name="slug" required pattern="[a-z0-9][a-z0-9-]{0,30}" placeholder="mm">
+        </label>
+        <label>
+          <span>Nome</span>
+          <input name="name" required placeholder="MM Calçados">
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Pastas</legend>
+        <label>
+          <span>Pasta de entrada (watch_dir)</span>
+          <div class="field-row">
+            <input name="watch_dir" required placeholder="C:\MM\Pedidos">
+            <button type="button" class="btn btn-secondary" data-browse="watch_dir">Selecionar</button>
+          </div>
+        </label>
+        <label>
+          <span>Pasta de saída (output_dir)</span>
+          <div class="field-row">
+            <input name="output_dir" required placeholder="C:\MM\XLS">
+            <button type="button" class="btn btn-secondary" data-browse="output_dir">Selecionar</button>
+          </div>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Firebird (Fire Sistemas)</legend>
+        <label>
+          <span>Caminho do .fdb</span>
+          <div class="field-row">
+            <input name="fb_path" required placeholder="C:\Fire\empresa.fdb">
+            <button type="button" class="btn btn-secondary" data-browse-file="fb_path" data-ext=".fdb">Selecionar</button>
+          </div>
+        </label>
+        <p class="hint">
+          <strong>Embedded</strong> (Portal e .fdb no mesmo PC): deixe Host e Porta vazios.
+          <strong>TCP</strong> (Firebird Server em outro servidor da rede): preencha Host
+          (ex: <code>192.168.1.10</code>) e Porta (padrão <code>3050</code>) — o
+          caminho do .fdb deve ser como o servidor remoto enxerga.
+        </p>
+        <div class="row">
+          <label>
+            <span>Host (vazio = embedded local)</span>
+            <input name="fb_host" placeholder="192.168.1.10">
+          </label>
+          <label>
+            <span>Porta (padrão 3050)</span>
+            <input name="fb_port" placeholder="3050">
+          </label>
+        </div>
+        <div class="row">
+          <label>
+            <span>Usuário</span>
+            <input name="fb_user" value="SYSDBA">
+          </label>
+          <label>
+            <span>Charset</span>
+            <input name="fb_charset" value="WIN1252">
+          </label>
+        </div>
+        <label>
+          <span>Senha (em modo edição, deixe vazio para manter a atual)</span>
+          <input name="fb_password" type="password">
+        </label>
+      </fieldset>
+
+      <div class="actions">
+        <button type="submit" class="btn btn-primary">Salvar</button>
+        <button type="button" id="btn-test" class="btn btn-secondary" hidden>Testar conexão</button>
+        <button type="button" id="btn-delete" class="btn btn-danger" hidden>Desativar</button>
+        <a class="cancel" href="/admin/ambientes">Cancelar</a>
+      </div>
+      <div id="test-result" class="test-result" hidden></div>
+    </form>
+  </main>
+
+  <!-- Folder browser modal -->
+  <div class="overlay" id="browseOverlay">
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-title">Selecionar pasta</span>
+        <button class="modal-close" type="button" id="browseClose" aria-label="Fechar">×</button>
+      </div>
+      <div class="modal-path" id="browsePath">—</div>
+      <div class="modal-body" id="browseBody">
+        <div style="padding:24px;text-align:center;color:var(--text-muted)">Carregando…</div>
+      </div>
+      <div class="modal-footer">
+        <span class="spacer" id="browseSelPath"></span>
+        <button class="btn btn-secondary" type="button" id="browseCancel">Cancelar</button>
+        <button class="btn btn-primary" type="button" id="browseConfirm">Selecionar aqui</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const path = location.pathname;
+    const isEdit = !path.endsWith('/novo');
+    const envId = isEdit ? path.split('/').pop() : null;
+    const f = document.getElementById('f');
+    const errBanner = document.getElementById('err-banner');
+    const testBtn = document.getElementById('btn-test');
+    const deleteBtn = document.getElementById('btn-delete');
+    const testResult = document.getElementById('test-result');
+
+    function showError(msg) {
+      errBanner.textContent = msg;
+      errBanner.hidden = false;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    function clearError() { errBanner.hidden = true; }
+
+    // Slug auto-lowercase enquanto digita (UX) + força no submit (defesa).
+    const slugInput = f.elements['slug'];
+    slugInput.addEventListener('input', () => {
+      const start = slugInput.selectionStart;
+      slugInput.value = slugInput.value.toLowerCase();
+      slugInput.setSelectionRange(start, start);
+    });
+
+    if (isEdit) {
+      document.getElementById('title').textContent = 'Editar ambiente';
+      testBtn.hidden = false;
+      deleteBtn.hidden = false;
+      fetch('/api/admin/environments/' + envId).then(r => {
+        if (r.status === 401) { location.href = '/login'; return; }
+        if (!r.ok) throw new Error('Falha ao carregar (' + r.status + ')');
+        return r.json();
+      }).then(env => {
+        if (!env) return;
+        for (const k of Object.keys(env)) {
+          const inp = f.elements[k];
+          if (inp && k !== 'fb_password') inp.value = env[k] ?? '';
+        }
+        f.elements['slug'].readOnly = true;
+      }).catch(e => showError(e.message));
+    }
+
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearError();
+      const data = Object.fromEntries(new FormData(f));
+      // Defesa: força lowercase no slug mesmo se algo escapou do input handler.
+      if (data.slug) data.slug = String(data.slug).toLowerCase().trim();
+      // Senha em PATCH: vazio = manter atual (None no payload)
+      if (isEdit && data.fb_password === '') delete data.fb_password;
+      const url = isEdit ? '/api/admin/environments/' + envId : '/api/admin/environments';
+      const method = isEdit ? 'PATCH' : 'POST';
+      const r = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (r.ok) { location.href = '/admin/ambientes'; return; }
+      const text = await r.text();
+      try { showError(JSON.parse(text).detail || text); }
+      catch { showError(text || ('Erro ' + r.status)); }
+    });
+
+    testBtn.addEventListener('click', async () => {
+      clearError();
+      testBtn.disabled = true;
+      try {
+        const r = await fetch('/api/admin/environments/' + envId + '/test', { method: 'POST' });
+        if (!r.ok) throw new Error('Falha ao testar (' + r.status + ')');
+        const body = await r.json();
+        const lines = [
+          (body.watch_dir_ok ? '✓' : '✗') + ' watch_dir: ' + body.watch_dir,
+          (body.output_dir_ok ? '✓' : '✗') + ' output_dir: ' + body.output_dir,
+          (body.firebird_ok ? '✓' : '✗') + ' firebird' + (body.firebird_error ? ': ' + body.firebird_error : ''),
+        ];
+        testResult.hidden = false;
+        testResult.innerHTML = lines.map(l =>
+          '<div class="' + (l.startsWith('✓') ? 'ok' : 'err') + '">' +
+          l.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])) +
+          '</div>'
+        ).join('');
+      } catch (e) {
+        showError(e.message);
+      } finally {
+        testBtn.disabled = false;
+      }
+    });
+
+    deleteBtn.addEventListener('click', async () => {
+      if (!confirm('Desativar este ambiente? Pedidos antigos permanecem intactos, mas ele somem da lista de seleção.')) return;
+      const r = await fetch('/api/admin/environments/' + envId, { method: 'DELETE' });
+      if (r.ok) { location.href = '/admin/ambientes'; return; }
+      showError('Falha ao desativar (' + r.status + ')');
+    });
+
+    // ── Filesystem browser (pastas e arquivos) ─────────────────────
+    // Modo "dir": clica em "Selecionar aqui" pra escolher o diretório atual
+    // Modo "file": clica num arquivo (filtrado por extensão) pra escolher
+    let browseTargetField = null;
+    let browseMode = 'dir';   // 'dir' | 'file'
+    let browseFileExt = '';   // ex: '.fdb'
+    let browseCurrentPath = null;
+    let browseSelectedFile = null;
+
+    const overlay = document.getElementById('browseOverlay');
+    const browseBody = document.getElementById('browseBody');
+    const browsePath = document.getElementById('browsePath');
+    const browseSelPath = document.getElementById('browseSelPath');
+    const browseConfirm = document.getElementById('browseConfirm');
+    const browseTitleEl = document.querySelector('#browseOverlay .modal-title');
+
+    function escAttr(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
+
+    function openBrowseDir(targetField) {
+      browseTargetField = targetField;
+      browseMode = 'dir';
+      browseFileExt = '';
+      browseSelectedFile = null;
+      browseTitleEl.textContent = 'Selecionar pasta';
+      browseConfirm.textContent = 'Selecionar aqui';
+      browseConfirm.disabled = false;
+      const start = (f.elements[targetField].value || '').trim();
+      const startDir = start ? start.replace(/[\\/][^\\/]*$/, '') || start : '';
+      overlay.classList.add('open');
+      loadBrowseDir(startDir || start || '~');
+    }
+
+    function openBrowseFile(targetField, ext) {
+      browseTargetField = targetField;
+      browseMode = 'file';
+      browseFileExt = ext;
+      browseSelectedFile = null;
+      browseTitleEl.textContent = 'Selecionar arquivo (' + ext + ')';
+      browseConfirm.textContent = 'Selecionar arquivo';
+      browseConfirm.disabled = true;  // só ativa quando um arquivo for clicado
+      const start = (f.elements[targetField].value || '').trim();
+      const startDir = start ? start.replace(/[\\/][^\\/]*$/, '') || start : '';
+      overlay.classList.add('open');
+      loadBrowseDir(startDir || start || '~');
+    }
+
+    function closeBrowse() { overlay.classList.remove('open'); }
+
+    function confirmBrowse() {
+      let chosen = null;
+      if (browseMode === 'dir') chosen = browseCurrentPath;
+      else chosen = browseSelectedFile;
+      if (chosen && browseTargetField) {
+        f.elements[browseTargetField].value = chosen;
+      }
+      closeBrowse();
+    }
+
+    async function loadBrowseDir(p) {
+      browseBody.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted)">Carregando…</div>';
+      try {
+        const url = '/api/fs?path=' + encodeURIComponent(p) +
+          (browseMode === 'file' ? '&file_ext=' + encodeURIComponent(browseFileExt) : '');
+        const r = await fetch(url, { credentials: 'same-origin' });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || data.error) throw new Error(data.error || ('Erro ' + r.status));
+        browseCurrentPath = data.current;
+        browsePath.textContent = data.current;
+        browseSelPath.textContent = browseMode === 'dir'
+          ? data.current
+          : (browseSelectedFile || 'Selecione um arquivo ' + browseFileExt);
+
+        let html = '';
+        if (data.parent) {
+          html += '<div class="dir-row up" data-path="' + escAttr(data.parent) + '">↑ Voltar</div>';
+        }
+        if (data.entries.length) {
+          html += data.entries.map(e =>
+            '<div class="dir-row" data-path="' + escAttr(e.path) + '">📁 ' + escAttr(e.name) + '</div>'
+          ).join('');
+        }
+        if (browseMode === 'file') {
+          if (data.files && data.files.length) {
+            html += data.files.map(e =>
+              '<div class="dir-row file-row" data-file="' + escAttr(e.path) + '">📄 ' + escAttr(e.name) + '</div>'
+            ).join('');
+          } else if (!data.entries.length) {
+            html += '<div style="padding:14px 12px;font-size:13px;color:var(--text-muted)">' +
+                    'Nenhum arquivo ' + escAttr(browseFileExt) + ' nesta pasta.</div>';
+          }
+        } else if (!data.entries.length) {
+          html += '<div style="padding:14px 12px;font-size:13px;color:var(--text-muted)">Nenhuma subpasta</div>';
+        }
+        browseBody.innerHTML = html;
+
+        browseBody.querySelectorAll('.dir-row[data-path]').forEach(row => {
+          row.addEventListener('click', () => loadBrowseDir(row.dataset.path));
+        });
+        browseBody.querySelectorAll('.file-row[data-file]').forEach(row => {
+          row.addEventListener('click', () => {
+            browseBody.querySelectorAll('.file-row.selected').forEach(r => r.classList.remove('selected'));
+            row.classList.add('selected');
+            browseSelectedFile = row.dataset.file;
+            browseSelPath.textContent = browseSelectedFile;
+            browseConfirm.disabled = false;
+          });
+          row.addEventListener('dblclick', () => {
+            browseSelectedFile = row.dataset.file;
+            confirmBrowse();
+          });
+        });
+      } catch (err) {
+        browseBody.innerHTML =
+          '<div style="padding:14px 12px;font-size:13px;color:var(--danger,#ef4444)">' +
+          escAttr(err.message) + '</div>';
+      }
+    }
+
+    document.querySelectorAll('[data-browse]').forEach(b => {
+      b.addEventListener('click', () => openBrowseDir(b.dataset.browse));
+    });
+    document.querySelectorAll('[data-browse-file]').forEach(b => {
+      b.addEventListener('click', () => openBrowseFile(b.dataset.browseFile, b.dataset.ext || ''));
+    });
+    document.getElementById('browseClose').addEventListener('click', closeBrowse);
+    document.getElementById('browseCancel').addEventListener('click', closeBrowse);
+    browseConfirm.addEventListener('click', confirmBrowse);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeBrowse();
+    });
+  </script>
+</body>
+</html>

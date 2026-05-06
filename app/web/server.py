@@ -33,13 +33,20 @@ from app.state import (
     transition,
 )
 from app.web.auth import (
+    COOKIE_NAME,
     User,
+    clear_env_cookie,
     clear_session_cookie,
     current_user,
     require_admin,
     require_user,
     set_session_cookie,
 )
+
+
+def _is_test_bypass() -> bool:
+    return os.environ.get("TEST_AUTH_BYPASS", "").strip() == "1"
+
 from app.web.preview_cache import PreviewConsumedError, PreviewNotFoundError, get_cache
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -57,10 +64,40 @@ from app import firebird_config  # noqa: E402
 
 firebird_config.apply_to_env()
 
+# Multi-ambiente: middleware lê cookie `portal_env` e ativa env no contexto
+# para todo o handler. Repos por-ambiente herdam o env via contextvar.
+from app.web.middleware.environment import EnvironmentMiddleware  # noqa: E402
+
+app.add_middleware(EnvironmentMiddleware)
+
+
+# Multi-ambiente: traduz NoActiveEnvironmentError em 412 estruturado para
+# que o cliente HTTP possa redirecionar para /selecionar-ambiente em vez
+# de quebrar com 500.
+from app.persistence.context import NoActiveEnvironmentError  # noqa: E402
+
+
+@app.exception_handler(NoActiveEnvironmentError)
+async def _no_env_handler(_request, _exc):
+    return JSONResponse(
+        status_code=412,
+        content={"detail": "Selecione um ambiente para continuar.", "code": "no_active_env"},
+    )
+
 # Inbound webhooks (Fase 4 — Gestor de Produção status updates)
 from app.web.webhooks import router as webhooks_router  # noqa: E402
 
 app.include_router(webhooks_router)
+
+# Multi-ambiente: rotas de seleção de ambiente.
+from app.web.routes_env_select import router as env_select_router  # noqa: E402
+
+app.include_router(env_select_router)
+
+# Multi-ambiente: CRUD admin.
+from app.web.routes_environments import router as environments_router  # noqa: E402
+
+app.include_router(environments_router)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────
@@ -68,6 +105,36 @@ app.include_router(webhooks_router)
 def _get_cfg() -> dict:
     from app import config as app_config
     return app_config.load()
+
+
+def _request_environment(request: Request) -> dict | None:
+    return getattr(request.state, "environment", None)
+
+
+def _get_cfg_for_request(request: Request) -> dict:
+    """Return legacy config, overridden by selected environment dirs when present."""
+    cfg = _get_cfg()
+    env = _request_environment(request)
+    if env is None:
+        return cfg
+    out = dict(cfg)
+    out["watch_dir"] = env["watch_dir"]
+    out["output_dir"] = env["output_dir"]
+    return out
+
+
+def _firebird_open_for_request(request: Request, conn_mgr):
+    """Return a Firebird connection opener for selected env, or legacy fallback."""
+    env = _request_environment(request)
+    if env is not None:
+        from app.persistence import environments_repo
+        fb_cfg = environments_repo.to_fb_config(env)
+        if not fb_cfg.get("path"):
+            raise HTTPException(status_code=503, detail="FB_DATABASE não configurado")
+        return lambda: conn_mgr.connect_with_config(fb_cfg)
+    if not conn_mgr.is_configured():
+        raise HTTPException(status_code=503, detail="FB_DATABASE não configurado")
+    return conn_mgr.connect
 
 
 def _append_log(cfg: dict, entry: dict) -> None:
@@ -172,8 +239,12 @@ def _build_preview_payload(preview_id: str, source_filename: str, order, check: 
     }
 
 
-def _run_exporters(order, output_path: Path) -> dict:
-    """Execute XLSX + Firebird exporters per export_mode; return summary dict."""
+def _run_exporters(order, output_path: Path, *, env: Optional[dict] = None) -> dict:
+    """Execute XLSX + Firebird exporters per export_mode; return summary dict.
+
+    `env`: ambiente ativo (dict de environments_repo). Se passado, o
+    FirebirdExporter usa as creds do ambiente em vez das env vars FB_*.
+    """
     from app import config as app_config
     from app.exporters.erp_exporter import ERPExporter
     from app.exporters.firebird_exporter import FirebirdExporter
@@ -191,7 +262,7 @@ def _run_exporters(order, output_path: Path) -> dict:
         output_files = [{"name": p.name, "path": str(p)} for p in paths]
 
     if export_mode in ("db", "both"):
-        db_exp = FirebirdExporter()
+        db_exp = FirebirdExporter(env=env)
         db_result = db_exp.export(order)
         db_result_dict = db_result.to_dict()
         fire_codigo = db_result.fire_codigo
@@ -203,7 +274,7 @@ def _run_exporters(order, output_path: Path) -> dict:
     }
 
 
-def _process_file(file_path: Path, output_path: Path) -> dict:
+def _process_file(file_path: Path, output_path: Path, *, env: Optional[dict] = None) -> dict:
     from app.ingestion.file_loader import LoadedFile
     from app.pipeline import process
 
@@ -214,7 +285,7 @@ def _process_file(file_path: Path, output_path: Path) -> dict:
     if not order:
         raise ValueError("Formato não reconhecido ou pedido sem itens")
 
-    exported = _run_exporters(order, output_path)
+    exported = _run_exporters(order, output_path, env=env)
 
     return {
         "order_number": order.header.order_number,
@@ -227,7 +298,15 @@ def _process_file(file_path: Path, output_path: Path) -> dict:
 # ── Routes ────────────────────────────────────────────────────────────────
 
 @app.get("/")
-def index() -> FileResponse:
+def index(request: Request):
+    """Dashboard. Redireciona para login se não autenticado, e para
+    seleção de ambiente se logado mas sem env ativo (cookie portal_env
+    ausente ou inválido — middleware não hidrata request.state.environment).
+    """
+    if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
+        return RedirectResponse(url="/login")
+    if getattr(request.state, "environment", None) is None and not _is_test_bypass():
+        return RedirectResponse(url="/selecionar-ambiente")
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 
@@ -235,6 +314,36 @@ def index() -> FileResponse:
 def login_page() -> FileResponse:
     """Static login form. Talks to /api/auth/login via fetch + sets cookie."""
     return FileResponse(str(STATIC_DIR / "login.html"))
+
+
+@app.get("/selecionar-ambiente")
+def select_environment_page(request: Request):
+    """Página estática para escolher o ambiente ativo. Auth é exigida via fetch."""
+    if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
+        return RedirectResponse(url="/login")
+    return FileResponse(str(STATIC_DIR / "selecionar-ambiente.html"))
+
+
+@app.get("/admin/ambientes")
+def admin_envs_page(request: Request):
+    """Lista CRUD de ambientes (admin-only). API enforce o role."""
+    if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
+        return RedirectResponse(url="/login")
+    return FileResponse(str(STATIC_DIR / "admin-ambientes.html"))
+
+
+@app.get("/admin/ambientes/novo")
+def admin_env_new_page(request: Request):
+    if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
+        return RedirectResponse(url="/login")
+    return FileResponse(str(STATIC_DIR / "admin-ambiente-edit.html"))
+
+
+@app.get("/admin/ambientes/{env_id}")
+def admin_env_edit_page(env_id: str, request: Request):  # noqa: ARG001 — env_id consumed in client
+    if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
+        return RedirectResponse(url="/login")
+    return FileResponse(str(STATIC_DIR / "admin-ambiente-edit.html"))
 
 
 @app.get("/admin/usuarios")
@@ -336,28 +445,31 @@ def logout(
     request: Request,
     user: User = Depends(require_user),  # noqa: ARG001 — enforce auth
 ) -> JSONResponse:
-    """Delete the current session. Cookie cleared on response.
-
-    Reads the cookie directly from request.cookies because the dependency
-    only exposes the validated User, not the raw token.
-    """
+    """Delete the current session. Cookies (sessão e ambiente) cleared on response."""
     token = request.cookies.get("portal_session")
     if token:
         sessions_repo.delete(token)
     response = JSONResponse({"ok": True})
     clear_session_cookie(response)
+    clear_env_cookie(response)
     return response
 
 
 @app.get("/api/auth/me")
-def auth_me(user: User | None = Depends(current_user)) -> JSONResponse:
-    """Whoami — returns the user or null. Used by the SPA to decide whether
-    to render the login page or the main UI.
-    """
+def auth_me(
+    request: Request,
+    user: User | None = Depends(current_user),
+) -> JSONResponse:
+    """Whoami — usuário + ambiente atual. SPA usa pra renderizar shell."""
     if user is None:
-        return JSONResponse({"user": None})
+        return JSONResponse({"user": None, "environment": None})
+    env = getattr(request.state, "environment", None)
+    env_payload = (
+        {"id": env["id"], "slug": env["slug"], "name": env["name"]} if env else None
+    )
     return JSONResponse({
         "user": {"id": user.id, "email": user.email, "role": user.role},
+        "environment": env_payload,
     })
 
 
@@ -862,9 +974,9 @@ def test_firebird_connection(
 
 
 @app.get("/api/pending")
-def list_pending() -> JSONResponse:
+def list_pending(request: Request) -> JSONResponse:
     from app import config as app_config
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
     watch = Path(cfg["watch_dir"])
     imp = app_config.imported_dir(cfg)
 
@@ -901,10 +1013,12 @@ class ImportRequest(BaseModel):
 @app.post("/api/import")
 def import_files(
     body: ImportRequest,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     from app import config as app_config
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
+    request_env = _request_environment(request)
     watch = Path(cfg["watch_dir"])
     imp = app_config.imported_dir(cfg)
 
@@ -935,7 +1049,7 @@ def import_files(
             continue
 
         try:
-            result = _process_file(src, output_path)
+            result = _process_file(src, output_path, env=request_env)
 
             dest = imp / name
             if dest.exists():
@@ -1030,10 +1144,12 @@ class ReimportRequest(BaseModel):
 @app.post("/api/reimport")
 def reimport_file(
     body: ReimportRequest,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     from app import config as app_config
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
+    request_env = _request_environment(request)
     imp = app_config.imported_dir(cfg)
 
     name = Path(body.filename).name
@@ -1056,7 +1172,7 @@ def reimport_file(
         raise HTTPException(status_code=500, detail=f"Erro ao criar diretório de saída: {exc}")
 
     try:
-        result = _process_file(src, output_path)
+        result = _process_file(src, output_path, env=request_env)
         entry = _make_log_entry(
             source_filename=name,
             order_number=result["order_number"],
@@ -1104,7 +1220,15 @@ def download_file(path: str) -> FileResponse:
 
 
 @app.get("/api/fs")
-def browse_filesystem(path: str = "~") -> JSONResponse:
+def browse_filesystem(
+    path: str = "~",
+    file_ext: str = "",
+    _admin: User = Depends(require_admin),
+) -> JSONResponse:
+    """Lista subpastas. Quando `file_ext` (ex: '.fdb') é passado, também lista
+    arquivos com essa extensão na pasta atual — útil para pickers de arquivo.
+    Sem `file_ext`, comportamento histórico (apenas pastas).
+    """
     try:
         p = Path(path).expanduser().resolve()
         while not p.exists() or not p.is_dir():
@@ -1113,16 +1237,36 @@ def browse_filesystem(path: str = "~") -> JSONResponse:
                 p = Path.home()
                 break
             p = parent
-        entries = sorted(
+        dirs = sorted(
             [
-                {"name": e.name, "path": str(e)}
+                {"name": e.name, "path": str(e), "type": "dir"}
                 for e in p.iterdir()
                 if e.is_dir() and not e.name.startswith(".")
             ],
             key=lambda x: x["name"].lower(),
         )
+        files: list[dict] = []
+        if file_ext:
+            ext = file_ext.lower().strip()
+            if not ext.startswith("."):
+                ext = "." + ext
+            files = sorted(
+                [
+                    {"name": e.name, "path": str(e), "type": "file"}
+                    for e in p.iterdir()
+                    if e.is_file()
+                    and e.suffix.lower() == ext
+                    and not e.name.startswith(".")
+                ],
+                key=lambda x: x["name"].lower(),
+            )
         parent = str(p.parent) if p != p.parent else None
-        return JSONResponse({"current": str(p), "parent": parent, "entries": entries})
+        return JSONResponse({
+            "current": str(p),
+            "parent": parent,
+            "entries": dirs,         # mantém shape antigo (só dirs) p/ chamadas legadas
+            "files": files,           # adicional, vazio quando file_ext não foi passado
+        })
     except PermissionError:
         return JSONResponse({"error": "Sem permissão para acessar este diretório"}, status_code=403)
     except Exception as exc:
@@ -1133,6 +1277,7 @@ def browse_filesystem(path: str = "~") -> JSONResponse:
 
 @app.post("/api/preview")
 async def preview_file(
+    request: Request,
     file: UploadFile = File(...),
     _user: User = Depends(require_user),
 ) -> JSONResponse:
@@ -1171,7 +1316,7 @@ async def preview_file(
         )
 
     from app.erp.product_check import check_order
-    check = check_order(order)
+    check = check_order(order, env=_request_environment(request))
     entry = get_cache().put(
         order=order, source_filename=filename, source_bytes=raw, source_ext=ext, check=check,
     )
@@ -1186,13 +1331,14 @@ class PreviewPendingRequest(BaseModel):
 @app.post("/api/preview-pending")
 def preview_pending(
     body: PreviewPendingRequest,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     """Preview a file already in the watch folder (no upload)."""
     from app.ingestion.file_loader import LoadedFile
     from app.pipeline import process
 
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
     watch = Path(cfg["watch_dir"])
 
     name = Path(body.filename).name  # strip path components
@@ -1213,7 +1359,7 @@ def preview_pending(
         raise HTTPException(status_code=422, detail="Formato não reconhecido ou pedido sem itens")
 
     from app.erp.product_check import check_order
-    check = check_order(order)
+    check = check_order(order, env=_request_environment(request))
     entry = get_cache().put(
         order=order,
         source_filename=name,
@@ -1233,12 +1379,13 @@ class CommitRequest(BaseModel):
 @app.post("/api/commit")
 def commit_preview(
     body: CommitRequest,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     """Salva o pedido no portal como 'em revisão'. NÃO grava no Fire.
     O usuário revisa o match na aba Pedidos e só depois clica em 'Cadastrar no Fire'.
     """
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
     try:
         entry = get_cache().consume(body.preview_id)
     except PreviewNotFoundError:
@@ -1332,9 +1479,13 @@ class _FireSendOutcome:
         self.detail = detail
 
 
-def _send_one_to_fire(import_id: str, cfg: dict) -> _FireSendOutcome:
+def _send_one_to_fire(import_id: str, cfg: dict, *, request_env: Optional[dict] = None) -> _FireSendOutcome:
     """Insert a parsed order into Fire. Returns structured outcome (no HTTP exceptions)
     so batch callers can aggregate per-item results.
+
+    `request_env`: ambiente atual hidratado pelo middleware. Quando presente,
+    o FirebirdExporter conecta com as creds do env (multi-ambiente). Quando
+    None, cai no fallback de env vars FB_* (legado).
 
     State mutation contract:
         - On Fire failure: log SEND_TO_FIRE_FAILED (state stays PARSED).
@@ -1380,7 +1531,8 @@ def _send_one_to_fire(import_id: str, cfg: dict) -> _FireSendOutcome:
             output_files = [{"name": p.name, "path": str(p)} for p in paths]
 
         override = entry.get("cliente_override_codigo")
-        result = FirebirdExporter().export(order, override_client_id=override)
+        # Multi-ambiente: usa creds do env atual em vez de env vars FB_*.
+        result = FirebirdExporter(env=request_env).export(order, override_client_id=override)
         db_result = result.to_dict()
 
         if result.skipped or result.fire_codigo is None:
@@ -1452,10 +1604,12 @@ def _send_one_to_fire(import_id: str, cfg: dict) -> _FireSendOutcome:
 @app.post("/api/imported/{import_id}/send-to-fire")
 def send_to_fire(
     import_id: str,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
-    cfg = _get_cfg()
-    outcome = _send_one_to_fire(import_id, cfg)
+    cfg = _get_cfg_for_request(request)
+    request_env = getattr(request.state, "environment", None)
+    outcome = _send_one_to_fire(import_id, cfg, request_env=request_env)
     if not outcome.ok:
         raise HTTPException(status_code=outcome.http_status, detail=outcome.detail)
     return JSONResponse({
@@ -1533,9 +1687,10 @@ def _export_one_xlsx(import_id: str, cfg: dict) -> _XlsxExportOutcome:
 @app.post("/api/imported/{import_id}/export-xlsx")
 def export_xlsx(
     import_id: str,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
     outcome = _export_one_xlsx(import_id, cfg)
     if not outcome.ok:
         raise HTTPException(status_code=outcome.http_status, detail=outcome.detail)
@@ -1553,6 +1708,7 @@ class BatchSendRequest(BaseModel):
 @app.post("/api/batch/send-to-fire")
 def batch_send_to_fire(
     body: BatchSendRequest,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     """Send multiple parsed orders to Fire. Tolerates partial failures — each id is
@@ -1562,12 +1718,13 @@ def batch_send_to_fire(
     if len(body.ids) > 100:
         raise HTTPException(status_code=400, detail="Máximo 100 pedidos por lote")
 
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
+    request_env = getattr(request.state, "environment", None)
     results: list[dict] = []
     ok_count = 0
     fail_count = 0
     for import_id in body.ids:
-        outcome = _send_one_to_fire(import_id, cfg)
+        outcome = _send_one_to_fire(import_id, cfg, request_env=request_env)
         if outcome.ok:
             ok_count += 1
             results.append({
@@ -1596,6 +1753,7 @@ def batch_send_to_fire(
 @app.post("/api/batch/export-xlsx")
 def batch_export_xlsx(
     body: BatchSendRequest,
+    request: Request,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     """Generate XLSX for multiple parsed orders WITHOUT touching Firebird."""
@@ -1604,7 +1762,7 @@ def batch_export_xlsx(
     if len(body.ids) > 100:
         raise HTTPException(status_code=400, detail="Máximo 100 pedidos por lote")
 
-    cfg = _get_cfg()
+    cfg = _get_cfg_for_request(request)
     results: list[dict] = []
     ok_count = 0
     fail_count = 0
@@ -1829,6 +1987,7 @@ def cancel_import(
 @app.get("/api/clientes/search")
 def search_clientes(
     q: str,
+    request: Request,
     limit: int = 20,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
@@ -1847,17 +2006,15 @@ def search_clientes(
     limit = max(1, min(int(limit), 50))
 
     conn_mgr = FirebirdConnection()
-    if not conn_mgr.is_configured():
-        raise HTTPException(status_code=503, detail="FB_DATABASE não configurado")
-
     razao_pattern = f"%{needle.upper()}%"
     cnpj_digits = re.sub(r"\D", "", needle)
     # Sentinel pattern that LIKE never matches: avoids OR-injection of
     # rows when the query has no digits at all.
     cnpj_pattern = f"%{cnpj_digits}%" if cnpj_digits else "%__never_matches__%"
+    open_conn = _firebird_open_for_request(request, conn_mgr)
 
     try:
-        with conn_mgr.connect() as conn:
+        with open_conn() as conn:
             cur = conn.cursor()
             cur.execute(queries.SEARCH_CLIENTS, (razao_pattern, cnpj_pattern))
             rows = cur.fetchall()
@@ -1887,6 +2044,7 @@ class ClienteOverrideRequest(BaseModel):
 def override_cliente(
     import_id: str,
     body: ClienteOverrideRequest,
+    request: Request,
     user: User = Depends(require_user),
 ) -> JSONResponse:
     """Aplica seleção manual de cliente a um pedido em revisão.
@@ -1912,11 +2070,9 @@ def override_cliente(
         )
 
     conn_mgr = FirebirdConnection()
-    if not conn_mgr.is_configured():
-        raise HTTPException(status_code=503, detail="FB_DATABASE não configurado")
-
+    open_conn = _firebird_open_for_request(request, conn_mgr)
     try:
-        with conn_mgr.connect() as conn:
+        with open_conn() as conn:
             cur = conn.cursor()
             cur.execute(queries.FIND_CLIENT_BY_CODIGO, (body.cliente_codigo,))
             row = cur.fetchone()

@@ -39,8 +39,9 @@ schema_report.txt
 *.sqlite3
 *.db
 
-# Plan files
+# Plan files (ad-hoc); excecao: docs/superpowers/plans/ é documentação
 plans/
+!docs/superpowers/plans/
 
 # Local UI-editable config + Fernet key (NEVER commit)
 app/firebird.json
