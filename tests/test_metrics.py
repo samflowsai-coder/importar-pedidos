@@ -105,3 +105,14 @@ def test_webhook_counter_increments():
     webhook_received_total.labels(provider="gestor").inc()
     after = webhook_received_total.labels(provider="gestor")._value.get()
     assert after == before + 1
+
+
+def test_product_sync_metrics_exist():
+    from app.observability import metrics
+    for m in (
+        metrics.portal_product_sync_duration_seconds,
+        metrics.portal_product_sync_items_total,
+        metrics.portal_product_sync_errors_total,
+        metrics.portal_product_sync_last_success_timestamp,
+    ):
+        assert m is not None

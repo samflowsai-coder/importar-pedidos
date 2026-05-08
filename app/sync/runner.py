@@ -8,10 +8,12 @@ per-env DB writes (state, run records) work.
 """
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any
 
 from app.integrations.flowpcp.client import FlowPCPClient, FlowPCPClientError
+from app.observability import metrics
 from app.persistence import environments_repo
 from app.persistence.context import active_env
 from app.sync import sync_state_repo
@@ -37,6 +39,40 @@ def _new_sync_id() -> str:
 
 
 def run(*, env: dict[str, Any], trigger: Trigger) -> RunResult:
+    """Public entry point — wraps _run_inner with metrics emission."""
+    start = time.perf_counter()
+    try:
+        result = _run_inner(env=env, trigger=trigger)
+    except Exception:
+        metrics.portal_product_sync_errors_total.labels(
+            env=env["slug"], reason="crash",
+        ).inc()
+        raise
+    duration = time.perf_counter() - start
+    metrics.portal_product_sync_duration_seconds.labels(
+        env=env["slug"], status=result.status.value,
+    ).observe(duration)
+    metrics.portal_product_sync_items_total.labels(
+        env=env["slug"], kind="produto", status=result.status.value,
+    ).inc(result.delta_count_produtos)
+    metrics.portal_product_sync_items_total.labels(
+        env=env["slug"], kind="componente", status=result.status.value,
+    ).inc(result.delta_count_componentes)
+    metrics.portal_product_sync_items_total.labels(
+        env=env["slug"], kind="tombstone", status=result.status.value,
+    ).inc(result.delta_count_tombstones)
+    for err in result.errors:
+        metrics.portal_product_sync_errors_total.labels(
+            env=env["slug"], reason=err.reason,
+        ).inc()
+    if result.status.value in ("applied", "partial"):
+        metrics.portal_product_sync_last_success_timestamp.labels(
+            env=env["slug"],
+        ).set(time.time())
+    return result
+
+
+def _run_inner(*, env: dict[str, Any], trigger: Trigger) -> RunResult:
     """Execute one sync run for `env`. Returns RunResult (does not raise on
     sync errors — those are surfaced in `result.status` and `result.errors`)."""
     flow_cfg = environments_repo.to_flowpcp_config(env)

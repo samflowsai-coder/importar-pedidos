@@ -39,6 +39,31 @@ webhook_received_total: Counter = Counter(
 )
 
 
+portal_product_sync_duration_seconds: Histogram = Histogram(
+    "portal_product_sync_duration_seconds",
+    "Duration of one product sync run",
+    labelnames=("env", "status"),
+)
+
+portal_product_sync_items_total: Counter = Counter(
+    "portal_product_sync_items_total",
+    "Items processed by product sync",
+    labelnames=("env", "kind", "status"),
+)
+
+portal_product_sync_errors_total: Counter = Counter(
+    "portal_product_sync_errors_total",
+    "Total error events from product sync",
+    labelnames=("env", "reason"),
+)
+
+portal_product_sync_last_success_timestamp: Gauge = Gauge(
+    "portal_product_sync_last_success_timestamp",
+    "Unix timestamp of the last successful sync per env",
+    labelnames=("env",),
+)
+
+
 def update_outbox_metrics() -> None:
     """Query todas as DBs de ambiente e atualiza outbox Gauges (soma global).
 
