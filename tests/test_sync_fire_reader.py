@@ -119,3 +119,24 @@ def test_read_components_filters_invalid_rows():
         comps = read_components_snapshot({"path": "/tmp/x.fdb"})
     codigos = {c.codigo for c in comps}
     assert codigos == {1, 5}
+
+
+def test_read_products_empty_table_returns_empty_list():
+    cur = _fake_cursor({
+        SQL_SELECT_PRODUTOS: [],
+        SQL_SELECT_PRODUTOS_KIT: [],
+    })
+    fb_mock = MagicMock()
+    fb_mock.connect_with_config.return_value = _fake_conn(cur)
+    with patch("app.sync.fire_reader.FirebirdConnection", return_value=fb_mock):
+        rows = read_products_snapshot({"path": "/tmp/x.fdb"})
+    assert rows == []
+
+
+def test_read_components_empty_table_returns_empty_list():
+    cur = _fake_cursor({SQL_SELECT_PRODUTOS_KIT: []})
+    fb_mock = MagicMock()
+    fb_mock.connect_with_config.return_value = _fake_conn(cur)
+    with patch("app.sync.fire_reader.FirebirdConnection", return_value=fb_mock):
+        comps = read_components_snapshot({"path": "/tmp/x.fdb"})
+    assert comps == []

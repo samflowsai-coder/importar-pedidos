@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import ValidationError
+
 from app.erp.connection import FirebirdConnection
 from app.sync.models import ComponentRow, ProductRow
 from app.utils.logger import logger
@@ -68,7 +70,7 @@ def read_products_snapshot(fb_cfg: dict[str, Any]) -> list[ProductRow]:
                 inativo=(str(inativo).strip().lower() == "sim"),
                 is_kit=(str(kit_ativo).strip().lower() == "sim") or (int(seq) in pais),
             ))
-        except Exception as exc:  # noqa: BLE001
+        except (ValidationError, ValueError, OverflowError) as exc:
             logger.warning(f"sync.fire_reader: SEQ={seq} skipped: {exc}")
     return out
 
@@ -99,6 +101,6 @@ def read_components_snapshot(fb_cfg: dict[str, Any]) -> list[ComponentRow]:
                     codproduto=int(filho),
                     qtd=qtd_f,
                 ))
-            except Exception as exc:  # noqa: BLE001
+            except (ValidationError, ValueError, OverflowError) as exc:
                 logger.warning(f"sync.fire_reader: PRODUTOS_KIT.CODIGO={codigo} skipped: {exc}")
     return out
