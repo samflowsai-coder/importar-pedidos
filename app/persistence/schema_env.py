@@ -83,6 +83,33 @@ CREATE TABLE IF NOT EXISTS outbox (
     sent_at          TEXT,
     FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS product_sync_state (
+    seq             INTEGER PRIMARY KEY,
+    content_hash    TEXT NOT NULL,
+    last_synced_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS component_sync_state (
+    codigo          INTEGER PRIMARY KEY,
+    content_hash    TEXT NOT NULL,
+    last_synced_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS product_sync_runs (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    sync_id                  TEXT NOT NULL UNIQUE,
+    trigger                  TEXT NOT NULL,
+    started_at               TEXT NOT NULL,
+    finished_at              TEXT,
+    status                   TEXT NOT NULL,
+    delta_count_produtos     INTEGER NOT NULL DEFAULT 0,
+    delta_count_componentes  INTEGER NOT NULL DEFAULT 0,
+    delta_count_tombstones   INTEGER NOT NULL DEFAULT 0,
+    applied_count            INTEGER NOT NULL DEFAULT 0,
+    errors_json              TEXT,
+    trace_id                 TEXT
+);
 """
 
 INDEXES_SQL = """
@@ -107,6 +134,9 @@ CREATE INDEX IF NOT EXISTS idx_outbox_import_id ON outbox(import_id, created_at 
 CREATE INDEX IF NOT EXISTS idx_imports_fire_poll
     ON imports(portal_status, production_status, fire_status_polled_at)
     WHERE fire_codigo IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS ix_product_sync_runs_started
+    ON product_sync_runs(started_at DESC);
 """
 
 # Schema novo, sem legados — vazio.
