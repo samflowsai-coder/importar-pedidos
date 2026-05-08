@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS component_sync_state (
 
 CREATE TABLE IF NOT EXISTS product_sync_runs (
     id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    environment_id           TEXT NOT NULL,
     sync_id                  TEXT NOT NULL UNIQUE,
     trigger                  TEXT NOT NULL,
     started_at               TEXT NOT NULL,
@@ -135,7 +136,7 @@ CREATE INDEX IF NOT EXISTS idx_imports_fire_poll
     ON imports(portal_status, production_status, fire_status_polled_at)
     WHERE fire_codigo IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS ix_product_sync_runs_started
+CREATE INDEX IF NOT EXISTS idx_product_sync_runs_started
     ON product_sync_runs(started_at DESC);
 """
 
