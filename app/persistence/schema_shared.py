@@ -93,5 +93,21 @@ CREATE INDEX IF NOT EXISTS idx_inbound_received_at  ON inbound_idempotency(recei
 CREATE INDEX IF NOT EXISTS idx_inbound_import_id    ON inbound_idempotency(import_id);
 """
 
-# Migrações de coluna para shared.db (vazio por ora — schema novo).
-COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = ()
+# Migrações de coluna para shared.db.
+COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    # FlowPCP product-sync integration (per environment)
+    ("environments", "flowpcp_enabled",
+        "ALTER TABLE environments ADD COLUMN flowpcp_enabled INTEGER NOT NULL DEFAULT 0"),
+    ("environments", "flowpcp_base_url",
+        "ALTER TABLE environments ADD COLUMN flowpcp_base_url TEXT"),
+    ("environments", "flowpcp_tenant_id",
+        "ALTER TABLE environments ADD COLUMN flowpcp_tenant_id TEXT"),
+    ("environments", "flowpcp_api_key_enc",
+        "ALTER TABLE environments ADD COLUMN flowpcp_api_key_enc TEXT"),
+    ("environments", "flowpcp_circuit_open",
+        "ALTER TABLE environments ADD COLUMN flowpcp_circuit_open INTEGER NOT NULL DEFAULT 0"),
+    ("environments", "flowpcp_last_failure_at",
+        "ALTER TABLE environments ADD COLUMN flowpcp_last_failure_at TEXT"),
+    ("environments", "flowpcp_consecutive_failures",
+        "ALTER TABLE environments ADD COLUMN flowpcp_consecutive_failures INTEGER NOT NULL DEFAULT 0"),
+)
