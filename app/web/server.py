@@ -99,6 +99,11 @@ from app.web.routes_environments import router as environments_router  # noqa: E
 
 app.include_router(environments_router)
 
+# FlowPCP product-sync admin routes.
+from app.web.routes_produtos_sync import router as produtos_sync_router  # noqa: E402
+
+app.include_router(produtos_sync_router)
+
 
 # ── Internal helpers ──────────────────────────────────────────────────────
 
