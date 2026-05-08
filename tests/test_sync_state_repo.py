@@ -1,6 +1,7 @@
 """SQLite state for product sync (per-environment)."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -127,8 +128,7 @@ def test_record_run_finish_with_errors_persists_json(env_active):
         ),
     )
     runs = sync_state_repo.list_runs(limit=10)
-    import json as _json
-    errs = _json.loads(runs[0]["errors_json"])
+    errs = json.loads(runs[0]["errors_json"])
     assert errs == [{"codigo": "42", "reason": "componente_filho_inexistente"}]
 
 

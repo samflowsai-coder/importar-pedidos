@@ -80,6 +80,14 @@ def commit_states(
 
 
 def record_run_start(*, sync_id: str, trigger: Trigger, trace_id: str | None) -> None:
+    """Insert a `'running'` row into product_sync_runs.
+
+    If the process crashes between `record_run_start` and `record_run_finish`,
+    the row remains as `'running'` indefinitely. Today this is harmless because
+    `consecutive_failure_count` only inspects `'failed'` rows. Future readers
+    that count `'running'` rows must handle this case (e.g., treat any
+    `'running'` row older than N minutes as stale).
+    """
     cur = env_context.current()
     if cur is None:
         raise RuntimeError("record_run_start: no active environment")
@@ -93,6 +101,7 @@ def record_run_start(*, sync_id: str, trigger: Trigger, trace_id: str | None) ->
 
 
 def record_run_finish(*, sync_id: str, result: RunResult) -> None:
+    """Update an existing run row with final status, counters, and any errors."""
     errors_json = json.dumps([e.model_dump() for e in result.errors]) if result.errors else None
     with db.connect() as conn:
         conn.execute(
@@ -130,7 +139,13 @@ def list_runs(*, limit: int = 50) -> list[dict]:
 
 def consecutive_failure_count() -> int:
     """Counts consecutive 'failed' runs from the most recent backwards.
-    Used by the circuit breaker."""
+
+    Inspects up to the last 20 runs only — sufficient for any practical
+    circuit-breaker threshold (we open the circuit at 5 consecutive failures).
+    If a circuit-breaker threshold ever exceeds 20, raise the LIMIT here.
+
+    Used by the circuit breaker.
+    """
     with db.connect() as conn:
         rows = conn.execute(
             "SELECT status FROM product_sync_runs ORDER BY started_at DESC, id DESC LIMIT 20"
