@@ -245,6 +245,34 @@
         </label>
       </fieldset>
 
+      <fieldset>
+        <legend>FlowPCP (sync de produtos)</legend>
+        <label style="display:flex;align-items:center;gap:.6rem;margin-bottom:1rem;cursor:pointer">
+          <input type="checkbox" name="flowpcp_enabled" id="flowpcp_enabled" style="width:auto">
+          <span style="margin:0">Habilitado</span>
+        </label>
+        <label>
+          <span>URL base FlowPCP</span>
+          <input type="url" name="flowpcp_base_url" id="flowpcp_base_url"
+                 placeholder="https://flowpcp.fly.dev">
+        </label>
+        <label>
+          <span>Tenant ID (UUID do FlowPCP)</span>
+          <input type="text" name="flowpcp_tenant_id" id="flowpcp_tenant_id"
+                 pattern="[0-9a-fA-F-]{36}" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+        </label>
+        <label>
+          <span>API Key</span>
+          <input type="password" name="flowpcp_api_key" id="flowpcp_api_key"
+                 placeholder="pp_live_…" autocomplete="new-password">
+          <small class="hint" style="margin-top:.4rem">Deixe em branco para manter a chave atual.</small>
+        </label>
+        <div style="display:flex;align-items:center;gap:.8rem;margin-top:.25rem">
+          <button type="button" id="flowpcp-test-btn" class="btn btn-secondary">Testar conexão FlowPCP</button>
+          <span id="flowpcp-test-status" aria-live="polite" style="font-size:.85em"></span>
+        </div>
+      </fieldset>
+
       <div class="actions">
         <button type="submit" class="btn btn-primary">Salvar</button>
         <button type="button" id="btn-test" class="btn btn-secondary" hidden>Testar conexão</button>
@@ -311,8 +339,10 @@
         if (!env) return;
         for (const k of Object.keys(env)) {
           const inp = f.elements[k];
-          if (inp && k !== 'fb_password') inp.value = env[k] ?? '';
+          if (inp && k !== 'fb_password' && k !== 'flowpcp_api_key') inp.value = env[k] ?? '';
         }
+        // Checkbox precisa de tratamento especial (não é value)
+        document.getElementById('flowpcp_enabled').checked = !!env.flowpcp_enabled;
         f.elements['slug'].readOnly = true;
       }).catch(e => showError(e.message));
     }
@@ -325,6 +355,10 @@
       if (data.slug) data.slug = String(data.slug).toLowerCase().trim();
       // Senha em PATCH: vazio = manter atual (None no payload)
       if (isEdit && data.fb_password === '') delete data.fb_password;
+      // FlowPCP: checkbox ausente do FormData quando desmarcado — normalizar para bool
+      data.flowpcp_enabled = document.getElementById('flowpcp_enabled').checked;
+      // API key em branco = manter atual (None no payload)
+      if (data.flowpcp_api_key === '') delete data.flowpcp_api_key;
       const url = isEdit ? '/api/admin/environments/' + envId : '/api/admin/environments';
       const method = isEdit ? 'PATCH' : 'POST';
       const r = await fetch(url, {
@@ -368,6 +402,41 @@
       const r = await fetch('/api/admin/environments/' + envId, { method: 'DELETE' });
       if (r.ok) { location.href = '/admin/ambientes'; return; }
       showError('Falha ao desativar (' + r.status + ')');
+    });
+
+    // ── FlowPCP test connection ────────────────────────────────────
+    const flowpcpTestBtn = document.getElementById('flowpcp-test-btn');
+    const flowpcpTestStatus = document.getElementById('flowpcp-test-status');
+    const STATE_STYLES = {
+      pending: 'color:var(--text-muted)',
+      ok:      'color:var(--success,#22c55e)',
+      error:   'color:var(--danger,#ef4444)',
+    };
+    flowpcpTestBtn.addEventListener('click', async () => {
+      if (!envId) {
+        flowpcpTestStatus.textContent = 'Salve o ambiente antes de testar.';
+        flowpcpTestStatus.style.cssText = STATE_STYLES.error;
+        return;
+      }
+      flowpcpTestStatus.textContent = 'Testando…';
+      flowpcpTestStatus.style.cssText = STATE_STYLES.pending;
+      flowpcpTestBtn.disabled = true;
+      try {
+        const r = await fetch('/api/admin/environments/' + envId + '/flowpcp/test', { method: 'POST' });
+        const data = await r.json();
+        if (data.ok) {
+          flowpcpTestStatus.textContent = 'OK — conexão verificada';
+          flowpcpTestStatus.style.cssText = STATE_STYLES.ok;
+        } else {
+          flowpcpTestStatus.textContent = 'Falhou: ' + (data.reason || 'verifique a config');
+          flowpcpTestStatus.style.cssText = STATE_STYLES.error;
+        }
+      } catch (err) {
+        flowpcpTestStatus.textContent = 'Erro: ' + err.message;
+        flowpcpTestStatus.style.cssText = STATE_STYLES.error;
+      } finally {
+        flowpcpTestBtn.disabled = false;
+      }
     });
 
     // ── Filesystem browser (pastas e arquivos) ─────────────────────

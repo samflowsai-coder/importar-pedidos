@@ -167,3 +167,38 @@ def test_test_endpoint_validates_existing_paths(setup):
     assert body["output_dir_ok"] is True
     # FB ainda falha porque o .fdb não existe
     assert body["firebird_ok"] is False
+
+
+def test_flowpcp_test_endpoint_incomplete_config(setup):
+    """Ambiente sem config FlowPCP retorna ok=False + reason=incomplete_config."""
+    c = _client()
+    env_id = c.post("/api/admin/environments", json={
+        "slug": "fp1", "name": "FP1",
+        "watch_dir": str(setup), "output_dir": str(setup),
+        "fb_path": "/tmp/x.fdb",
+    }).json()["id"]
+    r = c.post(f"/api/admin/environments/{env_id}/flowpcp/test")
+    assert r.status_code == 200
+    assert r.json() == {"ok": False, "reason": "incomplete_config"}
+
+
+def test_flowpcp_test_endpoint_calls_health(setup):
+    """Com config completa, delega ao FlowPCPClient.health() e devolve resultado."""
+    from unittest.mock import patch
+    c = _client()
+    env_id = c.post("/api/admin/environments", json={
+        "slug": "fp2", "name": "FP2",
+        "watch_dir": str(setup), "output_dir": str(setup),
+        "fb_path": "/tmp/x.fdb",
+    }).json()["id"]
+    environments_repo.set_flowpcp_config(
+        env_id=env_id, enabled=True,
+        base_url="https://flowpcp.test",
+        tenant_id="00000000-0000-0000-0000-000000000002",
+        api_key="pp_live_testkey",
+    )
+    with patch("app.web.routes_environments.FlowPCPClient") as ClientMock:
+        ClientMock.return_value.health.return_value = True
+        r = c.post(f"/api/admin/environments/{env_id}/flowpcp/test")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
