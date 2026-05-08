@@ -29,6 +29,9 @@ _PUBLIC_FIELDS = (
     "id", "slug", "name", "watch_dir", "output_dir",
     "fb_path", "fb_host", "fb_port", "fb_user", "fb_charset",
     "is_active", "created_at", "updated_at",
+    "flowpcp_enabled", "flowpcp_base_url", "flowpcp_tenant_id",
+    "flowpcp_circuit_open", "flowpcp_last_failure_at",
+    "flowpcp_consecutive_failures",
 )
 
 
@@ -194,3 +197,112 @@ def to_fb_config(env: dict[str, Any]) -> dict[str, Any]:
         "charset": env["fb_charset"],
         "password": get_password(env["id"]) or "",
     }
+
+
+# ---------------------------------------------------------------------------
+# FlowPCP integration helpers
+# ---------------------------------------------------------------------------
+
+def set_flowpcp_config(
+    *,
+    env_id: str,
+    enabled: bool,
+    base_url: str | None,
+    tenant_id: str | None,
+    api_key: str | None,
+) -> dict[str, Any]:
+    """Updates FlowPCP integration fields. api_key, if provided, is encrypted.
+    Pass api_key=None to keep existing key (does NOT nullify)."""
+    now = _now()
+    with router.shared_connect() as conn:
+        if api_key is not None:
+            enc = secret_store.encrypt(api_key)
+            conn.execute(
+                """UPDATE environments SET
+                     flowpcp_enabled = ?,
+                     flowpcp_base_url = ?,
+                     flowpcp_tenant_id = ?,
+                     flowpcp_api_key_enc = ?,
+                     updated_at = ?
+                   WHERE id = ?""",
+                (1 if enabled else 0, base_url, tenant_id, enc, now, env_id),
+            )
+        else:
+            conn.execute(
+                """UPDATE environments SET
+                     flowpcp_enabled = ?,
+                     flowpcp_base_url = ?,
+                     flowpcp_tenant_id = ?,
+                     updated_at = ?
+                   WHERE id = ?""",
+                (1 if enabled else 0, base_url, tenant_id, now, env_id),
+            )
+    result = get(env_id)
+    if result is None:
+        raise ValueError(f"env not found: {env_id}")
+    return result
+
+
+def get_flowpcp_secret(env_id: str) -> str | None:
+    """Returns the decrypted FlowPCP API key, or None if unset."""
+    with router.shared_connect() as conn:
+        row = conn.execute(
+            "SELECT flowpcp_api_key_enc FROM environments WHERE id = ?",
+            (env_id,),
+        ).fetchone()
+    if row is None or row["flowpcp_api_key_enc"] is None:
+        return None
+    return secret_store.decrypt(row["flowpcp_api_key_enc"])
+
+
+def to_flowpcp_config(env: dict[str, Any]) -> dict[str, Any]:
+    """Materialize a FlowPCP config dict from a public env row.
+
+    Returns dict with: enabled (bool), base_url, tenant_id, api_key (decrypted).
+    api_key is None when enabled is False (avoids unnecessary decrypt).
+    """
+    enabled = bool(env.get("flowpcp_enabled"))
+    api_key = get_flowpcp_secret(env["id"]) if enabled else None
+    return {
+        "enabled": enabled,
+        "base_url": env.get("flowpcp_base_url"),
+        "tenant_id": env.get("flowpcp_tenant_id"),
+        "api_key": api_key,
+    }
+
+
+def mark_flowpcp_failure(*, env_id: str, threshold: int = 5) -> None:
+    """Increment consecutive failures; open circuit if >= threshold."""
+    now = _now()
+    with router.shared_connect() as conn:
+        conn.execute(
+            """UPDATE environments SET
+                 flowpcp_consecutive_failures = flowpcp_consecutive_failures + 1,
+                 flowpcp_last_failure_at = ?,
+                 flowpcp_circuit_open = CASE
+                     WHEN flowpcp_consecutive_failures + 1 >= ? THEN 1
+                     ELSE flowpcp_circuit_open
+                 END,
+                 updated_at = ?
+               WHERE id = ?""",
+            (now, threshold, now, env_id),
+        )
+
+
+def mark_flowpcp_success(*, env_id: str) -> None:
+    """Reset failure counters and close the circuit."""
+    now = _now()
+    with router.shared_connect() as conn:
+        conn.execute(
+            """UPDATE environments SET
+                 flowpcp_consecutive_failures = 0,
+                 flowpcp_circuit_open = 0,
+                 updated_at = ?
+               WHERE id = ?""",
+            (now, env_id),
+        )
+
+
+def reset_flowpcp_circuit(env_id: str) -> None:
+    """Manual reset by admin (e.g. after fixing config)."""
+    mark_flowpcp_success(env_id=env_id)
