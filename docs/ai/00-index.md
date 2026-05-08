@@ -22,6 +22,7 @@
 | Login, sessão, cookie, proteger rota nova com auth, criar usuário via CLI | `auth` | `modules/auth.md` |
 | Rate-limit, token bucket, secrets abstraction, bcrypt, HMAC | `security` | `modules/security.md` |
 | Métricas Prometheus (/metrics), trace_id, observabilidade | `observability` | `modules/observability.md` |
+| Sync de produtos Portal → FlowPCP, scheduler, circuit breaker, hash delta | `sync` | `modules/sync.md` |
 | Worker APScheduler, drain_outbox, poll_fire, retention, backup | `worker` | `modules/worker.md` |
 | LLM fallback (OpenRouter / Gemini / Haiku) | `llm` | `modules/llm.md` |
 | Geração de XLSX, split por loja, naming de arquivo | `exporters` | `modules/exporters.md` |
@@ -49,6 +50,7 @@
 | worker | `tests/test_worker_drain_outbox.py`, `tests/test_worker_poll_fire.py`, `tests/test_retention.py` | `.venv/bin/pytest tests/test_worker_drain_outbox.py tests/test_worker_poll_fire.py tests/test_retention.py -v` |
 | llm | `tests/test_smoke_llm_fallback.py`, `tests/test_outbound_client.py` | `.venv/bin/pytest tests/test_smoke_llm_fallback.py tests/test_outbound_client.py -v` |
 | web | `tests/test_web_server.py`, `tests/test_preview_cache.py` | `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py -v` |
+| sync | `tests/test_sync_*.py`, `tests/test_flowpcp_client.py`, `tests/test_admin_produtos_sync_routes.py`, `tests/test_environments_repo_flowpcp.py` | `.venv/bin/pytest tests/test_sync_*.py tests/test_flowpcp_client.py tests/test_admin_produtos_sync_routes.py tests/test_environments_repo_flowpcp.py -v` |
 | Suite completa (antes de commit) | todos | `.venv/bin/pytest tests/ -v` |
 
 > **erp / exporters / pipeline não têm testes isolados hoje.** Para mudanças nesses domínios, validar manualmente com sample real + rodar suite completa.
