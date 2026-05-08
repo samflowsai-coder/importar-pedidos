@@ -50,12 +50,10 @@ class ComponentRow(BaseModel):
 
 
 class ProductDeltaItem(BaseModel):
-    """An upsert (full payload) for a product. Tombstones are tracked separately
-    in `SyncDelta.tombstones` to keep the type single-purpose."""
+    """An upsert for a product. Tombstones are tracked separately in SyncDelta.tombstones."""
 
     seq: int
-    is_tombstone: bool = False
-    payload: dict | None = None  # canonical dict; None if tombstone
+    payload: dict
 
 
 class ComponentDeltaItem(BaseModel):
@@ -87,6 +85,7 @@ class RunResult(BaseModel):
     delta_count_produtos: int = 0
     delta_count_componentes: int = 0
     delta_count_tombstones: int = 0
+    delta_count_component_tombstones: int = 0
     applied_count: int = 0
     errors: list[SyncError] = Field(default_factory=list)
     trace_id: str | None = None

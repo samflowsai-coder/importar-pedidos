@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from app.sync.models import (
     ComponentRow,
+    ProductDeltaItem,
     ProductRow,
     RunResult,
     RunStatus,
@@ -76,3 +77,15 @@ def test_run_result_carries_counters():
         errors=[],
     )
     assert r.applied_count == 4
+    assert r.delta_count_component_tombstones == 0  # default
+
+
+def test_product_delta_item_requires_payload():
+    with pytest.raises(ValidationError):
+        ProductDeltaItem(seq=1)  # payload is required
+
+
+def test_product_delta_item_accepts_payload():
+    item = ProductDeltaItem(seq=42, payload={"descricao": "TENIS ABC"})
+    assert item.seq == 42
+    assert item.payload["descricao"] == "TENIS ABC"
