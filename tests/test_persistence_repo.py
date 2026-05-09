@@ -213,16 +213,158 @@ def test_schema_includes_sem_preco_ack_columns(sqlite_tmp):
 
 
 def test_column_migration_is_idempotent(tmp_path):
-    """Rodar _ensure_schema duas vezes na mesma DB não deve falhar."""
-    from app.persistence import db, schema_env
+    """_ensure_schema executa COLUMN_MIGRATIONS em DB legada e é idempotente.
+
+    Simula uma DB de produção existente (sem as 3 colunas sem_preco_ack_*),
+    confirma que _ensure_schema as adiciona na primeira chamada, e que uma
+    segunda chamada (após limpar o cache) não levanta erro (ALTER TABLE IF NOT
+    EXISTS não existe no SQLite — a própria _apply_column_migrations checa
+    via PRAGMA table_info antes de cada ALTER).
+    """
+    import sqlite3
+
+    from app.persistence import schema_env
+    from app.persistence import router as persistence_router
     from app.persistence.router import _ensure_schema
 
-    db_path = tmp_path / "app_state_test.db"
-    _ensure_schema(db_path, schema_env)
-    _ensure_schema(db_path, schema_env)  # segunda vez é o teste real
+    # 1. Criar DB legada com schema antigo — todas as colunas atuais EXCETO as 3
+    #    novas de ack (simula DB de produção antes da migração).
+    db_path = tmp_path / "app_state_legacy.db"
+    legacy_conn = sqlite3.connect(db_path)
+    legacy_conn.executescript(
+        """
+        CREATE TABLE imports (
+            id                       TEXT PRIMARY KEY,
+            environment_id           TEXT NOT NULL,
+            source_filename          TEXT NOT NULL,
+            imported_at              TEXT NOT NULL,
+            order_number             TEXT,
+            customer_cnpj            TEXT,
+            customer_name            TEXT,
+            fire_codigo              INTEGER,
+            snapshot_json            TEXT,
+            check_json               TEXT,
+            output_files_json        TEXT,
+            db_result_json           TEXT,
+            status                   TEXT NOT NULL,
+            error                    TEXT,
+            portal_status            TEXT NOT NULL DEFAULT 'sent_to_fire',
+            sent_to_fire_at          TEXT,
+            production_status        TEXT NOT NULL DEFAULT 'none',
+            released_at              TEXT,
+            released_by              TEXT,
+            trace_id                 TEXT,
+            state_version            INTEGER NOT NULL DEFAULT 1,
+            gestor_order_id          TEXT,
+            apontae_order_id         TEXT,
+            cliente_override_codigo  INTEGER,
+            cliente_override_razao   TEXT,
+            cliente_override_at      TEXT,
+            cliente_override_by      TEXT,
+            fire_status_last_seen    TEXT,
+            fire_status_polled_at    TEXT,
+            file_sha256              TEXT,
+            original_path            TEXT
+        );
 
-    import sqlite3
-    conn = sqlite3.connect(db_path)
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(imports)").fetchall()}
-    conn.close()
-    assert {"sem_preco_ack_by", "sem_preco_ack_at", "sem_preco_ack_items"} <= cols
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            environment_id TEXT NOT NULL,
+            import_id      TEXT NOT NULL,
+            event_type     TEXT NOT NULL,
+            detail_json    TEXT,
+            created_at     TEXT NOT NULL,
+            FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS order_lifecycle_events (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            environment_id TEXT NOT NULL,
+            import_id      TEXT NOT NULL,
+            event_type     TEXT NOT NULL,
+            source         TEXT NOT NULL,
+            payload_json   TEXT,
+            trace_id       TEXT,
+            occurred_at    TEXT NOT NULL,
+            ingested_at    TEXT NOT NULL,
+            FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS outbox (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            environment_id   TEXT NOT NULL,
+            import_id        TEXT NOT NULL,
+            target           TEXT NOT NULL,
+            endpoint         TEXT NOT NULL,
+            payload_json     TEXT NOT NULL,
+            idempotency_key  TEXT NOT NULL UNIQUE,
+            status           TEXT NOT NULL DEFAULT 'pending',
+            attempts         INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at  TEXT,
+            last_error       TEXT,
+            response_json    TEXT,
+            trace_id         TEXT,
+            created_at       TEXT NOT NULL,
+            sent_at          TEXT,
+            FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS product_sync_state (
+            seq             INTEGER PRIMARY KEY,
+            content_hash    TEXT NOT NULL,
+            last_synced_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS component_sync_state (
+            codigo          INTEGER PRIMARY KEY,
+            content_hash    TEXT NOT NULL,
+            last_synced_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS product_sync_runs (
+            id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+            environment_id           TEXT NOT NULL,
+            sync_id                  TEXT NOT NULL UNIQUE,
+            trigger                  TEXT NOT NULL,
+            started_at               TEXT NOT NULL,
+            finished_at              TEXT,
+            status                   TEXT NOT NULL,
+            delta_count_produtos     INTEGER NOT NULL DEFAULT 0,
+            delta_count_componentes  INTEGER NOT NULL DEFAULT 0,
+            delta_count_tombstones   INTEGER NOT NULL DEFAULT 0,
+            applied_count            INTEGER NOT NULL DEFAULT 0,
+            errors_json              TEXT,
+            trace_id                 TEXT
+        );
+        """
+    )
+    legacy_conn.commit()
+    legacy_conn.close()
+
+    # 2. Confirmar que as colunas de ack NÃO estão presentes ainda
+    legacy_check = sqlite3.connect(db_path)
+    cols_before = {row[1] for row in legacy_check.execute("PRAGMA table_info(imports)").fetchall()}
+    legacy_check.close()
+    assert "sem_preco_ack_by" not in cols_before
+    assert "sem_preco_ack_at" not in cols_before
+    assert "sem_preco_ack_items" not in cols_before
+
+    # 3. Primeira chamada: deve rodar TABLES_SQL (no-op por IF NOT EXISTS) e
+    #    depois _apply_column_migrations, que adiciona as 3 colunas ausentes
+    persistence_router.reset_init_cache()
+    _ensure_schema(db_path, schema_env)
+
+    conn_after = sqlite3.connect(db_path)
+    cols_after = {row[1] for row in conn_after.execute("PRAGMA table_info(imports)").fetchall()}
+    conn_after.close()
+    assert {"sem_preco_ack_by", "sem_preco_ack_at", "sem_preco_ack_items"} <= cols_after
+
+    # 4. Segunda chamada (após reset do cache): idempotência no nível SQL —
+    #    _apply_column_migrations checa PRAGMA table_info e pula ALTERs já feitos
+    persistence_router.reset_init_cache()
+    _ensure_schema(db_path, schema_env)  # não deve levantar erro
+
+    conn_final = sqlite3.connect(db_path)
+    cols_final = {row[1] for row in conn_final.execute("PRAGMA table_info(imports)").fetchall()}
+    conn_final.close()
+    assert {"sem_preco_ack_by", "sem_preco_ack_at", "sem_preco_ack_items"} <= cols_final
