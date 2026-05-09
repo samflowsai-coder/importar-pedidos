@@ -21,6 +21,8 @@ def insert_import(entry: dict) -> None:
     `trace_id` is preserved across upserts (COALESCE keeps the original).
     Cliente override fields (`cliente_override_*`) are owned by
     `set_client_override()` — also never clobbered on upsert.
+    Sidecar do ack de itens sem preço (`sem_preco_ack_*`) é gerenciado
+    por `set_sem_preco_ack()` — também nunca clobbado no upsert.
     """
     snapshot = entry.get("snapshot")
     check = entry.get("check")
@@ -91,8 +93,9 @@ def insert_import(entry: dict) -> None:
                 -- portal_status, production_status, state_version,
                 -- sent_to_fire_at, released_at, released_by,
                 -- cliente_override_codigo, cliente_override_razao,
-                -- cliente_override_at, cliente_override_by are SM-owned
-                -- or set via dedicated helpers — never clobbered here.
+                -- cliente_override_at, cliente_override_by,
+                -- sem_preco_ack_by, sem_preco_ack_at, sem_preco_ack_items
+                -- are SM-owned or set via dedicated helpers — never clobbered here.
             """,
             params,
         )
@@ -134,6 +137,12 @@ def _row_to_entry(row) -> dict:
         "cliente_override_razao": _get("cliente_override_razao"),
         "cliente_override_at": _get("cliente_override_at"),
         "cliente_override_by": _get("cliente_override_by"),
+        "sem_preco_ack_by":    _get("sem_preco_ack_by"),
+        "sem_preco_ack_at":    _get("sem_preco_ack_at"),
+        "sem_preco_ack_items": (
+            json.loads(_get("sem_preco_ack_items"))
+            if _get("sem_preco_ack_items") else None
+        ),
         "output_files": json.loads(row["output_files_json"]) if row["output_files_json"] else [],
         "db_result": json.loads(row["db_result_json"]) if row["db_result_json"] else None,
         "snapshot": json.loads(row["snapshot_json"]) if row["snapshot_json"] else None,
@@ -199,7 +208,8 @@ def list_imports(
                production_status, released_at, released_by,
                trace_id, state_version, gestor_order_id, apontae_order_id,
                cliente_override_codigo, cliente_override_razao,
-               cliente_override_at, cliente_override_by
+               cliente_override_at, cliente_override_by,
+               sem_preco_ack_by, sem_preco_ack_at, sem_preco_ack_items
         FROM imports
         {clause}
         ORDER BY imported_at DESC
@@ -239,7 +249,8 @@ def get_import(import_id: str) -> Optional[dict]:
                    production_status, released_at, released_by,
                    trace_id, state_version, gestor_order_id, apontae_order_id,
                    cliente_override_codigo, cliente_override_razao,
-                   cliente_override_at, cliente_override_by
+                   cliente_override_at, cliente_override_by,
+                   sem_preco_ack_by, sem_preco_ack_at, sem_preco_ack_items
             FROM imports WHERE id = ?
             """,
             (import_id,),
@@ -358,6 +369,35 @@ def set_client_override(
                 razao,
                 datetime.now().isoformat(timespec="seconds"),
                 user,
+                import_id,
+            ),
+        )
+
+
+def set_sem_preco_ack(
+    import_id: str,
+    *,
+    by_email: str,
+    items: list[dict],
+) -> None:
+    """Persiste o ack do operador para itens sem preço cadastrado no Fire.
+
+    Sidecar — não toca snapshot. Last-write-wins. `items` é lista de dicts
+    {ean, product_code, fire_product_id}; serializado como JSON.
+    """
+    with db.connect() as conn:
+        conn.execute(
+            """
+            UPDATE imports
+            SET sem_preco_ack_by    = ?,
+                sem_preco_ack_at    = ?,
+                sem_preco_ack_items = ?
+            WHERE id = ?
+            """,
+            (
+                by_email,
+                datetime.now().isoformat(timespec="seconds"),
+                json.dumps(items, ensure_ascii=False),
                 import_id,
             ),
         )
