@@ -1,4 +1,5 @@
 """Tests for app.persistence.repo (SQLite import history)."""
+
 from __future__ import annotations
 
 import uuid
@@ -112,6 +113,7 @@ def test_list_caps_limit():
     # Even if caller passes huge limit, repo caps to MAX_PAGE_SIZE
     # This is a static check — no DB needed.
     from app.persistence.repo import _MAX_PAGE_SIZE
+
     assert _MAX_PAGE_SIZE == 500
 
 
@@ -205,6 +207,7 @@ def test_set_client_override_last_write_wins(sqlite_tmp):
 def test_schema_includes_sem_preco_ack_columns(sqlite_tmp):
     """schema_env.TABLES_SQL deve incluir as 3 colunas do sidecar de ack."""
     from app.persistence import db
+
     with db.connect() as conn:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(imports)").fetchall()}
     assert "sem_preco_ack_by" in cols
@@ -236,7 +239,9 @@ def test_set_sem_preco_ack_persists_and_get_returns_them(sqlite_tmp):
 def test_insert_import_does_not_clobber_sem_preco_ack(sqlite_tmp):
     e = _entry()
     repo.insert_import(e)
-    repo.set_sem_preco_ack(e["id"], by_email="op@example.com", items=[{"ean": "x", "product_code": "p"}])
+    repo.set_sem_preco_ack(
+        e["id"], by_email="op@example.com", items=[{"ean": "x", "product_code": "p"}]
+    )
 
     # Re-upsert — não pode limpar ack
     e_again = _entry(id=e["id"], customer="OUTRO")
@@ -258,8 +263,8 @@ def test_column_migration_is_idempotent(tmp_path):
     """
     import sqlite3
 
-    from app.persistence import schema_env
     from app.persistence import router as persistence_router
+    from app.persistence import schema_env
     from app.persistence.router import _ensure_schema
 
     # 1. Criar DB legada com schema antigo — todas as colunas atuais EXCETO as 3

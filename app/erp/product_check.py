@@ -7,30 +7,34 @@ the UI can render with green / amber / red indicators.
 Graceful when FB_DATABASE is not set: returns a report flagged as unavailable
 so the preview still loads.
 """
+
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
+from typing import Any
 
 from app.erp import queries
 from app.erp.connection import FirebirdConnection
 from app.models.order import Order
 
 
-def _cnpj_digits(cnpj: Optional[str]) -> str:
+def _cnpj_digits(cnpj: str | None) -> str:
     if not cnpj:
         return ""
     return re.sub(r"\D", "", cnpj)
 
 
-def _to_cents(value: Optional[float]) -> Optional[int]:
+def _to_cents(value: float | None) -> int | None:
     """Converte reais em centavos (int) para comparação sem drift de float."""
     if value is None:
         return None
     return int(round(float(value) * 100))
 
 
-def _classify_price(unit_price_order: Optional[float], fire_preco_venda: Optional[float]) -> str:
+def _classify_price(
+    unit_price_order: float | None,
+    fire_preco_venda: float | None,
+) -> str:
     """Determina price_status para um item COM match de produto.
 
     Não chame para itens sem match — use 'no_product_match' diretamente.
@@ -44,7 +48,11 @@ def _classify_price(unit_price_order: Optional[float], fire_preco_venda: Optiona
     return "mismatch"
 
 
-def _empty_item_result(product_code: Optional[str], ean: Optional[str], unit_price_order: Optional[float]) -> dict:
+def _empty_item_result(
+    product_code: str | None,
+    ean: str | None,
+    unit_price_order: float | None,
+) -> dict:
     return {
         "product_code": product_code,
         "ean": ean,
@@ -66,11 +74,13 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
     unavailable: dict[str, Any] = {
         "available": False,
         "reason": "FB_DATABASE_NOT_SET",
-        "client": {"match": False, "fire_id": None, "razao_social": None, "cnpj": order.header.customer_cnpj},
-        "items": [
-            _empty_item_result(it.product_code, it.ean, it.unit_price)
-            for it in order.items
-        ],
+        "client": {
+            "match": False,
+            "fire_id": None,
+            "razao_social": None,
+            "cnpj": order.header.customer_cnpj,
+        },
+        "items": [_empty_item_result(it.product_code, it.ean, it.unit_price) for it in order.items],
         "summary": {
             "items_total": len(order.items),
             "items_matched": 0,
@@ -87,6 +97,7 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
 
     if env is not None:
         from app.persistence import environments_repo  # avoid import cycle
+
         fb_cfg = environments_repo.to_fb_config(env)
         if not fb_cfg.get("path"):
             return unavailable
@@ -104,8 +115,8 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
 
             # Client lookup
             digits = _cnpj_digits(order.header.customer_cnpj)
-            client_id: Optional[int] = None
-            razao: Optional[str] = None
+            client_id: int | None = None
+            razao: str | None = None
             if digits:
                 cur.execute(queries.FIND_CLIENT_BY_CNPJ, (digits,))
                 row = cur.fetchone()
@@ -126,24 +137,28 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
                     cur.execute(queries.FIND_PRODUCT_BY_EAN, (it.ean,))
                     row = cur.fetchone()
                     if row:
-                        entry.update({
-                            "match": True,
-                            "match_source": "ean",
-                            "fire_product_id": row[0],
-                            "fire_description": row[1],
-                            "fire_preco_venda": float(row[2]) if row[2] is not None else None,
-                        })
+                        entry.update(
+                            {
+                                "match": True,
+                                "match_source": "ean",
+                                "fire_product_id": row[0],
+                                "fire_description": row[1],
+                                "fire_preco_venda": float(row[2]) if row[2] is not None else None,
+                            }
+                        )
                 if not entry["match"] and it.product_code:
                     cur.execute(queries.FIND_PRODUCT_BY_CODE, (it.product_code,))
                     row = cur.fetchone()
                     if row:
-                        entry.update({
-                            "match": True,
-                            "match_source": "codprod_altern",
-                            "fire_product_id": row[0],
-                            "fire_description": row[1],
-                            "fire_preco_venda": float(row[2]) if row[2] is not None else None,
-                        })
+                        entry.update(
+                            {
+                                "match": True,
+                                "match_source": "codprod_altern",
+                                "fire_product_id": row[0],
+                                "fire_description": row[1],
+                                "fire_preco_venda": float(row[2]) if row[2] is not None else None,
+                            }
+                        )
 
                 if entry["match"]:
                     matched += 1
@@ -166,7 +181,10 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
             cur.close()
     except Exception as exc:  # noqa: BLE001 — any Firebird failure downgrades to "check unavailable"
         from app.utils.logger import logger
-        logger.warning(f"Product check falhou ({type(exc).__name__}): {exc} — preview segue sem match")
+
+        logger.warning(
+            f"Product check falhou ({type(exc).__name__}): {exc} — preview segue sem match"
+        )
         out = dict(unavailable)
         out["reason"] = f"CHECK_FAILED: {type(exc).__name__}"
         return out
@@ -196,7 +214,10 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
     }
 
 
-def is_blocking(check: dict, ack_items: Optional[list[dict]] = None) -> tuple[bool, dict]:
+def is_blocking(
+    check: dict,
+    ack_items: list[dict] | None = None,
+) -> tuple[bool, dict]:
     """Decide se o estado do check impede envio.
 
     Bloqueia se:
@@ -239,22 +260,28 @@ def is_blocking(check: dict, ack_items: Optional[list[dict]] = None) -> tuple[bo
     for it in check.get("items", []):
         status = it.get("price_status")
         if status == "mismatch":
-            detail["items_mismatch"].append({
-                "ean": it.get("ean"),
-                "product_code": it.get("product_code"),
-                "order_price": it.get("unit_price_order"),
-                "fire_price": it.get("fire_preco_venda"),
-            })
+            detail["items_mismatch"].append(
+                {
+                    "ean": it.get("ean"),
+                    "product_code": it.get("product_code"),
+                    "order_price": it.get("unit_price_order"),
+                    "fire_price": it.get("fire_preco_venda"),
+                }
+            )
         elif status == "no_order_price":
-            detail["items_no_order_price"].append({
-                "ean": it.get("ean"),
-                "product_code": it.get("product_code"),
-            })
+            detail["items_no_order_price"].append(
+                {
+                    "ean": it.get("ean"),
+                    "product_code": it.get("product_code"),
+                }
+            )
         elif status == "no_price_in_fire" and not _covered(it):
-            detail["items_no_price_unacked"].append({
-                "ean": it.get("ean"),
-                "product_code": it.get("product_code"),
-            })
+            detail["items_no_price_unacked"].append(
+                {
+                    "ean": it.get("ean"),
+                    "product_code": it.get("product_code"),
+                }
+            )
 
     blocked = bool(
         detail["items_mismatch"]
