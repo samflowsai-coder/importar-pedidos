@@ -212,6 +212,41 @@ def test_schema_includes_sem_preco_ack_columns(sqlite_tmp):
     assert "sem_preco_ack_items" in cols
 
 
+def test_set_sem_preco_ack_persists_and_get_returns_them(sqlite_tmp):
+    e = _entry()
+    repo.insert_import(e)
+
+    fresh = repo.get_import(e["id"])
+    assert fresh["sem_preco_ack_by"] is None
+    assert fresh["sem_preco_ack_at"] is None
+    assert fresh["sem_preco_ack_items"] is None
+
+    items = [
+        {"ean": "7891234567890", "product_code": "ABC123", "fire_product_id": 42},
+        {"ean": None, "product_code": "XYZ", "fire_product_id": 7},
+    ]
+    repo.set_sem_preco_ack(e["id"], by_email="op@example.com", items=items)
+
+    got = repo.get_import(e["id"])
+    assert got["sem_preco_ack_by"] == "op@example.com"
+    assert got["sem_preco_ack_at"]  # ISO timestamp
+    assert got["sem_preco_ack_items"] == items
+
+
+def test_insert_import_does_not_clobber_sem_preco_ack(sqlite_tmp):
+    e = _entry()
+    repo.insert_import(e)
+    repo.set_sem_preco_ack(e["id"], by_email="op@example.com", items=[{"ean": "x", "product_code": "p"}])
+
+    # Re-upsert — não pode limpar ack
+    e_again = _entry(id=e["id"], customer="OUTRO")
+    repo.insert_import(e_again)
+
+    got = repo.get_import(e["id"])
+    assert got["sem_preco_ack_by"] == "op@example.com"
+    assert got["sem_preco_ack_items"] == [{"ean": "x", "product_code": "p"}]
+
+
 def test_column_migration_is_idempotent(tmp_path):
     """_ensure_schema executa COLUMN_MIGRATIONS em DB legada e é idempotente.
 
