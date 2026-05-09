@@ -161,3 +161,81 @@ def test_summary_aggregates_price_counts(mock_fb):
         "items_no_price_in_fire": 1,
         "items_no_order_price": 1,
     }
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — is_blocking() helper
+# ---------------------------------------------------------------------------
+
+def _check_with(items: list[dict]) -> dict:
+    return {"available": True, "items": items, "summary": {}}
+
+
+def test_is_blocking_passes_match_only():
+    check = _check_with([{"ean": "A", "product_code": "p1", "price_status": "match"}])
+    blocked, detail = product_check.is_blocking(check)
+    assert blocked is False
+    assert detail["items_mismatch"] == []
+    assert detail["items_no_order_price"] == []
+    assert detail["items_no_price_unacked"] == []
+
+
+def test_is_blocking_blocks_on_mismatch():
+    check = _check_with([
+        {"ean": "A", "product_code": "p1", "price_status": "mismatch",
+         "unit_price_order": 11.0, "fire_preco_venda": 10.0},
+    ])
+    blocked, detail = product_check.is_blocking(check)
+    assert blocked is True
+    assert detail["items_mismatch"] == [
+        {"ean": "A", "product_code": "p1", "order_price": 11.0, "fire_price": 10.0},
+    ]
+
+
+def test_is_blocking_blocks_on_no_order_price():
+    check = _check_with([{"ean": "A", "product_code": "p1", "price_status": "no_order_price"}])
+    blocked, detail = product_check.is_blocking(check)
+    assert blocked is True
+    assert detail["items_no_order_price"] == [{"ean": "A", "product_code": "p1"}]
+
+
+def test_is_blocking_blocks_on_no_price_unacked():
+    check = _check_with([{"ean": "A", "product_code": "p1", "price_status": "no_price_in_fire"}])
+    blocked, detail = product_check.is_blocking(check, ack_items=None)
+    assert blocked is True
+    assert detail["items_no_price_unacked"] == [{"ean": "A", "product_code": "p1"}]
+
+
+def test_is_blocking_passes_with_ack_by_ean():
+    check = _check_with([{"ean": "A", "product_code": "p1", "price_status": "no_price_in_fire"}])
+    blocked, _ = product_check.is_blocking(check, ack_items=[{"ean": "A", "product_code": None}])
+    assert blocked is False
+
+
+def test_is_blocking_passes_with_ack_by_code():
+    check = _check_with([{"ean": None, "product_code": "p1", "price_status": "no_price_in_fire"}])
+    blocked, _ = product_check.is_blocking(check, ack_items=[{"ean": None, "product_code": "p1"}])
+    assert blocked is False
+
+
+def test_is_blocking_partial_ack_still_blocks():
+    check = _check_with([
+        {"ean": "A", "product_code": "p1", "price_status": "no_price_in_fire"},
+        {"ean": "B", "product_code": "p2", "price_status": "no_price_in_fire"},
+    ])
+    blocked, detail = product_check.is_blocking(
+        check, ack_items=[{"ean": "A", "product_code": "p1"}],
+    )
+    assert blocked is True
+    assert detail["items_no_price_unacked"] == [{"ean": "B", "product_code": "p2"}]
+
+
+def test_is_blocking_ignores_no_product_match():
+    check = _check_with([{"ean": "A", "product_code": "p1", "price_status": "no_product_match"}])
+    blocked, _ = product_check.is_blocking(check)
+    assert blocked is False  # comportamento atual mantido — sem match não bloqueia aqui
+
+
+def test_is_blocking_returns_false_when_check_unavailable():
+    blocked, _ = product_check.is_blocking({"available": False, "items": []})
+    assert blocked is False  # check off → segue (best-effort)
