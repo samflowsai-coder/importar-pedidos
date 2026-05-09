@@ -23,7 +23,28 @@ def _cnpj_digits(cnpj: Optional[str]) -> str:
     return re.sub(r"\D", "", cnpj)
 
 
-def _empty_item_result(product_code: Optional[str], ean: Optional[str]) -> dict:
+def _to_cents(value: Optional[float]) -> Optional[int]:
+    """Converte reais em centavos (int) para comparação sem drift de float."""
+    if value is None:
+        return None
+    return int(round(float(value) * 100))
+
+
+def _classify_price(unit_price_order: Optional[float], fire_preco_venda: Optional[float]) -> str:
+    """Determina price_status para um item COM match de produto.
+
+    Não chame para itens sem match — use 'no_product_match' diretamente.
+    """
+    if unit_price_order is None:
+        return "no_order_price"
+    if fire_preco_venda is None or _to_cents(fire_preco_venda) == 0:
+        return "no_price_in_fire"
+    if _to_cents(unit_price_order) == _to_cents(fire_preco_venda):
+        return "match"
+    return "mismatch"
+
+
+def _empty_item_result(product_code: Optional[str], ean: Optional[str], unit_price_order: Optional[float]) -> dict:
     return {
         "product_code": product_code,
         "ean": ean,
@@ -32,6 +53,9 @@ def _empty_item_result(product_code: Optional[str], ean: Optional[str]) -> dict:
         "fire_product_id": None,
         "fire_description": None,
         "fire_preco_venda": None,
+        "unit_price_order": unit_price_order,
+        "price_status": "no_product_match",
+        "price_diff": None,
     }
 
 
@@ -44,13 +68,20 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
         "reason": "FB_DATABASE_NOT_SET",
         "client": {"match": False, "fire_id": None, "razao_social": None, "cnpj": order.header.customer_cnpj},
         "items": [
-            _empty_item_result(it.product_code, it.ean) for it in order.items
+            _empty_item_result(it.product_code, it.ean, it.unit_price)
+            for it in order.items
         ],
         "summary": {
             "items_total": len(order.items),
             "items_matched": 0,
             "items_missing": len(order.items),
             "client_matched": False,
+            "price_summary": {
+                "items_match": 0,
+                "items_mismatch": 0,
+                "items_no_price_in_fire": 0,
+                "items_no_order_price": 0,
+            },
         },
     }
 
@@ -84,8 +115,13 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
 
             items_report: list[dict] = []
             matched = 0
+            price_match = 0
+            price_mismatch = 0
+            price_no_price_in_fire = 0
+            price_no_order_price = 0
+
             for it in order.items:
-                entry = _empty_item_result(it.product_code, it.ean)
+                entry = _empty_item_result(it.product_code, it.ean, it.unit_price)
                 if it.ean:
                     cur.execute(queries.FIND_PRODUCT_BY_EAN, (it.ean,))
                     row = cur.fetchone()
@@ -108,8 +144,23 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
                             "fire_description": row[1],
                             "fire_preco_venda": float(row[2]) if row[2] is not None else None,
                         })
+
                 if entry["match"]:
                     matched += 1
+                    status = _classify_price(it.unit_price, entry["fire_preco_venda"])
+                    entry["price_status"] = status
+                    if status == "match":
+                        price_match += 1
+                    elif status == "mismatch":
+                        price_mismatch += 1
+                    elif status == "no_price_in_fire":
+                        price_no_price_in_fire += 1
+                    elif status == "no_order_price":
+                        price_no_order_price += 1
+                    fire_p = entry["fire_preco_venda"]
+                    if fire_p is not None and it.unit_price is not None:
+                        entry["price_diff"] = round(float(fire_p) - float(it.unit_price), 2)
+                # else: price_status fica 'no_product_match' (default), price_diff None
                 items_report.append(entry)
 
             cur.close()
@@ -135,5 +186,11 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
             "items_matched": matched,
             "items_missing": len(order.items) - matched,
             "client_matched": client_id is not None,
+            "price_summary": {
+                "items_match": price_match,
+                "items_mismatch": price_mismatch,
+                "items_no_price_in_fire": price_no_price_in_fire,
+                "items_no_order_price": price_no_order_price,
+            },
         },
     }
