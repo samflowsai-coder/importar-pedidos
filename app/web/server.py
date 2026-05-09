@@ -1516,6 +1516,37 @@ def _send_one_to_fire(import_id: str, cfg: dict, *, request_env: Optional[dict] 
             False, reason="invalid_snapshot", http_status=422, detail=f"Snapshot inválido: {exc}"
         )
 
+    # Defesa em profundidade: re-checar preço contra o Fire antes de enviar.
+    # Se Fire offline, segue (best-effort).
+    from app.erp.product_check import check_order, is_blocking
+    from app.observability import metrics
+
+    check = check_order(order, env=request_env)
+    ack_items = entry.get("sem_preco_ack_items") or []
+    blocked, block_detail = is_blocking(check, ack_items=ack_items)
+    if blocked:
+        repo.append_audit(import_id, "send_to_fire_blocked", block_detail)
+        if block_detail["items_mismatch"]:
+            metrics.price_check_blocks_total.labels(reason="price_mismatch").inc()
+        if block_detail["items_no_order_price"]:
+            metrics.price_check_blocks_total.labels(reason="missing_order_price").inc()
+        if block_detail["items_no_price_unacked"]:
+            metrics.price_check_blocks_total.labels(reason="no_price_unacked").inc()
+
+        parts = []
+        if block_detail["items_mismatch"]:
+            parts.append(f"{len(block_detail['items_mismatch'])} item(ns) com preço divergente do Fire")
+        if block_detail["items_no_order_price"]:
+            parts.append(f"{len(block_detail['items_no_order_price'])} item(ns) sem preço no pedido")
+        if block_detail["items_no_price_unacked"]:
+            parts.append(f"{len(block_detail['items_no_price_unacked'])} item(ns) sem preço no cadastro do Fire (sem confirmação)")
+        return _FireSendOutcome(
+            False,
+            reason="price_check_failed",
+            http_status=409,
+            detail="Pedido bloqueado: " + "; ".join(parts) + ".",
+        )
+
     # Reuse the trace_id minted on commit so logs across commit→send-to-fire
     # are correlated for the same pedido.
     with with_trace_id(entry.get("trace_id")):

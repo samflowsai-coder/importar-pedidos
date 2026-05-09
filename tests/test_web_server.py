@@ -1151,3 +1151,139 @@ def test_rehydrate_preview_surfaces_sem_preco_ack():
     body = r.json()
     assert body["sem_preco_ack"]["by"] == "op@example.com"
     assert body["sem_preco_ack"]["items"][0]["ean"] == "7891"
+
+
+# ── Guard _send_one_to_fire: price-check defense in depth ────────────────────
+
+def _seed_parsed_order(entry_id, *, items=None, snapshot_items=None):
+    """Helper: cria entry parsed pronto para send-to-fire."""
+    from app.persistence import repo
+    from datetime import datetime
+    repo.insert_import({
+        "id": entry_id,
+        "source_filename": "p.pdf",
+        "imported_at": datetime.now().isoformat(timespec="seconds"),
+        "order_number": f"GUARD-{entry_id[:4]}",
+        "customer": "ACME",
+        "status": "success",
+        "portal_status": "parsed",
+        "snapshot": {
+            "header": {"order_number": f"GUARD-{entry_id[:4]}", "customer_name": "ACME"},
+            "items": snapshot_items or [{"description": "x", "quantity": 1.0,
+                                          "ean": "7891", "unit_price": 89.90}],
+            "source_file": "",
+        },
+    })
+
+
+def test_send_to_fire_blocked_by_price_mismatch(monkeypatch):
+    from app.erp import product_check as pc_mod
+    from app.persistence import repo
+    from app.exporters import firebird_exporter as fb_mod
+    import uuid
+
+    entry_id = str(uuid.uuid4())
+    _seed_parsed_order(entry_id)
+
+    fake_check = {
+        "available": True,
+        "items": [{"ean": "7891", "product_code": None,
+                   "price_status": "mismatch",
+                   "unit_price_order": 89.90, "fire_preco_venda": 90.00}],
+        "summary": {},
+    }
+    monkeypatch.setattr(pc_mod, "check_order", lambda order, **kw: fake_check)
+
+    called = {"export": False}
+
+    def _no_export(self, order, *, override_client_id=None):
+        called["export"] = True
+        raise AssertionError("FirebirdExporter.export não pode ser chamado")
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _no_export)
+
+    r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    assert r.status_code == 409
+    assert "preço" in r.json()["detail"].lower() or "price" in r.json()["detail"].lower()
+    assert called["export"] is False
+
+    audits = [a["event_type"] for a in repo.list_audit(entry_id)]
+    assert "send_to_fire_blocked" in audits
+
+
+def test_send_to_fire_blocked_by_no_price_unacked(monkeypatch):
+    from app.erp import product_check as pc_mod
+    from app.exporters import firebird_exporter as fb_mod
+    import uuid
+
+    entry_id = str(uuid.uuid4())
+    _seed_parsed_order(entry_id)
+
+    fake_check = {
+        "available": True,
+        "items": [{"ean": "7891", "product_code": None,
+                   "price_status": "no_price_in_fire"}],
+        "summary": {},
+    }
+    monkeypatch.setattr(pc_mod, "check_order", lambda order, **kw: fake_check)
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export",
+                        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("não pode chamar")))
+
+    r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    assert r.status_code == 409
+
+
+def test_send_to_fire_passes_with_ack(monkeypatch):
+    from app.erp import product_check as pc_mod
+    from app.exporters import firebird_exporter as fb_mod
+    from app.persistence import repo
+    from app import config as app_config
+    import uuid
+
+    entry_id = str(uuid.uuid4())
+    _seed_parsed_order(entry_id)
+    repo.set_sem_preco_ack(entry_id, by_email="op@example.com",
+                           items=[{"ean": "7891", "product_code": None}])
+
+    fake_check = {
+        "available": True,
+        "items": [{"ean": "7891", "product_code": None,
+                   "price_status": "no_price_in_fire"}],
+        "summary": {},
+    }
+    monkeypatch.setattr(pc_mod, "check_order", lambda order, **kw: fake_check)
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export",
+                        lambda self, order, **kw: fb_mod.FirebirdExportResult(
+                            order_number=order.header.order_number,
+                            items_inserted=1, fire_codigo=999,
+                        ))
+    monkeypatch.setattr(app_config, "load",
+                        lambda: {"watch_dir": ".", "output_dir": ".", "export_mode": "db"})
+
+    r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    assert r.status_code == 200, r.text
+    assert r.json()["fire_codigo"] == 999
+
+
+def test_send_to_fire_passes_when_check_unavailable(monkeypatch):
+    """Fire offline → check best-effort, não bloqueia."""
+    from app.erp import product_check as pc_mod
+    from app.exporters import firebird_exporter as fb_mod
+    from app import config as app_config
+    import uuid
+
+    entry_id = str(uuid.uuid4())
+    _seed_parsed_order(entry_id)
+
+    monkeypatch.setattr(pc_mod, "check_order",
+                        lambda order, **kw: {"available": False, "items": [], "summary": {}})
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export",
+                        lambda self, order, **kw: fb_mod.FirebirdExportResult(
+                            order_number=order.header.order_number,
+                            items_inserted=1, fire_codigo=111,
+                        ))
+    monkeypatch.setattr(app_config, "load",
+                        lambda: {"watch_dir": ".", "output_dir": ".", "export_mode": "db"})
+
+    r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    assert r.status_code == 200
+    assert r.json()["fire_codigo"] == 111
