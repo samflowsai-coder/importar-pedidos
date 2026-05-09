@@ -1123,3 +1123,31 @@ def test_ack_sem_preco_rejects_wrong_status():
 def test_ack_sem_preco_returns_404_when_missing():
     r = client.post("/api/imported/does-not-exist/ack-sem-preco")
     assert r.status_code == 404
+
+
+def test_rehydrate_preview_surfaces_sem_preco_ack():
+    from app.persistence import repo
+    import uuid
+    from datetime import datetime
+    entry_id = str(uuid.uuid4())
+    repo.insert_import({
+        "id": entry_id,
+        "source_filename": "x.pdf",
+        "imported_at": datetime.now().isoformat(timespec="seconds"),
+        "order_number": "REHY-ACK",
+        "status": "success",
+        "portal_status": "parsed",
+        "snapshot": {
+            "header": {"order_number": "REHY-ACK"},
+            "items": [{"description": "x", "quantity": 1.0}],
+            "source_file": "",
+        },
+    })
+    repo.set_sem_preco_ack(entry_id, by_email="op@example.com",
+                           items=[{"ean": "7891", "product_code": None, "fire_product_id": 1}])
+
+    r = client.get(f"/api/imported/{entry_id}/preview")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sem_preco_ack"]["by"] == "op@example.com"
+    assert body["sem_preco_ack"]["items"][0]["ean"] == "7891"

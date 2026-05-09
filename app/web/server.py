@@ -2231,6 +2231,15 @@ def rehydrate_preview(import_id: str) -> JSONResponse:
         if override_codigo
         else None
     )
+    payload["sem_preco_ack"] = (
+        {
+            "by": entry.get("sem_preco_ack_by"),
+            "at": entry.get("sem_preco_ack_at"),
+            "items": entry.get("sem_preco_ack_items") or [],
+        }
+        if entry.get("sem_preco_ack_by")
+        else None
+    )
     return JSONResponse(payload)
 
 
