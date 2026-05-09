@@ -1,7 +1,7 @@
 """Integration tests for the FastAPI web server."""
+
 from __future__ import annotations
 
-import io
 from pathlib import Path
 
 import pytest
@@ -28,6 +28,7 @@ def isolated_sqlite(tmp_path_factory):
 
 # ── Basic smoke ──────────────────────────────────────────────────────────────
 
+
 def test_index_returns_html():
     r = client.get("/")
     assert r.status_code == 200
@@ -47,6 +48,7 @@ def test_config_returns_default_output_dir():
 
 # ── Security: download endpoint ──────────────────────────────────────────────
 
+
 def test_download_rejects_non_xlsx():
     r = client.get("/api/download?path=/etc/passwd")
     assert r.status_code == 403
@@ -63,6 +65,7 @@ def test_download_missing_xlsx_returns_404(tmp_path):
 
 
 # ── Security: upload validation ──────────────────────────────────────────────
+
 
 def test_upload_rejects_disallowed_extension(tmp_path):
     r = client.post(
@@ -90,6 +93,7 @@ def test_upload_rejects_oversized_file(tmp_path):
 
 # ── Filesystem browser ───────────────────────────────────────────────────────
 
+
 def test_fs_returns_directories():
     r = client.get("/api/fs?path=~")
     assert r.status_code == 200
@@ -114,6 +118,7 @@ def test_fs_requires_admin_auth_without_bypass(real_auth):
 
 
 # ── End-to-end: real PDFs ────────────────────────────────────────────────────
+
 
 @pytest.mark.skipif(not SAMPLES.exists(), reason="samples/ directory not found")
 def test_process_calcenter_pdf(tmp_path):
@@ -155,6 +160,7 @@ def test_process_riachuelo_splits_into_three(tmp_path):
 
 # ── Preview → Commit flow ────────────────────────────────────────────────────
 
+
 @pytest.mark.skipif(not SAMPLES.exists(), reason="samples/ directory not found")
 def test_preview_returns_structured_payload():
     pdf = SAMPLES / "2600009562-2026-02-25.pdf"
@@ -190,6 +196,7 @@ def test_commit_rejects_unknown_preview_id():
 @pytest.mark.skipif(not SAMPLES.exists(), reason="samples/ directory not found")
 def test_commit_consumes_preview_and_persists_log(tmp_path, monkeypatch):
     from app import config as app_config
+
     # Redirect config to tmp so we don't touch real log / output paths
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
     monkeypatch.setenv("EXPORT_MODE", "xlsx")
@@ -254,9 +261,15 @@ def test_preview_pending_reads_from_watch_folder(tmp_path, monkeypatch):
     seeded = watch / sample.name
     seeded.write_bytes(sample.read_bytes())
 
-    monkeypatch.setattr(app_config, "load", lambda: {
-        "watch_dir": str(watch), "output_dir": str(tmp_path), "export_mode": "xlsx",
-    })
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {
+            "watch_dir": str(watch),
+            "output_dir": str(tmp_path),
+            "export_mode": "xlsx",
+        },
+    )
     monkeypatch.setattr(app_config, "imported_dir", lambda _cfg: imp)
 
     r = client.post("/api/preview-pending", json={"filename": sample.name})
@@ -295,11 +308,14 @@ def test_preview_pending_uses_selected_environment_watch_dir(tmp_path, monkeypat
         output_dir=str(tmp_path / "env-out"),
         fb_path="",
     )
-    monkeypatch.setattr("app.config.load", lambda: {
-        "watch_dir": str(legacy_watch),
-        "output_dir": str(tmp_path / "legacy-out"),
-        "export_mode": "xlsx",
-    })
+    monkeypatch.setattr(
+        "app.config.load",
+        lambda: {
+            "watch_dir": str(legacy_watch),
+            "output_dir": str(tmp_path / "legacy-out"),
+            "export_mode": "xlsx",
+        },
+    )
 
     client.cookies.set("portal_env", env["id"])
     try:
@@ -312,38 +328,56 @@ def test_preview_pending_uses_selected_environment_watch_dir(tmp_path, monkeypat
 
 def test_preview_pending_rejects_missing_file(tmp_path, monkeypatch):
     from app import config as app_config
-    monkeypatch.setattr(app_config, "load", lambda: {
-        "watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx",
-    })
+
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {
+            "watch_dir": str(tmp_path),
+            "output_dir": str(tmp_path),
+            "export_mode": "xlsx",
+        },
+    )
     r = client.post("/api/preview-pending", json={"filename": "nao-existe.pdf"})
     assert r.status_code == 404
 
 
 def test_preview_pending_rejects_path_traversal(tmp_path, monkeypatch):
     from app import config as app_config
-    monkeypatch.setattr(app_config, "load", lambda: {
-        "watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx",
-    })
+
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {
+            "watch_dir": str(tmp_path),
+            "output_dir": str(tmp_path),
+            "export_mode": "xlsx",
+        },
+    )
     # Attempt to escape the watch folder
     r = client.post("/api/preview-pending", json={"filename": "../../../etc/passwd"})
     assert r.status_code in (400, 404)  # either ext-reject or not-found after basename strip
 
 
 def test_cancel_parsed_order_marks_as_cancelled():
-    from app.persistence import repo
     import uuid
     from datetime import datetime
+
+    from app.persistence import repo
+
     entry_id = str(uuid.uuid4())
-    repo.insert_import({
-        "id": entry_id,
-        "source_filename": "x.pdf",
-        "imported_at": datetime.now().isoformat(timespec="seconds"),
-        "order_number": "TEST-1",
-        "customer": "ACME",
-        "status": "success",
-        "portal_status": "parsed",
-        "snapshot": {"header": {"order_number": "TEST-1"}, "items": []},
-    })
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "TEST-1",
+            "customer": "ACME",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {"header": {"order_number": "TEST-1"}, "items": []},
+        }
+    )
 
     r = client.post(f"/api/imported/{entry_id}/cancel", json={"reason": "duplicado"})
     assert r.status_code == 200
@@ -354,38 +388,46 @@ def test_cancel_parsed_order_marks_as_cancelled():
 
 
 def test_cancel_sent_to_fire_rejected():
-    from app.persistence import repo
     import uuid
     from datetime import datetime
+
+    from app.persistence import repo
+
     entry_id = str(uuid.uuid4())
-    repo.insert_import({
-        "id": entry_id,
-        "source_filename": "x.pdf",
-        "imported_at": datetime.now().isoformat(timespec="seconds"),
-        "order_number": "TEST-2",
-        "status": "success",
-        "portal_status": "sent_to_fire",
-        "fire_codigo": 999,
-        "snapshot": {"header": {"order_number": "TEST-2"}, "items": []},
-    })
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "TEST-2",
+            "status": "success",
+            "portal_status": "sent_to_fire",
+            "fire_codigo": 999,
+            "snapshot": {"header": {"order_number": "TEST-2"}, "items": []},
+        }
+    )
     r = client.post(f"/api/imported/{entry_id}/cancel", json={})
     assert r.status_code == 409
 
 
 def test_send_to_fire_rejects_wrong_portal_status():
-    from app.persistence import repo
     import uuid
     from datetime import datetime
+
+    from app.persistence import repo
+
     entry_id = str(uuid.uuid4())
-    repo.insert_import({
-        "id": entry_id,
-        "source_filename": "x.pdf",
-        "imported_at": datetime.now().isoformat(timespec="seconds"),
-        "order_number": "TEST-3",
-        "status": "success",
-        "portal_status": "cancelled",
-        "snapshot": {"header": {"order_number": "TEST-3"}, "items": []},
-    })
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "TEST-3",
+            "status": "success",
+            "portal_status": "cancelled",
+            "snapshot": {"header": {"order_number": "TEST-3"}, "items": []},
+        }
+    )
     r = client.post(f"/api/imported/{entry_id}/send-to-fire")
     assert r.status_code == 409
 
@@ -397,26 +439,29 @@ def test_send_to_fire_missing_order_returns_404():
 
 def test_send_to_fire_inserts_when_success(monkeypatch):
     """Mock FirebirdExporter to simulate a real Fire insert without the DB."""
-    from app.persistence import repo
-    from app.exporters import firebird_exporter as fb_mod
     import uuid
     from datetime import datetime
 
+    from app.exporters import firebird_exporter as fb_mod
+    from app.persistence import repo
+
     entry_id = str(uuid.uuid4())
-    repo.insert_import({
-        "id": entry_id,
-        "source_filename": "pedido.pdf",
-        "imported_at": datetime.now().isoformat(timespec="seconds"),
-        "order_number": "TEST-OK",
-        "customer": "ACME",
-        "status": "success",
-        "portal_status": "parsed",
-        "snapshot": {
-            "header": {"order_number": "TEST-OK", "customer_name": "ACME"},
-            "items": [{"description": "x", "quantity": 1.0, "ean": "1234"}],
-            "source_file": "",
-        },
-    })
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "pedido.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "TEST-OK",
+            "customer": "ACME",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {
+                "header": {"order_number": "TEST-OK", "customer_name": "ACME"},
+                "items": [{"description": "x", "quantity": 1.0, "ean": "1234"}],
+                "source_file": "",
+            },
+        }
+    )
 
     def _fake_export(self, order, *, override_client_id=None):
         return fb_mod.FirebirdExportResult(
@@ -424,13 +469,21 @@ def test_send_to_fire_inserts_when_success(monkeypatch):
             items_inserted=1,
             fire_codigo=4242,
         )
+
     monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _fake_export)
 
     # also force export_mode to 'db' to skip XLSX export path
     from app import config as app_config
-    monkeypatch.setattr(app_config, "load", lambda: {
-        "watch_dir": ".", "output_dir": ".", "export_mode": "db",
-    })
+
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {
+            "watch_dir": ".",
+            "output_dir": ".",
+            "export_mode": "db",
+        },
+    )
 
     r = client.post(f"/api/imported/{entry_id}/send-to-fire")
     assert r.status_code == 200, r.text
@@ -443,41 +496,46 @@ def test_send_to_fire_inserts_when_success(monkeypatch):
 
 def test_batch_send_to_fire_mixed_outcomes(monkeypatch):
     """Batch endpoint tolerates partial failures: some parsed, one cancelled, one not-found."""
-    from app.persistence import repo
-    from app.exporters import firebird_exporter as fb_mod
-    from app import config as app_config
     import uuid
     from datetime import datetime
+
+    from app import config as app_config
+    from app.exporters import firebird_exporter as fb_mod
+    from app.persistence import repo
 
     parsed_ids = []
     for _ in range(2):
         entry_id = str(uuid.uuid4())
-        repo.insert_import({
-            "id": entry_id,
-            "source_filename": "pedido.pdf",
-            "imported_at": datetime.now().isoformat(timespec="seconds"),
-            "order_number": f"BATCH-{entry_id[:4]}",
-            "customer": "ACME",
-            "status": "success",
-            "portal_status": "parsed",
-            "snapshot": {
-                "header": {"order_number": f"BATCH-{entry_id[:4]}", "customer_name": "ACME"},
-                "items": [{"description": "x", "quantity": 1.0}],
-                "source_file": "",
-            },
-        })
+        repo.insert_import(
+            {
+                "id": entry_id,
+                "source_filename": "pedido.pdf",
+                "imported_at": datetime.now().isoformat(timespec="seconds"),
+                "order_number": f"BATCH-{entry_id[:4]}",
+                "customer": "ACME",
+                "status": "success",
+                "portal_status": "parsed",
+                "snapshot": {
+                    "header": {"order_number": f"BATCH-{entry_id[:4]}", "customer_name": "ACME"},
+                    "items": [{"description": "x", "quantity": 1.0}],
+                    "source_file": "",
+                },
+            }
+        )
         parsed_ids.append(entry_id)
 
     cancelled_id = str(uuid.uuid4())
-    repo.insert_import({
-        "id": cancelled_id,
-        "source_filename": "x.pdf",
-        "imported_at": datetime.now().isoformat(timespec="seconds"),
-        "order_number": "CANC-1",
-        "status": "success",
-        "portal_status": "cancelled",
-        "snapshot": {"header": {"order_number": "CANC-1"}, "items": []},
-    })
+    repo.insert_import(
+        {
+            "id": cancelled_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "CANC-1",
+            "status": "success",
+            "portal_status": "cancelled",
+            "snapshot": {"header": {"order_number": "CANC-1"}, "items": []},
+        }
+    )
 
     fire_seq = iter([4001, 4002])
 
@@ -487,14 +545,24 @@ def test_batch_send_to_fire_mixed_outcomes(monkeypatch):
             items_inserted=1,
             fire_codigo=next(fire_seq),
         )
-    monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _fake_export)
-    monkeypatch.setattr(app_config, "load", lambda: {
-        "watch_dir": ".", "output_dir": ".", "export_mode": "db",
-    })
 
-    r = client.post("/api/batch/send-to-fire", json={
-        "ids": parsed_ids + [cancelled_id, "unknown-id"],
-    })
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _fake_export)
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {
+            "watch_dir": ".",
+            "output_dir": ".",
+            "export_mode": "db",
+        },
+    )
+
+    r = client.post(
+        "/api/batch/send-to-fire",
+        json={
+            "ids": parsed_ids + [cancelled_id, "unknown-id"],
+        },
+    )
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["total"] == 4
@@ -518,28 +586,31 @@ def test_batch_send_to_fire_mixed_outcomes(monkeypatch):
 
 def test_export_xlsx_generates_files_without_calling_firebird(monkeypatch, tmp_path):
     """xlsx-only flow: ERPExporter runs, FirebirdExporter is NEVER instantiated/called."""
-    from app.persistence import repo
-    from app.exporters import erp_exporter as erp_mod
-    from app.exporters import firebird_exporter as fb_mod
-    from app import config as app_config
     import uuid
     from datetime import datetime
 
+    from app import config as app_config
+    from app.exporters import erp_exporter as erp_mod
+    from app.exporters import firebird_exporter as fb_mod
+    from app.persistence import repo
+
     entry_id = str(uuid.uuid4())
-    repo.insert_import({
-        "id": entry_id,
-        "source_filename": "pedido.pdf",
-        "imported_at": datetime.now().isoformat(timespec="seconds"),
-        "order_number": "XLSX-OK",
-        "customer": "ACME",
-        "status": "success",
-        "portal_status": "parsed",
-        "snapshot": {
-            "header": {"order_number": "XLSX-OK", "customer_name": "ACME"},
-            "items": [{"description": "x", "quantity": 1.0}],
-            "source_file": "",
-        },
-    })
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "pedido.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "XLSX-OK",
+            "customer": "ACME",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {
+                "header": {"order_number": "XLSX-OK", "customer_name": "ACME"},
+                "items": [{"description": "x", "quantity": 1.0}],
+                "source_file": "",
+            },
+        }
+    )
 
     # Stub ERPExporter to return predictable file paths without touching disk.
     erp_calls: list[str] = []
@@ -550,16 +621,24 @@ def test_export_xlsx_generates_files_without_calling_firebird(monkeypatch, tmp_p
         out.parent.mkdir(parents=True, exist_ok=True)
         out.touch()
         return [out]
+
     monkeypatch.setattr(erp_mod.ERPExporter, "export", _fake_erp_export)
 
     # Hard-fail if Firebird is touched.
     def _explode(self, order, *, override_client_id=None):
         raise AssertionError("FirebirdExporter.export must not be called in xlsx mode")
+
     monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _explode)
 
-    monkeypatch.setattr(app_config, "load", lambda: {
-        "watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx",
-    })
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {
+            "watch_dir": str(tmp_path),
+            "output_dir": str(tmp_path),
+            "export_mode": "xlsx",
+        },
+    )
 
     r = client.post(f"/api/imported/{entry_id}/export-xlsx")
     assert r.status_code == 200, r.text
@@ -576,19 +655,23 @@ def test_export_xlsx_generates_files_without_calling_firebird(monkeypatch, tmp_p
 
 
 def test_export_xlsx_rejects_wrong_portal_status():
-    from app.persistence import repo
     import uuid
     from datetime import datetime
+
+    from app.persistence import repo
+
     entry_id = str(uuid.uuid4())
-    repo.insert_import({
-        "id": entry_id,
-        "source_filename": "x.pdf",
-        "imported_at": datetime.now().isoformat(timespec="seconds"),
-        "order_number": "XLSX-WRONG",
-        "status": "success",
-        "portal_status": "cancelled",
-        "snapshot": {"header": {"order_number": "XLSX-WRONG"}, "items": []},
-    })
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "XLSX-WRONG",
+            "status": "success",
+            "portal_status": "cancelled",
+            "snapshot": {"header": {"order_number": "XLSX-WRONG"}, "items": []},
+        }
+    )
     r = client.post(f"/api/imported/{entry_id}/export-xlsx")
     assert r.status_code == 409
 
@@ -602,25 +685,35 @@ def test_batch_send_to_fire_rejects_empty_and_oversized():
 
 
 def test_rehydrate_preview_returns_snapshot():
-    from app.persistence import repo
     import uuid
     from datetime import datetime
+
+    from app.persistence import repo
+
     entry_id = str(uuid.uuid4())
-    repo.insert_import({
-        "id": entry_id,
-        "source_filename": "x.pdf",
-        "imported_at": datetime.now().isoformat(timespec="seconds"),
-        "order_number": "REHYDR-1",
-        "customer": "ACME",
-        "status": "success",
-        "portal_status": "parsed",
-        "snapshot": {
-            "header": {"order_number": "REHYDR-1", "customer_name": "ACME"},
-            "items": [{"description": "item A", "quantity": 3.0}],
-            "source_file": "",
-        },
-        "check": {"available": False, "reason": "FB_DATABASE_NOT_SET", "client": {"match": False}, "items": [], "summary": {}},
-    })
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "REHYDR-1",
+            "customer": "ACME",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {
+                "header": {"order_number": "REHYDR-1", "customer_name": "ACME"},
+                "items": [{"description": "item A", "quantity": 3.0}],
+                "source_file": "",
+            },
+            "check": {
+                "available": False,
+                "reason": "FB_DATABASE_NOT_SET",
+                "client": {"match": False},
+                "items": [],
+                "summary": {},
+            },
+        }
+    )
     r = client.get(f"/api/imported/{entry_id}/preview")
     assert r.status_code == 200
     body = r.json()
@@ -631,21 +724,29 @@ def test_rehydrate_preview_returns_snapshot():
 
 
 def test_imported_filter_by_search_and_status():
-    from app.persistence import repo
     # Seed a few rows directly
     import uuid
     from datetime import datetime
-    for customer, status in [("Riachuelo SA", "success"), ("Beira Rio", "success"), ("Erro LTDA", "error")]:
-        repo.insert_import({
-            "id": str(uuid.uuid4()),
-            "source_filename": "x.pdf",
-            "imported_at": datetime.now().isoformat(timespec="seconds"),
-            "order_number": "X-1",
-            "customer": customer,
-            "status": status,
-            "output_files": [],
-            "error": None if status == "success" else "boom",
-        })
+
+    from app.persistence import repo
+
+    for customer, status in [
+        ("Riachuelo SA", "success"),
+        ("Beira Rio", "success"),
+        ("Erro LTDA", "error"),
+    ]:
+        repo.insert_import(
+            {
+                "id": str(uuid.uuid4()),
+                "source_filename": "x.pdf",
+                "imported_at": datetime.now().isoformat(timespec="seconds"),
+                "order_number": "X-1",
+                "customer": customer,
+                "status": status,
+                "output_files": [],
+                "error": None if status == "success" else "boom",
+            }
+        )
 
     r = client.get("/api/imported?q=Riachuelo")
     assert r.status_code == 200
@@ -660,43 +761,52 @@ def test_imported_filter_by_search_and_status():
 
 # ── Manual cliente override (CLIENT_NOT_FOUND recovery) ──────────────────────
 
+
 def _seed_parsed_entry(**overrides):
-    from app.persistence import repo
     import uuid
     from datetime import datetime
+
+    from app.persistence import repo
+
     entry_id = overrides.pop("id", str(uuid.uuid4()))
-    repo.insert_import({
-        "id": entry_id,
-        "source_filename": "ovr.pdf",
-        "imported_at": datetime.now().isoformat(timespec="seconds"),
-        "order_number": overrides.get("order_number", "OVR-1"),
-        "customer": overrides.get("customer", "ACME"),
-        "customer_cnpj": overrides.get("customer_cnpj", "11.222.333/0001-44"),
-        "status": "success",
-        "portal_status": overrides.get("portal_status", "parsed"),
-        "snapshot": {
-            "header": {
-                "order_number": "OVR-1",
-                "customer_name": "ACME",
-                "customer_cnpj": "11.222.333/0001-44",
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "ovr.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": overrides.get("order_number", "OVR-1"),
+            "customer": overrides.get("customer", "ACME"),
+            "customer_cnpj": overrides.get("customer_cnpj", "11.222.333/0001-44"),
+            "status": "success",
+            "portal_status": overrides.get("portal_status", "parsed"),
+            "snapshot": {
+                "header": {
+                    "order_number": "OVR-1",
+                    "customer_name": "ACME",
+                    "customer_cnpj": "11.222.333/0001-44",
+                },
+                "items": [{"description": "x", "quantity": 1.0}],
+                "source_file": "",
             },
-            "items": [{"description": "x", "quantity": 1.0}],
-            "source_file": "",
-        },
-        "check": {
-            "available": True,
-            "reason": None,
-            "client": {
-                "match": False, "fire_id": None,
-                "razao_social": None, "cnpj": "11.222.333/0001-44",
+            "check": {
+                "available": True,
+                "reason": None,
+                "client": {
+                    "match": False,
+                    "fire_id": None,
+                    "razao_social": None,
+                    "cnpj": "11.222.333/0001-44",
+                },
+                "items": [],
+                "summary": {
+                    "items_total": 1,
+                    "items_matched": 0,
+                    "items_missing": 1,
+                    "client_matched": False,
+                },
             },
-            "items": [],
-            "summary": {
-                "items_total": 1, "items_matched": 0,
-                "items_missing": 1, "client_matched": False,
-            },
-        },
-    })
+        }
+    )
     return entry_id
 
 
@@ -762,10 +872,13 @@ def test_search_clientes_returns_503_when_fb_not_configured(monkeypatch):
 
 
 def test_search_clientes_happy_path_returns_results(monkeypatch):
-    cursor = _patch_fb_with_rows(monkeypatch, [
-        (101, "ACME COMERCIO LTDA", "11.222.333/0001-44"),
-        (102, "ACME INDUSTRIAS SA", "55.666.777/0001-88"),
-    ])
+    cursor = _patch_fb_with_rows(
+        monkeypatch,
+        [
+            (101, "ACME COMERCIO LTDA", "11.222.333/0001-44"),
+            (102, "ACME INDUSTRIAS SA", "55.666.777/0001-88"),
+        ],
+    )
     r = client.get("/api/clientes/search?q=acme")
     assert r.status_code == 200, r.text
     body = r.json()
@@ -844,10 +957,14 @@ def test_search_clientes_strips_non_digits_for_cnpj_pattern(monkeypatch):
 
 def test_override_cliente_happy_path(monkeypatch):
     from app.persistence import repo
+
     entry_id = _seed_parsed_entry()
-    _patch_fb_with_rows(monkeypatch, [
-        (4242, "ACME COMERCIO LTDA", "11222333000144"),  # FIND_CLIENT_BY_CODIGO
-    ])
+    _patch_fb_with_rows(
+        monkeypatch,
+        [
+            (4242, "ACME COMERCIO LTDA", "11222333000144"),  # FIND_CLIENT_BY_CODIGO
+        ],
+    )
 
     r = client.post(
         f"/api/imported/{entry_id}/override-cliente",
@@ -868,6 +985,7 @@ def test_override_cliente_happy_path(monkeypatch):
 
 def test_override_cliente_appends_audit_with_actor_email(monkeypatch):
     from app.persistence import repo
+
     entry_id = _seed_parsed_entry()
     _patch_fb_with_rows(monkeypatch, [(4242, "ACME LTDA", "11222333000144")])
 
@@ -925,6 +1043,7 @@ def test_override_cliente_returns_503_when_fb_not_configured(monkeypatch):
 
 def test_rehydrate_preview_injects_override_into_check_block(monkeypatch):
     from app.persistence import repo
+
     entry_id = _seed_parsed_entry()
     repo.set_client_override(entry_id, codigo=4242, razao="ACME OVERRIDE LTDA")
 
@@ -970,9 +1089,15 @@ def test_send_to_fire_passes_override_to_exporter(monkeypatch):
         )
 
     monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _fake_export)
-    monkeypatch.setattr(app_config, "load", lambda: {
-        "watch_dir": ".", "output_dir": ".", "export_mode": "db",
-    })
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {
+            "watch_dir": ".",
+            "output_dir": ".",
+            "export_mode": "db",
+        },
+    )
 
     r = client.post(f"/api/imported/{entry_id}/send-to-fire")
     assert r.status_code == 200, r.text
@@ -1004,8 +1129,10 @@ def test_process_sbf_centauro(tmp_path):
 # `app/persistence/db.py` pinou o caminho em local estável independente de
 # `watch_dir`.
 
+
 def test_save_config_preserves_session(real_auth, tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
+
     from app import config as app_config
     from app.persistence import users_repo
     from app.web.server import app as fastapi_app
@@ -1018,7 +1145,9 @@ def test_save_config_preserves_session(real_auth, tmp_path, monkeypatch):
     db.init()
 
     users_repo.create_user(
-        email="cfg@portal.local", password="strongpass1", role="admin",
+        email="cfg@portal.local",
+        password="strongpass1",
+        role="admin",
     )
 
     c = TestClient(fastapi_app)
@@ -1053,32 +1182,44 @@ def test_save_config_preserves_session(real_auth, tmp_path, monkeypatch):
 
 # ── ack-sem-preco ─────────────────────────────────────────────────────────────
 
+
 def test_ack_sem_preco_persists_and_audits(monkeypatch):
     """POST /api/imported/{id}/ack-sem-preco grava sidecar + audit."""
-    from app.persistence import repo
-    from app.erp import product_check as pc_mod
     import uuid
     from datetime import datetime
 
+    from app.erp import product_check as pc_mod
+    from app.persistence import repo
+
     entry_id = str(uuid.uuid4())
-    repo.insert_import({
-        "id": entry_id,
-        "source_filename": "x.pdf",
-        "imported_at": datetime.now().isoformat(timespec="seconds"),
-        "order_number": "ACK-1",
-        "status": "success",
-        "portal_status": "parsed",
-        "snapshot": {
-            "header": {"order_number": "ACK-1", "customer_cnpj": "00000000000100"},
-            "items": [{"description": "x", "quantity": 1.0, "ean": "7891", "unit_price": 89.90}],
-            "source_file": "",
-        },
-    })
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "ACK-1",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {
+                "header": {"order_number": "ACK-1", "customer_cnpj": "00000000000100"},
+                "items": [
+                    {"description": "x", "quantity": 1.0, "ean": "7891", "unit_price": 89.90}
+                ],
+                "source_file": "",
+            },
+        }
+    )
 
     fake_check = {
         "available": True,
-        "items": [{"ean": "7891", "product_code": None,
-                   "price_status": "no_price_in_fire", "fire_product_id": 42}],
+        "items": [
+            {
+                "ean": "7891",
+                "product_code": None,
+                "price_status": "no_price_in_fire",
+                "fire_product_id": 42,
+            }
+        ],
         "summary": {},
     }
     monkeypatch.setattr(pc_mod, "check_order", lambda order, **kw: fake_check)
@@ -1103,19 +1244,23 @@ def test_ack_sem_preco_persists_and_audits(monkeypatch):
 
 
 def test_ack_sem_preco_rejects_wrong_status():
-    from app.persistence import repo
     import uuid
     from datetime import datetime
+
+    from app.persistence import repo
+
     entry_id = str(uuid.uuid4())
-    repo.insert_import({
-        "id": entry_id,
-        "source_filename": "x.pdf",
-        "imported_at": datetime.now().isoformat(timespec="seconds"),
-        "order_number": "ACK-2",
-        "status": "success",
-        "portal_status": "sent_to_fire",
-        "snapshot": {"header": {"order_number": "ACK-2"}, "items": []},
-    })
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "ACK-2",
+            "status": "success",
+            "portal_status": "sent_to_fire",
+            "snapshot": {"header": {"order_number": "ACK-2"}, "items": []},
+        }
+    )
     r = client.post(f"/api/imported/{entry_id}/ack-sem-preco")
     assert r.status_code == 409
 
@@ -1126,25 +1271,32 @@ def test_ack_sem_preco_returns_404_when_missing():
 
 
 def test_rehydrate_preview_surfaces_sem_preco_ack():
-    from app.persistence import repo
     import uuid
     from datetime import datetime
+
+    from app.persistence import repo
+
     entry_id = str(uuid.uuid4())
-    repo.insert_import({
-        "id": entry_id,
-        "source_filename": "x.pdf",
-        "imported_at": datetime.now().isoformat(timespec="seconds"),
-        "order_number": "REHY-ACK",
-        "status": "success",
-        "portal_status": "parsed",
-        "snapshot": {
-            "header": {"order_number": "REHY-ACK"},
-            "items": [{"description": "x", "quantity": 1.0}],
-            "source_file": "",
-        },
-    })
-    repo.set_sem_preco_ack(entry_id, by_email="op@example.com",
-                           items=[{"ean": "7891", "product_code": None, "fire_product_id": 1}])
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "REHY-ACK",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {
+                "header": {"order_number": "REHY-ACK"},
+                "items": [{"description": "x", "quantity": 1.0}],
+                "source_file": "",
+            },
+        }
+    )
+    repo.set_sem_preco_ack(
+        entry_id,
+        by_email="op@example.com",
+        items=[{"ean": "7891", "product_code": None, "fire_product_id": 1}],
+    )
 
     r = client.get(f"/api/imported/{entry_id}/preview")
     assert r.status_code == 200, r.text
@@ -1155,41 +1307,53 @@ def test_rehydrate_preview_surfaces_sem_preco_ack():
 
 # ── Guard _send_one_to_fire: price-check defense in depth ────────────────────
 
+
 def _seed_parsed_order(entry_id, *, items=None, snapshot_items=None):
     """Helper: cria entry parsed pronto para send-to-fire."""
-    from app.persistence import repo
     from datetime import datetime
-    repo.insert_import({
-        "id": entry_id,
-        "source_filename": "p.pdf",
-        "imported_at": datetime.now().isoformat(timespec="seconds"),
-        "order_number": f"GUARD-{entry_id[:4]}",
-        "customer": "ACME",
-        "status": "success",
-        "portal_status": "parsed",
-        "snapshot": {
-            "header": {"order_number": f"GUARD-{entry_id[:4]}", "customer_name": "ACME"},
-            "items": snapshot_items or [{"description": "x", "quantity": 1.0,
-                                          "ean": "7891", "unit_price": 89.90}],
-            "source_file": "",
-        },
-    })
+
+    from app.persistence import repo
+
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "p.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": f"GUARD-{entry_id[:4]}",
+            "customer": "ACME",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {
+                "header": {"order_number": f"GUARD-{entry_id[:4]}", "customer_name": "ACME"},
+                "items": snapshot_items
+                or [{"description": "x", "quantity": 1.0, "ean": "7891", "unit_price": 89.90}],
+                "source_file": "",
+            },
+        }
+    )
 
 
 def test_send_to_fire_blocked_by_price_mismatch(monkeypatch):
-    from app.erp import product_check as pc_mod
-    from app.persistence import repo
-    from app.exporters import firebird_exporter as fb_mod
     import uuid
+
+    from app.erp import product_check as pc_mod
+    from app.exporters import firebird_exporter as fb_mod
+    from app.persistence import repo
 
     entry_id = str(uuid.uuid4())
     _seed_parsed_order(entry_id)
 
     fake_check = {
         "available": True,
-        "items": [{"ean": "7891", "product_code": None,
-                   "price_status": "mismatch",
-                   "unit_price_order": 89.90, "fire_preco_venda": 90.00}],
+        "items": [
+            {
+                "ean": "7891",
+                "product_code": None,
+                "price_status": "mismatch",
+                "unit_price_order": 89.90,
+                "fire_preco_venda": 90.00,
+            }
+        ],
         "summary": {},
     }
     monkeypatch.setattr(pc_mod, "check_order", lambda order, **kw: fake_check)
@@ -1199,6 +1363,7 @@ def test_send_to_fire_blocked_by_price_mismatch(monkeypatch):
     def _no_export(self, order, *, override_client_id=None):
         called["export"] = True
         raise AssertionError("FirebirdExporter.export não pode ser chamado")
+
     monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _no_export)
 
     r = client.post(f"/api/imported/{entry_id}/send-to-fire")
@@ -1211,53 +1376,62 @@ def test_send_to_fire_blocked_by_price_mismatch(monkeypatch):
 
 
 def test_send_to_fire_blocked_by_no_price_unacked(monkeypatch):
+    import uuid
+
     from app.erp import product_check as pc_mod
     from app.exporters import firebird_exporter as fb_mod
-    import uuid
 
     entry_id = str(uuid.uuid4())
     _seed_parsed_order(entry_id)
 
     fake_check = {
         "available": True,
-        "items": [{"ean": "7891", "product_code": None,
-                   "price_status": "no_price_in_fire"}],
+        "items": [{"ean": "7891", "product_code": None, "price_status": "no_price_in_fire"}],
         "summary": {},
     }
     monkeypatch.setattr(pc_mod, "check_order", lambda order, **kw: fake_check)
-    monkeypatch.setattr(fb_mod.FirebirdExporter, "export",
-                        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("não pode chamar")))
+    monkeypatch.setattr(
+        fb_mod.FirebirdExporter,
+        "export",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("não pode chamar")),
+    )
 
     r = client.post(f"/api/imported/{entry_id}/send-to-fire")
     assert r.status_code == 409
 
 
 def test_send_to_fire_passes_with_ack(monkeypatch):
+    import uuid
+
+    from app import config as app_config
     from app.erp import product_check as pc_mod
     from app.exporters import firebird_exporter as fb_mod
     from app.persistence import repo
-    from app import config as app_config
-    import uuid
 
     entry_id = str(uuid.uuid4())
     _seed_parsed_order(entry_id)
-    repo.set_sem_preco_ack(entry_id, by_email="op@example.com",
-                           items=[{"ean": "7891", "product_code": None}])
+    repo.set_sem_preco_ack(
+        entry_id, by_email="op@example.com", items=[{"ean": "7891", "product_code": None}]
+    )
 
     fake_check = {
         "available": True,
-        "items": [{"ean": "7891", "product_code": None,
-                   "price_status": "no_price_in_fire"}],
+        "items": [{"ean": "7891", "product_code": None, "price_status": "no_price_in_fire"}],
         "summary": {},
     }
     monkeypatch.setattr(pc_mod, "check_order", lambda order, **kw: fake_check)
-    monkeypatch.setattr(fb_mod.FirebirdExporter, "export",
-                        lambda self, order, **kw: fb_mod.FirebirdExportResult(
-                            order_number=order.header.order_number,
-                            items_inserted=1, fire_codigo=999,
-                        ))
-    monkeypatch.setattr(app_config, "load",
-                        lambda: {"watch_dir": ".", "output_dir": ".", "export_mode": "db"})
+    monkeypatch.setattr(
+        fb_mod.FirebirdExporter,
+        "export",
+        lambda self, order, **kw: fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number,
+            items_inserted=1,
+            fire_codigo=999,
+        ),
+    )
+    monkeypatch.setattr(
+        app_config, "load", lambda: {"watch_dir": ".", "output_dir": ".", "export_mode": "db"}
+    )
 
     r = client.post(f"/api/imported/{entry_id}/send-to-fire")
     assert r.status_code == 200, r.text
@@ -1266,23 +1440,30 @@ def test_send_to_fire_passes_with_ack(monkeypatch):
 
 def test_send_to_fire_passes_when_check_unavailable(monkeypatch):
     """Fire offline → check best-effort, não bloqueia."""
+    import uuid
+
+    from app import config as app_config
     from app.erp import product_check as pc_mod
     from app.exporters import firebird_exporter as fb_mod
-    from app import config as app_config
-    import uuid
 
     entry_id = str(uuid.uuid4())
     _seed_parsed_order(entry_id)
 
-    monkeypatch.setattr(pc_mod, "check_order",
-                        lambda order, **kw: {"available": False, "items": [], "summary": {}})
-    monkeypatch.setattr(fb_mod.FirebirdExporter, "export",
-                        lambda self, order, **kw: fb_mod.FirebirdExportResult(
-                            order_number=order.header.order_number,
-                            items_inserted=1, fire_codigo=111,
-                        ))
-    monkeypatch.setattr(app_config, "load",
-                        lambda: {"watch_dir": ".", "output_dir": ".", "export_mode": "db"})
+    monkeypatch.setattr(
+        pc_mod, "check_order", lambda order, **kw: {"available": False, "items": [], "summary": {}}
+    )
+    monkeypatch.setattr(
+        fb_mod.FirebirdExporter,
+        "export",
+        lambda self, order, **kw: fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number,
+            items_inserted=1,
+            fire_codigo=111,
+        ),
+    )
+    monkeypatch.setattr(
+        app_config, "load", lambda: {"watch_dir": ".", "output_dir": ".", "export_mode": "db"}
+    )
 
     r = client.post(f"/api/imported/{entry_id}/send-to-fire")
     assert r.status_code == 200
@@ -1291,19 +1472,27 @@ def test_send_to_fire_passes_when_check_unavailable(monkeypatch):
 
 # ── Guard _export_one_xlsx: price-check defense in depth ─────────────────────
 
+
 def test_export_xlsx_blocked_by_price_mismatch(monkeypatch):
+    import uuid
+
     from app.erp import product_check as pc_mod
     from app.persistence import repo
-    import uuid
 
     entry_id = str(uuid.uuid4())
     _seed_parsed_order(entry_id)
 
     fake_check = {
         "available": True,
-        "items": [{"ean": "7891", "product_code": None,
-                   "price_status": "mismatch",
-                   "unit_price_order": 89.90, "fire_preco_venda": 90.00}],
+        "items": [
+            {
+                "ean": "7891",
+                "product_code": None,
+                "price_status": "mismatch",
+                "unit_price_order": 89.90,
+                "fire_preco_venda": 90.00,
+            }
+        ],
         "summary": {},
     }
     monkeypatch.setattr(pc_mod, "check_order", lambda order, **kw: fake_check)
@@ -1316,26 +1505,29 @@ def test_export_xlsx_blocked_by_price_mismatch(monkeypatch):
 
 
 def test_export_xlsx_passes_with_ack(monkeypatch, tmp_path):
+    import uuid
+
+    from app import config as app_config
     from app.erp import product_check as pc_mod
     from app.persistence import repo
-    from app import config as app_config
-    import uuid
 
     entry_id = str(uuid.uuid4())
     _seed_parsed_order(entry_id)
-    repo.set_sem_preco_ack(entry_id, by_email="op@example.com",
-                           items=[{"ean": "7891", "product_code": None}])
+    repo.set_sem_preco_ack(
+        entry_id, by_email="op@example.com", items=[{"ean": "7891", "product_code": None}]
+    )
 
     fake_check = {
         "available": True,
-        "items": [{"ean": "7891", "product_code": None,
-                   "price_status": "no_price_in_fire"}],
+        "items": [{"ean": "7891", "product_code": None, "price_status": "no_price_in_fire"}],
         "summary": {},
     }
     monkeypatch.setattr(pc_mod, "check_order", lambda order, **kw: fake_check)
-    monkeypatch.setattr(app_config, "load",
-                        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path),
-                                 "export_mode": "xlsx"})
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx"},
+    )
 
     r = client.post(f"/api/imported/{entry_id}/export-xlsx")
     assert r.status_code == 200, r.text

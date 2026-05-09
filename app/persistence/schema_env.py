@@ -5,6 +5,7 @@ do pedido: importações, audit, lifecycle, outbox. Coluna `environment_id`
 em todas as tabelas é defensiva — a DB já é específica de um ambiente, mas
 o ID redundante torna trivial detectar bug de wiring.
 """
+
 from __future__ import annotations
 
 TABLES_SQL = """
@@ -145,10 +146,7 @@ CREATE INDEX IF NOT EXISTS idx_product_sync_runs_started
 
 # Cada entrada: (table, column_name, ALTER TABLE DDL) — aplicada só se a coluna ainda não existir.
 COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
-    ("imports", "sem_preco_ack_by",
-        "ALTER TABLE imports ADD COLUMN sem_preco_ack_by TEXT"),
-    ("imports", "sem_preco_ack_at",
-        "ALTER TABLE imports ADD COLUMN sem_preco_ack_at TEXT"),
-    ("imports", "sem_preco_ack_items",
-        "ALTER TABLE imports ADD COLUMN sem_preco_ack_items TEXT"),
+    ("imports", "sem_preco_ack_by", "ALTER TABLE imports ADD COLUMN sem_preco_ack_by TEXT"),
+    ("imports", "sem_preco_ack_at", "ALTER TABLE imports ADD COLUMN sem_preco_ack_at TEXT"),
+    ("imports", "sem_preco_ack_items", "ALTER TABLE imports ADD COLUMN sem_preco_ack_items TEXT"),
 )

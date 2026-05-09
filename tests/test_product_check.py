@@ -1,4 +1,5 @@
 """Tests for app.erp.product_check — match e price_status."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -147,13 +148,15 @@ def test_summary_aggregates_price_counts(mock_fb):
             # E não cadastrado → no_product_match
         },
     )
-    order = _order([
-        {"ean": "A", "unit_price": 10.0},
-        {"ean": "B", "unit_price": 11.0},
-        {"ean": "C", "unit_price": 30.0},
-        {"ean": "D", "unit_price": None},
-        {"ean": "E", "unit_price": 5.0},
-    ])
+    order = _order(
+        [
+            {"ean": "A", "unit_price": 10.0},
+            {"ean": "B", "unit_price": 11.0},
+            {"ean": "C", "unit_price": 30.0},
+            {"ean": "D", "unit_price": None},
+            {"ean": "E", "unit_price": 5.0},
+        ]
+    )
     summary = product_check.check_order(order)["summary"]["price_summary"]
     assert summary == {
         "items_match": 1,
@@ -166,6 +169,7 @@ def test_summary_aggregates_price_counts(mock_fb):
 # ---------------------------------------------------------------------------
 # Task 4 — is_blocking() helper
 # ---------------------------------------------------------------------------
+
 
 def _check_with(items: list[dict]) -> dict:
     return {"available": True, "items": items, "summary": {}}
@@ -181,10 +185,17 @@ def test_is_blocking_passes_match_only():
 
 
 def test_is_blocking_blocks_on_mismatch():
-    check = _check_with([
-        {"ean": "A", "product_code": "p1", "price_status": "mismatch",
-         "unit_price_order": 11.0, "fire_preco_venda": 10.0},
-    ])
+    check = _check_with(
+        [
+            {
+                "ean": "A",
+                "product_code": "p1",
+                "price_status": "mismatch",
+                "unit_price_order": 11.0,
+                "fire_preco_venda": 10.0,
+            },
+        ]
+    )
     blocked, detail = product_check.is_blocking(check)
     assert blocked is True
     assert detail["items_mismatch"] == [
@@ -219,12 +230,15 @@ def test_is_blocking_passes_with_ack_by_code():
 
 
 def test_is_blocking_partial_ack_still_blocks():
-    check = _check_with([
-        {"ean": "A", "product_code": "p1", "price_status": "no_price_in_fire"},
-        {"ean": "B", "product_code": "p2", "price_status": "no_price_in_fire"},
-    ])
+    check = _check_with(
+        [
+            {"ean": "A", "product_code": "p1", "price_status": "no_price_in_fire"},
+            {"ean": "B", "product_code": "p2", "price_status": "no_price_in_fire"},
+        ]
+    )
     blocked, detail = product_check.is_blocking(
-        check, ack_items=[{"ean": "A", "product_code": "p1"}],
+        check,
+        ack_items=[{"ean": "A", "product_code": "p1"}],
     )
     assert blocked is True
     assert detail["items_no_price_unacked"] == [{"ean": "B", "product_code": "p2"}]

@@ -72,3 +72,19 @@ SQL e a integração com o exporter.
 - O usuário que aplicou o override é gravado em `audit_log`
   (`user_email`, `user_id`) e em `imports.cliente_override_by` (email),
   vindo de `require_user` na rota `/api/imported/{id}/override-cliente`.
+
+## Validação de preço (pedido vs Fire)
+
+`product_check.check_order` agora popula por item:
+- `unit_price_order`, `fire_preco_venda` (já existente), `price_diff`
+- `price_status ∈ {match, mismatch, no_price_in_fire, no_order_price, no_product_match}` — comparação em centavos.
+
+E `summary.price_summary` agrega contagens.
+
+`product_check.is_blocking(check, ack_items=None)` decide se o estado bloqueia
+envio. Bloqueia em `mismatch`, `no_order_price`, ou `no_price_in_fire` não
+coberto por `ack_items`. `available=False` → não bloqueia (best-effort).
+
+Os guards vivem em `_send_one_to_fire` e `_export_one_xlsx` (web). Audit
+events: `send_to_fire_blocked`, `xlsx_export_blocked`, `sem_preco_acknowledged`.
+Métricas: `portal_price_check_blocks_total{reason}`, `portal_price_check_acks_total`.

@@ -47,6 +47,7 @@ from app.web.auth import (
 def _is_test_bypass() -> bool:
     return os.environ.get("TEST_AUTH_BYPASS", "").strip() == "1"
 
+
 from app.web.preview_cache import PreviewConsumedError, PreviewNotFoundError, get_cache
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -84,6 +85,7 @@ async def _no_env_handler(_request, _exc):
         content={"detail": "Selecione um ambiente para continuar.", "code": "no_active_env"},
     )
 
+
 # Inbound webhooks (Fase 4 — Gestor de Produção status updates)
 from app.web.webhooks import router as webhooks_router  # noqa: E402
 
@@ -107,8 +109,10 @@ app.include_router(produtos_sync_router)
 
 # ── Internal helpers ──────────────────────────────────────────────────────
 
+
 def _get_cfg() -> dict:
     from app import config as app_config
+
     return app_config.load()
 
 
@@ -133,6 +137,7 @@ def _firebird_open_for_request(request: Request, conn_mgr):
     env = _request_environment(request)
     if env is not None:
         from app.persistence import environments_repo
+
         fb_cfg = environments_repo.to_fb_config(env)
         if not fb_cfg.get("path"):
             raise HTTPException(status_code=503, detail="FB_DATABASE não configurado")
@@ -146,6 +151,7 @@ def _append_log(cfg: dict, entry: dict) -> None:
     """Persist to SQLite. `cfg` kept for signature compatibility."""
     del cfg  # unused — repo resolves db path on its own
     from app.persistence import repo
+
     repo.insert_import(entry)
 
 
@@ -179,22 +185,27 @@ def _make_log_entry(
 
 # ── Preview helpers ───────────────────────────────────────────────────────
 
-def _build_preview_payload(preview_id: str, source_filename: str, order, check: Optional[dict] = None) -> dict:
+
+def _build_preview_payload(
+    preview_id: str, source_filename: str, order, check: Optional[dict] = None
+) -> dict:
     """Shape an Order for the preview modal: items, per-store groups, totals, product check."""
     items = []
     for it in order.items:
-        items.append({
-            "description": it.description,
-            "product_code": it.product_code,
-            "ean": it.ean,
-            "quantity": it.quantity,
-            "unit_price": it.unit_price,
-            "total_price": it.total_price,
-            "obs": it.obs,
-            "delivery_date": it.delivery_date,
-            "delivery_cnpj": it.delivery_cnpj,
-            "delivery_name": it.delivery_name,
-        })
+        items.append(
+            {
+                "description": it.description,
+                "product_code": it.product_code,
+                "ean": it.ean,
+                "quantity": it.quantity,
+                "unit_price": it.unit_price,
+                "total_price": it.total_price,
+                "obs": it.obs,
+                "delivery_date": it.delivery_date,
+                "delivery_cnpj": it.delivery_cnpj,
+                "delivery_name": it.delivery_name,
+            }
+        )
 
     groups: dict[str, dict] = {}
     for it in order.items:
@@ -207,14 +218,17 @@ def _build_preview_payload(preview_id: str, source_filename: str, order, check: 
         else:
             key = "default"
             label = order.header.customer_name or "Pedido"
-        g = groups.setdefault(key, {
-            "key": key,
-            "label": label,
-            "cnpj": it.delivery_cnpj,
-            "items_count": 0,
-            "total_qty": 0.0,
-            "total_value": 0.0,
-        })
+        g = groups.setdefault(
+            key,
+            {
+                "key": key,
+                "label": label,
+                "cnpj": it.delivery_cnpj,
+                "items_count": 0,
+                "total_qty": 0.0,
+                "total_value": 0.0,
+            },
+        )
         g["items_count"] += 1
         g["total_qty"] += float(it.quantity or 0)
         g["total_value"] += float(it.total_price or (it.quantity or 0) * (it.unit_price or 0))
@@ -223,8 +237,7 @@ def _build_preview_payload(preview_id: str, source_filename: str, order, check: 
         "items_count": len(order.items),
         "total_qty": sum(float(it.quantity or 0) for it in order.items),
         "total_value": sum(
-            float(it.total_price or (it.quantity or 0) * (it.unit_price or 0))
-            for it in order.items
+            float(it.total_price or (it.quantity or 0) * (it.unit_price or 0)) for it in order.items
         ),
     }
 
@@ -301,6 +314,7 @@ def _process_file(file_path: Path, output_path: Path, *, env: Optional[dict] = N
 
 
 # ── Routes ────────────────────────────────────────────────────────────────
+
 
 @app.get("/")
 def index(request: Request):
@@ -437,10 +451,12 @@ def login(body: LoginRequest, request: Request) -> JSONResponse:
         ip=(request.client.host if request.client else None),
         user_agent=(request.headers.get("user-agent") or "")[:500],
     )
-    response = JSONResponse({
-        "user": {"id": user.id, "email": user.email, "role": user.role},
-        "session_expires_at": sess.expires_at,
-    })
+    response = JSONResponse(
+        {
+            "user": {"id": user.id, "email": user.email, "role": user.role},
+            "session_expires_at": sess.expires_at,
+        }
+    )
     set_session_cookie(response, sess.token)
     return response
 
@@ -469,13 +485,13 @@ def auth_me(
     if user is None:
         return JSONResponse({"user": None, "environment": None})
     env = getattr(request.state, "environment", None)
-    env_payload = (
-        {"id": env["id"], "slug": env["slug"], "name": env["name"]} if env else None
+    env_payload = {"id": env["id"], "slug": env["slug"], "name": env["name"]} if env else None
+    return JSONResponse(
+        {
+            "user": {"id": user.id, "email": user.email, "role": user.role},
+            "environment": env_payload,
+        }
     )
-    return JSONResponse({
-        "user": {"id": user.id, "email": user.email, "role": user.role},
-        "environment": env_payload,
-    })
 
 
 # ── Bootstrap (first-admin signup; closes after first user) ──────────────
@@ -512,7 +528,9 @@ def bootstrap_admin(body: BootstrapRequest, request: Request) -> JSONResponse:
         )
     try:
         user = users_repo.create_user(
-            email=body.email, password=body.password, role="admin",
+            email=body.email,
+            password=body.password,
+            role="admin",
         )
     except WeakPasswordError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -529,10 +547,12 @@ def bootstrap_admin(body: BootstrapRequest, request: Request) -> JSONResponse:
         ip=(request.client.host if request.client else None),
         user_agent=(request.headers.get("user-agent") or "")[:500],
     )
-    response = JSONResponse({
-        "user": {"id": user.id, "email": user.email, "role": user.role},
-        "session_expires_at": sess.expires_at,
-    })
+    response = JSONResponse(
+        {
+            "user": {"id": user.id, "email": user.email, "role": user.role},
+            "session_expires_at": sess.expires_at,
+        }
+    )
     set_session_cookie(response, sess.token)
     return response
 
@@ -555,9 +575,11 @@ def _user_dto(u: users_repo.User) -> dict:
 def admin_list_users(
     _admin: User = Depends(require_admin),
 ) -> JSONResponse:
-    return JSONResponse({
-        "users": [_user_dto(u) for u in users_repo.list_users(limit=500)],
-    })
+    return JSONResponse(
+        {
+            "users": [_user_dto(u) for u in users_repo.list_users(limit=500)],
+        }
+    )
 
 
 class AdminCreateUserRequest(BaseModel):
@@ -573,7 +595,9 @@ def admin_create_user(
 ) -> JSONResponse:
     try:
         user = users_repo.create_user(
-            email=body.email, password=body.password, role=body.role,
+            email=body.email,
+            password=body.password,
+            role=body.role,
         )
     except WeakPasswordError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -620,7 +644,8 @@ def admin_deactivate(
 ) -> JSONResponse:
     if user_id == admin_user.id:
         raise HTTPException(
-            status_code=409, detail="você não pode desativar a si mesmo",
+            status_code=409,
+            detail="você não pode desativar a si mesmo",
         )
     target = users_repo.find_by_id(user_id)
     if target is None:
@@ -687,7 +712,11 @@ def admin_create_invite(
             detail=f"já existe usuário com este e-mail (id={existing_user.id})",
         )
     try:
-        ttl = body.ttl_hours if body.ttl_hours and body.ttl_hours > 0 else invites_repo.DEFAULT_TTL_HOURS
+        ttl = (
+            body.ttl_hours
+            if body.ttl_hours and body.ttl_hours > 0
+            else invites_repo.DEFAULT_TTL_HOURS
+        )
         inv = invites_repo.create(
             email=body.email,
             role=body.role,
@@ -708,9 +737,11 @@ def admin_list_invites(
     request: Request,
     _admin: User = Depends(require_admin),
 ) -> JSONResponse:
-    return JSONResponse({
-        "invites": [_invite_dto(inv, request) for inv in invites_repo.list_pending()],
-    })
+    return JSONResponse(
+        {
+            "invites": [_invite_dto(inv, request) for inv in invites_repo.list_pending()],
+        }
+    )
 
 
 @app.delete("/api/admin/invites/{token}")
@@ -731,6 +762,7 @@ def admin_revoke_invite(
 # Public endpoints — invitee uses these. NO auth dependency. They are
 # guarded entirely by the secret token in the URL.
 
+
 @app.get("/api/invites/{token}")
 def public_get_invite(token: str) -> JSONResponse:
     """Returns minimal info to render the accept page. 404 if invalid."""
@@ -739,11 +771,13 @@ def public_get_invite(token: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail="convite inválido ou já utilizado")
     if inv.is_expired():
         raise HTTPException(status_code=410, detail="convite expirado")
-    return JSONResponse({
-        "email": inv.email,
-        "role": inv.role,
-        "expires_at": inv.expires_at,
-    })
+    return JSONResponse(
+        {
+            "email": inv.email,
+            "role": inv.role,
+            "expires_at": inv.expires_at,
+        }
+    )
 
 
 class AcceptInviteRequest(BaseModel):
@@ -775,7 +809,9 @@ def public_accept_invite(
 
     try:
         user = users_repo.create_user(
-            email=inv.email, password=body.password, role=inv.role,
+            email=inv.email,
+            password=body.password,
+            role=inv.role,
         )
     except WeakPasswordError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -799,10 +835,13 @@ def public_accept_invite(
         ip=(request.client.host if request.client else None),
         user_agent=(request.headers.get("user-agent") or "")[:500],
     )
-    response = JSONResponse({
-        "user": {"id": user.id, "email": user.email, "role": user.role},
-        "session_expires_at": sess.expires_at,
-    }, status_code=201)
+    response = JSONResponse(
+        {
+            "user": {"id": user.id, "email": user.email, "role": user.role},
+            "session_expires_at": sess.expires_at,
+        },
+        status_code=201,
+    )
     set_session_cookie(response, sess.token)
     return response
 
@@ -816,14 +855,16 @@ def invite_accept_page(token: str) -> FileResponse:  # noqa: ARG001 — token us
 @app.get("/api/config")
 def get_config() -> JSONResponse:
     cfg = _get_cfg()
-    return JSONResponse({
-        "watchDir": cfg["watch_dir"],
-        "outputDir": cfg["output_dir"],
-        "exportMode": cfg.get("export_mode", "xlsx"),
-        "firebirdConfigured": (
-            firebird_config.is_configured() or bool(os.environ.get("FB_DATABASE"))
-        ),
-    })
+    return JSONResponse(
+        {
+            "watchDir": cfg["watch_dir"],
+            "outputDir": cfg["output_dir"],
+            "exportMode": cfg.get("export_mode", "xlsx"),
+            "firebirdConfigured": (
+                firebird_config.is_configured() or bool(os.environ.get("FB_DATABASE"))
+            ),
+        }
+    )
 
 
 class ConfigUpdate(BaseModel):
@@ -838,14 +879,17 @@ def update_config(
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     from app import config as app_config
+
     watch_dir = str(Path(body.watchDir).expanduser().resolve()) if body.watchDir else None
     output_dir = str(Path(body.outputDir).expanduser().resolve()) if body.outputDir else None
     cfg = app_config.save(watch_dir=watch_dir, output_dir=output_dir, export_mode=body.exportMode)
-    return JSONResponse({
-        "watchDir": cfg["watch_dir"],
-        "outputDir": cfg["output_dir"],
-        "exportMode": cfg.get("export_mode", "xlsx"),
-    })
+    return JSONResponse(
+        {
+            "watchDir": cfg["watch_dir"],
+            "outputDir": cfg["output_dir"],
+            "exportMode": cfg.get("export_mode", "xlsx"),
+        }
+    )
 
 
 # ── Firebird connection config (admin-managed via UI) ────────────────────
@@ -928,8 +972,11 @@ def test_firebird_connection(
 
     if not eff_path:
         return JSONResponse(
-            {"ok": False, "error": "Caminho do banco (path) é obrigatório.",
-             "traceId": current_trace_id()},
+            {
+                "ok": False,
+                "error": "Caminho do banco (path) é obrigatório.",
+                "traceId": current_trace_id(),
+            },
             status_code=400,
         )
 
@@ -965,8 +1012,7 @@ def test_firebird_connection(
         )
     except Exception as exc:  # noqa: BLE001 — surface any driver error
         return JSONResponse(
-            {"ok": False, "error": f"Erro inesperado: {exc}",
-             "traceId": current_trace_id()},
+            {"ok": False, "error": f"Erro inesperado: {exc}", "traceId": current_trace_id()},
             status_code=500,
         )
     finally:
@@ -987,7 +1033,9 @@ def list_pending(request: Request) -> JSONResponse:
         return JSONResponse({"files": [], "watchDir": cfg["watch_dir"], "exists": False})
 
     files = []
-    for f in sorted(watch.iterdir(), key=lambda x: x.stat().st_mtime if x.is_file() else 0, reverse=True):
+    for f in sorted(
+        watch.iterdir(), key=lambda x: x.stat().st_mtime if x.is_file() else 0, reverse=True
+    ):
         if not f.is_file():
             continue
         if f.suffix.lower() not in ALLOWED_EXTENSIONS:
@@ -995,13 +1043,15 @@ def list_pending(request: Request) -> JSONResponse:
         # Exclude anything inside "Pedidos importados" (safety, iterdir is not recursive)
         try:
             stat = f.stat()
-            files.append({
-                "name": f.name,
-                "path": str(f),
-                "size": stat.st_size,
-                "mtime": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
-                "ext": f.suffix.lower().lstrip("."),
-            })
+            files.append(
+                {
+                    "name": f.name,
+                    "path": str(f),
+                    "size": stat.st_size,
+                    "mtime": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+                    "ext": f.suffix.lower().lstrip("."),
+                }
+            )
         except Exception:
             pass
 
@@ -1020,6 +1070,7 @@ def import_files(
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     from app import config as app_config
+
     cfg = _get_cfg_for_request(request)
     request_env = _request_environment(request)
     watch = Path(cfg["watch_dir"])
@@ -1072,14 +1123,16 @@ def import_files(
             )
             _append_log(cfg, entry)
 
-            results.append({
-                "source": name,
-                "order": result["order_number"] or "—",
-                "customer": result["customer"] or "—",
-                "files": result["output_files"],
-                "fire_codigo": result.get("fire_codigo"),
-                "entry_id": entry["id"],
-            })
+            results.append(
+                {
+                    "source": name,
+                    "order": result["order_number"] or "—",
+                    "customer": result["customer"] or "—",
+                    "files": result["output_files"],
+                    "fire_codigo": result.get("fire_codigo"),
+                    "entry_id": entry["id"],
+                }
+            )
 
         except Exception as exc:
             entry = _make_log_entry(
@@ -1108,6 +1161,7 @@ def list_imported(
     date_to: Optional[str] = None,
 ) -> JSONResponse:
     from app.persistence import repo
+
     entries = repo.list_imports(
         limit=limit,
         offset=offset,
@@ -1132,6 +1186,7 @@ def list_imported(
 @app.get("/api/imported/{import_id}")
 def get_imported(import_id: str) -> JSONResponse:
     from app.persistence import repo
+
     entry = repo.get_import(import_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Importação não encontrada")
@@ -1151,6 +1206,7 @@ def reimport_file(
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     from app import config as app_config
+
     cfg = _get_cfg_for_request(request)
     request_env = _request_environment(request)
     imp = app_config.imported_dir(cfg)
@@ -1159,7 +1215,9 @@ def reimport_file(
     src = imp / name
 
     if not src.exists() or not src.is_file():
-        raise HTTPException(status_code=404, detail="Arquivo não encontrado em 'Pedidos importados'")
+        raise HTTPException(
+            status_code=404, detail="Arquivo não encontrado em 'Pedidos importados'"
+        )
     if src.suffix.lower() not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Extensão não permitida")
 
@@ -1187,14 +1245,16 @@ def reimport_file(
             db_result=result.get("db_result"),
         )
         _append_log(cfg, entry)
-        return JSONResponse({
-            "source": name,
-            "order": result["order_number"] or "—",
-            "customer": result["customer"] or "—",
-            "files": result["output_files"],
-            "fire_codigo": result.get("fire_codigo"),
-            "entry_id": entry["id"],
-        })
+        return JSONResponse(
+            {
+                "source": name,
+                "order": result["order_number"] or "—",
+                "customer": result["customer"] or "—",
+                "files": result["output_files"],
+                "fire_codigo": result.get("fire_codigo"),
+                "entry_id": entry["id"],
+            }
+        )
     except Exception as exc:
         entry = _make_log_entry(
             source_filename=name,
@@ -1257,19 +1317,19 @@ def browse_filesystem(
                 [
                     {"name": e.name, "path": str(e), "type": "file"}
                     for e in p.iterdir()
-                    if e.is_file()
-                    and e.suffix.lower() == ext
-                    and not e.name.startswith(".")
+                    if e.is_file() and e.suffix.lower() == ext and not e.name.startswith(".")
                 ],
                 key=lambda x: x["name"].lower(),
             )
         parent = str(p.parent) if p != p.parent else None
-        return JSONResponse({
-            "current": str(p),
-            "parent": parent,
-            "entries": dirs,         # mantém shape antigo (só dirs) p/ chamadas legadas
-            "files": files,           # adicional, vazio quando file_ext não foi passado
-        })
+        return JSONResponse(
+            {
+                "current": str(p),
+                "parent": parent,
+                "entries": dirs,  # mantém shape antigo (só dirs) p/ chamadas legadas
+                "files": files,  # adicional, vazio quando file_ext não foi passado
+            }
+        )
     except PermissionError:
         return JSONResponse({"error": "Sem permissão para acessar este diretório"}, status_code=403)
     except Exception as exc:
@@ -1277,6 +1337,7 @@ def browse_filesystem(
 
 
 # ── Preview → Commit flow ─────────────────────────────────────────────────
+
 
 @app.post("/api/preview")
 async def preview_file(
@@ -1319,9 +1380,14 @@ async def preview_file(
         )
 
     from app.erp.product_check import check_order
+
     check = check_order(order, env=_request_environment(request))
     entry = get_cache().put(
-        order=order, source_filename=filename, source_bytes=raw, source_ext=ext, check=check,
+        order=order,
+        source_filename=filename,
+        source_bytes=raw,
+        source_ext=ext,
+        check=check,
     )
     payload = _build_preview_payload(entry.preview_id, filename, order, check)
     return JSONResponse(payload)
@@ -1362,6 +1428,7 @@ def preview_pending(
         raise HTTPException(status_code=422, detail="Formato não reconhecido ou pedido sem itens")
 
     from app.erp.product_check import check_order
+
     check = check_order(order, env=_request_environment(request))
     entry = get_cache().put(
         order=order,
@@ -1415,6 +1482,7 @@ def commit_preview(
         # DB first — if this fails, the file stays in the watch folder and user
         # can retry without losing the original document.
         from app.persistence import repo
+
         repo.insert_import(log_entry)
         repo.append_audit(
             log_entry["id"],
@@ -1440,6 +1508,7 @@ def commit_preview(
         # Only move the source after persistence succeeded.
         if entry.source_path:
             from app import config as app_config
+
             src = Path(entry.source_path)
             if src.exists():
                 imp = app_config.imported_dir(cfg)
@@ -1450,19 +1519,23 @@ def commit_preview(
                     dest = imp / f"{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}"
                 shutil.move(str(src), str(dest))
 
-        return JSONResponse({
-            "entry_id": log_entry["id"],
-            "order": order.header.order_number or "—",
-            "customer": order.header.customer_name or "—",
-            "portal_status": "parsed",
-            "trace_id": trace_id,
-        })
+        return JSONResponse(
+            {
+                "entry_id": log_entry["id"],
+                "order": order.header.order_number or "—",
+                "customer": order.header.customer_name or "—",
+                "portal_status": "parsed",
+                "trace_id": trace_id,
+            }
+        )
 
 
 # ── Per-order actions ───────────────────────────────────────────────────
 
+
 class _FireSendOutcome:
     """Internal result of _send_one_to_fire. HTTP layer translates to status."""
+
     __slots__ = ("ok", "reason", "http_status", "fire_codigo", "items_inserted", "detail")
 
     def __init__(
@@ -1482,7 +1555,9 @@ class _FireSendOutcome:
         self.detail = detail
 
 
-def _send_one_to_fire(import_id: str, cfg: dict, *, request_env: Optional[dict] = None) -> _FireSendOutcome:
+def _send_one_to_fire(
+    import_id: str, cfg: dict, *, request_env: Optional[dict] = None
+) -> _FireSendOutcome:
     """Insert a parsed order into Fire. Returns structured outcome (no HTTP exceptions)
     so batch callers can aggregate per-item results.
 
@@ -1500,7 +1575,9 @@ def _send_one_to_fire(import_id: str, cfg: dict, *, request_env: Optional[dict] 
 
     entry = repo.get_import(import_id)
     if entry is None:
-        return _FireSendOutcome(False, reason="not_found", http_status=404, detail="Pedido não encontrado")
+        return _FireSendOutcome(
+            False, reason="not_found", http_status=404, detail="Pedido não encontrado"
+        )
     if entry.get("portal_status") != "parsed":
         return _FireSendOutcome(
             False,
@@ -1540,11 +1617,17 @@ def _send_one_to_fire(import_id: str, cfg: dict, *, request_env: Optional[dict] 
 
         parts = []
         if block_detail["items_mismatch"]:
-            parts.append(f"{len(block_detail['items_mismatch'])} item(ns) com preço divergente do Fire")
+            parts.append(
+                f"{len(block_detail['items_mismatch'])} item(ns) com preço divergente do Fire"
+            )
         if block_detail["items_no_order_price"]:
-            parts.append(f"{len(block_detail['items_no_order_price'])} item(ns) sem preço no pedido")
+            parts.append(
+                f"{len(block_detail['items_no_order_price'])} item(ns) sem preço no pedido"
+            )
         if block_detail["items_no_price_unacked"]:
-            parts.append(f"{len(block_detail['items_no_price_unacked'])} item(ns) sem preço no cadastro do Fire (sem confirmação)")
+            parts.append(
+                f"{len(block_detail['items_no_price_unacked'])} item(ns) sem preço no cadastro do Fire (sem confirmação)"
+            )
         return _FireSendOutcome(
             False,
             reason="price_check_failed",
@@ -1561,6 +1644,7 @@ def _send_one_to_fire(import_id: str, cfg: dict, *, request_env: Optional[dict] 
         output_files: list[dict] = []
         if export_mode in ("xlsx", "both"):
             from app.exporters.erp_exporter import ERPExporter
+
             paths = ERPExporter().export(order, str(output_path))
             output_files = [{"name": p.name, "path": str(p)} for p in paths]
 
@@ -1646,16 +1730,19 @@ def send_to_fire(
     outcome = _send_one_to_fire(import_id, cfg, request_env=request_env)
     if not outcome.ok:
         raise HTTPException(status_code=outcome.http_status, detail=outcome.detail)
-    return JSONResponse({
-        "entry_id": import_id,
-        "fire_codigo": outcome.fire_codigo,
-        "items_inserted": outcome.items_inserted,
-        "portal_status": "sent_to_fire",
-    })
+    return JSONResponse(
+        {
+            "entry_id": import_id,
+            "fire_codigo": outcome.fire_codigo,
+            "items_inserted": outcome.items_inserted,
+            "portal_status": "sent_to_fire",
+        }
+    )
 
 
 class _XlsxExportOutcome:
     """Internal result of _export_one_xlsx. HTTP layer translates to status."""
+
     __slots__ = ("ok", "reason", "http_status", "output_files", "detail")
 
     def __init__(
@@ -1685,7 +1772,9 @@ def _export_one_xlsx(import_id: str, cfg: dict) -> _XlsxExportOutcome:
 
     entry = repo.get_import(import_id)
     if entry is None:
-        return _XlsxExportOutcome(False, reason="not_found", http_status=404, detail="Pedido não encontrado")
+        return _XlsxExportOutcome(
+            False, reason="not_found", http_status=404, detail="Pedido não encontrado"
+        )
     if entry.get("portal_status") != "parsed":
         return _XlsxExportOutcome(
             False,
@@ -1726,11 +1815,17 @@ def _export_one_xlsx(import_id: str, cfg: dict) -> _XlsxExportOutcome:
             metrics.price_check_blocks_total.labels(reason="no_price_unacked").inc()
         parts = []
         if block_detail["items_mismatch"]:
-            parts.append(f"{len(block_detail['items_mismatch'])} item(ns) com preço divergente do Fire")
+            parts.append(
+                f"{len(block_detail['items_mismatch'])} item(ns) com preço divergente do Fire"
+            )
         if block_detail["items_no_order_price"]:
-            parts.append(f"{len(block_detail['items_no_order_price'])} item(ns) sem preço no pedido")
+            parts.append(
+                f"{len(block_detail['items_no_order_price'])} item(ns) sem preço no pedido"
+            )
         if block_detail["items_no_price_unacked"]:
-            parts.append(f"{len(block_detail['items_no_price_unacked'])} item(ns) sem preço no cadastro do Fire (sem confirmação)")
+            parts.append(
+                f"{len(block_detail['items_no_price_unacked'])} item(ns) sem preço no cadastro do Fire (sem confirmação)"
+            )
         return _XlsxExportOutcome(
             False,
             reason="price_check_failed",
@@ -1760,11 +1855,13 @@ def export_xlsx(
     outcome = _export_one_xlsx(import_id, cfg)
     if not outcome.ok:
         raise HTTPException(status_code=outcome.http_status, detail=outcome.detail)
-    return JSONResponse({
-        "entry_id": import_id,
-        "output_files": outcome.output_files,
-        "portal_status": "parsed",
-    })
+    return JSONResponse(
+        {
+            "entry_id": import_id,
+            "output_files": outcome.output_files,
+            "portal_status": "parsed",
+        }
+    )
 
 
 class BatchSendRequest(BaseModel):
@@ -1793,27 +1890,33 @@ def batch_send_to_fire(
         outcome = _send_one_to_fire(import_id, cfg, request_env=request_env)
         if outcome.ok:
             ok_count += 1
-            results.append({
-                "id": import_id,
-                "ok": True,
-                "fire_codigo": outcome.fire_codigo,
-                "items_inserted": outcome.items_inserted,
-            })
+            results.append(
+                {
+                    "id": import_id,
+                    "ok": True,
+                    "fire_codigo": outcome.fire_codigo,
+                    "items_inserted": outcome.items_inserted,
+                }
+            )
         else:
             fail_count += 1
-            results.append({
-                "id": import_id,
-                "ok": False,
-                "reason": outcome.reason,
-                "detail": outcome.detail,
-            })
+            results.append(
+                {
+                    "id": import_id,
+                    "ok": False,
+                    "reason": outcome.reason,
+                    "detail": outcome.detail,
+                }
+            )
 
-    return JSONResponse({
-        "total": len(body.ids),
-        "ok": ok_count,
-        "failed": fail_count,
-        "results": results,
-    })
+    return JSONResponse(
+        {
+            "total": len(body.ids),
+            "ok": ok_count,
+            "failed": fail_count,
+            "results": results,
+        }
+    )
 
 
 @app.post("/api/batch/export-xlsx")
@@ -1836,26 +1939,32 @@ def batch_export_xlsx(
         outcome = _export_one_xlsx(import_id, cfg)
         if outcome.ok:
             ok_count += 1
-            results.append({
-                "id": import_id,
-                "ok": True,
-                "output_files": outcome.output_files,
-            })
+            results.append(
+                {
+                    "id": import_id,
+                    "ok": True,
+                    "output_files": outcome.output_files,
+                }
+            )
         else:
             fail_count += 1
-            results.append({
-                "id": import_id,
-                "ok": False,
-                "reason": outcome.reason,
-                "detail": outcome.detail,
-            })
+            results.append(
+                {
+                    "id": import_id,
+                    "ok": False,
+                    "reason": outcome.reason,
+                    "detail": outcome.detail,
+                }
+            )
 
-    return JSONResponse({
-        "total": len(body.ids),
-        "ok": ok_count,
-        "failed": fail_count,
-        "results": results,
-    })
+    return JSONResponse(
+        {
+            "total": len(body.ids),
+            "ok": ok_count,
+            "failed": fail_count,
+            "results": results,
+        }
+    )
 
 
 class CancelRequest(BaseModel):
@@ -1899,8 +2008,7 @@ def post_to_gestor(
         raise HTTPException(
             status_code=409,
             detail=(
-                "Pedido já enviado ao Gestor "
-                f"(production_status: {entry.get('production_status')})"
+                f"Pedido já enviado ao Gestor (production_status: {entry.get('production_status')})"
             ),
         )
 
@@ -1910,9 +2018,7 @@ def post_to_gestor(
     try:
         order = Order.model_validate(snapshot)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=422, detail=f"Snapshot inválido: {exc}"
-        ) from exc
+        raise HTTPException(status_code=422, detail=f"Snapshot inválido: {exc}") from exc
 
     with with_trace_id(entry.get("trace_id")) as trace_id:
         payload_request = build_gestor_payload(
@@ -1949,9 +2055,7 @@ def post_to_gestor(
                 payload={"outbox_id": row.id, "idempotency_key": idempotency_key},
             )
         except InvalidTransitionError as exc:
-            outbox_repo.mark_failed(
-                row.id, error=f"transition_invalid: {exc}", dead=True
-            )
+            outbox_repo.mark_failed(row.id, error=f"transition_invalid: {exc}", dead=True)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         # 3) Drain inline. Phase 5 worker will own this.
@@ -1965,14 +2069,13 @@ def post_to_gestor(
                 source=EventSource.PORTAL,
                 payload={"reason": str(exc)},
             )
-            raise HTTPException(
-                status_code=503, detail=f"Gestor não configurado: {exc}"
-            ) from exc
+            raise HTTPException(status_code=503, detail=f"Gestor não configurado: {exc}") from exc
 
         try:
             try:
                 response = client.create_order(
-                    payload_request, idempotency_key=idempotency_key,
+                    payload_request,
+                    idempotency_key=idempotency_key,
                 )
             except GestorClientError as exc:
                 outbox_repo.mark_failed(row.id, error=str(exc))
@@ -1982,9 +2085,7 @@ def post_to_gestor(
                     source=EventSource.PORTAL,
                     payload={"reason": str(exc), "status_code": exc.status_code},
                 )
-                raise HTTPException(
-                    status_code=502, detail=f"Gestor rejeitou: {exc}"
-                ) from exc
+                raise HTTPException(status_code=502, detail=f"Gestor rejeitou: {exc}") from exc
 
             # 4) Success: persist correlation, mark outbox, transition SENT.
             outbox_repo.mark_sent(row.id, response=response.model_dump())
@@ -2001,13 +2102,15 @@ def post_to_gestor(
         finally:
             client.close()
 
-        return JSONResponse({
-            "entry_id": import_id,
-            "gestor_order_id": response.id,
-            "production_status": result.production_status.value,
-            "outbox_id": row.id,
-            "trace_id": trace_id,
-        })
+        return JSONResponse(
+            {
+                "entry_id": import_id,
+                "gestor_order_id": response.id,
+                "production_status": result.production_status.value,
+                "outbox_id": row.id,
+                "trace_id": trace_id,
+            }
+        )
 
 
 @app.post("/api/imported/{import_id}/cancel")
@@ -2017,11 +2120,15 @@ def cancel_import(
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     from app.persistence import repo
+
     entry = repo.get_import(import_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Pedido não encontrado")
     if entry.get("portal_status") == "sent_to_fire":
-        raise HTTPException(status_code=409, detail="Pedido já foi enviado ao Fire — não pode ser cancelado pelo portal")
+        raise HTTPException(
+            status_code=409,
+            detail="Pedido já foi enviado ao Fire — não pode ser cancelado pelo portal",
+        )
 
     reason = body.reason if body else None
     with with_trace_id(entry.get("trace_id")):
@@ -2035,10 +2142,12 @@ def cancel_import(
             )
         except InvalidTransitionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return JSONResponse({
-        "entry_id": import_id,
-        "portal_status": result.portal_status.value,
-    })
+    return JSONResponse(
+        {
+            "entry_id": import_id,
+            "portal_status": result.portal_status.value,
+        }
+    )
 
 
 # ── Manual cliente override (CLIENT_NOT_FOUND recovery) ─────────────────
@@ -2087,6 +2196,7 @@ def search_clientes(
             cur.close()
     except Exception as exc:  # noqa: BLE001
         from app.utils.logger import logger
+
         logger.warning(f"clientes/search falhou ({type(exc).__name__}): {exc}")
         raise HTTPException(status_code=502, detail="Falha consultando o Fire") from exc
 
@@ -2145,6 +2255,7 @@ def override_cliente(
             cur.close()
     except Exception as exc:  # noqa: BLE001
         from app.utils.logger import logger
+
         logger.warning(f"override-cliente falhou ({type(exc).__name__}): {exc}")
         raise HTTPException(status_code=502, detail="Falha consultando o Fire") from exc
 
@@ -2159,7 +2270,10 @@ def override_cliente(
 
     with with_trace_id(entry.get("trace_id")):
         repo.set_client_override(
-            import_id, codigo=int(row[0]), razao=razao, user=actor,
+            import_id,
+            codigo=int(row[0]),
+            razao=razao,
+            user=actor,
         )
         repo.append_audit(
             import_id,
@@ -2174,11 +2288,13 @@ def override_cliente(
             },
         )
 
-    return JSONResponse({
-        "entry_id": import_id,
-        "cliente_override_codigo": int(row[0]),
-        "cliente_override_razao": razao,
-    })
+    return JSONResponse(
+        {
+            "entry_id": import_id,
+            "cliente_override_codigo": int(row[0]),
+            "cliente_override_razao": razao,
+        }
+    )
 
 
 @app.post("/api/imported/{import_id}/ack-sem-preco")
@@ -2241,12 +2357,14 @@ def ack_sem_preco(
         metrics.price_check_acks_total.inc()
 
     fresh = repo.get_import(import_id)
-    return JSONResponse({
-        "entry_id": import_id,
-        "ack_by": fresh["sem_preco_ack_by"],
-        "ack_at": fresh["sem_preco_ack_at"],
-        "items_acked": items_acked,
-    })
+    return JSONResponse(
+        {
+            "entry_id": import_id,
+            "ack_by": fresh["sem_preco_ack_by"],
+            "ack_at": fresh["sem_preco_ack_at"],
+            "items_acked": items_acked,
+        }
+    )
 
 
 @app.get("/api/imported/{import_id}/preview")
@@ -2321,10 +2439,12 @@ async def process_files(
     try:
         output_path.mkdir(parents=True, exist_ok=True)
     except Exception as exc:
-        return JSONResponse({
-            "results": [],
-            "errors": [{"source": "—", "error": f"Pasta inválida: {exc}"}],
-        })
+        return JSONResponse(
+            {
+                "results": [],
+                "errors": [{"source": "—", "error": f"Pasta inválida: {exc}"}],
+            }
+        )
 
     exporter = ERPExporter()
     results = []
@@ -2341,10 +2461,12 @@ async def process_files(
         raw = await upload.read()
 
         if len(raw) > MAX_UPLOAD_BYTES:
-            errors.append({
-                "source": filename,
-                "error": f"Arquivo excede o limite de {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
-            })
+            errors.append(
+                {
+                    "source": filename,
+                    "error": f"Arquivo excede o limite de {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
+                }
+            )
             continue
 
         tmp_path: Optional[Path] = None
@@ -2358,16 +2480,20 @@ async def process_files(
 
             if order:
                 paths = exporter.export(order, str(output_path))
-                results.append({
-                    "source": filename,
-                    "order": order.header.order_number or "—",
-                    "files": [{"name": p.name, "path": str(p)} for p in paths],
-                })
+                results.append(
+                    {
+                        "source": filename,
+                        "order": order.header.order_number or "—",
+                        "files": [{"name": p.name, "path": str(p)} for p in paths],
+                    }
+                )
             else:
-                errors.append({
-                    "source": filename,
-                    "error": "Formato não reconhecido ou pedido sem itens",
-                })
+                errors.append(
+                    {
+                        "source": filename,
+                        "error": "Formato não reconhecido ou pedido sem itens",
+                    }
+                )
         except Exception as exc:
             errors.append({"source": filename, "error": str(exc)})
         finally:

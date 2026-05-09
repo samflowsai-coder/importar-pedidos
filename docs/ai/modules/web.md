@@ -57,6 +57,13 @@ API pública para páginas-filho:
   aplica seleção manual ao pedido (sidecar em `imports.cliente_override_*`).
   Requer auth. Só permitido em `portal_status='parsed'`. Logs em `audit_log`
   (`cliente_override_selected`) com `user_email`/`user_id` do autenticado.
+- `POST /api/imported/{id}/ack-sem-preco` → operador confirma itens sem preço cadastrado no Fire (`require_user`).
+  Body vazio. Pre: `portal_status='parsed'`. Re-roda check, persiste lista
+  em `imports.sem_preco_ack_*`, audit `sem_preco_acknowledged`. 503 se Fire offline.
+- Guards de preço em `_send_one_to_fire` / `_export_one_xlsx`: re-roda
+  `check_order` + `is_blocking`; bloqueia 409 com audit `send_to_fire_blocked` /
+  `xlsx_export_blocked` quando há mismatch / no_order_price / no_price_unacked.
+  Fire offline = best-effort, segue.
 
 ## Segurança (não relaxar)
 - Whitelist de extensão: `.pdf`, `.xls`, `.xlsx`.
@@ -95,3 +102,6 @@ event listener.
   feito pelas APIs que cada página consome — daí ser admin-only no `POST` do Firebird.
 - Assets estáticos não têm hash. Use `?v=1` em `<link>`/`<script>` ao mudar tokens/shell;
   caso contrário, hard-reload no browser.
+- `_export_one_xlsx` re-roda `check_order` SEM passar `request_env` (caminho
+  legado). Em deploy multi-ambiente isso usa env vars `FB_*`. Follow-up:
+  passar env do request quando essa rota também adotar `getattr(request.state, "environment")`.
