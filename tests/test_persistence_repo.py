@@ -200,3 +200,29 @@ def test_set_client_override_last_write_wins(sqlite_tmp):
     got = repo.get_import(e["id"])
     assert got["cliente_override_codigo"] == 2
     assert got["cliente_override_razao"] == "SEGUNDA"
+
+
+def test_schema_includes_sem_preco_ack_columns(sqlite_tmp):
+    """schema_env.TABLES_SQL deve incluir as 3 colunas do sidecar de ack."""
+    from app.persistence import db
+    with db.connect() as conn:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(imports)").fetchall()}
+    assert "sem_preco_ack_by" in cols
+    assert "sem_preco_ack_at" in cols
+    assert "sem_preco_ack_items" in cols
+
+
+def test_column_migration_is_idempotent(tmp_path):
+    """Rodar _ensure_schema duas vezes na mesma DB não deve falhar."""
+    from app.persistence import db, schema_env
+    from app.persistence.router import _ensure_schema
+
+    db_path = tmp_path / "app_state_test.db"
+    _ensure_schema(db_path, schema_env)
+    _ensure_schema(db_path, schema_env)  # segunda vez é o teste real
+
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(imports)").fetchall()}
+    conn.close()
+    assert {"sem_preco_ack_by", "sem_preco_ack_at", "sem_preco_ack_items"} <= cols
