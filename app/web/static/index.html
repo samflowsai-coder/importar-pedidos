@@ -1698,15 +1698,19 @@ function renderPreview(data) {
     groupsEl.innerHTML = '';
   }
 
-  // Match map by (ean || code) for rendering the Fire column
+  // Check map by (ean || code) for rendering the Fire column
   const check = data.check;
-  const matchByEan = new Map();
-  const matchByCode = new Map();
+  const checkByEan = new Map();
+  const checkByCode = new Map();
   if (check && check.items) {
     check.items.forEach(m => {
-      if (m.ean) matchByEan.set(m.ean, m);
-      if (m.product_code) matchByCode.set(m.product_code, m);
+      if (m.ean) checkByEan.set(m.ean, m);
+      if (m.product_code) checkByCode.set(m.product_code, m);
     });
+  }
+  function _checkOf(it) {
+    return (it.ean && checkByEan.get(it.ean))
+        || (it.product_code && checkByCode.get(it.product_code));
   }
 
   // Check banner
@@ -1772,15 +1776,32 @@ function renderPreview(data) {
       }
       for (const it of gitems) {
         const deliv = [it.delivery_name, it.delivery_date].filter(Boolean).join(' · ');
-        const match = (it.ean && matchByEan.get(it.ean)) || (it.product_code && matchByCode.get(it.product_code));
+        const m = _checkOf(it);
         let cell;
-        if (!check) cell = '<span style="color:var(--text-muted)">—</span>';
-        else if (!check.available) cell = '<span style="color:var(--text-muted)" title="check indisponível">—</span>';
-        else if (match && match.match) {
-          const title = `#${match.fire_product_id} · ${match.fire_description || ''} · via ${match.match_source}`;
-          cell = `<span style="color:var(--success);font-weight:600" title="${esc(title)}">✓</span>`;
-        } else {
+        if (!check) {
+          cell = '<span style="color:var(--text-muted)">—</span>';
+        } else if (!check.available) {
+          cell = '<span style="color:var(--text-muted)" title="check indisponível">—</span>';
+        } else if (!m || !m.match) {
           cell = '<span style="color:var(--error);font-weight:600" title="sem match no Fire">✗</span>';
+        } else {
+          const ps = m.price_status;
+          const idTitle = `#${m.fire_product_id} · ${m.fire_description || ''} · via ${m.match_source}`;
+          if (ps === 'match') {
+            cell = `<span style="color:var(--success);font-weight:600" title="${esc(idTitle)}">✓</span>`;
+          } else if (ps === 'mismatch') {
+            const fp = m.fire_preco_venda != null ? fmtBRL(m.fire_preco_venda) : '?';
+            cell = `<span style="color:var(--error);font-weight:600"
+                     title="${esc(idTitle)} · cadastro Fire: ${esc(fp)}">✗ ${esc(fp)}</span>`;
+          } else if (ps === 'no_price_in_fire') {
+            cell = `<span style="color:var(--warn);font-weight:600"
+                     title="${esc(idTitle)} · sem preço cadastrado no Fire">⚠ sem preço</span>`;
+          } else if (ps === 'no_order_price') {
+            cell = `<span style="color:var(--error);font-weight:600"
+                     title="${esc(idTitle)} · pedido sem preço">✗ pedido sem preço</span>`;
+          } else {
+            cell = `<span style="color:var(--success);font-weight:600" title="${esc(idTitle)}">✓</span>`;
+          }
         }
         rows.push(`
           <tr>
