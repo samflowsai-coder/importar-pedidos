@@ -194,3 +194,71 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
             },
         },
     }
+
+
+def is_blocking(check: dict, ack_items: Optional[list[dict]] = None) -> tuple[bool, dict]:
+    """Decide se o estado do check impede envio.
+
+    Bloqueia se:
+      - Algum item com price_status='mismatch'
+      - Algum item com price_status='no_order_price'
+      - Algum item com price_status='no_price_in_fire' não coberto por ack_items
+
+    `ack_items`: lista [{ean, product_code, ...}] vinda de
+    imports.sem_preco_ack_items. Item é considerado coberto se EAN bate
+    (quando ambos presentes) OU product_code bate.
+
+    Quando check['available'] é False, devolve (False, ...) — best-effort:
+    sem dados pra avaliar, não bloqueia.
+
+    Retorna (blocked, detail) onde detail = {
+      "items_mismatch": [{ean, product_code, order_price, fire_price}],
+      "items_no_order_price": [{ean, product_code}],
+      "items_no_price_unacked": [{ean, product_code}],
+    }.
+    """
+    detail: dict[str, list] = {
+        "items_mismatch": [],
+        "items_no_order_price": [],
+        "items_no_price_unacked": [],
+    }
+    if not check.get("available"):
+        return False, detail
+
+    ack = ack_items or []
+    ack_eans = {a.get("ean") for a in ack if a.get("ean")}
+    ack_codes = {a.get("product_code") for a in ack if a.get("product_code")}
+
+    def _covered(item: dict) -> bool:
+        if item.get("ean") and item["ean"] in ack_eans:
+            return True
+        if item.get("product_code") and item["product_code"] in ack_codes:
+            return True
+        return False
+
+    for it in check.get("items", []):
+        status = it.get("price_status")
+        if status == "mismatch":
+            detail["items_mismatch"].append({
+                "ean": it.get("ean"),
+                "product_code": it.get("product_code"),
+                "order_price": it.get("unit_price_order"),
+                "fire_price": it.get("fire_preco_venda"),
+            })
+        elif status == "no_order_price":
+            detail["items_no_order_price"].append({
+                "ean": it.get("ean"),
+                "product_code": it.get("product_code"),
+            })
+        elif status == "no_price_in_fire" and not _covered(it):
+            detail["items_no_price_unacked"].append({
+                "ean": it.get("ean"),
+                "product_code": it.get("product_code"),
+            })
+
+    blocked = bool(
+        detail["items_mismatch"]
+        or detail["items_no_order_price"]
+        or detail["items_no_price_unacked"]
+    )
+    return blocked, detail
