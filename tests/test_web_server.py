@@ -1049,3 +1049,77 @@ def test_save_config_preserves_session(real_auth, tmp_path, monkeypatch):
     me = c.get("/api/auth/me", headers=headers)
     assert me.status_code == 200, me.text
     assert me.json()["user"]["email"] == "cfg@portal.local"
+
+
+# ── ack-sem-preco ─────────────────────────────────────────────────────────────
+
+def test_ack_sem_preco_persists_and_audits(monkeypatch):
+    """POST /api/imported/{id}/ack-sem-preco grava sidecar + audit."""
+    from app.persistence import repo
+    from app.erp import product_check as pc_mod
+    import uuid
+    from datetime import datetime
+
+    entry_id = str(uuid.uuid4())
+    repo.insert_import({
+        "id": entry_id,
+        "source_filename": "x.pdf",
+        "imported_at": datetime.now().isoformat(timespec="seconds"),
+        "order_number": "ACK-1",
+        "status": "success",
+        "portal_status": "parsed",
+        "snapshot": {
+            "header": {"order_number": "ACK-1", "customer_cnpj": "00000000000100"},
+            "items": [{"description": "x", "quantity": 1.0, "ean": "7891", "unit_price": 89.90}],
+            "source_file": "",
+        },
+    })
+
+    fake_check = {
+        "available": True,
+        "items": [{"ean": "7891", "product_code": None,
+                   "price_status": "no_price_in_fire", "fire_product_id": 42}],
+        "summary": {},
+    }
+    monkeypatch.setattr(pc_mod, "check_order", lambda order, **kw: fake_check)
+
+    r = client.post(f"/api/imported/{entry_id}/ack-sem-preco")
+    assert r.status_code == 200, r.text
+
+    body = r.json()
+    assert body["ack_by"] == "test@portal.local"  # do TEST_AUTH_BYPASS
+    assert body["items_acked"] == [
+        {"ean": "7891", "product_code": None, "fire_product_id": 42},
+    ]
+
+    got = repo.get_import(entry_id)
+    assert got["sem_preco_ack_by"] == "test@portal.local"
+    assert got["sem_preco_ack_items"] == [
+        {"ean": "7891", "product_code": None, "fire_product_id": 42},
+    ]
+
+    audits = [a["event_type"] for a in repo.list_audit(entry_id)]
+    assert "sem_preco_acknowledged" in audits
+
+
+def test_ack_sem_preco_rejects_wrong_status():
+    from app.persistence import repo
+    import uuid
+    from datetime import datetime
+    entry_id = str(uuid.uuid4())
+    repo.insert_import({
+        "id": entry_id,
+        "source_filename": "x.pdf",
+        "imported_at": datetime.now().isoformat(timespec="seconds"),
+        "order_number": "ACK-2",
+        "status": "success",
+        "portal_status": "sent_to_fire",
+        "snapshot": {"header": {"order_number": "ACK-2"}, "items": []},
+    })
+    r = client.post(f"/api/imported/{entry_id}/ack-sem-preco")
+    assert r.status_code == 409
+
+
+def test_ack_sem_preco_returns_404_when_missing():
+    r = client.post("/api/imported/does-not-exist/ack-sem-preco")
+    assert r.status_code == 404

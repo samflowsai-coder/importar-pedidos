@@ -2118,6 +2118,74 @@ def override_cliente(
     })
 
 
+@app.post("/api/imported/{import_id}/ack-sem-preco")
+def ack_sem_preco(
+    import_id: str,
+    request: Request,
+    user: User = Depends(require_user),
+) -> JSONResponse:
+    """Registra ack do operador para itens sem preço cadastrado no Fire.
+
+    Re-roda o check_order para coletar a lista atual de itens com
+    price_status='no_price_in_fire' e persiste em imports.sem_preco_ack_*.
+    Audit log grava a ação. Itens com mismatch ou no_order_price NÃO podem
+    ser ack-ados — devolveriam 409 implicitamente porque o guard server-side
+    no envio bloqueia mesmo com ack.
+    """
+    from app.persistence import repo
+    from app.models.order import Order
+    from app.erp.product_check import check_order
+    from app.observability import metrics
+
+    entry = repo.get_import(import_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    if entry.get("portal_status") != "parsed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Pedido não está 'em revisão' (status atual: {entry.get('portal_status')})",
+        )
+    snapshot = entry.get("snapshot")
+    if not snapshot:
+        raise HTTPException(status_code=422, detail="Snapshot indisponível")
+    try:
+        order = Order.model_validate(snapshot)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Snapshot inválido: {exc}") from exc
+
+    request_env = getattr(request.state, "environment", None)
+    with with_trace_id(entry.get("trace_id")):
+        check = check_order(order, env=request_env)
+        if not check.get("available"):
+            raise HTTPException(status_code=503, detail="Fire indisponível para validar ack")
+
+        items_acked = [
+            {
+                "ean": it.get("ean"),
+                "product_code": it.get("product_code"),
+                "fire_product_id": it.get("fire_product_id"),
+            }
+            for it in check.get("items", [])
+            if it.get("price_status") == "no_price_in_fire"
+        ]
+
+        repo.set_sem_preco_ack(import_id, by_email=user.email, items=items_acked)
+        repo.append_audit(
+            import_id,
+            "sem_preco_acknowledged",
+            {"user_email": user.email, "user_id": user.id, "items": items_acked},
+        )
+        metrics.price_check_acks_total.inc()
+
+    fresh = repo.get_import(import_id)
+    return JSONResponse({
+        "entry_id": import_id,
+        "ack_by": fresh["sem_preco_ack_by"],
+        "ack_at": fresh["sem_preco_ack_at"],
+        "items_acked": items_acked,
+    })
+
+
 @app.get("/api/imported/{import_id}/preview")
 def rehydrate_preview(import_id: str) -> JSONResponse:
     """Rebuild the preview payload for a stored order (for the review modal)."""

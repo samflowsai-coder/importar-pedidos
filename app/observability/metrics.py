@@ -64,6 +64,18 @@ portal_product_sync_last_success_timestamp: Gauge = Gauge(
 )
 
 
+price_check_acks_total: Counter = Counter(
+    "portal_price_check_acks_total",
+    "Total de ACKs do operador para itens sem preço cadastrado no Fire",
+)
+
+price_check_blocks_total: Counter = Counter(
+    "portal_price_check_blocks_total",
+    "Total de envios/exports bloqueados por validação de preço",
+    labelnames=("reason",),  # price_mismatch | missing_order_price | no_price_unacked
+)
+
+
 def update_outbox_metrics() -> None:
     """Query todas as DBs de ambiente e atualiza outbox Gauges (soma global).
 
