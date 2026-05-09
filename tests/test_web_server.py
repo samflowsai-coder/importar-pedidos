@@ -1287,3 +1287,55 @@ def test_send_to_fire_passes_when_check_unavailable(monkeypatch):
     r = client.post(f"/api/imported/{entry_id}/send-to-fire")
     assert r.status_code == 200
     assert r.json()["fire_codigo"] == 111
+
+
+# ── Guard _export_one_xlsx: price-check defense in depth ─────────────────────
+
+def test_export_xlsx_blocked_by_price_mismatch(monkeypatch):
+    from app.erp import product_check as pc_mod
+    from app.persistence import repo
+    import uuid
+
+    entry_id = str(uuid.uuid4())
+    _seed_parsed_order(entry_id)
+
+    fake_check = {
+        "available": True,
+        "items": [{"ean": "7891", "product_code": None,
+                   "price_status": "mismatch",
+                   "unit_price_order": 89.90, "fire_preco_venda": 90.00}],
+        "summary": {},
+    }
+    monkeypatch.setattr(pc_mod, "check_order", lambda order, **kw: fake_check)
+
+    r = client.post(f"/api/imported/{entry_id}/export-xlsx")
+    assert r.status_code == 409
+
+    audits = [a["event_type"] for a in repo.list_audit(entry_id)]
+    assert "xlsx_export_blocked" in audits
+
+
+def test_export_xlsx_passes_with_ack(monkeypatch, tmp_path):
+    from app.erp import product_check as pc_mod
+    from app.persistence import repo
+    from app import config as app_config
+    import uuid
+
+    entry_id = str(uuid.uuid4())
+    _seed_parsed_order(entry_id)
+    repo.set_sem_preco_ack(entry_id, by_email="op@example.com",
+                           items=[{"ean": "7891", "product_code": None}])
+
+    fake_check = {
+        "available": True,
+        "items": [{"ean": "7891", "product_code": None,
+                   "price_status": "no_price_in_fire"}],
+        "summary": {},
+    }
+    monkeypatch.setattr(pc_mod, "check_order", lambda order, **kw: fake_check)
+    monkeypatch.setattr(app_config, "load",
+                        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path),
+                                 "export_mode": "xlsx"})
+
+    r = client.post(f"/api/imported/{entry_id}/export-xlsx")
+    assert r.status_code == 200, r.text
