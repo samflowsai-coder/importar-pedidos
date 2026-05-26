@@ -13,6 +13,8 @@ $ErrorActionPreference = "Stop"
 
 $AppDir = Split-Path -Parent $PSScriptRoot
 
+. (Join-Path $PSScriptRoot "network.ps1")
+
 # ── Helpers de output ─────────────────────────────────────────────────────────
 
 function Write-Step([string]$N, [string]$Msg) {
@@ -194,6 +196,15 @@ if (Test-Path $EnvFile) {
     $portInput = (Read-Host "  Porta do servidor [3636]").Trim()
     $Port = if ($portInput -match "^\d+$") { $portInput } else { "3636" }
 
+    # Acesso pela rede
+    Write-Host ""
+    Write-Host "  Acesso pela rede:" -ForegroundColor White
+    Write-Host "    [1] Rede local — outros PCs e celulares na mesma rede acessam pelo IP (recomendado)" -ForegroundColor Gray
+    Write-Host "    [2] Somente este computador (localhost)" -ForegroundColor Gray
+    Write-Host "  Em ambos os casos o Portal NAO fica exposto na internet." -ForegroundColor Gray
+    $netInput = (Read-Host "  Escolha [1/2] (Enter = 1)").Trim()
+    $PortalHost = if ($netInput -eq "2") { "127.0.0.1" } else { "0.0.0.0" }
+
     # Construir .env
     $lines = [System.Collections.Generic.List[string]]::new()
     $lines.Add("# Portal de Pedidos — gerado por instalar.bat em $(Get-Date -Format 'yyyy-MM-dd HH:mm')")
@@ -206,7 +217,7 @@ if (Test-Path $EnvFile) {
     $lines.Add("OUTPUT_DIR=output/")
     $lines.Add("LOG_DIR=logs/")
     $lines.Add("")
-    $lines.Add("PORTAL_HOST=127.0.0.1")
+    $lines.Add("PORTAL_HOST=$PortalHost")
     $lines.Add("PORTAL_PORT=$Port")
     $lines.Add("PORTAL_RELOAD=false")
 
@@ -316,13 +327,29 @@ if ($usersExist) {
     }
 }
 
-# ── Finalizacao ───────────────────────────────────────────────────────────────
+# ── Rede / Firewall ─────────────────────────────────────────────────────────
 
-$port = "3636"
-$envLines2 = Get-Content $EnvFile -Encoding UTF8 -ErrorAction SilentlyContinue
+$port       = "3636"
+$portalHost = "127.0.0.1"
+$envLines2  = Get-Content $EnvFile -Encoding UTF8 -ErrorAction SilentlyContinue
 foreach ($l in $envLines2) {
-    if ($l -match "^PORTAL_PORT=(\d+)") { $port = $Matches[1] }
+    if ($l -match "^PORTAL_PORT=(\d+)")    { $port       = $Matches[1] }
+    if ($l -match "^PORTAL_HOST=([\d.]+)") { $portalHost = $Matches[1] }
 }
+
+if ($portalHost -eq "0.0.0.0") {
+    Write-Step "Rede" "Liberando a porta $port no Firewall do Windows (rede local)..."
+    try {
+        Set-PortalFirewallRule -Port ([int]$port)
+        Write-OK "Porta $port liberada nos perfis Particular/Dominio (Publico continua bloqueado)."
+    } catch {
+        Write-Warn "Nao foi possivel criar a regra de firewall automaticamente."
+        Write-Host "        Rode como Administrador, se necessario:" -ForegroundColor Gray
+        Write-Host "        New-NetFirewallRule -DisplayName 'Portal de Pedidos' -Direction Inbound -Action Allow -Protocol TCP -LocalPort $port -Profile Private,Domain" -ForegroundColor Gray
+    }
+}
+
+# ── Finalizacao ───────────────────────────────────────────────────────────────
 
 Write-Host ""
 Write-Host "  ============================================================" -ForegroundColor Green
@@ -331,7 +358,16 @@ Write-Host "  ============================================================" -For
 Write-Host ""
 Write-Host "  Para iniciar o sistema:" -ForegroundColor White
 Write-Host "    Duplo-clique em  iniciar.bat" -ForegroundColor White
-Write-Host "    Acesso em        http://localhost:$port" -ForegroundColor White
+Write-Host ""
+Write-Host "  Acesso neste computador:  http://localhost:$port" -ForegroundColor White
+if ($portalHost -eq "0.0.0.0") {
+    $lanIp = Get-LanIp
+    if ($lanIp) {
+        Write-Host "  Acesso de outros PCs:     http://${lanIp}:$port" -ForegroundColor White
+    } else {
+        Write-Host "  Acesso de outros PCs:     http://SEU-IP-LOCAL:$port  (descubra o IP com 'ipconfig')" -ForegroundColor White
+    }
+}
 Write-Host ""
 Write-Host "  Para iniciar automaticamente com o Windows (recomendado):" -ForegroundColor Gray
 Write-Host "    Execute  setup-service.bat  como Administrador." -ForegroundColor Gray

@@ -14,6 +14,8 @@ $ErrorActionPreference = "Stop"
 $AppDir   = Split-Path -Parent $PSScriptRoot
 $TaskName = "PortalPedidos"
 
+. (Join-Path $PSScriptRoot "network.ps1")
+
 function Write-Step([string]$N, [string]$Msg) {
     Write-Host ""
     Write-Host "  [$N] $Msg" -ForegroundColor Cyan
@@ -99,10 +101,22 @@ if ($state -eq "Running") {
     Write-Host "        Estado: $state (pode levar alguns segundos para subir)." -ForegroundColor Yellow
 }
 
-# Ler porta do .env
-$port = "3636"
+# Ler porta e host do .env
+$port       = "3636"
+$portalHost = "127.0.0.1"
 (Get-Content $EnvFile -Encoding UTF8 -ErrorAction SilentlyContinue) | ForEach-Object {
-    if ($_ -match "^PORTAL_PORT=(\d+)") { $port = $Matches[1] }
+    if ($_ -match "^PORTAL_PORT=(\d+)")    { $port       = $Matches[1] }
+    if ($_ -match "^PORTAL_HOST=([\d.]+)") { $portalHost = $Matches[1] }
+}
+
+# Garantir liberacao no firewall quando o Portal escuta na rede (ja elevado aqui)
+if ($portalHost -eq "0.0.0.0") {
+    try {
+        Set-PortalFirewallRule -Port ([int]$port)
+        Write-OK "Porta $port liberada no firewall (rede local)."
+    } catch {
+        Write-Host "        AVISO: nao foi possivel criar a regra de firewall." -ForegroundColor Yellow
+    }
 }
 
 Write-Host ""
@@ -111,7 +125,13 @@ Write-Host "   Servico configurado!" -ForegroundColor Green
 Write-Host "  ============================================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  O servidor inicia automaticamente com o Windows." -ForegroundColor White
-Write-Host "  Acesso: http://localhost:$port" -ForegroundColor White
+Write-Host "  Acesso neste computador:  http://localhost:$port" -ForegroundColor White
+if ($portalHost -eq "0.0.0.0") {
+    $lanIp = Get-LanIp
+    if ($lanIp) {
+        Write-Host "  Acesso de outros PCs:     http://${lanIp}:$port" -ForegroundColor White
+    }
+}
 Write-Host ""
 Write-Host "  Para verificar o status:" -ForegroundColor Gray
 Write-Host "    Get-ScheduledTask -TaskName '$TaskName' | Select-Object State" -ForegroundColor Gray
