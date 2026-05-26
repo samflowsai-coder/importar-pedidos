@@ -37,6 +37,14 @@ find "$STAGE" -type f \( \
     -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \
     \) ! -name '.env.example' -delete
 
+# ── Quebras de linha CRLF para os arquivos executados no Windows ─────────────
+# .bat exige CRLF (LF puro pode quebrar goto/labels); .ps1 e o template .env
+# tambem ficam CRLF por seguranca.
+while IFS= read -r -d '' f; do
+    perl -i -pe 's/\r?\n/\r\n/' "$f"
+done < <(find "$STAGE" -type f \( -name '*.bat' -o -name '*.ps1' \) -print0)
+perl -i -pe 's/\r?\n/\r\n/' "$STAGE/.env.example"
+
 # ── Empacotar ────────────────────────────────────────────────────────────────
 mkdir -p "$ROOT/dist"
 OUT="$ROOT/dist/${NAME}-${STAMP}.zip"
