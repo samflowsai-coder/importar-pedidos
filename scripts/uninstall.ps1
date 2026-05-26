@@ -14,6 +14,8 @@ $ErrorActionPreference = "Stop"
 $AppDir   = Split-Path -Parent $PSScriptRoot
 $TaskName = "PortalPedidos"
 
+. (Join-Path $PSScriptRoot "network.ps1")
+
 function Write-Step([string]$N, [string]$Msg) {
     Write-Host ""
     Write-Host "  [$N] $Msg" -ForegroundColor Cyan
@@ -38,9 +40,9 @@ if ($confirm -ne "s") {
     exit 0
 }
 
-# ── [1/4] Parar e remover servico ────────────────────────────────────────────
+# ── [1/5] Parar e remover servico ────────────────────────────────────────────
 
-Write-Step "1/4" "Removendo servico agendado..."
+Write-Step "1/5" "Removendo servico agendado..."
 
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($task) {
@@ -54,9 +56,22 @@ if ($task) {
     Write-OK "Tarefa '$TaskName' nao estava registrada."
 }
 
-# ── [2/4] Remover .venv ───────────────────────────────────────────────────────
+# ── [2/5] Remover regra de firewall ──────────────────────────────────────────
 
-Write-Step "2/4" "Removendo ambiente virtual (.venv)..."
+Write-Step "2/5" "Removendo regra de firewall (se existir)..."
+
+try {
+    Remove-PortalFirewallRule
+    Write-OK "Regra 'Portal de Pedidos' removida."
+} catch {
+    Write-Warn "Nao foi possivel remover a regra de firewall automaticamente."
+    Write-Host "        Remova manualmente como Administrador, se necessario:" -ForegroundColor Gray
+    Write-Host "        Remove-NetFirewallRule -DisplayName 'Portal de Pedidos'" -ForegroundColor Gray
+}
+
+# ── [3/5] Remover .venv ───────────────────────────────────────────────────────
+
+Write-Step "3/5" "Removendo ambiente virtual (.venv)..."
 
 $venvPath = Join-Path $AppDir ".venv"
 if (Test-Path $venvPath) {
@@ -66,9 +81,9 @@ if (Test-Path $venvPath) {
     Write-OK ".venv nao encontrado — nada a remover."
 }
 
-# ── [3/4] Dados de output ─────────────────────────────────────────────────────
+# ── [4/5] Dados de output ─────────────────────────────────────────────────────
 
-Write-Step "3/4" "Dados de saida (output\)..."
+Write-Step "4/5" "Dados de saida (output\)..."
 
 $outputPath = Join-Path $AppDir "output"
 if (Test-Path $outputPath) {
@@ -88,9 +103,9 @@ if (Test-Path $outputPath) {
     }
 }
 
-# ── [4/4] Configuracao (.env) ─────────────────────────────────────────────────
+# ── [5/5] Configuracao (.env) ─────────────────────────────────────────────────
 
-Write-Step "4/4" "Arquivo de configuracao (.env)..."
+Write-Step "5/5" "Arquivo de configuracao (.env)..."
 
 $envFile = Join-Path $AppDir ".env"
 if (Test-Path $envFile) {

@@ -45,10 +45,18 @@ if %PY_MAJOR% EQU 3 if %PY_MINOR% LSS 11 (
     exit /b 1
 )
 
-:: Ler porta do .env
+:: Ler porta e host do .env
 set PORTAL_PORT=3636
+set PORTAL_HOST=127.0.0.1
 for /f "tokens=1,2 delims==" %%a in (.env) do (
     if "%%a"=="PORTAL_PORT" set PORTAL_PORT=%%b
+    if "%%a"=="PORTAL_HOST" set PORTAL_HOST=%%b
+)
+
+:: Se escutando na rede (0.0.0.0), descobrir o IP local desta maquina
+set LAN_IP=
+if "%PORTAL_HOST%"=="0.0.0.0" (
+    for /f "delims=" %%i in ('powershell -NoProfile -Command "Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue ^| Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -notlike '169.254.*' -and $_.PrefixOrigin -ne 'WellKnown' } ^| Sort-Object SkipAsSource ^| Select-Object -First 1 -ExpandProperty IPAddress"') do set LAN_IP=%%i
 )
 
 cls
@@ -57,7 +65,18 @@ echo  ============================================
 echo   IMPORTAR PEDIDOS
 echo  ============================================
 echo.
-echo   Iniciando servidor em http://localhost:%PORTAL_PORT%
+echo   Acesso neste computador:
+echo     http://localhost:%PORTAL_PORT%
+if "%PORTAL_HOST%"=="0.0.0.0" (
+    echo.
+    if defined LAN_IP (
+        echo   Acesso de outros PCs/celulares na rede:
+        echo     http://%LAN_IP%:%PORTAL_PORT%
+    ) else (
+        echo   Acesso de outros PCs na rede: use o IP desta maquina
+        echo     (descubra com o comando: ipconfig^)
+    )
+)
 echo.
 echo   NAO feche esta janela enquanto estiver
 echo   usando o sistema.
@@ -65,9 +84,6 @@ echo.
 echo   Para encerrar: feche esta janela (Ctrl+C)
 echo  ============================================
 echo.
-
-:: Abrir o browser apos 3 segundos (em segundo plano)
-start /b cmd /c "timeout /t 3 /nobreak >nul && start http://localhost:%PORTAL_PORT%"
 
 :: Iniciar servidor (mantém a janela aberta)
 .venv\Scripts\python.exe ui.py
