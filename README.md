@@ -18,18 +18,18 @@ pip install -e ".[dev]"
 
 # 3. Configure as variáveis de ambiente
 cp .env.example .env
-# Edite .env e adicione sua ANTHROPIC_API_KEY
+# Edite .env e adicione sua OPENROUTER_API_KEY
 
 # 4. Rode a interface web
 python ui.py
-# Acesse: http://localhost:8000
+# Acesse: http://localhost:3636
 ```
 
 ## Setup via Docker
 
 ```bash
 cp .env.example .env
-# Edite .env com a ANTHROPIC_API_KEY
+# Edite .env com a OPENROUTER_API_KEY
 
 docker compose up
 ```
@@ -80,7 +80,7 @@ Detalhes em [ARCHITECTURE.md](ARCHITECTURE.md) e [PRD.md](PRD.md).
 
 | Variável | Obrigatório | Descrição |
 |----------|-------------|-----------|
-| `ANTHROPIC_API_KEY` | Sim (fallback LLM) | Chave da API Anthropic |
+| `OPENROUTER_API_KEY` | Sim (fallback LLM) | Chave da API OpenRouter (https://openrouter.ai/keys) |
 | `INPUT_DIR` | Não | Diretório de entrada (padrão: `input/`) |
 | `OUTPUT_DIR` | Não | Diretório de saída (padrão: `output/`) |
 
