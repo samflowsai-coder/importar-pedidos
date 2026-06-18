@@ -30,6 +30,7 @@ from app.persistence import sessions_repo, users_repo
 from app.persistence.users_repo import User
 
 COOKIE_NAME = "portal_session"
+ENV_COOKIE_NAME = "portal_env"
 
 
 def _is_secure_cookie() -> bool:
@@ -65,6 +66,23 @@ def set_session_cookie(response: Response, token: str) -> None:
 
 def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(key=COOKIE_NAME, path="/")
+
+
+def set_env_cookie(response: Response, environment_id: str) -> None:
+    """Marca o ambiente ativo na sessão. Mesmo TTL e flags do session cookie."""
+    response.set_cookie(
+        key=ENV_COOKIE_NAME,
+        value=environment_id,
+        max_age=_ttl_hours() * 3600,
+        httponly=True,
+        secure=_is_secure_cookie(),
+        samesite="strict",
+        path="/",
+    )
+
+
+def clear_env_cookie(response: Response) -> None:
+    response.delete_cookie(key=ENV_COOKIE_NAME, path="/")
 
 
 def _is_test_bypass() -> bool:
@@ -138,10 +156,13 @@ def require_admin(
 
 __all__ = [
     "COOKIE_NAME",
+    "ENV_COOKIE_NAME",
     "User",
+    "clear_env_cookie",
     "clear_session_cookie",
     "current_user",
     "require_admin",
     "require_user",
+    "set_env_cookie",
     "set_session_cookie",
 ]

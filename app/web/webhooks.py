@@ -34,7 +34,8 @@ from app.integrations.gestor.webhook_schema import (
 )
 from app.observability.metrics import webhook_received_total
 from app.observability.trace import current_trace_id, with_trace_id
-from app.persistence import idempotency_repo, repo
+from app.persistence import context as env_context
+from app.persistence import environments_repo, idempotency_repo, repo, router as db_router
 from app.security import (
     InvalidSignatureError,
     ReplayedRequestError,
@@ -77,13 +78,51 @@ def _gestor_secrets() -> list[str]:
     ]
 
 
-def _resolve_import_id(event: GestorWebhookEvent) -> str | None:
-    """Prefer `external_id` (echoed back by Gestor); fall back to
-    reverse-lookup by `gestor_order_id`."""
+def _known_environments() -> list[dict[str, Any]]:
+    """All persisted envs, plus current test/legacy context when no row exists."""
+    envs = environments_repo.list_all()
+    current = env_context.current()
+    if current and not any(e["slug"] == current["slug"] for e in envs):
+        envs.append({"id": current["id"], "slug": current["slug"]})
+    return envs
+
+
+def _find_env_by_import_id(import_id: str) -> dict[str, Any] | None:
+    for env in _known_environments():
+        try:
+            with db_router.env_connect(env["slug"]) as conn:
+                row = conn.execute("SELECT 1 FROM imports WHERE id = ?", (import_id,)).fetchone()
+        except Exception:
+            continue
+        if row:
+            return env
+    return None
+
+
+def _find_import_by_gestor_order_id(gestor_order_id: str) -> tuple[str, dict[str, Any]] | None:
+    for env in _known_environments():
+        try:
+            with db_router.env_connect(env["slug"]) as conn:
+                row = conn.execute(
+                    "SELECT id FROM imports WHERE gestor_order_id = ? LIMIT 1",
+                    (gestor_order_id,),
+                ).fetchone()
+        except Exception:
+            continue
+        if row:
+            return row["id"], env
+    return None
+
+
+def _resolve_import(event: GestorWebhookEvent) -> tuple[str, dict[str, Any]] | None:
+    """Prefer external_id; fall back to gestor_order_id, resolving env too."""
     if event.external_id:
-        return event.external_id
+        env = _find_env_by_import_id(event.external_id)
+        if env is not None:
+            return event.external_id, env
+        return None
     if event.gestor_order_id:
-        return repo.find_import_id_by_gestor(event.gestor_order_id)
+        return _find_import_by_gestor_order_id(event.gestor_order_id)
     return None
 
 
@@ -160,8 +199,8 @@ async def gestor_webhook(
         return JSONResponse(cached_body, status_code=cached.response_status)
 
     # 4) Resolve correlation
-    import_id = _resolve_import_id(event)
-    if import_id is None:
+    resolved = _resolve_import(event)
+    if resolved is None:
         body_out = {
             "received": False,
             "reason": "unknown_external_id_and_gestor_order_id",
@@ -170,51 +209,53 @@ async def gestor_webhook(
             GESTOR_PROVIDER, event.event_id, status=404, body=json.dumps(body_out),
         )
         raise HTTPException(status_code=404, detail=body_out["reason"])
+    import_id, env = resolved
 
     # 5) Drive the state machine, propagating Portal trace_id for correlation.
     #    `external_id` may have been forged or stale — verify the row exists.
-    entry = repo.get_import(import_id)
-    if entry is None:
-        body_out = {
-            "received": False,
-            "reason": f"unknown_import_id:{import_id}",
-        }
-        idempotency_repo.finalize(
-            GESTOR_PROVIDER, event.event_id, status=404, body=json.dumps(body_out),
-        )
-        raise HTTPException(status_code=404, detail=body_out["reason"])
-    portal_trace = entry.get("trace_id")
-
-    try:
-        sm_event = _GESTOR_EVENT_MAP[event.event_type]
-    except KeyError:
-        body_out = {"received": False, "reason": f"unmapped_event_type:{event.event_type.value}"}
-        idempotency_repo.finalize(
-            GESTOR_PROVIDER, event.event_id,
-            status=422, body=json.dumps(body_out), import_id=import_id,
-        )
-        raise HTTPException(status_code=422, detail=body_out["reason"])  # noqa: B904
-
-    with with_trace_id(portal_trace):
-        # Stamp apontae_order_id idempotently on every event that includes it.
-        if event.apontae_order_id:
-            repo.set_apontae_order_id(import_id, event.apontae_order_id)
+    with env_context.active_env(env["id"], env["slug"]):
+        entry = repo.get_import(import_id)
+        if entry is None:
+            body_out = {
+                "received": False,
+                "reason": f"unknown_import_id:{import_id}",
+            }
+            idempotency_repo.finalize(
+                GESTOR_PROVIDER, event.event_id, status=404, body=json.dumps(body_out),
+            )
+            raise HTTPException(status_code=404, detail=body_out["reason"])
+        portal_trace = entry.get("trace_id")
 
         try:
-            result = transition(
-                import_id,
-                sm_event,
-                source=EventSource.GESTOR,
-                payload=_build_payload(event),
-                trace_id=current_trace_id(),
-            )
-        except InvalidTransitionError as exc:
-            body_out = {"received": False, "reason": str(exc)}
+            sm_event = _GESTOR_EVENT_MAP[event.event_type]
+        except KeyError:
+            body_out = {"received": False, "reason": f"unmapped_event_type:{event.event_type.value}"}
             idempotency_repo.finalize(
                 GESTOR_PROVIDER, event.event_id,
-                status=409, body=json.dumps(body_out), import_id=import_id,
+                status=422, body=json.dumps(body_out), import_id=import_id,
             )
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=422, detail=body_out["reason"])  # noqa: B904
+
+        with with_trace_id(portal_trace):
+            # Stamp apontae_order_id idempotently on every event that includes it.
+            if event.apontae_order_id:
+                repo.set_apontae_order_id(import_id, event.apontae_order_id)
+
+            try:
+                result = transition(
+                    import_id,
+                    sm_event,
+                    source=EventSource.GESTOR,
+                    payload=_build_payload(event),
+                    trace_id=current_trace_id(),
+                )
+            except InvalidTransitionError as exc:
+                body_out = {"received": False, "reason": str(exc)}
+                idempotency_repo.finalize(
+                    GESTOR_PROVIDER, event.event_id,
+                    status=409, body=json.dumps(body_out), import_id=import_id,
+                )
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     body_out = {
         "received": True,

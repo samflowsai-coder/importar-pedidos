@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 import time
 
-from app.persistence.db import connect
+from app.persistence.db import connect_shared as connect
 
 
 def _enabled() -> bool:

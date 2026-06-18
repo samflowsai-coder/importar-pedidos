@@ -2,9 +2,33 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from app.persistence.outbox_repo import OutboxRow
+
+
+@pytest.fixture(autouse=True)
+def _seed_env(tmp_path: Path):
+    """Cria um ambiente "test" para que list_env_slugs() retorne 'test'."""
+    import os
+    from app.persistence import db, environments_repo
+    os.environ["APP_DATA_DIR"] = str(tmp_path)
+    db.set_db_path(tmp_path / "app_state.db")
+    db.reset_init_cache()
+    db.init()
+    environments_repo.create(
+        slug="test", name="Test",
+        watch_dir=str(tmp_path / "in"),
+        output_dir=str(tmp_path / "out"),
+        fb_path=str(tmp_path / "x.fdb"),
+    )
+    yield
+    db.set_db_path(None)
+    db.reset_init_cache()
+    os.environ.pop("APP_DATA_DIR", None)
 
 
 def _make_row(*, attempts: int = 0, trace_id: str | None = None) -> OutboxRow:

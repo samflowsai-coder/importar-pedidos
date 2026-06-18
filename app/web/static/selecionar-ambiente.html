@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Selecionar ambiente — Portal de Pedidos</title>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/shell.css">
+  <style>
+    body {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans, -apple-system, system-ui, sans-serif);
+      margin: 0;
+      padding: 2rem 1.5rem;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin: 0 0 .5rem;
+      letter-spacing: -0.01em;
+    }
+    .subtitle {
+      color: var(--text-muted);
+      margin: 0 0 3rem;
+      font-size: .95rem;
+    }
+    .env-grid {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      max-width: 760px;
+      width: 100%;
+    }
+    .env-card {
+      padding: 1.5rem;
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all .15s ease;
+      text-align: left;
+      font: inherit;
+      color: inherit;
+      display: flex;
+      flex-direction: column;
+      gap: .35rem;
+    }
+    .env-card:hover {
+      border-color: var(--accent, #3b82f6);
+      transform: translateY(-1px);
+    }
+    .env-card:active { transform: translateY(0); }
+    .env-card[disabled] { opacity: .5; cursor: progress; }
+    .env-name { font-size: 1.1rem; font-weight: 600; }
+    .env-slug { font-size: .8rem; color: var(--text-muted); font-family: var(--font-mono, monospace); }
+    .empty {
+      text-align: center;
+      padding: 3rem 1rem;
+      color: var(--text-muted);
+      max-width: 480px;
+    }
+    .empty a {
+      color: var(--accent, #3b82f6);
+      text-decoration: none;
+    }
+    .empty a:hover { text-decoration: underline; }
+    .err {
+      color: var(--danger, #ef4444);
+      margin-top: 1rem;
+      font-size: .9rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Selecione o ambiente</h1>
+  <p class="subtitle">Escolha qual empresa você vai operar nesta sessão.</p>
+  <div class="env-grid" id="envs"></div>
+  <div class="empty" id="empty" hidden>
+    <p>Nenhum ambiente configurado.</p>
+    <p><a href="/admin/ambientes">Ir para gerenciar ambientes →</a></p>
+  </div>
+  <p class="err" id="err" hidden></p>
+
+  <script>
+    async function load() {
+      try {
+        const r = await fetch('/api/env/list');
+        if (r.status === 401) { location.href = '/login'; return; }
+        if (!r.ok) throw new Error('Falha ao carregar lista');
+        const envs = await r.json();
+        const grid = document.getElementById('envs');
+        if (!envs.length) {
+          document.getElementById('empty').hidden = false;
+          grid.hidden = true;
+          return;
+        }
+        envs.forEach(env => {
+          const btn = document.createElement('button');
+          btn.className = 'env-card';
+          btn.type = 'button';
+          btn.innerHTML =
+            '<span class="env-name"></span>' +
+            '<span class="env-slug"></span>';
+          btn.querySelector('.env-name').textContent = env.name;
+          btn.querySelector('.env-slug').textContent = env.slug;
+          btn.addEventListener('click', () => choose(btn, env.id));
+          grid.appendChild(btn);
+        });
+      } catch (e) {
+        showError(e.message || 'Erro ao carregar');
+      }
+    }
+
+    async function choose(btn, env_id) {
+      btn.disabled = true;
+      try {
+        const r = await fetch('/api/env/select', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ environment_id: env_id }),
+        });
+        if (!r.ok) throw new Error('Falha ao selecionar (' + r.status + ')');
+        location.href = '/';
+      } catch (e) {
+        btn.disabled = false;
+        showError(e.message);
+      }
+    }
+
+    function showError(msg) {
+      const el = document.getElementById('err');
+      el.textContent = msg;
+      el.hidden = false;
+    }
+
+    load();
+  </script>
+</body>
+</html>

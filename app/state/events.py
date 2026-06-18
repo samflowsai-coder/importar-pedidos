@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Any
 
 from app.observability.trace import current_trace_id
+from app.persistence import context as env_context
 from app.persistence import db
 from app.state.machine import (
     EventSource,
@@ -69,14 +70,16 @@ def _insert_event(
     trace_id: str | None,
     occurred_at: str,
 ) -> int:
+    environment_id = env_context.current_env_id()
     cur = conn.execute(
         """
         INSERT INTO order_lifecycle_events
-            (import_id, event_type, source, payload_json, trace_id,
+            (environment_id, import_id, event_type, source, payload_json, trace_id,
              occurred_at, ingested_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
+            environment_id,
             import_id,
             event_type.value,
             source.value,

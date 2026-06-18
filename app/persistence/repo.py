@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 from typing import Any, Optional
 
+from app.persistence import context as env_context
 from app.persistence import db
 
 _MAX_PAGE_SIZE = 500
@@ -32,8 +33,10 @@ def insert_import(entry: dict) -> None:
     if not portal_status:
         portal_status = "sent_to_fire" if entry.get("fire_codigo") else "parsed"
 
+    environment_id = entry.get("environment_id") or env_context.current_env_id()
     params = (
         entry["id"],
+        environment_id,
         entry["source_filename"],
         entry["imported_at"],
         entry.get("order_number"),
@@ -53,19 +56,22 @@ def insert_import(entry: dict) -> None:
         entry.get("released_by"),
         entry.get("trace_id"),
         int(entry.get("state_version", 1)),
+        entry.get("file_sha256"),
+        entry.get("original_path"),
     )
     with db.connect() as conn:
         conn.execute(
             """
             INSERT INTO imports (
-                id, source_filename, imported_at, order_number,
+                id, environment_id, source_filename, imported_at, order_number,
                 customer_cnpj, customer_name, fire_codigo,
                 snapshot_json, check_json, output_files_json, db_result_json,
                 status, error,
                 portal_status, sent_to_fire_at,
                 production_status, released_at, released_by,
-                trace_id, state_version
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                trace_id, state_version,
+                file_sha256, original_path
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 source_filename = excluded.source_filename,
                 imported_at     = excluded.imported_at,
@@ -79,7 +85,9 @@ def insert_import(entry: dict) -> None:
                 db_result_json  = excluded.db_result_json,
                 status          = excluded.status,
                 error           = excluded.error,
-                trace_id        = COALESCE(imports.trace_id, excluded.trace_id)
+                trace_id        = COALESCE(imports.trace_id, excluded.trace_id),
+                file_sha256     = COALESCE(imports.file_sha256, excluded.file_sha256),
+                original_path   = COALESCE(imports.original_path, excluded.original_path)
                 -- portal_status, production_status, state_version,
                 -- sent_to_fire_at, released_at, released_by,
                 -- cliente_override_codigo, cliente_override_razao,
@@ -240,13 +248,15 @@ def get_import(import_id: str) -> Optional[dict]:
 
 
 def append_audit(import_id: str, event_type: str, detail: Optional[dict] = None) -> None:
+    environment_id = env_context.current_env_id()
     with db.connect() as conn:
         conn.execute(
             """
-            INSERT INTO audit_log (import_id, event_type, detail_json, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO audit_log (environment_id, import_id, event_type, detail_json, created_at)
+            VALUES (?, ?, ?, ?, ?)
             """,
             (
+                environment_id,
                 import_id,
                 event_type,
                 json.dumps(detail, ensure_ascii=False) if detail is not None else None,

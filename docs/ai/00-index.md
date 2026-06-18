@@ -8,6 +8,7 @@
 
 | Se a task envolve... | Domínio | Leia |
 |---|---|---|
+| Adicionar/editar ambiente (multi-empresa MM/Nasmar/...) | `environments` | `modules/environments.md` |
 | Adicionar/ajustar parser de cliente novo (PDF ou XLS) | `parsers` | `modules/parsers.md` |
 | Bug em parser específico (Riachuelo, Centauro, Kolosh, etc.) | `parsers` | `modules/parsers.md` |
 | Importação no Firebird, queries SQL, mapper de colunas | `erp` | `modules/erp.md` |
@@ -58,7 +59,10 @@
 - `app/utils/logger.py` — logger loguru singleton
 - `app/models/order.py` — `Order`, `OrderHeader`, `OrderItem`, `ERPRow`
 - `app/config.py` — leitura de env vars (diretórios, modo de exportação)
-- `app/firebird_config.py` — config Firebird editável via UI (`load`, `save`, `apply_to_env`); senha cifrada via `app/security/secret_store.py`
+- `app/persistence/environments_repo.py` — CRUD multi-ambiente (substitui `firebird_config.py` no fluxo multi-empresa); senha cifrada via `app/security/secret_store.py`
+- `app/persistence/router.py` — `shared_connect()` / `env_connect(slug)` para roteamento de DB
+- `app/persistence/context.py` — ContextVar `active_env`; `db.connect()` lê daqui
+- `app/firebird_config.py` — **legado**: config singleton para deploy single-empresa (mantido para compat)
 - `app/web/static/css/tokens.css`, `shell.css`, `app/web/static/js/shell.js` — app shell compartilhado entre páginas autenticadas
 
 ## Fluxos completos

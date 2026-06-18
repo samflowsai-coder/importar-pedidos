@@ -1,7 +1,31 @@
 """Tests for app.worker.jobs.poll_fire."""
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _seed_env(tmp_path: Path):
+    """Cria um ambiente "test" no app_shared para que list_env_slugs() retorne 'test'."""
+    import os
+    from app.persistence import db, environments_repo, router
+    os.environ["APP_DATA_DIR"] = str(tmp_path)
+    db.set_db_path(tmp_path / "app_state.db")
+    db.reset_init_cache()
+    db.init()
+    environments_repo.create(
+        slug="test", name="Test",
+        watch_dir=str(tmp_path / "in"),
+        output_dir=str(tmp_path / "out"),
+        fb_path=str(tmp_path / "x.fdb"),
+    )
+    yield
+    db.set_db_path(None)
+    db.reset_init_cache()
+    os.environ.pop("APP_DATA_DIR", None)
 
 
 def _make_entry(
@@ -37,9 +61,13 @@ def _make_fb_ctx(status: str) -> MagicMock:
     return ctx
 
 
-@patch("app.worker.jobs.poll_fire.FirebirdConnection")
-def test_returns_early_when_firebird_not_configured(mock_fb):
-    mock_fb.return_value.is_configured.return_value = False
+def test_returns_early_when_no_envs_configured(tmp_path):
+    """Sem ambientes ativos, run_poll_fire não chama nada."""
+    import os
+    from app.persistence import db, environments_repo, router
+    # remove o env do fixture autouse
+    for env in environments_repo.list_active():
+        environments_repo.soft_delete(env["id"])
 
     from app.worker.jobs.poll_fire import run_poll_fire
     with patch("app.worker.jobs.poll_fire.repo") as mock_repo:
@@ -54,7 +82,7 @@ def test_status_change_emits_event(mock_append, mock_repo, mock_fb):
     mock_fb.return_value.is_configured.return_value = True
     entry = _make_entry(last_seen="PEDIDO")
     mock_repo.list_pending_for_fire_poll.return_value = [entry]
-    mock_fb.return_value.connect.return_value = _make_fb_ctx("LIBERADO")
+    mock_fb.return_value.connect_with_config.return_value = _make_fb_ctx("LIBERADO")
 
     with patch("app.worker.jobs.poll_fire.app_config") as mock_cfg:
         mock_cfg.load.return_value = {"fire_trigger_status": ""}
@@ -75,7 +103,7 @@ def test_unchanged_status_skips_event(mock_append, mock_repo, mock_fb):
     mock_fb.return_value.is_configured.return_value = True
     entry = _make_entry(last_seen="PEDIDO")
     mock_repo.list_pending_for_fire_poll.return_value = [entry]
-    mock_fb.return_value.connect.return_value = _make_fb_ctx("PEDIDO")
+    mock_fb.return_value.connect_with_config.return_value = _make_fb_ctx("PEDIDO")
 
     with patch("app.worker.jobs.poll_fire.app_config") as mock_cfg:
         mock_cfg.load.return_value = {"fire_trigger_status": ""}
@@ -96,7 +124,7 @@ def test_trigger_status_enqueues_to_outbox(
     mock_fb.return_value.is_configured.return_value = True
     entry = _make_entry(last_seen="PEDIDO")
     mock_repo.list_pending_for_fire_poll.return_value = [entry]
-    mock_fb.return_value.connect.return_value = _make_fb_ctx("LIBERADO")
+    mock_fb.return_value.connect_with_config.return_value = _make_fb_ctx("LIBERADO")
 
     with patch("app.worker.jobs.poll_fire.app_config") as mock_cfg:
         mock_cfg.load.return_value = {"fire_trigger_status": "LIBERADO"}
@@ -121,7 +149,7 @@ def test_empty_trigger_status_never_enqueues(mock_append, mock_outbox, mock_repo
     mock_fb.return_value.is_configured.return_value = True
     entry = _make_entry(last_seen="PEDIDO")
     mock_repo.list_pending_for_fire_poll.return_value = [entry]
-    mock_fb.return_value.connect.return_value = _make_fb_ctx("QUALQUER_STATUS")
+    mock_fb.return_value.connect_with_config.return_value = _make_fb_ctx("QUALQUER_STATUS")
 
     with patch("app.worker.jobs.poll_fire.app_config") as mock_cfg:
         mock_cfg.load.return_value = {"fire_trigger_status": ""}
@@ -141,7 +169,7 @@ def test_outbox_duplicate_is_swallowed(mock_append, mock_outbox, mock_repo, mock
     mock_fb.return_value.is_configured.return_value = True
     entry = _make_entry(last_seen="PEDIDO")
     mock_repo.list_pending_for_fire_poll.return_value = [entry]
-    mock_fb.return_value.connect.return_value = _make_fb_ctx("LIBERADO")
+    mock_fb.return_value.connect_with_config.return_value = _make_fb_ctx("LIBERADO")
     mock_outbox.enqueue.side_effect = OutboxDuplicateError("dup")
 
     with patch("app.worker.jobs.poll_fire.app_config") as mock_cfg:

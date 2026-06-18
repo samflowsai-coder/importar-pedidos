@@ -40,24 +40,28 @@ webhook_received_total: Counter = Counter(
 
 
 def update_outbox_metrics() -> None:
-    """Query SQLite and refresh outbox Gauges.
+    """Query todas as DBs de ambiente e atualiza outbox Gauges (soma global).
 
-    Called from drain_outbox job (every 15 s). Import is deferred to avoid
-    circular imports at module load time.
+    Multi-ambiente: itera `router.list_env_slugs()` e agrega contadores
+    de outbox de cada DB. Métrica é global; rotular por ambiente fica para
+    quando virar requisito real.
     """
-    from app.persistence.db import connect  # noqa: PLC0415
+    from app.persistence import router  # noqa: PLC0415
 
-    with connect() as conn:
-        row = conn.execute(
-            """
-            SELECT
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END),
-                SUM(CASE WHEN status = 'dead'    THEN 1 ELSE 0 END)
-            FROM outbox
-            """
-        ).fetchone()
+    pending_total = 0
+    dead_total = 0
+    for slug in router.list_env_slugs():
+        with router.env_connect(slug) as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN status = 'dead'    THEN 1 ELSE 0 END)
+                FROM outbox
+                """
+            ).fetchone()
+        pending_total += row[0] or 0
+        dead_total += row[1] or 0
 
-    pending = row[0] or 0
-    dead = row[1] or 0
-    outbox_pending_count.set(pending)
-    outbox_dead_count.set(dead)
+    outbox_pending_count.set(pending_total)
+    outbox_dead_count.set(dead_total)

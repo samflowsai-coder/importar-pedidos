@@ -119,7 +119,7 @@ def create(
     now = datetime.now()
     expires = now + timedelta(hours=ttl_hours)
     token = new_token()
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         conn.execute(
             """
             INSERT INTO user_invites
@@ -142,7 +142,7 @@ def create(
 def get_by_token(token: str) -> Invite | None:
     if not token:
         return None
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         row = conn.execute(
             "SELECT * FROM user_invites WHERE token = ?", (token,)
         ).fetchone()
@@ -152,7 +152,7 @@ def get_by_token(token: str) -> Invite | None:
 def find_pending_for_email(email: str) -> Invite | None:
     norm = _norm_email(email)
     now = _now_iso()
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         row = conn.execute(
             """
             SELECT * FROM user_invites
@@ -172,7 +172,7 @@ def list_pending() -> list[Invite]:
     """All invites the admin should still see in the UI: pending OR expired
     (so admin notices to revoke). Excludes already-accepted and revoked.
     """
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         rows = conn.execute(
             """
             SELECT * FROM user_invites
@@ -196,7 +196,7 @@ def accept_for_user(token: str, *, accepted_user_id: int) -> Invite:
             "invite already accepted, revoked, or expired"
         )
     now = _now_iso()
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         cur = conn.execute(
             """
             UPDATE user_invites
@@ -222,7 +222,7 @@ def revoke(token: str) -> bool:
     """Mark revoked_at. Returns True if it changed something. Idempotent
     on already-terminal invites (accepted: returns False; revoked: returns False).
     """
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         cur = conn.execute(
             """
             UPDATE user_invites
@@ -241,7 +241,7 @@ def prune_old(*, older_than_days: int = 30) -> int:
     Pending-but-expired are left alone — admin should see and revoke explicitly.
     """
     cutoff = (datetime.now() - timedelta(days=older_than_days)).isoformat(timespec="seconds")
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         cur = conn.execute(
             """
             DELETE FROM user_invites

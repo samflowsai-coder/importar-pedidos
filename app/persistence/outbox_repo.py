@@ -26,6 +26,7 @@ from datetime import datetime
 from typing import Any
 
 from app.observability.trace import current_trace_id
+from app.persistence import context as env_context
 from app.persistence import db
 
 
@@ -87,17 +88,18 @@ def enqueue(
     tid = trace_id if trace_id is not None else current_trace_id()
     now = _now()
     payload_json = json.dumps(payload, ensure_ascii=False)
+    environment_id = env_context.current_env_id()
     try:
         with db.connect() as conn:
             cur = conn.execute(
                 """
                 INSERT INTO outbox (
-                    import_id, target, endpoint, payload_json, idempotency_key,
+                    environment_id, import_id, target, endpoint, payload_json, idempotency_key,
                     status, attempts, next_attempt_at, last_error, response_json,
                     trace_id, created_at, sent_at
-                ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, NULL, NULL, ?, ?, NULL)
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, NULL, ?, ?, NULL)
                 """,
-                (import_id, target, endpoint, payload_json, idempotency_key, now, tid, now),
+                (environment_id, import_id, target, endpoint, payload_json, idempotency_key, now, tid, now),
             )
             new_id = int(cur.lastrowid)
             row = conn.execute(

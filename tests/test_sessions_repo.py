@@ -53,7 +53,7 @@ def test_expired_session_lazily_deleted(sqlite_tmp):
     # Use a very short TTL via direct DB write to be deterministic.
     from datetime import datetime, timedelta
     past = (datetime.now() - timedelta(hours=1)).isoformat(timespec="seconds")
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         conn.execute(
             """
             INSERT INTO sessions (token, user_id, created_at, expires_at, ip, user_agent)
@@ -63,7 +63,7 @@ def test_expired_session_lazily_deleted(sqlite_tmp):
         )
     assert sessions_repo.get_active("expired-tok") is None
     # And it was deleted
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         row = conn.execute(
             "SELECT * FROM sessions WHERE token = ?", ("expired-tok",)
         ).fetchone()
@@ -90,7 +90,7 @@ def test_delete_all_for_user(sqlite_tmp):
 def test_cascade_delete_on_user(sqlite_tmp):
     uid = _make_user()
     sess = sessions_repo.create_session(user_id=uid)
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         conn.execute("DELETE FROM users WHERE id = ?", (uid,))
     # Cascade FK
     assert sessions_repo.get_active(sess.token) is None
@@ -100,7 +100,7 @@ def test_prune_expired(sqlite_tmp):
     uid = _make_user()
     from datetime import datetime, timedelta
     past = (datetime.now() - timedelta(hours=1)).isoformat(timespec="seconds")
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         conn.execute(
             "INSERT INTO sessions (token, user_id, created_at, expires_at) "
             "VALUES (?, ?, ?, ?)", ("e1", uid, past, past),
@@ -119,7 +119,7 @@ def test_user_agent_truncated(sqlite_tmp):
     huge_ua = "x" * 1000
     sess = sessions_repo.create_session(user_id=uid, user_agent=huge_ua)
     # Stored truncated to 500
-    with db.connect() as conn:
+    with db.connect_shared() as conn:
         row = conn.execute(
             "SELECT user_agent FROM sessions WHERE token = ?", (sess.token,)
         ).fetchone()

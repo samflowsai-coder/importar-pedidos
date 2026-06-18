@@ -26,7 +26,8 @@ from app.integrations.gestor.mapper import build_gestor_payload
 from app.models.order import Order
 from app.observability.metrics import poll_fire_duration_seconds
 from app.observability.trace import with_trace_id
-from app.persistence import outbox_repo, repo
+from app.persistence import context as env_context
+from app.persistence import environments_repo, outbox_repo, repo, router
 from app.persistence.outbox_repo import OutboxDuplicateError
 from app.state.events import append_event, transition
 from app.state.machine import EventSource, LifecycleEvent
@@ -36,16 +37,23 @@ _WINDOW_DAYS = 7
 
 
 def run_poll_fire() -> None:
-    """Poll Firebird for order status changes. No-op if Firebird is not configured."""
+    """Poll Firebird for order status changes em CADA ambiente ativo."""
+    with poll_fire_duration_seconds.time():
+        for slug in router.list_env_slugs():
+            env = environments_repo.get_by_slug(slug)
+            if env is None:
+                continue
+            with env_context.active_env(env["id"], env["slug"]):
+                _do_poll_for_env(env)
+
+
+def _do_poll_for_env(env: dict) -> None:
+    """Poll do Firebird para um ambiente específico — usa creds do env."""
     fire_conn = FirebirdConnection()
-    if not fire_conn.is_configured():
+    fb_cfg = environments_repo.to_fb_config(env)
+    if not fb_cfg.get("path"):
         return
 
-    with poll_fire_duration_seconds.time():
-        _do_poll(fire_conn)
-
-
-def _do_poll(fire_conn: FirebirdConnection) -> None:
     trigger = app_config.load().get("fire_trigger_status", "")
     pending = repo.list_pending_for_fire_poll(_WINDOW_DAYS)
     if not pending:
@@ -53,7 +61,7 @@ def _do_poll(fire_conn: FirebirdConnection) -> None:
 
     now_iso = datetime.now(UTC).isoformat()
 
-    with fire_conn.connect() as conn:
+    with fire_conn.connect_with_config(fb_cfg) as conn:
         for entry in pending:
             fire_codigo = entry["fire_codigo"]
             row = conn.execute(GET_ORDER_STATUS_BY_CODE, (fire_codigo,)).fetchone()
