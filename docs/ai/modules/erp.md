@@ -51,6 +51,8 @@ A partir do redesign do shell, o admin pode editar `FB_*` pela página
 - Nunca rodar `explore_firebird.py` no .fdb de produção.
 - Nunca commitar `.fdb`, `jaybird.jar`, `bkp Fire/`, `bkp Fire Novo/`, `backup Fire/`.
 - Charset errado quebra acentos silenciosamente.
+- **`FB_CLIENT_LIBRARY` em `/tmp/...`**: reboot do macOS limpa `/tmp` e derruba o symlink pra dylib do Firebird. Erro: `"The location of Firebird Client Library could not be determined."` — confunde porque o `.env` aparenta correto. Apontar sempre pra `/Library/Frameworks/Firebird.framework/...` (macOS) ou path estável equivalente em Linux.
+- **`fb_path` com aspas literais salvas no banco**: Finder ("Copy as Pathname") e cmd do Windows embrulham paths em aspas. `environments_repo._clean_path()` faz strip defensivo em `create`/`update`/`to_fb_config`. Sintoma no log antes do fix: `"io error: file not found"` mesmo com o arquivo no disco.
 
 ## Cliente override (CLIENT_NOT_FOUND recovery)
 Quando o CNPJ parseado não bate com `CADASTRO`, o usuário pode escolher

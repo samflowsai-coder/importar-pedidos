@@ -190,3 +190,52 @@ def test_to_fb_config_extracts_password(fresh_shared):
 
 def test_get_returns_none_for_missing(fresh_shared):
     assert environments_repo.get("nope") is None
+
+
+# ── fb_path sanitization ─────────────────────────────────────────────────────
+# Finder "Copy as Pathname" e cmd do Windows costumam embrulhar paths em
+# aspas. Salvar bruto quebra a conexão Firebird com "io error: file not found".
+
+def test_create_strips_wrapping_quotes_from_fb_path(fresh_shared):
+    env = environments_repo.create(
+        slug="mm", name="MM",
+        watch_dir="/a", output_dir="/b",
+        fb_path="'/Users/me/db.fdb'",
+    )
+    assert env["fb_path"] == "/Users/me/db.fdb"
+
+
+def test_create_strips_wrapping_double_quotes_and_whitespace(fresh_shared):
+    env = environments_repo.create(
+        slug="mm", name="MM",
+        watch_dir="/a", output_dir="/b",
+        fb_path='  "/Users/me/db.fdb"  ',
+    )
+    assert env["fb_path"] == "/Users/me/db.fdb"
+
+
+def test_update_strips_wrapping_quotes_from_fb_path(fresh_shared):
+    env = environments_repo.create(
+        slug="mm", name="MM",
+        watch_dir="/a", output_dir="/b", fb_path="/clean.fdb",
+    )
+    updated = environments_repo.update(env["id"], fb_path="'/new/path.fdb'")
+    assert updated["fb_path"] == "/new/path.fdb"
+
+
+def test_to_fb_config_strips_legacy_quoted_path(fresh_shared):
+    """Dados legados na DB (gravados antes do fix) ainda podem ter aspas —
+    `to_fb_config` normaliza na leitura."""
+    env = environments_repo.create(
+        slug="mm", name="MM",
+        watch_dir="/a", output_dir="/b", fb_path="/clean.fdb",
+    )
+    # Simula linha legada com aspas literais na DB (bypassa o sanitizer do update).
+    with router.shared_connect() as conn:
+        conn.execute(
+            "UPDATE environments SET fb_path = ? WHERE id = ?",
+            ("'/legacy/path.fdb'", env["id"]),
+        )
+    env_legacy = environments_repo.get(env["id"])
+    cfg = environments_repo.to_fb_config(env_legacy)
+    assert cfg["path"] == "/legacy/path.fdb"
