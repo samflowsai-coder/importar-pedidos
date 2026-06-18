@@ -1755,7 +1755,9 @@ class _XlsxExportOutcome:
         self.detail = detail
 
 
-def _export_one_xlsx(import_id: str, cfg: dict) -> _XlsxExportOutcome:
+def _export_one_xlsx(
+    import_id: str, cfg: dict, *, request_env: Optional[dict] = None
+) -> _XlsxExportOutcome:
     """Generate XLSX for a parsed order WITHOUT touching Firebird.
 
     Used when EXPORT_MODE='xlsx'. Audit-only side effect; portal_status stays
@@ -1791,13 +1793,12 @@ def _export_one_xlsx(import_id: str, cfg: dict) -> _XlsxExportOutcome:
         )
 
     # Defesa em profundidade: re-checar preço — mesma lógica de _send_one_to_fire.
-    # Nota: _export_one_xlsx ainda não recebe request_env; check_order usa env vars
-    # FB_* como fallback. Em deploy multi-ambiente isso é uma limitação a corrigir
-    # quando esta rota também adotar getattr(request.state, "environment").
+    # Usa o ambiente da request (multi-ambiente); cai pra env vars FB_* só quando
+    # request_env é None (deploy single-DB legado).
     from app.erp.product_check import check_order, is_blocking
     from app.observability import metrics
 
-    check = check_order(order)
+    check = check_order(order, env=request_env)
     ack_items = entry.get("sem_preco_ack_items") or []
     blocked, block_detail = is_blocking(check, ack_items=ack_items)
     if blocked:
@@ -1847,7 +1848,8 @@ def export_xlsx(
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     cfg = _get_cfg_for_request(request)
-    outcome = _export_one_xlsx(import_id, cfg)
+    request_env = getattr(request.state, "environment", None)
+    outcome = _export_one_xlsx(import_id, cfg, request_env=request_env)
     if not outcome.ok:
         raise HTTPException(status_code=outcome.http_status, detail=outcome.detail)
     return JSONResponse(
@@ -1927,11 +1929,12 @@ def batch_export_xlsx(
         raise HTTPException(status_code=400, detail="Máximo 100 pedidos por lote")
 
     cfg = _get_cfg_for_request(request)
+    request_env = getattr(request.state, "environment", None)
     results: list[dict] = []
     ok_count = 0
     fail_count = 0
     for import_id in body.ids:
-        outcome = _export_one_xlsx(import_id, cfg)
+        outcome = _export_one_xlsx(import_id, cfg, request_env=request_env)
         if outcome.ok:
             ok_count += 1
             results.append(

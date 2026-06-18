@@ -1987,6 +1987,14 @@ function openAckSemPrecoModal(previewId) {
 }
 
 async function confirmAckSemPreco(previewId) {
+  // Guard contra double-submit: ack grava audit + métrica, então 2 cliques
+  // duplicariam o registro de uma ação sensível (compliance).
+  const btn = document.querySelector('#ackSemPrecoModal .btn-primary');
+  if (btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = 'Confirmando…';
+  }
   try {
     // api() throws on non-ok and returns parsed JSON body directly
     await api('/api/imported/' + encodeURIComponent(previewId) + '/ack-sem-preco', { method: 'POST' });
@@ -1997,6 +2005,7 @@ async function confirmAckSemPreco(previewId) {
     renderPreview(fresh);
     if (window.appShell) window.appShell.showSuccess('Confirmação registrada.');
   } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Confirmar e prosseguir'; }
     if (window.appShell) window.appShell.showError('Falha ao confirmar', null);
   }
 }
