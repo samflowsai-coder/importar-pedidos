@@ -12,8 +12,13 @@ from pathlib import Path
 
 from fpdf.enums import XPos, YPos
 
+# Permite rodar tanto `python tools/generate_install_pdf.py` quanto
+# `python -m tools.generate_install_pdf`: garante o repo root no sys.path
+# antes do import absoluto de `tools.*`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 # Reaproveita classe-base e paleta do gerador de ajuda (mesma linguagem visual)
-from tools.generate_help_pdf import (
+from tools.generate_help_pdf import (  # noqa: E402
     ACCENT,
     DARK_BG,
     DIVIDER,
