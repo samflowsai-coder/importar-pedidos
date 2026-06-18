@@ -12,6 +12,7 @@ Counters and Histograms are incremented/observed at event time (in their
 respective handlers / jobs). Gauges are refreshed by calling
 ``update_outbox_metrics()`` — the drain_outbox job does this every 15 s.
 """
+
 from __future__ import annotations
 
 from prometheus_client import Counter, Gauge, Histogram
@@ -36,6 +37,18 @@ webhook_received_total: Counter = Counter(
     "portal_webhook_received_total",
     "Inbound webhook requests received",
     ["provider"],
+)
+
+
+price_check_acks_total: Counter = Counter(
+    "portal_price_check_acks_total",
+    "Total de ACKs do operador para itens sem preço cadastrado no Fire",
+)
+
+price_check_blocks_total: Counter = Counter(
+    "portal_price_check_blocks_total",
+    "Total de envios/exports bloqueados por validação de preço",
+    labelnames=("reason",),  # price_mismatch | missing_order_price | no_price_unacked
 )
 
 

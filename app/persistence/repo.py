@@ -1,9 +1,10 @@
 """Import history repository — parameterized queries only, no string concat."""
+
 from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from app.persistence import context as env_context
 from app.persistence import db
@@ -21,6 +22,8 @@ def insert_import(entry: dict) -> None:
     `trace_id` is preserved across upserts (COALESCE keeps the original).
     Cliente override fields (`cliente_override_*`) are owned by
     `set_client_override()` — also never clobbered on upsert.
+    Sidecar do ack de itens sem preço (`sem_preco_ack_*`) é gerenciado
+    por `set_sem_preco_ack()` — também nunca clobbado no upsert.
     """
     snapshot = entry.get("snapshot")
     check = entry.get("check")
@@ -91,14 +94,15 @@ def insert_import(entry: dict) -> None:
                 -- portal_status, production_status, state_version,
                 -- sent_to_fire_at, released_at, released_by,
                 -- cliente_override_codigo, cliente_override_razao,
-                -- cliente_override_at, cliente_override_by are SM-owned
-                -- or set via dedicated helpers — never clobbered here.
+                -- cliente_override_at, cliente_override_by,
+                -- sem_preco_ack_by, sem_preco_ack_at, sem_preco_ack_items
+                -- are SM-owned or set via dedicated helpers — never clobbered here.
             """,
             params,
         )
 
 
-def _derive_cnpj(snapshot: Optional[dict]) -> Optional[str]:
+def _derive_cnpj(snapshot: dict | None) -> str | None:
     if not snapshot:
         return None
     header = snapshot.get("header") or {}
@@ -121,7 +125,8 @@ def _row_to_entry(row) -> dict:
         "fire_codigo": row["fire_codigo"],
         "status": row["status"],
         "error": row["error"],
-        "portal_status": _get("portal_status") or ("sent_to_fire" if row["fire_codigo"] else "parsed"),
+        "portal_status": _get("portal_status")
+        or ("sent_to_fire" if row["fire_codigo"] else "parsed"),
         "sent_to_fire_at": _get("sent_to_fire_at"),
         "production_status": row["production_status"],
         "released_at": row["released_at"],
@@ -134,6 +139,11 @@ def _row_to_entry(row) -> dict:
         "cliente_override_razao": _get("cliente_override_razao"),
         "cliente_override_at": _get("cliente_override_at"),
         "cliente_override_by": _get("cliente_override_by"),
+        "sem_preco_ack_by": _get("sem_preco_ack_by"),
+        "sem_preco_ack_at": _get("sem_preco_ack_at"),
+        "sem_preco_ack_items": (
+            json.loads(_get("sem_preco_ack_items")) if _get("sem_preco_ack_items") else None
+        ),
         "output_files": json.loads(row["output_files_json"]) if row["output_files_json"] else [],
         "db_result": json.loads(row["db_result_json"]) if row["db_result_json"] else None,
         "snapshot": json.loads(row["snapshot_json"]) if row["snapshot_json"] else None,
@@ -142,12 +152,12 @@ def _row_to_entry(row) -> dict:
 
 
 def _build_where(
-    status: Optional[str],
-    portal_status: Optional[str],
-    production_status: Optional[str],
-    customer_search: Optional[str],
-    date_from: Optional[str],
-    date_to: Optional[str],
+    status: str | None,
+    portal_status: str | None,
+    production_status: str | None,
+    customer_search: str | None,
+    date_from: str | None,
+    date_to: str | None,
 ) -> tuple[str, list[Any]]:
     where: list[str] = []
     params: list[Any] = []
@@ -176,12 +186,12 @@ def _build_where(
 def list_imports(
     limit: int = 100,
     offset: int = 0,
-    status: Optional[str] = None,
-    portal_status: Optional[str] = None,
-    production_status: Optional[str] = None,
-    customer_search: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
+    status: str | None = None,
+    portal_status: str | None = None,
+    production_status: str | None = None,
+    customer_search: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> list[dict]:
     """Paginated list with optional filters. All params bound as ? placeholders."""
     limit = max(1, min(int(limit), _MAX_PAGE_SIZE))
@@ -199,7 +209,8 @@ def list_imports(
                production_status, released_at, released_by,
                trace_id, state_version, gestor_order_id, apontae_order_id,
                cliente_override_codigo, cliente_override_razao,
-               cliente_override_at, cliente_override_by
+               cliente_override_at, cliente_override_by,
+               sem_preco_ack_by, sem_preco_ack_at, sem_preco_ack_items
         FROM imports
         {clause}
         ORDER BY imported_at DESC
@@ -212,12 +223,12 @@ def list_imports(
 
 
 def count_imports(
-    status: Optional[str] = None,
-    portal_status: Optional[str] = None,
-    production_status: Optional[str] = None,
-    customer_search: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
+    status: str | None = None,
+    portal_status: str | None = None,
+    production_status: str | None = None,
+    customer_search: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> int:
     clause, params = _build_where(
         status, portal_status, production_status, customer_search, date_from, date_to
@@ -227,7 +238,7 @@ def count_imports(
     return int(row["n"])
 
 
-def get_import(import_id: str) -> Optional[dict]:
+def get_import(import_id: str) -> dict | None:
     with db.connect() as conn:
         row = conn.execute(
             """
@@ -239,7 +250,8 @@ def get_import(import_id: str) -> Optional[dict]:
                    production_status, released_at, released_by,
                    trace_id, state_version, gestor_order_id, apontae_order_id,
                    cliente_override_codigo, cliente_override_razao,
-                   cliente_override_at, cliente_override_by
+                   cliente_override_at, cliente_override_by,
+                   sem_preco_ack_by, sem_preco_ack_at, sem_preco_ack_items
             FROM imports WHERE id = ?
             """,
             (import_id,),
@@ -247,7 +259,7 @@ def get_import(import_id: str) -> Optional[dict]:
     return _row_to_entry(row) if row else None
 
 
-def append_audit(import_id: str, event_type: str, detail: Optional[dict] = None) -> None:
+def append_audit(import_id: str, event_type: str, detail: dict | None = None) -> None:
     environment_id = env_context.current_env_id()
     with db.connect() as conn:
         conn.execute(
@@ -268,10 +280,10 @@ def append_audit(import_id: str, event_type: str, detail: Optional[dict] = None)
 def update_fire_metadata(
     import_id: str,
     *,
-    fire_codigo: Optional[int] = None,
-    db_result: Optional[dict] = None,
-    output_files: Optional[list[dict]] = None,
-    sent_to_fire_at: Optional[str] = None,
+    fire_codigo: int | None = None,
+    db_result: dict | None = None,
+    output_files: list[dict] | None = None,
+    sent_to_fire_at: str | None = None,
 ) -> None:
     """Update Fire-related auxiliary columns. Does NOT touch portal_status /
     production_status — those mutations belong to `app.state.transition`.
@@ -319,7 +331,7 @@ def set_apontae_order_id(import_id: str, apontae_order_id: str) -> None:
         )
 
 
-def find_import_id_by_gestor(gestor_order_id: str) -> Optional[str]:
+def find_import_id_by_gestor(gestor_order_id: str) -> str | None:
     """Reverse-lookup for webhooks that omit our external_id."""
     with db.connect() as conn:
         row = conn.execute(
@@ -334,7 +346,7 @@ def set_client_override(
     *,
     codigo: int,
     razao: str,
-    user: Optional[str] = None,
+    user: str | None = None,
 ) -> None:
     """Persist a manual cliente selection for a parsed pedido.
 
@@ -358,6 +370,35 @@ def set_client_override(
                 razao,
                 datetime.now().isoformat(timespec="seconds"),
                 user,
+                import_id,
+            ),
+        )
+
+
+def set_sem_preco_ack(
+    import_id: str,
+    *,
+    by_email: str,
+    items: list[dict],
+) -> None:
+    """Persiste o ack do operador para itens sem preço cadastrado no Fire.
+
+    Sidecar — não toca snapshot. Last-write-wins. `items` é lista de dicts
+    {ean, product_code, fire_product_id}; serializado como JSON.
+    """
+    with db.connect() as conn:
+        conn.execute(
+            """
+            UPDATE imports
+            SET sem_preco_ack_by    = ?,
+                sem_preco_ack_at    = ?,
+                sem_preco_ack_items = ?
+            WHERE id = ?
+            """,
+            (
+                by_email,
+                datetime.now().isoformat(timespec="seconds"),
+                json.dumps(items, ensure_ascii=False),
                 import_id,
             ),
         )

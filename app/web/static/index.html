@@ -1698,51 +1698,88 @@ function renderPreview(data) {
     groupsEl.innerHTML = '';
   }
 
-  // Match map by (ean || code) for rendering the Fire column
+  // Check map by (ean || code) for rendering the Fire column
   const check = data.check;
-  const matchByEan = new Map();
-  const matchByCode = new Map();
+  const checkByEan = new Map();
+  const checkByCode = new Map();
   if (check && check.items) {
     check.items.forEach(m => {
-      if (m.ean) matchByEan.set(m.ean, m);
-      if (m.product_code) matchByCode.set(m.product_code, m);
+      if (m.ean) checkByEan.set(m.ean, m);
+      if (m.product_code) checkByCode.set(m.product_code, m);
     });
   }
+  function _checkOf(it) {
+    return (it.ean && checkByEan.get(it.ean))
+        || (it.product_code && checkByCode.get(it.product_code));
+  }
 
-  // Check banner
+  // Check banner — client status + price/items status (stacked vertically)
   const banner = document.getElementById('pvCheckBanner');
-  if (!check) {
-    banner.classList.add('hidden');
-  } else if (!check.available) {
-    banner.classList.remove('hidden');
-    banner.innerHTML = `<span style="color:var(--text-muted)">⚪ Check contra o Fire indisponível (${esc(check.reason || 'FB não configurado')})</span>`;
-  } else {
-    banner.classList.remove('hidden');
-    const s = check.summary;
-    const client = check.client;
-    // Identifier para o picker: dentro de openImportDetail temos o import_id
-    // como `data.preview_id`; numa preview fresca de upload o id ainda não existe,
-    // então o botão só aparece quando há um import_id estável.
-    const importId = data.preview_id;
-    const isCommitted = !!data.portal_status; // hidratado: já tem import_id em DB
-    let clientBit;
-    if (client.override) {
-      clientBit = `<span style="color:var(--success)">✓ Cliente selecionado manualmente: ${esc(client.razao_social || '')} (Fire #${esc(client.fire_id)})</span>`
-        + (isCommitted
-            ? ` <a href="#" onclick="event.preventDefault(); openClientPicker('${esc(importId)}')" style="font-size:11px;color:var(--text-muted);margin-left:6px">alterar</a>`
-            : '');
-    } else if (client.match) {
-      clientBit = `<span style="color:var(--success)">✓ Cliente ${esc(client.razao_social || '')} (Fire #${esc(client.fire_id)})</span>`;
+  if (banner && check) {
+    const s = check.summary || {};
+    const ps = s.price_summary || {};
+    const ack = data.sem_preco_ack;  // {by, at, items} | null
+    const ackedEans = new Set((ack && ack.items || []).map(i => i.ean).filter(Boolean));
+    const ackedCodes = new Set((ack && ack.items || []).map(i => i.product_code).filter(Boolean));
+    const noPriceItems = (check.items || []).filter(i => i.price_status === 'no_price_in_fire');
+    const noPriceUnacked = noPriceItems.filter(
+      i => !(i.ean && ackedEans.has(i.ean)) && !(i.product_code && ackedCodes.has(i.product_code))
+    );
+
+    // ── Client bit (restored from pre-Task-10 banner) ────────────────────────
+    let clientBit = '';
+    if (!check.available) {
+      clientBit = `<span style="color:var(--text-muted)">⚪ Check contra o Fire indisponível (${esc(check.reason || 'FB não configurado')})</span>`;
     } else {
-      const pickerBtn = isCommitted
-        ? ` <button class="btn btn-sm" onclick="openClientPicker('${esc(importId)}')" style="margin-left:8px;padding:2px 10px;font-size:11px">Selecionar cliente do Fire</button>`
-        : ' <span style="color:var(--text-muted);font-size:11px;margin-left:6px">(commit para destravar a seleção manual)</span>';
-      clientBit = `<span style="color:var(--error)">✗ Cliente não encontrado no Fire (CNPJ ${esc(client.cnpj || '—')})</span>${pickerBtn}`;
+      const client = check.client || {};
+      const importId = data.preview_id;
+      const isCommitted = !!data.portal_status;
+      if (client.override) {
+        clientBit = `<span style="color:var(--success)">✓ Cliente selecionado manualmente: ${esc(client.razao_social || '')} (Fire #${esc(client.fire_id)})</span>`
+          + (isCommitted
+              ? ` <a href="#" onclick="event.preventDefault(); openClientPicker('${esc(importId)}')" style="font-size:11px;color:var(--text-muted);margin-left:6px">alterar</a>`
+              : '');
+      } else if (client.match) {
+        clientBit = `<span style="color:var(--success)">✓ Cliente ${esc(client.razao_social || '')} (Fire #${esc(client.fire_id)})</span>`;
+      } else {
+        const pickerBtn = isCommitted
+          ? ` <button class="btn btn-sm" onclick="openClientPicker('${esc(importId)}')" style="margin-left:8px;padding:2px 10px;font-size:11px">Selecionar cliente do Fire</button>`
+          : ' <span style="color:var(--text-muted);font-size:11px;margin-left:6px">(commit para destravar a seleção manual)</span>';
+        clientBit = `<span style="color:var(--error)">✗ Cliente não encontrado no Fire (CNPJ ${esc(client.cnpj || '—')})</span>${pickerBtn}`;
+      }
     }
-    const itemsBit = s.items_missing > 0
-      ? `<span style="color:var(--warn)">⚠ ${s.items_matched}/${s.items_total} itens com match &middot; ${s.items_missing} sem correspondência</span>`
-      : `<span style="color:var(--success)">✓ ${s.items_matched}/${s.items_total} itens com match no Fire</span>`;
-    banner.innerHTML = `${clientBit}<span style="color:var(--border-hover)">|</span>${itemsBit}`;
+
+    // ── Price/items bit (new — 5 prioritized states) ─────────────────────────
+    let priceBit = '';
+    if (!check.available) {
+      // Já coberto pelo clientBit "indisponível"; deixa em branco aqui.
+      priceBit = '';
+    } else if ((ps.items_mismatch || 0) > 0) {
+      priceBit = `<span style="color:var(--error);font-weight:600">✗ ${ps.items_mismatch} item(ns) com preço divergente do Fire — ajuste o cadastro ou a planilha e reimporte.</span>`;
+    } else if ((ps.items_no_order_price || 0) > 0) {
+      priceBit = `<span style="color:var(--error);font-weight:600">✗ ${ps.items_no_order_price} item(ns) sem preço no pedido — corrija a planilha e reimporte.</span>`;
+    } else if (noPriceUnacked.length > 0) {
+      priceBit = `<span style="color:var(--warn);font-weight:600">⚠ ${noPriceUnacked.length} item(ns) sem preço cadastrado no Fire.</span>
+        <button class="btn" id="pvAckSemPrecoBtn"
+                onclick="openAckSemPrecoModal('${esc(data.preview_id)}')"
+                style="margin-left:8px;padding:2px 10px;font-size:11px">Confirmar e prosseguir</button>`;
+    } else if (ack) {
+      priceBit = `<span style="color:var(--text-muted)">✓ Confirmado por <strong>${esc(ack.by)}</strong> em ${esc(ack.at)}: ${ack.items.length} item(ns) sem preço serão importados sem validação.</span>`;
+    } else {
+      priceBit = (s.items_missing || 0) > 0
+        ? `<span style="color:var(--warn)">⚠ ${s.items_matched}/${s.items_total} itens com match · ${s.items_missing} sem correspondência</span>`
+        : `<span style="color:var(--success)">✓ ${s.items_matched}/${s.items_total} itens com match no Fire</span>`;
+    }
+
+    // ── Render: stacked vertically ───────────────────────────────────────────
+    banner.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:6px;width:100%">
+        <div>${clientBit}</div>
+        ${priceBit ? `<div>${priceBit}</div>` : ''}
+      </div>`;
+    banner.classList.remove('hidden');
+  } else if (banner) {
+    banner.classList.add('hidden');
   }
 
   const tbody = document.getElementById('pvItemsBody');
@@ -1772,15 +1809,32 @@ function renderPreview(data) {
       }
       for (const it of gitems) {
         const deliv = [it.delivery_name, it.delivery_date].filter(Boolean).join(' · ');
-        const match = (it.ean && matchByEan.get(it.ean)) || (it.product_code && matchByCode.get(it.product_code));
+        const m = _checkOf(it);
         let cell;
-        if (!check) cell = '<span style="color:var(--text-muted)">—</span>';
-        else if (!check.available) cell = '<span style="color:var(--text-muted)" title="check indisponível">—</span>';
-        else if (match && match.match) {
-          const title = `#${match.fire_product_id} · ${match.fire_description || ''} · via ${match.match_source}`;
-          cell = `<span style="color:var(--success);font-weight:600" title="${esc(title)}">✓</span>`;
-        } else {
+        if (!check) {
+          cell = '<span style="color:var(--text-muted)">—</span>';
+        } else if (!check.available) {
+          cell = '<span style="color:var(--text-muted)" title="check indisponível">—</span>';
+        } else if (!m || !m.match) {
           cell = '<span style="color:var(--error);font-weight:600" title="sem match no Fire">✗</span>';
+        } else {
+          const ps = m.price_status;
+          const idTitle = `#${m.fire_product_id} · ${m.fire_description || ''} · via ${m.match_source}`;
+          if (ps === 'match') {
+            cell = `<span style="color:var(--success);font-weight:600" title="${esc(idTitle)}">✓</span>`;
+          } else if (ps === 'mismatch') {
+            const fp = m.fire_preco_venda != null ? fmtBRL(m.fire_preco_venda) : '?';
+            cell = `<span style="color:var(--error);font-weight:600"
+                     title="${esc(idTitle)} · cadastro Fire: ${esc(fp)}">✗ ${esc(fp)}</span>`;
+          } else if (ps === 'no_price_in_fire') {
+            cell = `<span style="color:var(--warn);font-weight:600"
+                     title="${esc(idTitle)} · sem preço cadastrado no Fire">⚠ sem preço</span>`;
+          } else if (ps === 'no_order_price') {
+            cell = `<span style="color:var(--error);font-weight:600"
+                     title="${esc(idTitle)} · pedido sem preço">✗ pedido sem preço</span>`;
+          } else {
+            cell = `<span style="color:var(--success);font-weight:600" title="${esc(idTitle)}">✓</span>`;
+          }
         }
         rows.push(`
           <tr>
@@ -1799,6 +1853,41 @@ function renderPreview(data) {
   }
 
   renderPreviewFooter(data, items.length);
+}
+
+function _isBlockedByPriceCheck(data) {
+  const check = data.check;
+  if (!check || !check.available) return false;
+  const items = check.items || [];
+  const ack = data.sem_preco_ack;
+  const ackedEans = new Set((ack && ack.items || []).map(i => i.ean).filter(Boolean));
+  const ackedCodes = new Set((ack && ack.items || []).map(i => i.product_code).filter(Boolean));
+  for (const it of items) {
+    if (it.price_status === 'mismatch') return true;
+    if (it.price_status === 'no_order_price') return true;
+    if (it.price_status === 'no_price_in_fire') {
+      const covered = (it.ean && ackedEans.has(it.ean)) || (it.product_code && ackedCodes.has(it.product_code));
+      if (!covered) return true;
+    }
+  }
+  return false;
+}
+
+function _blockReasonText(data) {
+  const check = data.check; if (!check) return '';
+  const ps = (check.summary && check.summary.price_summary) || {};
+  const ack = data.sem_preco_ack;
+  const ackedEans = new Set((ack && ack.items || []).map(i => i.ean).filter(Boolean));
+  const ackedCodes = new Set((ack && ack.items || []).map(i => i.product_code).filter(Boolean));
+  const unacked = (check.items || []).filter(i =>
+    i.price_status === 'no_price_in_fire'
+    && !(i.ean && ackedEans.has(i.ean))
+    && !(i.product_code && ackedCodes.has(i.product_code))
+  ).length;
+  if ((ps.items_mismatch || 0) > 0) return `${ps.items_mismatch} divergência(s) de preço — corrija antes de enviar`;
+  if ((ps.items_no_order_price || 0) > 0) return `${ps.items_no_order_price} item(ns) sem preço no pedido`;
+  if (unacked > 0) return `Confirme ${unacked} item(ns) sem preço cadastrado`;
+  return '';
 }
 
 function renderPreviewFooter(data, itemsCount) {
@@ -1822,10 +1911,14 @@ function renderPreviewFooter(data, itemsCount) {
       ? 'Confira o match e gere o XLS quando estiver OK.'
       : 'Confira o match com o Fire e envie quando estiver OK.';
     note.innerHTML = `Pedido <strong>em revisão</strong>. ${noteSuffix}`;
+    const blocked = _isBlockedByPriceCheck(data);
+    const reason = blocked ? _blockReasonText(data) : '';
+    const disabledAttr = blocked ? 'disabled' : '';
+    const titleAttr = blocked ? `title="${esc(reason)}"` : '';
     actions.innerHTML = `
       <button class="btn" onclick="cancelImport('${esc(data.preview_id)}')" style="color:var(--error)">Cancelar pedido</button>
       <button class="btn" onclick="closePreviewModal()">Fechar</button>
-      <button class="btn btn-primary" id="pvCommitBtn" data-primary-btn
+      <button class="btn btn-primary" id="pvCommitBtn" data-primary-btn ${disabledAttr} ${titleAttr}
               onclick="${action.fn}('${esc(data.preview_id)}')">
         ${action.label}
       </button>`;
@@ -1862,6 +1955,58 @@ async function commitPreview() {
     btn.disabled = false;
     btn.innerHTML = prev;
     showPreviewError(err.message || 'Falha ao salvar o pedido');
+  }
+}
+
+function openAckSemPrecoModal(previewId) {
+  const data = currentPreview;
+  if (!data) return;
+  const items = (data.check && data.check.items || []).filter(i => i.price_status === 'no_price_in_fire');
+  const list = items.map(i => {
+    const desc = i.fire_description || '(sem descrição)';
+    const ident = i.ean || i.product_code || '?';
+    return `<li><code>${esc(ident)}</code> · ${esc(desc)}</li>`;
+  }).join('');
+
+  const modal = document.createElement('div');
+  modal.className = 'modal-backdrop';
+  modal.id = 'ackSemPrecoModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999';
+  modal.innerHTML = `
+    <div style="max-width:520px;width:90%;background:var(--surface);border:1px solid var(--border-subtle);border-radius:8px;padding:20px">
+      <h3 style="margin-top:0">Confirmar itens sem preço</h3>
+      <p>Você está confirmando que <strong>${items.length} produto(s) sem preço cadastrado no Fire</strong>
+         podem ser importados sem validação. Esta ação será registrada com seu email e horário.</p>
+      <ul style="max-height:200px;overflow:auto;padding-left:20px">${list}</ul>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+        <button class="btn" onclick="document.getElementById('ackSemPrecoModal').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmAckSemPreco('${esc(previewId)}')">Confirmar e prosseguir</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+async function confirmAckSemPreco(previewId) {
+  // Guard contra double-submit: ack grava audit + métrica, então 2 cliques
+  // duplicariam o registro de uma ação sensível (compliance).
+  const btn = document.querySelector('#ackSemPrecoModal .btn-primary');
+  if (btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = 'Confirmando…';
+  }
+  try {
+    // api() throws on non-ok and returns parsed JSON body directly
+    await api('/api/imported/' + encodeURIComponent(previewId) + '/ack-sem-preco', { method: 'POST' });
+    document.getElementById('ackSemPrecoModal')?.remove();
+    // Re-fetch and re-render preview with ack already recorded
+    const fresh = await api('/api/imported/' + encodeURIComponent(previewId) + '/preview');
+    currentPreview = fresh;
+    renderPreview(fresh);
+    if (window.appShell) window.appShell.showSuccess('Confirmação registrada.');
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Confirmar e prosseguir'; }
+    if (window.appShell) window.appShell.showError('Falha ao confirmar', null);
   }
 }
 

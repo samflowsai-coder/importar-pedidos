@@ -5,6 +5,7 @@ do pedido: importações, audit, lifecycle, outbox. Coluna `environment_id`
 em todas as tabelas é defensiva — a DB já é específica de um ambiente, mas
 o ID redundante torna trivial detectar bug de wiring.
 """
+
 from __future__ import annotations
 
 TABLES_SQL = """
@@ -39,7 +40,10 @@ CREATE TABLE IF NOT EXISTS imports (
     fire_status_last_seen    TEXT,
     fire_status_polled_at    TEXT,
     file_sha256              TEXT,
-    original_path            TEXT
+    original_path            TEXT,
+    sem_preco_ack_by         TEXT,
+    sem_preco_ack_at         TEXT,
+    sem_preco_ack_items      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -109,5 +113,9 @@ CREATE INDEX IF NOT EXISTS idx_imports_fire_poll
     WHERE fire_codigo IS NOT NULL;
 """
 
-# Schema novo, sem legados — vazio.
-COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = ()
+# Cada entrada: (table, column_name, ALTER TABLE DDL) — aplicada só se a coluna ainda não existir.
+COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    ("imports", "sem_preco_ack_by", "ALTER TABLE imports ADD COLUMN sem_preco_ack_by TEXT"),
+    ("imports", "sem_preco_ack_at", "ALTER TABLE imports ADD COLUMN sem_preco_ack_at TEXT"),
+    ("imports", "sem_preco_ack_items", "ALTER TABLE imports ADD COLUMN sem_preco_ack_items TEXT"),
+)
