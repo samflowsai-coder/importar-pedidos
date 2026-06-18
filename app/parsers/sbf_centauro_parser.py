@@ -42,7 +42,7 @@ class SbfCentauroParser(BaseParser):
     def _parse_header(self, text: str, tables: list) -> OrderHeader:
         order_number = self._find(text, r"Pedido:\s*(\d+)")
         issue_date = self._find(text, r"Data Emiss[aã]o:\s*(\d{2}\.\d{2}\.\d{4})")
-        customer_name, customer_cnpj = self._extract_customer(tables)
+        customer_name, customer_cnpj = self._extract_customer(text)
         return OrderHeader(
             order_number=order_number,
             issue_date=issue_date,
@@ -50,21 +50,25 @@ class SbfCentauroParser(BaseParser):
             customer_cnpj=customer_cnpj,
         )
 
-    def _extract_customer(self, tables: list):
-        """Extract from 'Informações de Cobrança' table row."""
-        for table in tables:
-            for row in table:
-                if not row or not row[0]:
-                    continue
-                cell = str(row[0])
-                if "Informa" in cell and "Cobran" in cell:
-                    name = re.search(r"Cobran[çc]a\s*\n(.+?)\s+Insc", cell, re.DOTALL)
-                    cnpj = re.search(r"CNPJ:\s*([\d./-]+)", cell)
-                    return (
-                        name.group(1).strip() if name else None,
-                        cnpj.group(1).strip() if cnpj else None,
-                    )
-        return None, None
+    def _extract_customer(self, text: str):
+        """Extract from 'Dados para Entrega / Faturamento' section.
+
+        O Fire cadastra o cliente pelo CNPJ da filial faturada (ex.: CD Jarinu
+        /0296-51), não pela matriz de cobrança (/0001-65). Usar o CNPJ de
+        cobrança quebra o FIND_CLIENT_BY_CNPJ no exporter."""
+        section_m = re.search(
+            r"Dados para Entrega.*?(?=Dados Modelo|Observa[çc][õo]es Gerais|Totais do Pedido|$)",
+            text, re.DOTALL,
+        )
+        if not section_m:
+            return None, None
+        section = section_m.group(0)
+        cnpj_m = re.search(r"CNPJ:\s*([\d./-]+)", section)
+        name_m = re.search(r"^\s*([A-Z][^\n]+?)\s+Insc\. Est\.", section, re.MULTILINE)
+        return (
+            name_m.group(1).strip() if name_m else None,
+            cnpj_m.group(1).strip() if cnpj_m else None,
+        )
 
     # ------------------------------------------------------------------
     # Items
