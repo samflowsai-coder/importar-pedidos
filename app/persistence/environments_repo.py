@@ -43,6 +43,20 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+def _clean_path(value: str | None) -> str | None:
+    """Strip surrounding whitespace + paired single/double quotes from a path.
+
+    Macs (Finder "Copy as Pathname") and Windows (cmd path-with-spaces) often
+    yield paths wrapped in quotes when pasted. Saving that raw breaks Firebird
+    `connect()` with a confusing "io error: file not found"."""
+    if value is None:
+        return None
+    s = value.strip()
+    while len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+        s = s[1:-1].strip()
+    return s
+
+
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {k: row[k] for k in _PUBLIC_FIELDS}
 
@@ -72,6 +86,7 @@ def create(
     env_id = str(uuid.uuid4())
     now = _now()
     pw_enc = secret_store.encrypt(fb_password) if fb_password else None
+    fb_path_clean = _clean_path(fb_path) or ""
 
     try:
         with router.shared_connect() as conn:
@@ -80,7 +95,7 @@ def create(
                    (id, slug, name, watch_dir, output_dir, fb_path, fb_host, fb_port,
                     fb_user, fb_charset, fb_password_enc, is_active, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
-                (env_id, slug, name.strip(), watch_dir, output_dir, fb_path,
+                (env_id, slug, name.strip(), watch_dir, output_dir, fb_path_clean,
                  fb_host or None, fb_port or None, fb_user, fb_charset,
                  pw_enc, now, now),
             )
@@ -149,7 +164,7 @@ def update(
         "name": name.strip() if isinstance(name, str) else name,
         "watch_dir": watch_dir,
         "output_dir": output_dir,
-        "fb_path": fb_path,
+        "fb_path": _clean_path(fb_path),
         "fb_host": fb_host,
         "fb_port": fb_port,
         "fb_user": fb_user,
@@ -188,9 +203,12 @@ def get_password(env_id: str) -> str | None:
 
 
 def to_fb_config(env: dict[str, Any]) -> dict[str, Any]:
-    """Dict pronto para `app/erp/connection.connect_with_config(...)`."""
+    """Dict pronto para `app/erp/connection.connect_with_config(...)`.
+
+    `_clean_path` normaliza dados legados que tenham aspas em volta do path
+    (pre-fix do bug do Copy Pathname). Saves novos já chegam limpos."""
     return {
-        "path": env["fb_path"],
+        "path": _clean_path(env["fb_path"]) or "",
         "host": env["fb_host"] or "",
         "port": env["fb_port"] or "",
         "user": env["fb_user"],
