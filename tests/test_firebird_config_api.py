@@ -174,7 +174,6 @@ def test_test_connection_missing_path_returns_400(isolated_app):
 
 def test_test_connection_success(isolated_app, monkeypatch):
     """When the driver succeeds, endpoint reports ok=True."""
-    from app.erp import connection as conn_mod
     from app.web.server import app
 
     # Mock the firebird driver's connect() to return a fake connection
@@ -206,6 +205,7 @@ def test_test_connection_success(isolated_app, monkeypatch):
 def test_test_connection_driver_error_returns_400_with_trace(isolated_app, monkeypatch):
     """Driver errors are wrapped into FirebirdConnectionError → 400 with trace_id."""
     import sys
+
     from app.web.server import app
 
     def boom(**_kwargs):

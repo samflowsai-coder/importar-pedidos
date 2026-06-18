@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from app.models.order import Order, OrderHeader, OrderItem
 from app.parsers.base_parser import BaseParser
@@ -37,7 +36,7 @@ class SamsClubParser(BaseParser):
         text = extracted.get("text", "")
         return _SIGNATURE_CNPJ in text and _SIGNATURE_TEXT.lower() in text.lower()
 
-    def parse(self, extracted: dict) -> Optional[Order]:
+    def parse(self, extracted: dict) -> Order | None:
         text = extracted.get("text", "")
         if not self.can_parse(extracted):
             return None
@@ -76,7 +75,7 @@ class SamsClubParser(BaseParser):
             customer_cnpj=customer_cnpj,
         )
 
-    def _extract_date(self, text: str, pattern: str) -> Optional[str]:
+    def _extract_date(self, text: str, pattern: str) -> str | None:
         m = re.search(pattern, text, re.IGNORECASE)
         if not m:
             return None
@@ -176,7 +175,7 @@ class SamsClubParser(BaseParser):
             )
         return items
 
-    def _stitch_cnpj(self, lines: list[str], data_idx: int) -> Optional[str]:
+    def _stitch_cnpj(self, lines: list[str], data_idx: int) -> str | None:
         """Junta as 2 metades do CNPJ que ficam acima/abaixo da linha de dados."""
         head = None
         tail = None
@@ -262,7 +261,7 @@ class SamsClubParser(BaseParser):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _parse_br_number(self, value: str) -> Optional[float]:
+    def _parse_br_number(self, value: str) -> float | None:
         if not value or not value.strip():
             return None
         try:
@@ -272,6 +271,6 @@ class SamsClubParser(BaseParser):
         except ValueError:
             return None
 
-    def _find(self, text: str, pattern: str) -> Optional[str]:
+    def _find(self, text: str, pattern: str) -> str | None:
         m = re.search(pattern, text, re.IGNORECASE)
         return m.group(1).strip() if m else None

@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
-from typing import Optional
 
 from app.models.order import ERPRow, Order
 
@@ -82,7 +81,7 @@ class FireSistemasMapper:
         item: ERPRow,
         item_pk: int,
         header_pk: int,
-        product_seq: Optional[int],
+        product_seq: int | None,
     ) -> tuple:
         """Returns positional tuple for INSERT_CORPO_VENDAS parameters."""
         qty = item.quantidade or 0.0

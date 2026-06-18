@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
-from typing import Optional
 
 from app.models.order import Order, OrderHeader, OrderItem
 from app.parsers.base_parser import BaseParser
@@ -16,7 +14,7 @@ class KallanXlsParser(BaseParser):
     def can_parse(self, extracted: dict) -> bool:
         return _SIGNATURE in extracted.get("text", "").upper()
 
-    def parse(self, extracted: dict) -> Optional[Order]:
+    def parse(self, extracted: dict) -> Order | None:
         if not self.can_parse(extracted):
             return None
 
@@ -84,7 +82,7 @@ class KallanXlsParser(BaseParser):
     # Items
     # ------------------------------------------------------------------
 
-    def _parse_items(self, rows: list, order_number: Optional[str]) -> list[OrderItem]:
+    def _parse_items(self, rows: list, order_number: str | None) -> list[OrderItem]:
         header_idx, col_map = self._find_headers(rows)
         if header_idx is None:
             return []
@@ -129,7 +127,7 @@ class KallanXlsParser(BaseParser):
 
         return items
 
-    def _find_headers(self, rows: list) -> tuple[Optional[int], dict]:
+    def _find_headers(self, rows: list) -> tuple[int | None, dict]:
         for i, row in enumerate(rows):
             cells = [str(c).strip() if c is not None else "" for c in row]
             cells_lower = [c.lower() for c in cells]
@@ -170,7 +168,7 @@ class KallanXlsParser(BaseParser):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _parse_number(self, value: str) -> Optional[float]:
+    def _parse_number(self, value: str) -> float | None:
         if not value or not value.strip():
             return None
         # Remove currency symbols
@@ -182,6 +180,6 @@ class KallanXlsParser(BaseParser):
         except ValueError:
             return None
 
-    def _find(self, text: str, pattern: str) -> Optional[str]:
+    def _find(self, text: str, pattern: str) -> str | None:
         m = re.search(pattern, text, re.IGNORECASE)
         return m.group(1).strip() if m else None

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
-from typing import Optional
 
 from app.models.order import Order, OrderHeader, OrderItem
 from app.parsers.base_parser import BaseParser
@@ -26,7 +25,7 @@ class AuthenticFeetParser(BaseParser):
                 return True
         return False
 
-    def parse(self, extracted: dict) -> Optional[Order]:
+    def parse(self, extracted: dict) -> Order | None:
         if not self.can_parse(extracted):
             return None
 
@@ -51,10 +50,10 @@ class AuthenticFeetParser(BaseParser):
     # ------------------------------------------------------------------
 
     def _parse_header_block(self, rows: list, header_idx: int) -> OrderHeader:
-        customer_cnpj: Optional[str] = None
-        customer_name: Optional[str] = None
-        fantasia: Optional[str] = None
-        issue_date: Optional[str] = None
+        customer_cnpj: str | None = None
+        customer_name: str | None = None
+        fantasia: str | None = None
+        issue_date: str | None = None
 
         for row in rows[:header_idx]:
             cells = list(row)
@@ -101,7 +100,7 @@ class AuthenticFeetParser(BaseParser):
             return v
         return None
 
-    def _coerce_date(self, value) -> Optional[str]:
+    def _coerce_date(self, value) -> str | None:
         if value is None:
             return None
         if isinstance(value, (_dt.datetime, _dt.date)):
@@ -113,7 +112,7 @@ class AuthenticFeetParser(BaseParser):
     # Itens
     # ------------------------------------------------------------------
 
-    def _find_header_row(self, rows: list) -> tuple[Optional[int], dict]:
+    def _find_header_row(self, rows: list) -> tuple[int | None, dict]:
         for i, row in enumerate(rows):
             cells = [str(c).strip() if c is not None else "" for c in row]
             if not all(tok in cells for tok in _HEADER_TOKENS):
@@ -173,7 +172,7 @@ class AuthenticFeetParser(BaseParser):
     # Helpers locais
     # ------------------------------------------------------------------
 
-    def _cell(self, row: list, idx: Optional[int]) -> str:
+    def _cell(self, row: list, idx: int | None) -> str:
         if idx is None or idx >= len(row):
             return ""
         v = row[idx]
@@ -181,7 +180,7 @@ class AuthenticFeetParser(BaseParser):
             return ""
         return str(v).strip()
 
-    def _to_number(self, value) -> Optional[float]:
+    def _to_number(self, value) -> float | None:
         if value is None or value == "":
             return None
         if isinstance(value, bool):

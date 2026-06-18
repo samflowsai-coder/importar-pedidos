@@ -24,9 +24,9 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, Optional
 
 from app.persistence import context as env_context
 from app.persistence import router
@@ -77,7 +77,7 @@ def reset_init_cache() -> None:
     router.reset_init_cache()
 
 
-def set_db_path(path: Optional[Path]) -> None:
+def set_db_path(path: Path | None) -> None:
     """Helper de teste: aponta `APP_DATA_DIR` pra parent dir e ativa
     um ambiente "test" (id=test-env-id, slug=test).
 

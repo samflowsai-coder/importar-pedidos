@@ -1,29 +1,27 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel
 
 
 class OrderHeader(BaseModel):
-    order_number: Optional[str] = None
-    issue_date: Optional[str] = None
-    customer_name: Optional[str] = None
-    customer_cnpj: Optional[str] = None
+    order_number: str | None = None
+    issue_date: str | None = None
+    customer_name: str | None = None
+    customer_cnpj: str | None = None
 
 
 class OrderItem(BaseModel):
-    description: Optional[str] = None
-    product_code: Optional[str] = None
-    ean: Optional[str] = None
-    quantity: Optional[float] = None
-    unit_price: Optional[float] = None
-    total_price: Optional[float] = None
-    obs: Optional[str] = None
-    delivery_date: Optional[str] = None
-    delivery_cnpj: Optional[str] = None
-    delivery_name: Optional[str] = None
-    delivery_ean: Optional[str] = None
+    description: str | None = None
+    product_code: str | None = None
+    ean: str | None = None
+    quantity: float | None = None
+    unit_price: float | None = None
+    total_price: float | None = None
+    obs: str | None = None
+    delivery_date: str | None = None
+    delivery_cnpj: str | None = None
+    delivery_name: str | None = None
+    delivery_ean: str | None = None
 
 
 class Order(BaseModel):
@@ -34,15 +32,15 @@ class Order(BaseModel):
 
 class ERPRow(BaseModel):
     pedido: str
-    nome_cliente: Optional[str] = None
-    cnpj_cliente: Optional[str] = None
-    codigo_produto: Optional[str] = None
-    ean: Optional[str] = None
+    nome_cliente: str | None = None
+    cnpj_cliente: str | None = None
+    codigo_produto: str | None = None
+    ean: str | None = None
     descricao: str
     quantidade: float
-    preco_unitario: Optional[float] = None
-    valor_total: Optional[float] = None
-    obs: Optional[str] = None
-    data_entrega: Optional[str] = None
-    cnpj_local_entrega: Optional[str] = None
-    ean_local_entrega: Optional[str] = None
+    preco_unitario: float | None = None
+    valor_total: float | None = None
+    obs: str | None = None
+    data_entrega: str | None = None
+    cnpj_local_entrega: str | None = None
+    ean_local_entrega: str | None = None

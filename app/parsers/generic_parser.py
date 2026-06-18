@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from app.models.order import Order, OrderHeader, OrderItem
 from app.parsers.base_parser import BaseParser
@@ -57,7 +56,7 @@ class GenericParser(BaseParser):
                 continue
         return items
 
-    def _extract_desc_qty(self, row: list) -> tuple[Optional[str], Optional[float]]:
+    def _extract_desc_qty(self, row: list) -> tuple[str | None, float | None]:
         desc = None
         qty = None
         for cell in row:
@@ -75,6 +74,6 @@ class GenericParser(BaseParser):
                     desc = cell_str
         return desc, qty
 
-    def _find(self, text: str, pattern: str) -> Optional[str]:
+    def _find(self, text: str, pattern: str) -> str | None:
         match = re.search(pattern, text, re.IGNORECASE)
         return match.group(1).strip() if match else None

@@ -7,17 +7,14 @@ import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-
 from app.observability.trace import current_trace_id, new_trace_id, with_trace_id
-from app.web.middleware.rate_limit import check_and_consume
 from app.persistence import invites_repo, sessions_repo, users_repo
 from app.security import (
     PasswordTooLongError,
@@ -42,13 +39,18 @@ from app.web.auth import (
     require_user,
     set_session_cookie,
 )
+from app.web.middleware.rate_limit import check_and_consume
 
 
 def _is_test_bypass() -> bool:
     return os.environ.get("TEST_AUTH_BYPASS", "").strip() == "1"
 
 
-from app.web.preview_cache import PreviewConsumedError, PreviewNotFoundError, get_cache
+from app.web.preview_cache import (  # noqa: E402
+    PreviewConsumedError,
+    PreviewNotFoundError,
+    get_cache,
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -152,15 +154,15 @@ def _append_log(cfg: dict, entry: dict) -> None:
 
 def _make_log_entry(
     source_filename: str,
-    order_number: Optional[str],
-    customer: Optional[str],
-    output_files: List[dict],
+    order_number: str | None,
+    customer: str | None,
+    output_files: list[dict],
     status: str,
-    error: Optional[str] = None,
-    snapshot: Optional[dict] = None,
-    fire_codigo: Optional[int] = None,
-    db_result: Optional[dict] = None,
-    trace_id: Optional[str] = None,
+    error: str | None = None,
+    snapshot: dict | None = None,
+    fire_codigo: int | None = None,
+    db_result: dict | None = None,
+    trace_id: str | None = None,
 ) -> dict:
     return {
         "id": str(uuid.uuid4()),
@@ -182,7 +184,7 @@ def _make_log_entry(
 
 
 def _build_preview_payload(
-    preview_id: str, source_filename: str, order, check: Optional[dict] = None
+    preview_id: str, source_filename: str, order, check: dict | None = None
 ) -> dict:
     """Shape an Order for the preview modal: items, per-store groups, totals, product check."""
     items = []
@@ -252,7 +254,7 @@ def _build_preview_payload(
     }
 
 
-def _run_exporters(order, output_path: Path, *, env: Optional[dict] = None) -> dict:
+def _run_exporters(order, output_path: Path, *, env: dict | None = None) -> dict:
     """Execute XLSX + Firebird exporters per export_mode; return summary dict.
 
     `env`: ambiente ativo (dict de environments_repo). Se passado, o
@@ -265,9 +267,9 @@ def _run_exporters(order, output_path: Path, *, env: Optional[dict] = None) -> d
     cfg = app_config.load()
     export_mode = cfg.get("export_mode", "xlsx")
 
-    output_files: List[dict] = []
-    db_result_dict: Optional[dict] = None
-    fire_codigo: Optional[int] = None
+    output_files: list[dict] = []
+    db_result_dict: dict | None = None
+    fire_codigo: int | None = None
 
     if export_mode in ("xlsx", "both"):
         exporter = ERPExporter()
@@ -287,7 +289,7 @@ def _run_exporters(order, output_path: Path, *, env: Optional[dict] = None) -> d
     }
 
 
-def _process_file(file_path: Path, output_path: Path, *, env: Optional[dict] = None) -> dict:
+def _process_file(file_path: Path, output_path: Path, *, env: dict | None = None) -> dict:
     from app.ingestion.file_loader import LoadedFile
     from app.pipeline import process
 
@@ -863,9 +865,9 @@ def get_config() -> JSONResponse:
 
 
 class ConfigUpdate(BaseModel):
-    watchDir: Optional[str] = None
-    outputDir: Optional[str] = None
-    exportMode: Optional[str] = None
+    watchDir: str | None = None
+    outputDir: str | None = None
+    exportMode: str | None = None
 
 
 @app.post("/api/config")
@@ -891,13 +893,13 @@ def update_config(
 
 
 class FirebirdConfigUpdate(BaseModel):
-    path: Optional[str] = None
-    host: Optional[str] = None
-    port: Optional[str] = None
-    user: Optional[str] = None
-    charset: Optional[str] = None
+    path: str | None = None
+    host: str | None = None
+    port: str | None = None
+    user: str | None = None
+    charset: str | None = None
     # Omit `password` to keep current; empty string clears it.
-    password: Optional[str] = None
+    password: str | None = None
 
 
 @app.get("/api/firebird/config")
@@ -1054,8 +1056,8 @@ def list_pending(request: Request) -> JSONResponse:
 
 
 class ImportRequest(BaseModel):
-    files: List[str]
-    outputDir: Optional[str] = None
+    files: list[str]
+    outputDir: str | None = None
 
 
 @app.post("/api/import")
@@ -1148,12 +1150,12 @@ def import_files(
 def list_imported(
     limit: int = 100,
     offset: int = 0,
-    status: Optional[str] = None,
-    portal_status: Optional[str] = None,
-    production_status: Optional[str] = None,
-    q: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
+    status: str | None = None,
+    portal_status: str | None = None,
+    production_status: str | None = None,
+    q: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> JSONResponse:
     from app.persistence import repo
 
@@ -1191,7 +1193,7 @@ def get_imported(import_id: str) -> JSONResponse:
 
 class ReimportRequest(BaseModel):
     filename: str
-    outputDir: Optional[str] = None
+    outputDir: str | None = None
 
 
 @app.post("/api/reimport")
@@ -1356,7 +1358,7 @@ async def preview_file(
             detail=f"Arquivo excede o limite de {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
         )
 
-    tmp_path: Optional[Path] = None
+    tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
             tmp.write(raw)
@@ -1536,11 +1538,11 @@ class _FireSendOutcome:
     def __init__(
         self,
         ok: bool,
-        reason: Optional[str] = None,
+        reason: str | None = None,
         http_status: int = 200,
-        fire_codigo: Optional[int] = None,
+        fire_codigo: int | None = None,
         items_inserted: int = 0,
-        detail: Optional[str] = None,
+        detail: str | None = None,
     ) -> None:
         self.ok = ok
         self.reason = reason
@@ -1551,7 +1553,7 @@ class _FireSendOutcome:
 
 
 def _send_one_to_fire(
-    import_id: str, cfg: dict, *, request_env: Optional[dict] = None
+    import_id: str, cfg: dict, *, request_env: dict | None = None
 ) -> _FireSendOutcome:
     """Insert a parsed order into Fire. Returns structured outcome (no HTTP exceptions)
     so batch callers can aggregate per-item results.
@@ -1565,8 +1567,8 @@ def _send_one_to_fire(
         - On Fire success: update aux fields then transition SEND_TO_FIRE_SUCCEEDED.
     """
     from app.exporters.firebird_exporter import FirebirdExporter
-    from app.persistence import repo
     from app.models.order import Order
+    from app.persistence import repo
 
     entry = repo.get_import(import_id)
     if entry is None:
@@ -1743,10 +1745,10 @@ class _XlsxExportOutcome:
     def __init__(
         self,
         ok: bool,
-        reason: Optional[str] = None,
+        reason: str | None = None,
         http_status: int = 200,
-        output_files: Optional[list[dict]] = None,
-        detail: Optional[str] = None,
+        output_files: list[dict] | None = None,
+        detail: str | None = None,
     ) -> None:
         self.ok = ok
         self.reason = reason
@@ -1756,7 +1758,7 @@ class _XlsxExportOutcome:
 
 
 def _export_one_xlsx(
-    import_id: str, cfg: dict, *, request_env: Optional[dict] = None
+    import_id: str, cfg: dict, *, request_env: dict | None = None
 ) -> _XlsxExportOutcome:
     """Generate XLSX for a parsed order WITHOUT touching Firebird.
 
@@ -1764,8 +1766,8 @@ def _export_one_xlsx(
     'parsed' so the operator can still cancel or re-export.
     """
     from app.exporters.erp_exporter import ERPExporter
-    from app.persistence import repo
     from app.models.order import Order
+    from app.persistence import repo
 
     entry = repo.get_import(import_id)
     if entry is None:
@@ -1862,7 +1864,7 @@ def export_xlsx(
 
 
 class BatchSendRequest(BaseModel):
-    ids: List[str]
+    ids: list[str]
 
 
 @app.post("/api/batch/send-to-fire")
@@ -1966,7 +1968,7 @@ def batch_export_xlsx(
 
 
 class CancelRequest(BaseModel):
-    reason: Optional[str] = None
+    reason: str | None = None
 
 
 # ── Gestor de Produção (Fase 3, gatilho manual + drain inline) ──────────
@@ -2211,7 +2213,7 @@ def search_clientes(
 
 class ClienteOverrideRequest(BaseModel):
     cliente_codigo: int
-    reason: Optional[str] = None
+    reason: str | None = None
 
 
 @app.post("/api/imported/{import_id}/override-cliente")
@@ -2309,10 +2311,10 @@ def ack_sem_preco(
     ser ack-ados — devolveriam 409 implicitamente porque o guard server-side
     no envio bloqueia mesmo com ack.
     """
-    from app.persistence import repo
-    from app.models.order import Order
     from app.erp.product_check import check_order
+    from app.models.order import Order
     from app.observability import metrics
+    from app.persistence import repo
 
     entry = repo.get_import(import_id)
     if entry is None:
@@ -2368,8 +2370,8 @@ def ack_sem_preco(
 @app.get("/api/imported/{import_id}/preview")
 def rehydrate_preview(import_id: str) -> JSONResponse:
     """Rebuild the preview payload for a stored order (for the review modal)."""
-    from app.persistence import repo
     from app.models.order import Order
+    from app.persistence import repo
 
     entry = repo.get_import(import_id)
     if entry is None:
@@ -2426,7 +2428,7 @@ def rehydrate_preview(import_id: str) -> JSONResponse:
 @app.post("/api/process")
 async def process_files(
     _user: User = Depends(require_user),
-    files: List[UploadFile] = File(...),
+    files: list[UploadFile] = File(...),
     output_dir: str = Form("output"),
 ) -> JSONResponse:
     from app.exporters.erp_exporter import ERPExporter
@@ -2467,7 +2469,7 @@ async def process_files(
             )
             continue
 
-        tmp_path: Optional[Path] = None
+        tmp_path: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
                 tmp.write(raw)

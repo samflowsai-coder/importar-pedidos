@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from app.models.order import Order, OrderHeader, OrderItem
 from app.parsers.base_parser import BaseParser
@@ -17,7 +16,7 @@ class SbfCentauroParser(BaseParser):
     def can_parse(self, extracted: dict) -> bool:
         return _SIGNATURE in extracted.get("text", "")
 
-    def parse(self, extracted: dict) -> Optional[Order]:
+    def parse(self, extracted: dict) -> Order | None:
         text = extracted.get("text", "")
         tables = extracted.get("tables", [])
         if not self.can_parse(extracted):
@@ -121,7 +120,7 @@ class SbfCentauroParser(BaseParser):
     # Additional field extractors
     # ------------------------------------------------------------------
 
-    def _extract_delivery_date(self, tables: list) -> Optional[str]:
+    def _extract_delivery_date(self, tables: list) -> str | None:
         """From Dados Variante table: col[3] = Data Entrega."""
         for table in tables:
             if not table or not table[0]:
@@ -133,7 +132,7 @@ class SbfCentauroParser(BaseParser):
                         return str(row[3]).strip()
         return None
 
-    def _extract_delivery_cnpj(self, text: str) -> Optional[str]:
+    def _extract_delivery_cnpj(self, text: str) -> str | None:
         """From 'Dados para Entrega' section."""
         m = re.search(r"Dados para Entrega.+?CNPJ:\s*([\d./-]+)", text, re.DOTALL)
         return m.group(1).strip() if m else None
@@ -155,7 +154,7 @@ class SbfCentauroParser(BaseParser):
                         ean_map[full_code] = ean
         return ean_map
 
-    def _extract_obs(self, tables: list) -> Optional[str]:
+    def _extract_obs(self, tables: list) -> str | None:
         """First meaningful obs line from the observations table."""
         for table in tables:
             for row in table:
@@ -171,7 +170,7 @@ class SbfCentauroParser(BaseParser):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _parse_br_number(self, value: str) -> Optional[float]:
+    def _parse_br_number(self, value: str) -> float | None:
         if not value or not value.strip():
             return None
         try:
@@ -181,6 +180,6 @@ class SbfCentauroParser(BaseParser):
         except ValueError:
             return None
 
-    def _find(self, text: str, pattern: str) -> Optional[str]:
+    def _find(self, text: str, pattern: str) -> str | None:
         m = re.search(pattern, text, re.IGNORECASE)
         return m.group(1).strip() if m else None

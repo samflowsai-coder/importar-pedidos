@@ -11,7 +11,8 @@ import pytest
 def _seed_env(tmp_path: Path):
     """Cria um ambiente "test" no app_shared para que list_env_slugs() retorne 'test'."""
     import os
-    from app.persistence import db, environments_repo, router
+
+    from app.persistence import db, environments_repo
     os.environ["APP_DATA_DIR"] = str(tmp_path)
     db.set_db_path(tmp_path / "app_state.db")
     db.reset_init_cache()
@@ -63,8 +64,7 @@ def _make_fb_ctx(status: str) -> MagicMock:
 
 def test_returns_early_when_no_envs_configured(tmp_path):
     """Sem ambientes ativos, run_poll_fire não chama nada."""
-    import os
-    from app.persistence import db, environments_repo, router
+    from app.persistence import environments_repo
     # remove o env do fixture autouse
     for env in environments_repo.list_active():
         environments_repo.soft_delete(env["id"])

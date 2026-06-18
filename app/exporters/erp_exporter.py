@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -93,7 +92,7 @@ class ERPExporter:
 
         return buckets
 
-    def _delivery_key(self, item: OrderItem, customer_cnpj: Optional[str]) -> str:
+    def _delivery_key(self, item: OrderItem, customer_cnpj: str | None) -> str:
         """Chave de agrupamento por destino.
 
         Prioridade:
@@ -123,7 +122,7 @@ class ERPExporter:
         order: Order,
         items: list[OrderItem],
         output_dir: str,
-        suffix: Optional[str],
+        suffix: str | None,
     ) -> Path:
         rows = self._to_erp_rows(order, items)
         filename = self._make_filename(order, suffix, items)
@@ -185,7 +184,7 @@ class ERPExporter:
             ws.column_dimensions[cell.column_letter].width = w
 
     def _make_filename(
-        self, order: Order, suffix: Optional[str], items: Optional[list] = None
+        self, order: Order, suffix: str | None, items: list | None = None
     ) -> str:
         name = order.header.customer_name or "SEM_CLIENTE"
         cnpj = re.sub(r"[^\d]", "", order.header.customer_cnpj or "")

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.persistence import db, environments_repo, router
+from app.persistence import db, environments_repo
 
 
 @pytest.fixture

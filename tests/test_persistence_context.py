@@ -50,7 +50,9 @@ def test_isolation_between_threads():
 
     t1 = threading.Thread(target=worker, args=("mm",))
     t2 = threading.Thread(target=worker, args=("nasmar",))
-    t1.start(); t2.start()
-    t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
 
     assert seen == {"mm": "mm", "nasmar": "nasmar"}

@@ -20,14 +20,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # Reaproveita classe-base e paleta do gerador de ajuda (mesma linguagem visual)
 from tools.generate_help_pdf import (  # noqa: E402
     ACCENT,
-    DARK_BG,
     DIVIDER,
-    Doc,
     SUCCESS,
     SURFACE,
     TEXT_PRI,
     TEXT_SEC,
     WARNING,
+    Doc,
 )
 
 DEFAULT_OUTPUT = (
