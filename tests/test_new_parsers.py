@@ -31,10 +31,20 @@ def test_centauro_ean_extracted():
 def test_centauro_correct_fields():
     order = _process("PEDIDO CENTAURO.pdf")
     assert order.header.order_number == "29852927"
-    assert order.header.customer_cnpj is not None
-    assert "06.347.409" in order.header.customer_cnpj
+    assert order.header.customer_cnpj == "06.347.409/0296-51"
+    assert order.header.customer_name == "Sbf Comercio Produtos Esportivos"
     assert order.items[0].quantity == 4545.0
     assert order.items[0].unit_price == 11.37
+
+
+def test_centauro_uses_invoicing_cnpj_not_billing():
+    """CNPJ deve vir da seção 'Dados para Entrega / Faturamento' (filial cadastrada
+    no Fire), não de 'Informações de Cobrança' (matriz SBF /0001-65)."""
+    order = _process("Pedido_0036730565.pdf")
+    assert order is not None
+    assert order.header.order_number == "36730565"
+    assert order.header.customer_cnpj == "06.347.409/0296-51"
+    assert order.header.customer_cnpj != "06.347.409/0001-65"
 
 
 # ── FIX: Studio Z EAN ────────────────────────────────────────────────────────

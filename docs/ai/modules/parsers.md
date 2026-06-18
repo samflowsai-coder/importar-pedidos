@@ -36,6 +36,10 @@ Transformar a saída do extractor (texto + tabelas) em um `Order` (pydantic). Ca
 - **Datas e números brasileiros:** sempre passe por `_parse_br_number` / `OrderNormalizer`.
 - **Riachuelo/ME tem footer paginado** — strip já feito, ver commit `d25d480`.
 
+## SBF/Centauro: CNPJ de Faturamento, não de Cobrança
+
+`SbfCentauroParser._extract_customer` lê o CNPJ + nome da seção **"Dados para Entrega / Faturamento"** (ex.: `06.347.409/0296-51` — CD Jarinu), **não** da seção "Informações de Cobrança" (`/0001-65` — matriz SBF). Razão: o Fire cadastra o cliente pela filial faturada, então o exporter (`FIND_CLIENT_BY_CNPJ`) precisa do CNPJ /0296-51 para achar o cadastro. Usar a matriz quebra o lookup. Texto extraído via regex (a tabela `pdfplumber` mistura essa seção com o painel "Atenção Fornecedor").
+
 ## Sam's Club: dois layouts (consolidado vs GRADE)
 
 `SamsClubParser` cobre 2 formatos do WebEDI/Neogrid:
