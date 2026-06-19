@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from app.models.order import Order, OrderHeader, OrderItem
 from app.parsers.base_parser import BaseParser
@@ -17,7 +16,7 @@ class KoloshParser(BaseParser):
     def can_parse(self, extracted: dict) -> bool:
         return _SIGNATURE in extracted.get("text", "")
 
-    def parse(self, extracted: dict) -> Optional[Order]:
+    def parse(self, extracted: dict) -> Order | None:
         text = extracted.get("text", "")
         if not self.can_parse(extracted):
             return None
@@ -46,7 +45,7 @@ class KoloshParser(BaseParser):
             customer_cnpj=customer_cnpj,
         )
 
-    def _extract_delivery_date(self, text: str) -> Optional[str]:
+    def _extract_delivery_date(self, text: str) -> str | None:
         m = re.search(r"Entrega\s*:\s*(\d{2}/\d{2}/(\d{2,4}))", text)
         if not m:
             return None
@@ -73,7 +72,7 @@ class KoloshParser(BaseParser):
                 items.append(item)
         return items
 
-    def _parse_block(self, block: str, delivery_date: Optional[str] = None) -> Optional[OrderItem]:
+    def _parse_block(self, block: str, delivery_date: str | None = None) -> OrderItem | None:
         # Join lines to handle multi-line descriptions
         joined = " ".join(block.splitlines())
         # Format: CODE DESC QTY UN IPI% UNIT_PRICE TOTAL
@@ -108,7 +107,7 @@ class KoloshParser(BaseParser):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _parse_us_number(self, value: str) -> Optional[float]:
+    def _parse_us_number(self, value: str) -> float | None:
         """Parse US-format numbers: 500.000 = 500, 1,000.000 = 1000, 4,985.00 = 4985."""
         if not value or not value.strip():
             return None
@@ -117,7 +116,7 @@ class KoloshParser(BaseParser):
         except ValueError:
             return None
 
-    def _parse_br_number(self, value: str) -> Optional[float]:
+    def _parse_br_number(self, value: str) -> float | None:
         if not value or not value.strip():
             return None
         try:
@@ -127,6 +126,6 @@ class KoloshParser(BaseParser):
         except ValueError:
             return None
 
-    def _find(self, text: str, pattern: str) -> Optional[str]:
+    def _find(self, text: str, pattern: str) -> str | None:
         m = re.search(pattern, text, re.IGNORECASE)
         return m.group(1).strip() if m else None

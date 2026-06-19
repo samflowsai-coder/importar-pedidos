@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
-from typing import Optional
 
 from app.models.order import Order, OrderHeader, OrderItem
 from app.parsers.base_parser import BaseParser
@@ -33,7 +31,7 @@ class DesmembramentoXlsParser(BaseParser):
                 return True
         return False
 
-    def parse(self, extracted: dict) -> Optional[Order]:
+    def parse(self, extracted: dict) -> Order | None:
         if not self.can_parse(extracted):
             return None
 
@@ -59,12 +57,11 @@ class DesmembramentoXlsParser(BaseParser):
     # Structure detection
     # ------------------------------------------------------------------
 
-    def _find_structure(self, rows: list) -> tuple[Optional[int], dict, list]:
+    def _find_structure(self, rows: list) -> tuple[int | None, dict, list]:
         """Return (header_row_idx, col_map, store_columns_list).
 
         store_columns_list: list of (col_idx, store_name, cnpj_or_None)
         """
-        cnpj_row_idx = None
         header_idx = None
 
         # First pass: find header row
@@ -207,7 +204,7 @@ class DesmembramentoXlsParser(BaseParser):
     # Order number from source file
     # ------------------------------------------------------------------
 
-    def _derive_order_number(self, extracted: dict) -> Optional[str]:
+    def _derive_order_number(self, extracted: dict) -> str | None:
         rows = extracted.get("rows", [])
         # Look for a title cell that contains meaningful keywords
         for row in rows[:4]:
@@ -246,7 +243,7 @@ class DesmembramentoXlsParser(BaseParser):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _parse_number(self, value: str) -> Optional[float]:
+    def _parse_number(self, value: str) -> float | None:
         if not value or not value.strip():
             return None
         value = re.sub(r"[R$\s]", "", value)
@@ -257,6 +254,6 @@ class DesmembramentoXlsParser(BaseParser):
         except ValueError:
             return None
 
-    def _find(self, text: str, pattern: str) -> Optional[str]:
+    def _find(self, text: str, pattern: str) -> str | None:
         m = re.search(pattern, text, re.IGNORECASE)
         return m.group(1).strip() if m else None

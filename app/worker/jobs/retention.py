@@ -18,9 +18,8 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from app import config as app_config
-from app.persistence import context as env_context
 from app.persistence import router
-from app.persistence.db import connect_shared, db_path
+from app.persistence.db import connect_shared
 from app.utils.logger import logger
 
 _IDEMPOTENCY_TTL_DAYS = 90

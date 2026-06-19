@@ -4,8 +4,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 from app.models.order import Order
 
@@ -18,8 +17,8 @@ class PreviewEntry:
     source_bytes: bytes
     source_ext: str
     created_at: float
-    source_path: Optional[str] = None  # set when preview came from watch folder
-    check: Optional[dict] = None       # product-match report against Fire
+    source_path: str | None = None  # set when preview came from watch folder
+    check: dict | None = None       # product-match report against Fire
     consumed: bool = False
 
 
@@ -43,7 +42,7 @@ class PreviewCache:
     def __init__(self, ttl_seconds: int = 15 * 60, max_entries: int = 50) -> None:
         self._ttl = ttl_seconds
         self._max = max_entries
-        self._entries: "OrderedDict[str, PreviewEntry]" = OrderedDict()
+        self._entries: OrderedDict[str, PreviewEntry] = OrderedDict()
         self._lock = threading.Lock()
 
     def put(
@@ -52,8 +51,8 @@ class PreviewCache:
         source_filename: str,
         source_bytes: bytes,
         source_ext: str,
-        source_path: Optional[str] = None,
-        check: Optional[dict] = None,
+        source_path: str | None = None,
+        check: dict | None = None,
     ) -> PreviewEntry:
         preview_id = str(uuid.uuid4())
         entry = PreviewEntry(
@@ -73,7 +72,7 @@ class PreviewCache:
                 self._entries.popitem(last=False)
         return entry
 
-    def get(self, preview_id: str) -> Optional[PreviewEntry]:
+    def get(self, preview_id: str) -> PreviewEntry | None:
         with self._lock:
             self._evict_expired_locked()
             entry = self._entries.get(preview_id)
@@ -110,7 +109,7 @@ class PreviewCache:
             self._entries.pop(pid, None)
 
 
-_default_cache: Optional[PreviewCache] = None
+_default_cache: PreviewCache | None = None
 
 
 def get_cache() -> PreviewCache:

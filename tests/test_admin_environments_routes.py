@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.persistence import db, environments_repo, router
+from app.persistence import db, environments_repo
 
 
 @pytest.fixture
@@ -152,8 +152,10 @@ def test_test_endpoint_validates_paths(setup):
 
 
 def test_test_endpoint_validates_existing_paths(setup):
-    in_dir = setup / "in"; out_dir = setup / "out"
-    in_dir.mkdir(); out_dir.mkdir()
+    in_dir = setup / "in"
+    out_dir = setup / "out"
+    in_dir.mkdir()
+    out_dir.mkdir()
     c = _client()
     payload = {
         "slug": "mm", "name": "MM",

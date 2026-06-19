@@ -14,6 +14,7 @@ from app.persistence.outbox_repo import OutboxRow
 def _seed_env(tmp_path: Path):
     """Cria um ambiente "test" para que list_env_slugs() retorne 'test'."""
     import os
+
     from app.persistence import db, environments_repo
     os.environ["APP_DATA_DIR"] = str(tmp_path)
     db.set_db_path(tmp_path / "app_state.db")

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from app.classifiers.format_classifier import FileFormat, FormatClassifier
 from app.extractors.pdf_extractor import PDFExtractor
 from app.extractors.xls_extractor import XLSExtractor
@@ -42,7 +40,7 @@ _validator = OrderValidator()
 _llm = LLMFallbackParser()
 
 
-def process(file: LoadedFile) -> Optional[Order]:
+def process(file: LoadedFile) -> Order | None:
     logger.info(f"Processando: {file.path.name}")
 
     fmt = _classifier.classify(file)

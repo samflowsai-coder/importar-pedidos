@@ -35,7 +35,8 @@ from app.integrations.gestor.webhook_schema import (
 from app.observability.metrics import webhook_received_total
 from app.observability.trace import current_trace_id, with_trace_id
 from app.persistence import context as env_context
-from app.persistence import environments_repo, idempotency_repo, repo, router as db_router
+from app.persistence import environments_repo, idempotency_repo, repo
+from app.persistence import router as db_router
 from app.security import (
     InvalidSignatureError,
     ReplayedRequestError,

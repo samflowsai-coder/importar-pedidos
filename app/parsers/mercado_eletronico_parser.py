@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from app.models.order import Order, OrderHeader, OrderItem
 from app.parsers.base_parser import BaseParser
@@ -33,7 +32,7 @@ class MercadoEletronicoParser(BaseParser):
     def can_parse(self, extracted: dict) -> bool:
         return _SIGNATURE in extracted.get("text", "")
 
-    def parse(self, extracted: dict) -> Optional[Order]:
+    def parse(self, extracted: dict) -> Order | None:
         text = extracted.get("text", "")
         if not self.can_parse(extracted):
             return None
@@ -81,7 +80,7 @@ class MercadoEletronicoParser(BaseParser):
                 items.append(item)
         return items
 
-    def _parse_block(self, block: str) -> Optional[OrderItem]:
+    def _parse_block(self, block: str) -> OrderItem | None:
         first_line = block.splitlines()[0]
 
         qty = self._extract_qty(first_line)
@@ -109,7 +108,7 @@ class MercadoEletronicoParser(BaseParser):
     # Field extractors
     # ------------------------------------------------------------------
 
-    def _extract_qty(self, line: str) -> Optional[float]:
+    def _extract_qty(self, line: str) -> float | None:
         m = re.search(r"([\d,]+)\s*ST", line)
         if not m:
             return None
@@ -118,7 +117,7 @@ class MercadoEletronicoParser(BaseParser):
         except ValueError:
             return None
 
-    def _extract_prices(self, line: str) -> tuple[Optional[float], Optional[float]]:
+    def _extract_prices(self, line: str) -> tuple[float | None, float | None]:
         # "BRL 13,70 BRL 137,00"  or  "BRL 13,70BRL 2.041,30"
         matches = re.findall(r"BRL\s*([\d,.]+)", line)
         unit_price = self._parse_br_number(matches[0]) if len(matches) >= 1 else None
@@ -139,7 +138,7 @@ class MercadoEletronicoParser(BaseParser):
         desc = self._deduplicate(desc)
         return desc, product_code
 
-    def _extract_cnpj(self, block: str) -> Optional[str]:
+    def _extract_cnpj(self, block: str) -> str | None:
         # Look inside "Local Entrega Item:" section
         m = re.search(r"Local Entrega Item:.+?(" + _CNPJ_RE.pattern + r")", block, re.DOTALL)
         if m:
@@ -148,7 +147,7 @@ class MercadoEletronicoParser(BaseParser):
         m = _CNPJ_RE.search(block)
         return m.group(0) if m else None
 
-    def _extract_delivery_name(self, block: str) -> Optional[str]:
+    def _extract_delivery_name(self, block: str) -> str | None:
         """Extract store identifier, e.g. 'Lojas Riachuelo S/A - LJ270'."""
         m = re.search(r"Local Entrega Item:\s*(.+?)(?:\n|CNPJ|$)", block, re.DOTALL)
         if not m:
@@ -160,7 +159,7 @@ class MercadoEletronicoParser(BaseParser):
             return f"{parts[0]} - {parts[1]}"
         return parts[0] if parts else None
 
-    def _parse_br_number(self, value: str) -> Optional[float]:
+    def _parse_br_number(self, value: str) -> float | None:
         if not value:
             return None
         try:
@@ -179,6 +178,6 @@ class MercadoEletronicoParser(BaseParser):
                 return left
         return text
 
-    def _find(self, text: str, pattern: str) -> Optional[str]:
+    def _find(self, text: str, pattern: str) -> str | None:
         m = re.search(pattern, text, re.IGNORECASE)
         return m.group(1).strip() if m else None

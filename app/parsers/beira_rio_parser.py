@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from app.models.order import Order, OrderHeader, OrderItem
 from app.parsers.base_parser import BaseParser
@@ -31,7 +30,7 @@ class BeiranRioParser(BaseParser):
     def can_parse(self, extracted: dict) -> bool:
         return _SIGNATURE in extracted.get("text", "").upper()
 
-    def parse(self, extracted: dict) -> Optional[Order]:
+    def parse(self, extracted: dict) -> Order | None:
         text = extracted.get("text", "")
         if not self.can_parse(extracted):
             return None
@@ -63,7 +62,7 @@ class BeiranRioParser(BaseParser):
             customer_cnpj=customer_cnpj,
         )
 
-    def _extract_issue_date(self, text: str) -> Optional[str]:
+    def _extract_issue_date(self, text: str) -> str | None:
         m = re.search(r"SAPIRANGA,\s*(\d+)/(\w+)/(\d{4})", text, re.IGNORECASE)
         if not m:
             return None
@@ -174,7 +173,7 @@ class BeiranRioParser(BaseParser):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _parse_br_number(self, value: str) -> Optional[float]:
+    def _parse_br_number(self, value: str) -> float | None:
         if not value or not value.strip():
             return None
         try:
@@ -184,6 +183,6 @@ class BeiranRioParser(BaseParser):
         except ValueError:
             return None
 
-    def _find(self, text: str, pattern: str) -> Optional[str]:
+    def _find(self, text: str, pattern: str) -> str | None:
         m = re.search(pattern, text, re.IGNORECASE)
         return m.group(1).strip() if m else None

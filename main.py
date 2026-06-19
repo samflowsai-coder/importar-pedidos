@@ -3,7 +3,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import os
-from typing import Optional
 
 from app import config as app_config
 from app.exporters.erp_exporter import ERPExporter
@@ -20,13 +19,13 @@ def main() -> None:
     cfg = app_config.load()
     export_mode = cfg.get("export_mode", "xlsx")
 
-    xlsx_exporter: Optional[ERPExporter] = ERPExporter() if export_mode in ("xlsx", "both") else None
-    db_exporter: Optional[FirebirdExporter] = FirebirdExporter() if export_mode in ("db", "both") else None
+    xlsx_exporter: ERPExporter | None = ERPExporter() if export_mode in ("xlsx", "both") else None
+    db_exporter: FirebirdExporter | None = FirebirdExporter() if export_mode in ("db", "both") else None
 
     loader = FileLoader()
     files = loader.load_files(INPUT_DIR)
 
-    logger.info(f"Portal de Pedidos — iniciando processamento em lote")
+    logger.info("Portal de Pedidos — iniciando processamento em lote")
 
     if not files:
         logger.warning(f"Nenhum arquivo encontrado em {INPUT_DIR}")

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import re
 import threading
-from typing import Optional
 
+from app.erp import queries
 from app.erp.connection import FirebirdConnection
 from app.erp.exceptions import (
     FirebirdClientNotFoundError,
@@ -11,10 +11,8 @@ from app.erp.exceptions import (
     FirebirdOrderAlreadyExistsError,
 )
 from app.erp.mapper import FireSistemasMapper
-from app.erp import queries
 from app.models.order import ERPRow, Order
 from app.utils.logger import logger
-
 
 # GET_NEXT_CABVENDAS_CODIGO / GET_NEXT_CORPOVENDAS_CODIGO use MAX(CODIGO)+1, which
 # is not atomic. Serialize inserts process-wide until we migrate to a Firebird
@@ -27,7 +25,7 @@ class FirebirdExportResult:
         self,
         order_number: str | None,
         items_inserted: int,
-        fire_codigo: Optional[int] = None,
+        fire_codigo: int | None = None,
         skipped: bool = False,
         skip_reason: str | None = None,
     ) -> None:
@@ -204,7 +202,7 @@ class FirebirdExporter:
             fire_codigo=header_pk,
         )
 
-    def _find_client(self, cur, cnpj: str | None) -> Optional[int]:
+    def _find_client(self, cur, cnpj: str | None) -> int | None:
         if not cnpj:
             return None
         digits = re.sub(r"\D", "", cnpj)
@@ -214,13 +212,13 @@ class FirebirdExporter:
         row = cur.fetchone()
         return row[0] if row else None
 
-    def _validate_client_id(self, cur, codigo: int) -> Optional[int]:
+    def _validate_client_id(self, cur, codigo: int) -> int | None:
         """Confirma que o codigo ainda existe e está ativo em CADASTRO."""
         cur.execute(queries.FIND_CLIENT_BY_CODIGO, (int(codigo),))
         row = cur.fetchone()
         return row[0] if row else None
 
-    def _find_product(self, cur, row: ERPRow) -> Optional[int]:
+    def _find_product(self, cur, row: ERPRow) -> int | None:
         # Try EAN first, then alternative code
         if row.ean:
             cur.execute(queries.FIND_PRODUCT_BY_EAN, (row.ean,))

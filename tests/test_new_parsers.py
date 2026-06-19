@@ -1,8 +1,9 @@
 """Integration tests for the 5 new parsers and 2 EAN fixes."""
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 SAMPLES = Path(__file__).parent.parent / "samples"
 
@@ -238,8 +239,9 @@ def test_sams_grade_pack_size_multiplier():
 
 def test_sams_grade_per_store_split():
     """Cada loja recebe um arquivo XLSX próprio, identificado por SAMS_LOJA_<filial>."""
-    from app.exporters.erp_exporter import ERPExporter
     import tempfile
+
+    from app.exporters.erp_exporter import ERPExporter
 
     order = _process(GRADE_FILE)
     with tempfile.TemporaryDirectory() as tmp:
@@ -285,8 +287,9 @@ def test_magic_feet_splits_by_store():
     order = _process("Desmembramento Magic Feet.xlsx")
     assert order is not None
     # Magic Feet has 9 stores with CNPJs → should generate 9 output files
-    from app.exporters.erp_exporter import ERPExporter
     import tempfile
+
+    from app.exporters.erp_exporter import ERPExporter
     with tempfile.TemporaryDirectory() as tmp:
         paths = ERPExporter().export(order, tmp)
         assert len(paths) == 9
@@ -337,8 +340,9 @@ def test_authentic_fit_single_output_file():
     """Pedido single-customer → exportador gera 1 arquivo (sem split)."""
     order = _process("Pedido Authentic Fit.xlsx")
     assert order is not None
-    from app.exporters.erp_exporter import ERPExporter
     import tempfile
+
+    from app.exporters.erp_exporter import ERPExporter
     with tempfile.TemporaryDirectory() as tmp:
         paths = ERPExporter().export(order, tmp)
         assert len(paths) == 1
@@ -360,8 +364,9 @@ def test_nba_splits_by_store():
     """Each store column becomes a separate output file."""
     order = _process("PEDIDO NBA 3.xlsx")
     assert order is not None
-    from app.exporters.erp_exporter import ERPExporter
     import tempfile
+
+    from app.exporters.erp_exporter import ERPExporter
     with tempfile.TemporaryDirectory() as tmp:
         paths = ERPExporter().export(order, tmp)
         assert len(paths) == 21, f"Expected 21 store files, got {len(paths)}: {[p.name for p in paths]}"
@@ -370,8 +375,9 @@ def test_nba_splits_by_store():
 def test_nba_store_name_in_filename():
     """Store name appears in the output filename."""
     order = _process("PEDIDO NBA 3.xlsx")
-    from app.exporters.erp_exporter import ERPExporter
     import tempfile
+
+    from app.exporters.erp_exporter import ERPExporter
     with tempfile.TemporaryDirectory() as tmp:
         paths = ERPExporter().export(order, tmp)
         names = [p.name for p in paths]

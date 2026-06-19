@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from app.models.order import Order, OrderHeader, OrderItem
 from app.parsers.base_parser import BaseParser
@@ -15,7 +14,7 @@ class PedidoComprasRevendaParser(BaseParser):
     def can_parse(self, extracted: dict) -> bool:
         return _SIGNATURE in extracted.get("text", "")
 
-    def parse(self, extracted: dict) -> Optional[Order]:
+    def parse(self, extracted: dict) -> Order | None:
         text = extracted.get("text", "")
         if not self.can_parse(extracted):
             return None
@@ -64,7 +63,7 @@ class PedidoComprasRevendaParser(BaseParser):
                 items.append(item)
         return items
 
-    def _parse_block(self, block: str, delivery_date: Optional[str] = None) -> Optional[OrderItem]:
+    def _parse_block(self, block: str, delivery_date: str | None = None) -> OrderItem | None:
         desc = self._extract_description(block)
         qty = self._extract_quantity(block)
         product_code = self._find(block, r"PREPACK:\s*(\d+)")
@@ -92,14 +91,14 @@ class PedidoComprasRevendaParser(BaseParser):
     # Field extractors
     # ------------------------------------------------------------------
 
-    def _extract_description(self, block: str) -> Optional[str]:
+    def _extract_description(self, block: str) -> str | None:
         m = re.search(r"Montagem:\s*\n(.+?)(?:\n|$)", block)
         if m:
             return m.group(1).strip()
         m = re.search(r"DESCRI[CÇ][AÃ]O:\s*(.+?)(?:\s+COR:|$)", block, re.IGNORECASE)
         return m.group(1).strip() if m else None
 
-    def _extract_quantity(self, block: str) -> Optional[float]:
+    def _extract_quantity(self, block: str) -> float | None:
         m = re.search(r"Qtd\.?\s*Total:\s*(\d[\d.]*)", block, re.IGNORECASE)
         if m:
             return self._parse_br_number(m.group(1))
@@ -108,14 +107,14 @@ class PedidoComprasRevendaParser(BaseParser):
             return self._parse_br_number(m.group(1))
         return None
 
-    def _extract_unit_price(self, block: str) -> Optional[float]:
+    def _extract_unit_price(self, block: str) -> float | None:
         # After UNI qty, first price value: "PAR 1500 10,9500"
         m = re.search(r"(?:PAR|KIT|PC|UN|UND|PCS|UNID|ST)\s+[\d.]+\s+([\d,]+)", block, re.IGNORECASE)
         if m:
             return self._parse_br_number(m.group(1))
         return None
 
-    def _extract_total_price(self, block: str) -> Optional[float]:
+    def _extract_total_price(self, block: str) -> float | None:
         # "Qtd. Total: 1500 16425.00 16.425,00 0,00" — second value is Total NF (no comma format)
         m = re.search(r"Qtd\.?\s*Total:\s*[\d.]+\s+([\d.]+)", block, re.IGNORECASE)
         if m:
@@ -125,7 +124,7 @@ class PedidoComprasRevendaParser(BaseParser):
                 pass
         return None
 
-    def _extract_obs(self, block: str) -> Optional[str]:
+    def _extract_obs(self, block: str) -> str | None:
         # First "Observações:" block inside the PREPACK section
         parts = block.split("Observações:")
         if len(parts) >= 2:
@@ -134,7 +133,7 @@ class PedidoComprasRevendaParser(BaseParser):
                 return line
         return None
 
-    def _extract_delivery_date(self, text: str) -> Optional[str]:
+    def _extract_delivery_date(self, text: str) -> str | None:
         """First business day of the delivery week.
         Format: 'Semana Ent.: 22(25/05 a 31/05/2026)' → first date = 25/05/2026 (Monday).
         """
@@ -152,7 +151,7 @@ class PedidoComprasRevendaParser(BaseParser):
         except ValueError:
             return raw_date
 
-    def _extract_ean(self, block: str) -> Optional[str]:
+    def _extract_ean(self, block: str) -> str | None:
         """EAN-13 appears on its own line or inline on the item data line."""
         m = re.search(r"\n(\d{13})\n", block)
         if m:
@@ -160,7 +159,7 @@ class PedidoComprasRevendaParser(BaseParser):
         m = re.search(r"\b(\d{13})\b", block)
         return m.group(1) if m else None
 
-    def _parse_br_number(self, value: str) -> Optional[float]:
+    def _parse_br_number(self, value: str) -> float | None:
         try:
             if "," in value:
                 return float(value.replace(".", "").replace(",", "."))
@@ -168,6 +167,6 @@ class PedidoComprasRevendaParser(BaseParser):
         except ValueError:
             return None
 
-    def _find(self, text: str, pattern: str) -> Optional[str]:
+    def _find(self, text: str, pattern: str) -> str | None:
         m = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
         return m.group(1).strip() if m else None
