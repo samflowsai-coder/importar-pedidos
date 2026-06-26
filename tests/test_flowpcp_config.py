@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from app.integrations.flowpcp.config import FlowPCPConfig, load_flowpcp_config
+from app.integrations.flowpcp.config import (
+    FlowPCPConfig,
+    load_flowpcp_config,
+    load_flowpcp_envs,
+)
 
 
 def test_default_is_disabled():
@@ -26,3 +30,25 @@ def test_loads_enabled_mm_config():
     assert cfg.base_url == "https://flow.test"
     assert cfg.dry_run is True
     assert isinstance(cfg, FlowPCPConfig)
+
+
+def test_load_envs_empty_when_unset():
+    assert load_flowpcp_envs({}) == {}
+    assert load_flowpcp_envs({"FLOWPCP_ENVS": "   "}) == {}
+
+
+def test_load_envs_ignores_malformed_json():
+    assert load_flowpcp_envs({"FLOWPCP_ENVS": "{not json"}) == {}
+
+
+def test_load_envs_parses_per_slug_config():
+    raw = (
+        '{"mm": {"flowpcp": {"enabled": true, "base_url": "https://flow.test", '
+        '"service_token": "tok", "tenant_id": "uuid-mm"}}, '
+        '"nasmar": {"flowpcp": {"enabled": false}}}'
+    )
+    envs = load_flowpcp_envs({"FLOWPCP_ENVS": raw})
+    assert set(envs) == {"mm", "nasmar"}
+    assert envs["mm"].enabled is True
+    assert envs["mm"].tenant_id == "uuid-mm"
+    assert envs["nasmar"].enabled is False
