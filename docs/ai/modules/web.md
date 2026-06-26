@@ -64,6 +64,14 @@ API pública para páginas-filho:
   `check_order` + `is_blocking`; bloqueia 409 com audit `send_to_fire_blocked` /
   `xlsx_export_blocked` quando há mismatch / no_order_price / no_price_unacked.
   Fire offline = best-effort, segue.
+- **Ponte FlowPCP (Modelo B/OVERLAY):** após `SEND_TO_FIRE_SUCCEEDED` (dentro do
+  `with_trace_id`), `_send_one_to_fire` chama `push_new_order(order, import_id,
+  slug)` (`app/integrations/flowpcp/hook.py`) — notifica o FlowPCP do pedido novo
+  em paralelo ao Fire. Gated: só ambientes com `flowpcp.enabled` (slug do
+  `request.state.environment` ∩ `FLOWPCP_ENVS`); sem env ativo → no-op.
+  Best-effort: erro nunca derruba o send-to-fire (falha vira outbox `target=flowpcp`
+  + retry no worker). Vale para single e batch (ambos passam por `_send_one_to_fire`).
+  CLI `main.py` fica fora (batch legado, sem contexto multi-ambiente).
 
 ## Segurança (não relaxar)
 - Whitelist de extensão: `.pdf`, `.xls`, `.xlsx`.
@@ -74,7 +82,9 @@ API pública para páginas-filho:
   Env `RATE_LIMIT_ENABLED=false` desativa (dev/test).
 
 ## Testes
-- `tests/test_web_server.py`
+- `tests/test_web_server.py` — inclui o push FlowPCP no send-to-fire
+  (`test_send_to_fire_pushes_to_flowpcp_for_env_with_slug` / `_skips_flowpcp_without_env`).
+- `tests/test_flowpcp_hook.py` — `push_new_order` (gating MM + best-effort).
 - `tests/test_preview_cache.py`
 - `tests/test_firebird_config_api.py` — endpoints `/api/firebird/*`, redirect legacy, gating por role.
 - Comando: `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py tests/test_firebird_config_api.py -v`
