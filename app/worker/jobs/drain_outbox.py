@@ -83,7 +83,7 @@ def _process_row(row: OutboxRow) -> None:
 
 def _handle_failure(row: OutboxRow, error: str) -> None:
     if row.attempts >= len(_BACKOFF_S):
-        outbox_repo.mark_failed(row.id, error, dead=True)
+        outbox_repo.mark_failed(row.id, error=error, dead=True)
         append_event(
             row.import_id,
             LifecycleEvent.POST_TO_GESTOR_FAILED,
@@ -99,7 +99,7 @@ def _handle_failure(row: OutboxRow, error: str) -> None:
     else:
         delta = _BACKOFF_S[row.attempts]
         next_at = (datetime.now(UTC) + timedelta(seconds=delta)).isoformat()
-        outbox_repo.mark_failed(row.id, error, next_attempt_at=next_at)
+        outbox_repo.mark_failed(row.id, error=error, next_attempt_at=next_at)
         logger.warning(
             "worker.drain retry import_id={} attempts={} next=+{}s",
             row.import_id,
