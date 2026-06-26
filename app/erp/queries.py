@@ -196,3 +196,12 @@ INSERT_CORPO_VENDAS = """
         ?, ?
     )
 """
+
+# Reconciliação FlowPCP → Fire: atualiza data de entrega do pedido.
+# Chave = PEDIDO_CLIENTE (ref do varejista) + CLIENTE (FK CADASTRO.CODIGO).
+UPDATE_DT_ENTREGA = """
+    UPDATE CAB_VENDAS
+       SET DT_ENTREGA = ?
+     WHERE TRIM(PEDIDO_CLIENTE) = ?
+       AND CLIENTE = ?
+"""
