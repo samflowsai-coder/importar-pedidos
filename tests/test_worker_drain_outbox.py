@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
 
@@ -166,3 +166,40 @@ def test_backoff_progression(mock_client, mock_outbox):
         assert expected_delta - 5 <= delta <= expected_delta + 5, (
             f"attempts={idx}: expected ~{expected_delta}s, got {delta:.0f}s"
         )
+
+
+# ── Regression: outbox_repo.mark_failed() tem `error` keyword-only ──────────────
+# Os testes acima trocam `outbox_repo` por um MagicMock liso, que aceita `error`
+# posicional e mascara o bug. create_autospec impõe a assinatura real, então um
+# `mark_failed(row.id, error, ...)` posicional levanta TypeError.
+
+
+def test_handle_failure_retry_passes_error_as_keyword(monkeypatch):
+    import app.worker.jobs.drain_outbox as drain
+    from app.persistence import outbox_repo
+
+    spec_mark_failed = create_autospec(outbox_repo.mark_failed)
+    monkeypatch.setattr(drain.outbox_repo, "mark_failed", spec_mark_failed)
+
+    drain._handle_failure(_make_row(attempts=0), "boom")
+
+    spec_mark_failed.assert_called_once()
+    _, kwargs = spec_mark_failed.call_args
+    assert kwargs["error"] == "boom"
+    assert kwargs["next_attempt_at"] is not None
+
+
+@patch("app.worker.jobs.drain_outbox.append_event")
+def test_handle_failure_dead_passes_error_as_keyword(mock_append, monkeypatch):
+    import app.worker.jobs.drain_outbox as drain
+    from app.persistence import outbox_repo
+
+    spec_mark_failed = create_autospec(outbox_repo.mark_failed)
+    monkeypatch.setattr(drain.outbox_repo, "mark_failed", spec_mark_failed)
+
+    drain._handle_failure(_make_row(attempts=len(drain._BACKOFF_S)), "permanent")
+
+    spec_mark_failed.assert_called_once()
+    _, kwargs = spec_mark_failed.call_args
+    assert kwargs["error"] == "permanent"
+    assert kwargs["dead"] is True
