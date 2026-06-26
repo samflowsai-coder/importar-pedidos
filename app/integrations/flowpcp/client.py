@@ -11,7 +11,9 @@ from app.integrations.flowpcp.schema import (
 )
 from app.utils.logger import logger
 
-_RECEBIMENTO_PATH = "/api/portal-pedidos/recebimento"
+FLOWPCP_TARGET_NAME = "flowpcp"  # outbox.target identifier
+RECEBIMENTO_PATH = "/api/portal-pedidos/recebimento"
+_RECEBIMENTO_PATH = RECEBIMENTO_PATH
 _DECISOES_PATH = "/api/portal-pedidos/decisoes"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
