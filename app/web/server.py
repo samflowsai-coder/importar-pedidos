@@ -73,6 +73,9 @@ from app.web.middleware.environment import EnvironmentMiddleware  # noqa: E402
 
 app.add_middleware(EnvironmentMiddleware)
 
+# Ponte FlowPCP (Modelo B/OVERLAY): push best-effort do pedido novo após o
+# send-to-fire, só em ambientes com FlowPCP habilitado (MM).
+from app.integrations.flowpcp.hook import push_new_order  # noqa: E402
 
 # Multi-ambiente: traduz NoActiveEnvironmentError em 412 estruturado para
 # que o cliente HTTP possa redirecionar para /selecionar-ambiente em vez
@@ -1708,6 +1711,13 @@ def _send_one_to_fire(
                 "cliente_override_codigo": override,
             },
         )
+
+        # Ponte FlowPCP (Modelo B/OVERLAY): notifica o pedido novo em paralelo
+        # ao Fire — só em ambientes com FlowPCP habilitado (MM). Best-effort:
+        # nunca derruba o send-to-fire que já teve sucesso.
+        slug = (request_env or {}).get("slug")
+        if slug:
+            push_new_order(order, import_id=import_id, slug=slug)
 
         return _FireSendOutcome(
             True,
