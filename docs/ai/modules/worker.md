@@ -2,9 +2,10 @@
 
 ## Responsabilidade
 Processo separado (`python -m app.worker`) que executa jobs periódicos:
-drena o outbox para o Gestor, poll o Firebird por mudanças de status e
-faz retenção/backup do banco. Não compartilha estado em memória com o
-FastAPI — comunicação exclusivamente via SQLite.
+drena o outbox (Gestor + FlowPCP), poll o Firebird por mudanças de status,
+poll de decisões do FlowPCP (reconciliação de data de entrega), ingesta
+arquivos novos por ambiente e faz retenção/backup do banco. Não compartilha
+estado em memória com o FastAPI — comunicação exclusivamente via SQLite.
 
 ## Entry point
 ```bash
@@ -16,22 +17,47 @@ docker compose up worker      # via Docker (mesmo Dockerfile, cmd diferente)
 
 ### Scheduler
 - `app/worker/scheduler.py` — bootstrap APScheduler com `SQLAlchemyJobStore`
-  no SQLite do app. Três jobs registrados:
+  no SQLite do app. Jobs registrados:
 
 | Job | Trigger | Função |
 |---|---|---|
 | `drain_outbox` | interval 15s | `run_drain_outbox()` |
 | `poll_fire` | interval 60s | `run_poll_fire()` |
+| `scan_environments` | interval 30s | `run_scan_environments()` |
+| `poll_flowpcp` | interval 30s | `run_poll_flowpcp()` |
 | `retention` | cron hour=3 | `run_retention()` |
 
 Todos com `coalesce=True`, `max_instances=1`, `misfire_grace_time=30s`.
 
 ### drain_outbox
 - `app/worker/jobs/drain_outbox.py`
-- Pega até 20 linhas `pending` do outbox e posta para o Gestor de Produção.
+- Pega até 20 linhas `pending` do outbox e posta para o Gestor de Produção
+  (`target=gestor`).
 - Sucesso: `mark_sent` + `set_gestor_order_id` + `POST_TO_GESTOR_SENT`.
 - Falha: backoff exponencial (30s → 2m → 10m → 1h → 6h → `dead` após 5 tentativas).
+- **FlowPCP (`target=flowpcp`):** no mesmo loop por-ambiente, se `flowpcp.enabled`
+  para o slug, drena rows `flowpcp` reenviando `send_order` (retry do push que
+  falhou inline em `FlowPCPExporter`). `_process_flowpcp_row` reconstrói
+  `RecebimentoRequest.model_validate(row.payload)`; backoff/dead próprio via
+  `_handle_flowpcp_failure` (`mark_failed(..., error=..., next_attempt_at=...)` —
+  `error` é **keyword-only**) — sem emitir eventos de lifecycle do Gestor.
 - Ao final de cada execução: chama `update_outbox_metrics()` (atualiza Gauges Prometheus).
+
+### poll_flowpcp
+- `app/worker/jobs/poll_flowpcp.py` (ponte Importador↔FlowPCP, Modelo B / OVERLAY).
+- A cada 30s, para CADA ambiente com FlowPCP habilitado, chama
+  `poll_decisoes_once` (`app/integrations/flowpcp/poll_decisoes.py`): busca
+  decisões pendentes e reconcilia a data de entrega no Fire
+  (`UPDATE CAB_VENDAS.DT_ENTREGA` via `app/erp/fire_update.py`).
+- 4 ramos: rejeitado → `cancelamento_pendente_manual`; sem mudança →
+  `sem_acao_necessaria`; data nova → `update_dt_entrega` + `data_atualizada`
+  (ou só log se `dry_run`); pedido não localizado no Fire → conta tentativas e
+  confirma `pedido_nao_encontrado_no_fire` após 5×.
+- Cursor + contador de tentativas persistidos em `flowpcp_repo`
+  (`app/persistence/flowpcp_repo.py`, tabelas no `schema_env`).
+- Auth = `X-Service-Token` + `X-Tenant-Id` (NÃO Bearer).
+- Config per-ambiente via `FLOWPCP_ENVS` (JSON, fonte interina), gated aos
+  ambientes ativos — só o ambiente MM liga. Um ambiente ruim não derruba os outros.
 
 ### poll_fire
 - `app/worker/jobs/poll_fire.py`
@@ -63,12 +89,20 @@ FIRE_TRIGGER_STATUS=       # status que dispara POST ao Gestor (vazio = desligad
 RETENTION_DAYS=180         # dias de retenção de lifecycle_events e audit_log
 BACKUP_DIR=                # diretório para backup VACUUM INTO (vazio = desligado)
 RATE_LIMIT_ENABLED=true    # false bypassa rate-limit (worker não usa, mas compartilha DB)
+FLOWPCP_ENVS=              # JSON {"<slug>": {"flowpcp": {...}}} (vazio = poll desligado).
+                           # Fonte interina até UI de config + secret_store por ambiente.
 ```
 
 ## Testes
 - `tests/test_worker_drain_outbox.py`
 - `tests/test_worker_poll_fire.py`
 - `tests/test_retention.py` — purge por tabela, VACUUM INTO, manutenção de 7 backups.
+- `tests/test_flowpcp_worker_wiring.py` — `run_poll_flowpcp` + `_list_flowpcp_envs`
+  (gating ativo+enabled) + drain `_process_flowpcp_row` (sent / retry / dead).
+- Lógica FlowPCP a montante: `tests/test_flowpcp_poll.py`,
+  `tests/test_flowpcp_fire_update.py`, `tests/test_flowpcp_client.py`,
+  `tests/test_flowpcp_repo.py`, `tests/test_flowpcp_config.py`,
+  `tests/test_flowpcp_exporter.py`, `tests/test_flowpcp_schema.py`.
 
 ```bash
 .venv/bin/pytest tests/test_worker_drain_outbox.py tests/test_worker_poll_fire.py \

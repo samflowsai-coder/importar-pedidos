@@ -23,11 +23,13 @@ from app.persistence.db import init as db_init
 from app.utils.logger import logger
 from app.worker.jobs.drain_outbox import run_drain_outbox
 from app.worker.jobs.poll_fire import run_poll_fire
+from app.worker.jobs.poll_flowpcp import run_poll_flowpcp
 from app.worker.jobs.retention import run_retention
 from app.worker.jobs.scan_environments import run_scan as run_scan_environments
 
 _DRAIN_INTERVAL_S = 15
 _POLL_INTERVAL_S = 60
+_FLOWPCP_INTERVAL_S = 30  # poll de decisões FlowPCP (só ambientes MM habilitados)
 _SCAN_INTERVAL_S = 30  # watcher multi-pasta — ingesta arquivos novos por env
 _RETENTION_HOUR = 3  # 03:00 local — low-traffic window
 
@@ -73,6 +75,13 @@ def start() -> None:
         "interval",
         seconds=_SCAN_INTERVAL_S,
         id="scan_environments",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_poll_flowpcp,
+        "interval",
+        seconds=_FLOWPCP_INTERVAL_S,
+        id="poll_flowpcp",
         replace_existing=True,
     )
 

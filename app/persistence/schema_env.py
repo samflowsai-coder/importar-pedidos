@@ -87,6 +87,23 @@ CREATE TABLE IF NOT EXISTS outbox (
     sent_at          TEXT,
     FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS flowpcp_decisoes_mapping (
+    decisao_id      TEXT PRIMARY KEY,
+    pedido_erp      TEXT,
+    cliente_cnpj    TEXT,
+    acao_executada  TEXT,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    reconciliado_em TEXT,
+    criado_em       TEXT NOT NULL DEFAULT (datetime('now')),
+    atualizado_em   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS flowpcp_cursor_state (
+    id            INTEGER PRIMARY KEY CHECK (id = 1),
+    last_cursor   TEXT,
+    atualizado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 INDEXES_SQL = """
