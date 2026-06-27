@@ -192,6 +192,76 @@ def test_get_returns_none_for_missing(fresh_shared):
     assert environments_repo.get("nope") is None
 
 
+# ── FlowPCP per-ambiente (token cifrado via secret_store) ─────────────────────
+
+
+def test_flowpcp_defaults_disabled(fresh_shared):
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
+    got = environments_repo.get(env["id"])
+    assert got["flowpcp_enabled"] == 0
+    assert got["flowpcp_timezone"] == "America/Sao_Paulo"
+    assert got["flowpcp_poll_interval_s"] == 30
+    assert environments_repo.get_flowpcp_token(env["id"]) is None
+
+
+def test_flowpcp_config_round_trip(fresh_shared):
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
+    environments_repo.set_flowpcp_config(
+        env["id"],
+        enabled=True,
+        base_url="https://flow.test",
+        tenant_id="uuid-mm",
+        dry_run=True,
+        poll_interval_s=45,
+        service_token="svc-tok",
+    )
+    got = environments_repo.get(env["id"])
+    assert got["flowpcp_enabled"] == 1
+    assert got["flowpcp_base_url"] == "https://flow.test"
+    assert got["flowpcp_tenant_id"] == "uuid-mm"
+    assert got["flowpcp_dry_run"] == 1
+    assert got["flowpcp_poll_interval_s"] == 45
+    # token nunca volta no public view
+    assert "flowpcp_service_token_enc" not in got
+    assert environments_repo.get_flowpcp_token(env["id"]) == "svc-tok"
+
+
+def test_flowpcp_token_keep_replace_clear(fresh_shared):
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
+    base = dict(enabled=True, base_url="x", tenant_id="t")
+    environments_repo.set_flowpcp_config(env["id"], **base, service_token="orig")
+    # None → mantém
+    environments_repo.set_flowpcp_config(env["id"], **base, service_token=None)
+    assert environments_repo.get_flowpcp_token(env["id"]) == "orig"
+    # "..." → substitui
+    environments_repo.set_flowpcp_config(env["id"], **base, service_token="new")
+    assert environments_repo.get_flowpcp_token(env["id"]) == "new"
+    # "" → limpa
+    environments_repo.set_flowpcp_config(env["id"], **base, service_token="")
+    assert environments_repo.get_flowpcp_token(env["id"]) is None
+
+
+def test_flowpcp_disable_keeps_token(fresh_shared):
+    """Desligar não apaga o token — re-ligar não exige redigitar."""
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
+    environments_repo.set_flowpcp_config(
+        env["id"], enabled=True, base_url="x", tenant_id="t", service_token="keepme"
+    )
+    environments_repo.set_flowpcp_config(
+        env["id"], enabled=False, base_url="x", tenant_id="t", service_token=None
+    )
+    assert environments_repo.get(env["id"])["flowpcp_enabled"] == 0
+    assert environments_repo.get_flowpcp_token(env["id"]) == "keepme"
+
+
 # ── fb_path sanitization ─────────────────────────────────────────────────────
 # Finder "Copy as Pathname" e cmd do Windows costumam embrulhar paths em
 # aspas. Salvar bruto quebra a conexão Firebird com "io error: file not found".

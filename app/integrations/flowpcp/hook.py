@@ -7,7 +7,7 @@ aqui vira outbox/retry e nunca pode derrubar o fluxo de send-to-fire.
 from __future__ import annotations
 
 from app.integrations.flowpcp.client import FlowPCPClient
-from app.integrations.flowpcp.config import load_flowpcp_envs
+from app.integrations.flowpcp.config import flowpcp_config_for_slug
 from app.integrations.flowpcp.exporter import FlowPCPExporter
 from app.models.order import Order
 from app.utils.logger import logger
@@ -17,8 +17,8 @@ def push_new_order(order: Order, *, import_id: str, slug: str) -> bool:
     """Notifica o FlowPCP de um pedido novo. Retorna True se enviado; False se
     o ambiente não tem FlowPCP habilitado, ou se o envio falhou (já enfileirado
     no outbox para retry). Nunca levanta exceção."""
-    cfg = load_flowpcp_envs().get(slug)
-    if not (cfg and cfg.enabled):
+    cfg = flowpcp_config_for_slug(slug)
+    if cfg is None:
         return False
     try:
         client = FlowPCPClient(

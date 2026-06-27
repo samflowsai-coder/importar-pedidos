@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import json
-import os
-from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
+
+from app.persistence import environments_repo
 
 
 @dataclass(frozen=True)
@@ -18,37 +18,41 @@ class FlowPCPConfig:
     request_timeout_s: float = 30.0
 
 
-def load_flowpcp_config(env: dict) -> FlowPCPConfig:
-    """Lê a sub-seção `flowpcp` do config do ambiente. Desligado por padrão.
-    Só o ambiente MM preenche; Nasmar fica disabled."""
-    raw = (env or {}).get("flowpcp") or {}
+def flowpcp_config_from_env(env: dict[str, Any], *, service_token: str | None) -> FlowPCPConfig:
+    """Materializa a FlowPCPConfig a partir das colunas `flowpcp_*` do ambiente
+    (`environments_repo`) + o token já decifrado. Mapper puro (sem I/O)."""
     return FlowPCPConfig(
-        enabled=bool(raw.get("enabled", False)),
-        base_url=str(raw.get("base_url", "")),
-        service_token=str(raw.get("service_token", "")),
-        tenant_id=str(raw.get("tenant_id", "")),
-        timezone=str(raw.get("timezone", "America/Sao_Paulo")),
-        dry_run=bool(raw.get("dry_run", False)),
-        poll_interval_s=int(raw.get("poll_interval_s", 30)),
-        request_timeout_s=float(raw.get("request_timeout_s", 30.0)),
+        enabled=bool(env.get("flowpcp_enabled")),
+        base_url=str(env.get("flowpcp_base_url") or ""),
+        service_token=service_token or "",
+        tenant_id=str(env.get("flowpcp_tenant_id") or ""),
+        timezone=str(env.get("flowpcp_timezone") or "America/Sao_Paulo"),
+        dry_run=bool(env.get("flowpcp_dry_run")),
+        poll_interval_s=int(env.get("flowpcp_poll_interval_s") or 30),
+        request_timeout_s=float(env.get("flowpcp_request_timeout_s") or 30.0),
     )
 
 
-def load_flowpcp_envs(environ: Mapping[str, str] | None = None) -> dict[str, FlowPCPConfig]:
-    """Carrega config FlowPCP por ambiente a partir da env var `FLOWPCP_ENVS`.
+def flowpcp_config_for_slug(slug: str) -> FlowPCPConfig | None:
+    """Config FlowPCP ATIVA do ambiente `slug`, ou None se o ambiente não existe
+    ou não tem FlowPCP habilitado. Decifra o service_token via secret_store."""
+    env = environments_repo.get_by_slug(slug)
+    if env is None:
+        return None
+    cfg = flowpcp_config_from_env(
+        env, service_token=environments_repo.get_flowpcp_token(env["id"])
+    )
+    return cfg if cfg.enabled else None
 
-    Formato (JSON): ``{"<slug>": {"flowpcp": {...}}, ...}`` — mesma sub-seção que
-    `load_flowpcp_config` lê. Fonte interina (env var/JSON) até a UI de config +
-    secret_store por ambiente (follow-up §6 da spec). JSON inválido → {} (o poll
-    fica desligado em vez de derrubar o worker)."""
-    env = os.environ if environ is None else environ
-    raw = (env.get("FLOWPCP_ENVS") or "").strip()
-    if not raw:
-        return {}
-    try:
-        data = json.loads(raw)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {str(slug): load_flowpcp_config(cfg) for slug, cfg in data.items()}
+
+def enabled_flowpcp_envs() -> dict[str, FlowPCPConfig]:
+    """{slug: FlowPCPConfig} só dos ambientes ATIVOS com FlowPCP habilitado.
+    Só o ambiente MM liga; Nasmar (só vende) fica de fora."""
+    out: dict[str, FlowPCPConfig] = {}
+    for env in environments_repo.list_active():
+        if not env.get("flowpcp_enabled"):
+            continue
+        out[env["slug"]] = flowpcp_config_from_env(
+            env, service_token=environments_repo.get_flowpcp_token(env["id"])
+        )
+    return out

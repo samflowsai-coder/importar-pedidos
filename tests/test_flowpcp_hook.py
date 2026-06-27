@@ -17,7 +17,8 @@ def _order() -> Order:
 
 
 def test_push_skips_when_env_not_flowpcp(monkeypatch):
-    monkeypatch.setattr(hook, "load_flowpcp_envs", lambda: {})
+    # flowpcp_config_for_slug devolve None quando o env não tem FlowPCP / disabled.
+    monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: None)
 
     def _boom(**_kw):
         raise AssertionError("não deveria construir o client para env sem flowpcp")
@@ -26,19 +27,8 @@ def test_push_skips_when_env_not_flowpcp(monkeypatch):
     assert hook.push_new_order(_order(), import_id="imp-1", slug="nasmar") is False
 
 
-def test_push_skips_when_disabled(monkeypatch):
-    disabled = FlowPCPConfig(enabled=False, base_url="x", service_token="t", tenant_id="mm")
-    monkeypatch.setattr(hook, "load_flowpcp_envs", lambda: {"mm": disabled})
-
-    def _boom(**_kw):
-        raise AssertionError("não deveria construir o client quando disabled")
-
-    monkeypatch.setattr(hook, "FlowPCPClient", _boom)
-    assert hook.push_new_order(_order(), import_id="imp-1", slug="mm") is False
-
-
 def test_push_exports_when_enabled(monkeypatch):
-    monkeypatch.setattr(hook, "load_flowpcp_envs", lambda: {"mm": _CFG})
+    monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: _CFG)
     fake_client = MagicMock()
     monkeypatch.setattr(hook, "FlowPCPClient", lambda **_kw: fake_client)
     fake_exporter = MagicMock()
@@ -53,7 +43,7 @@ def test_push_exports_when_enabled(monkeypatch):
 
 
 def test_push_swallows_errors_best_effort(monkeypatch):
-    monkeypatch.setattr(hook, "load_flowpcp_envs", lambda: {"mm": _CFG})
+    monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: _CFG)
     monkeypatch.setattr(hook, "FlowPCPClient", lambda **_kw: MagicMock())
     boom = MagicMock()
     boom.export.side_effect = RuntimeError("kaboom")
