@@ -494,6 +494,90 @@ def test_send_to_fire_inserts_when_success(monkeypatch):
     assert got["fire_codigo"] == 4242
 
 
+def _seed_parsed_import(repo, entry_id: str) -> None:
+    from datetime import datetime
+
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "pedido.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "TEST-FLOW",
+            "customer": "MM",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {
+                "header": {"order_number": "TEST-FLOW", "customer_name": "MM"},
+                "items": [{"description": "x", "quantity": 1.0, "ean": "1234"}],
+                "source_file": "",
+            },
+        }
+    )
+
+
+def _stub_fire_success(monkeypatch):
+    from app.exporters import firebird_exporter as fb_mod
+
+    monkeypatch.setattr(
+        fb_mod.FirebirdExporter,
+        "export",
+        lambda self, order, *, override_client_id=None: fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number, items_inserted=1, fire_codigo=4242
+        ),
+    )
+    # Neutraliza price-check (sem Fire real) — deterministico.
+    monkeypatch.setattr("app.erp.product_check.check_order", lambda order, env=None: {})
+    monkeypatch.setattr("app.erp.product_check.is_blocking", lambda check, ack_items=None: (False, {}))
+
+
+def test_send_to_fire_pushes_to_flowpcp_for_env_with_slug(monkeypatch, tmp_path):
+    import uuid
+    from unittest.mock import MagicMock
+
+    from app.persistence import repo
+    from app.web import server
+
+    entry_id = str(uuid.uuid4())
+    _seed_parsed_import(repo, entry_id)
+    _stub_fire_success(monkeypatch)
+
+    spy = MagicMock()
+    monkeypatch.setattr(server, "push_new_order", spy)
+
+    cfg = {"output_dir": str(tmp_path), "export_mode": "db"}
+    outcome = server._send_one_to_fire(
+        entry_id, cfg, request_env={"id": "e1", "slug": "mm"}
+    )
+
+    assert outcome.ok
+    spy.assert_called_once()
+    args, kwargs = spy.call_args
+    assert kwargs["import_id"] == entry_id
+    assert kwargs["slug"] == "mm"
+    assert args[0].header.order_number == "TEST-FLOW"  # o Order
+
+
+def test_send_to_fire_skips_flowpcp_without_env(monkeypatch, tmp_path):
+    import uuid
+    from unittest.mock import MagicMock
+
+    from app.persistence import repo
+    from app.web import server
+
+    entry_id = str(uuid.uuid4())
+    _seed_parsed_import(repo, entry_id)
+    _stub_fire_success(monkeypatch)
+
+    spy = MagicMock()
+    monkeypatch.setattr(server, "push_new_order", spy)
+
+    cfg = {"output_dir": str(tmp_path), "export_mode": "db"}
+    outcome = server._send_one_to_fire(entry_id, cfg, request_env=None)
+
+    assert outcome.ok
+    spy.assert_not_called()
+
+
 def test_batch_send_to_fire_mixed_outcomes(monkeypatch):
     """Batch endpoint tolerates partial failures: some parsed, one cancelled, one not-found."""
     import uuid
