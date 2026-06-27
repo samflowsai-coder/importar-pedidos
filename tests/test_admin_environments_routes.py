@@ -133,6 +133,77 @@ def test_delete_soft_removes_from_list(setup):
     assert rec["is_active"] == 0
 
 
+def _create_env(c, setup, slug="mm"):
+    return c.post(
+        "/api/admin/environments",
+        json={
+            "slug": slug, "name": slug.upper(),
+            "watch_dir": str(setup), "output_dir": str(setup),
+            "fb_path": "/x.fdb",
+        },
+    ).json()["id"]
+
+
+def test_set_flowpcp_config_round_trip(setup):
+    c = _client()
+    env_id = _create_env(c, setup)
+    r = c.put(
+        f"/api/admin/environments/{env_id}/flowpcp",
+        json={
+            "enabled": True,
+            "base_url": "https://flow.test",
+            "tenant_id": "uuid-mm",
+            "dry_run": True,
+            "poll_interval_s": 45,
+            "service_token": "svc-tok",
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["flowpcp_enabled"] == 1
+    assert body["flowpcp_base_url"] == "https://flow.test"
+    assert body["flowpcp_tenant_id"] == "uuid-mm"
+    assert body["flowpcp_dry_run"] == 1
+    assert body["flowpcp_poll_interval_s"] == 45
+    # token cifrado jamais volta no JSON
+    assert "flowpcp_service_token_enc" not in body
+    assert environments_repo.get_flowpcp_token(env_id) == "svc-tok"
+
+
+def test_set_flowpcp_keeps_token_when_omitted(setup):
+    c = _client()
+    env_id = _create_env(c, setup)
+    c.put(
+        f"/api/admin/environments/{env_id}/flowpcp",
+        json={"enabled": True, "base_url": "x", "tenant_id": "t", "service_token": "orig"},
+    )
+    # PUT sem service_token → mantém o token atual (desligar não apaga)
+    c.put(
+        f"/api/admin/environments/{env_id}/flowpcp",
+        json={"enabled": False, "base_url": "x", "tenant_id": "t"},
+    )
+    assert environments_repo.get(env_id)["flowpcp_enabled"] == 0
+    assert environments_repo.get_flowpcp_token(env_id) == "orig"
+
+
+def test_set_flowpcp_404_for_missing(setup):
+    r = _client().put("/api/admin/environments/nope/flowpcp", json={"enabled": False})
+    assert r.status_code == 404
+
+
+def test_get_env_exposes_flowpcp_fields_not_token(setup):
+    c = _client()
+    env_id = _create_env(c, setup)
+    c.put(
+        f"/api/admin/environments/{env_id}/flowpcp",
+        json={"enabled": True, "base_url": "x", "tenant_id": "t", "service_token": "sek"},
+    )
+    got = c.get(f"/api/admin/environments/{env_id}").json()
+    assert got["flowpcp_enabled"] == 1
+    assert got["flowpcp_base_url"] == "x"
+    assert "flowpcp_service_token_enc" not in got
+
+
 def test_test_endpoint_validates_paths(setup):
     c = _client()
     payload = {
