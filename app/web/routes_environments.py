@@ -51,6 +51,19 @@ class UpdateEnvRequest(BaseModel):
     fb_password: str | None = None
 
 
+class FlowPCPConfigRequest(BaseModel):
+    """Config da ponte FlowPCP por ambiente. Token cifrado via secret_store."""
+    enabled: bool = False
+    base_url: str | None = None
+    tenant_id: str | None = None
+    timezone: str = "America/Sao_Paulo"
+    dry_run: bool = False
+    poll_interval_s: int = Field(default=30, ge=5)
+    request_timeout_s: float = Field(default=30.0, gt=0)
+    # None = mantém token atual; "" = limpa; valor = substitui
+    service_token: str | None = None
+
+
 @router.get("")
 def list_environments(_=Depends(require_admin)):
     return environments_repo.list_all()
@@ -81,6 +94,17 @@ def update_environment(
     if not environments_repo.get(env_id):
         raise HTTPException(404, "Ambiente não encontrado")
     return environments_repo.update(env_id, **payload.model_dump())
+
+
+@router.put("/{env_id}/flowpcp")
+def set_environment_flowpcp(
+    env_id: str, payload: FlowPCPConfigRequest, _=Depends(require_admin)
+):
+    """Grava a config FlowPCP do ambiente (token cifrado). `service_token`:
+    omitir/None mantém o atual, "" limpa, valor substitui."""
+    if not environments_repo.get(env_id):
+        raise HTTPException(404, "Ambiente não encontrado")
+    return environments_repo.set_flowpcp_config(env_id, **payload.model_dump())
 
 
 @router.delete("/{env_id}", status_code=204)

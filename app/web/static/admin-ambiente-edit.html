@@ -46,6 +46,13 @@
       border-color: var(--accent, #3b82f6);
     }
     input[readonly] { opacity: .6; cursor: not-allowed; }
+    label.check {
+      display: flex; align-items: center; gap: .55rem;
+      margin-bottom: 1rem; cursor: pointer;
+    }
+    label.check > input { width: auto; margin: 0; }
+    label.check > span { margin: 0; color: var(--text); font-size: .9em; }
+    .flowpcp-status { font-size: .85em; }
     .row { display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; }
     .field-row { display: flex; gap: .5rem; align-items: stretch; }
     .field-row > input { flex: 1; }
@@ -253,6 +260,55 @@
       </div>
       <div id="test-result" class="test-result" hidden></div>
     </form>
+
+    <!-- Integração FlowPCP — fora do <form> principal: salva via endpoint próprio. -->
+    <fieldset id="flowpcp-fieldset" hidden>
+      <legend>Integração FlowPCP (PCP)</legend>
+      <p class="hint">
+        Ponte <strong>Modelo B / OVERLAY</strong>: o pedido entra no Fire normalmente e,
+        em paralelo, é enviado ao FlowPCP. Quando o PCP renegocia a data de entrega, um
+        job reconcilia <code>DT_ENTREGA</code> de volta no Fire. Ative só nos ambientes
+        que usam o FlowPCP.
+      </p>
+      <label class="check">
+        <input type="checkbox" name="flowpcp_enabled">
+        <span>Habilitar FlowPCP neste ambiente</span>
+      </label>
+      <label>
+        <span>Base URL</span>
+        <input name="flowpcp_base_url" placeholder="https://flowpcp.fly.dev">
+      </label>
+      <label>
+        <span>Tenant ID (UUID do ambiente no FlowPCP)</span>
+        <input name="flowpcp_tenant_id" placeholder="1798c3c5-0fb6-4edb-a523-e13fb5bf52a0">
+      </label>
+      <label>
+        <span>Service token (deixe vazio para manter o atual)</span>
+        <input name="flowpcp_service_token" type="password" autocomplete="new-password">
+      </label>
+      <label>
+        <span>Timezone</span>
+        <input name="flowpcp_timezone" value="America/Sao_Paulo">
+      </label>
+      <div class="row">
+        <label>
+          <span>Poll (segundos)</span>
+          <input name="flowpcp_poll_interval_s" type="number" min="5" value="30">
+        </label>
+        <label>
+          <span>Timeout de request (s)</span>
+          <input name="flowpcp_request_timeout_s" type="number" min="1" step="0.5" value="30">
+        </label>
+      </div>
+      <label class="check">
+        <input type="checkbox" name="flowpcp_dry_run">
+        <span>Dry-run (loga o UPDATE, não escreve no Fire)</span>
+      </label>
+      <div class="actions" style="margin-top:1rem">
+        <button type="button" id="btn-save-flowpcp" class="btn btn-primary">Salvar FlowPCP</button>
+        <span id="flowpcp-status" class="flowpcp-status"></span>
+      </div>
+    </fieldset>
   </main>
 
   <!-- Folder browser modal -->
@@ -283,6 +339,9 @@
     const testBtn = document.getElementById('btn-test');
     const deleteBtn = document.getElementById('btn-delete');
     const testResult = document.getElementById('test-result');
+    const flowFs = document.getElementById('flowpcp-fieldset');
+    const flowStatus = document.getElementById('flowpcp-status');
+    const fv = (n) => flowFs.querySelector('[name="' + n + '"]');
 
     function showError(msg) {
       errBanner.textContent = msg;
@@ -314,6 +373,15 @@
           if (inp && k !== 'fb_password') inp.value = env[k] ?? '';
         }
         f.elements['slug'].readOnly = true;
+        // FlowPCP: prefill (sem o token, que é write-only) e revela a seção.
+        fv('flowpcp_enabled').checked = !!env.flowpcp_enabled;
+        fv('flowpcp_base_url').value = env.flowpcp_base_url ?? '';
+        fv('flowpcp_tenant_id').value = env.flowpcp_tenant_id ?? '';
+        fv('flowpcp_timezone').value = env.flowpcp_timezone ?? 'America/Sao_Paulo';
+        fv('flowpcp_poll_interval_s').value = env.flowpcp_poll_interval_s ?? 30;
+        fv('flowpcp_request_timeout_s').value = env.flowpcp_request_timeout_s ?? 30;
+        fv('flowpcp_dry_run').checked = !!env.flowpcp_dry_run;
+        flowFs.hidden = false;
       }).catch(e => showError(e.message));
     }
 
@@ -368,6 +436,45 @@
       const r = await fetch('/api/admin/environments/' + envId, { method: 'DELETE' });
       if (r.ok) { location.href = '/admin/ambientes'; return; }
       showError('Falha ao desativar (' + r.status + ')');
+    });
+
+    // FlowPCP tem save próprio (endpoint dedicado); token vazio = mantém o atual.
+    document.getElementById('btn-save-flowpcp').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      flowStatus.textContent = '';
+      flowStatus.className = 'flowpcp-status';
+      const payload = {
+        enabled: fv('flowpcp_enabled').checked,
+        base_url: fv('flowpcp_base_url').value.trim() || null,
+        tenant_id: fv('flowpcp_tenant_id').value.trim() || null,
+        timezone: fv('flowpcp_timezone').value.trim() || 'America/Sao_Paulo',
+        dry_run: fv('flowpcp_dry_run').checked,
+        poll_interval_s: parseInt(fv('flowpcp_poll_interval_s').value, 10) || 30,
+        request_timeout_s: parseFloat(fv('flowpcp_request_timeout_s').value) || 30,
+      };
+      const tok = fv('flowpcp_service_token').value;
+      if (tok !== '') payload.service_token = tok;  // vazio = mantém atual
+      btn.disabled = true;
+      try {
+        const r = await fetch('/api/admin/environments/' + envId + '/flowpcp', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (r.ok) {
+          flowStatus.textContent = '✓ FlowPCP salvo';
+          flowStatus.classList.add('ok');
+          fv('flowpcp_service_token').value = '';
+        } else {
+          const t = await r.text();
+          let msg;
+          try { msg = JSON.parse(t).detail || t; } catch { msg = t || ('Erro ' + r.status); }
+          flowStatus.textContent = '✗ ' + msg;
+          flowStatus.classList.add('err');
+        }
+      } finally {
+        btn.disabled = false;
+      }
     });
 
     // ── Filesystem browser (pastas e arquivos) ─────────────────────

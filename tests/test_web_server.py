@@ -36,6 +36,14 @@ def test_index_returns_html():
     assert "Portal de Pedidos" in r.text
 
 
+def test_env_edit_page_has_flowpcp_section():
+    r = client.get("/admin/ambientes/any-id")
+    assert r.status_code == 200
+    assert "Integração FlowPCP" in r.text
+    assert 'name="flowpcp_enabled"' in r.text
+    assert 'name="flowpcp_service_token"' in r.text
+
+
 def test_config_returns_default_output_dir():
     r = client.get("/api/config")
     assert r.status_code == 200
