@@ -23,6 +23,16 @@ CREATE TABLE IF NOT EXISTS environments (
     fb_charset      TEXT NOT NULL DEFAULT 'WIN1252',
     fb_password_enc TEXT,
     is_active       INTEGER NOT NULL DEFAULT 1,
+    -- Ponte FlowPCP (Modelo B/OVERLAY) por ambiente. Token cifrado via
+    -- secret_store (Fernet), como fb_password_enc. Só MM liga.
+    flowpcp_enabled           INTEGER NOT NULL DEFAULT 0,
+    flowpcp_base_url          TEXT,
+    flowpcp_tenant_id         TEXT,
+    flowpcp_timezone          TEXT NOT NULL DEFAULT 'America/Sao_Paulo',
+    flowpcp_dry_run           INTEGER NOT NULL DEFAULT 0,
+    flowpcp_poll_interval_s   INTEGER NOT NULL DEFAULT 30,
+    flowpcp_request_timeout_s REAL NOT NULL DEFAULT 30.0,
+    flowpcp_service_token_enc TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -93,5 +103,22 @@ CREATE INDEX IF NOT EXISTS idx_inbound_received_at  ON inbound_idempotency(recei
 CREATE INDEX IF NOT EXISTS idx_inbound_import_id    ON inbound_idempotency(import_id);
 """
 
-# Migrações de coluna para shared.db (vazio por ora — schema novo).
-COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = ()
+# Migrações de coluna para shared.db — aplicadas se a coluna ainda não existir.
+COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    ("environments", "flowpcp_enabled",
+     "ALTER TABLE environments ADD COLUMN flowpcp_enabled INTEGER NOT NULL DEFAULT 0"),
+    ("environments", "flowpcp_base_url",
+     "ALTER TABLE environments ADD COLUMN flowpcp_base_url TEXT"),
+    ("environments", "flowpcp_tenant_id",
+     "ALTER TABLE environments ADD COLUMN flowpcp_tenant_id TEXT"),
+    ("environments", "flowpcp_timezone",
+     "ALTER TABLE environments ADD COLUMN flowpcp_timezone TEXT NOT NULL DEFAULT 'America/Sao_Paulo'"),
+    ("environments", "flowpcp_dry_run",
+     "ALTER TABLE environments ADD COLUMN flowpcp_dry_run INTEGER NOT NULL DEFAULT 0"),
+    ("environments", "flowpcp_poll_interval_s",
+     "ALTER TABLE environments ADD COLUMN flowpcp_poll_interval_s INTEGER NOT NULL DEFAULT 30"),
+    ("environments", "flowpcp_request_timeout_s",
+     "ALTER TABLE environments ADD COLUMN flowpcp_request_timeout_s REAL NOT NULL DEFAULT 30.0"),
+    ("environments", "flowpcp_service_token_enc",
+     "ALTER TABLE environments ADD COLUMN flowpcp_service_token_enc TEXT"),
+)

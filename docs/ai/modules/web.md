@@ -67,8 +67,8 @@ API pública para páginas-filho:
 - **Ponte FlowPCP (Modelo B/OVERLAY):** após `SEND_TO_FIRE_SUCCEEDED` (dentro do
   `with_trace_id`), `_send_one_to_fire` chama `push_new_order(order, import_id,
   slug)` (`app/integrations/flowpcp/hook.py`) — notifica o FlowPCP do pedido novo
-  em paralelo ao Fire. Gated: só ambientes com `flowpcp.enabled` (slug do
-  `request.state.environment` ∩ `FLOWPCP_ENVS`); sem env ativo → no-op.
+  em paralelo ao Fire. Gated por `flowpcp_config_for_slug(slug)` (config
+  per-ambiente em `environments`, `flowpcp_enabled=1`); sem env ativo → no-op.
   Best-effort: erro nunca derruba o send-to-fire (falha vira outbox `target=flowpcp`
   + retry no worker). Vale para single e batch (ambos passam por `_send_one_to_fire`).
   CLI `main.py` fica fora (batch legado, sem contexto multi-ambiente).

@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from app.integrations.flowpcp.client import FLOWPCP_TARGET_NAME, FlowPCPClient
-from app.integrations.flowpcp.config import FlowPCPConfig, load_flowpcp_envs
+from app.integrations.flowpcp.config import FlowPCPConfig, enabled_flowpcp_envs
 from app.integrations.flowpcp.schema import RecebimentoRequest
 from app.integrations.gestor.client import (
     GESTOR_TARGET_NAME,
@@ -42,7 +42,7 @@ _BATCH = 20  # max rows per invocation to avoid blocking the thread indefinitely
 
 def run_drain_outbox() -> None:
     """Drain pending outbox rows em CADA ambiente ativo (até _BATCH por env)."""
-    flowpcp_envs = load_flowpcp_envs()
+    flowpcp_envs = enabled_flowpcp_envs()
     for slug in router.list_env_slugs():
         env = environments_repo.get_by_slug(slug)
         if env is None:

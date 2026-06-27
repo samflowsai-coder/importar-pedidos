@@ -1,30 +1,23 @@
 """FlowPCP decisions poll job — runs every 30s via the worker scheduler.
 
-Para CADA ambiente com FlowPCP habilitado (`FLOWPCP_ENVS`, gated aos ambientes
-ativos), busca decisões pendentes no FlowPCP e reconcilia a data de entrega no
-Fire (Modelo B / OVERLAY). Um ambiente ruim não derruba os outros.
-
-Config interina via env var `FLOWPCP_ENVS` (JSON slug->config); a UI de config +
-secret_store por ambiente é follow-up (§6 da spec). Só o ambiente MM liga hoje.
+Para CADA ambiente com FlowPCP habilitado (config per-ambiente em `environments`,
+token cifrado via secret_store), busca decisões pendentes no FlowPCP e reconcilia
+a data de entrega no Fire (Modelo B / OVERLAY). Um ambiente ruim não derruba os
+outros. Só o ambiente MM liga hoje.
 """
 from __future__ import annotations
 
 from app.erp.connection import FirebirdConnection
 from app.integrations.flowpcp.client import FlowPCPClient
-from app.integrations.flowpcp.config import FlowPCPConfig, load_flowpcp_envs
+from app.integrations.flowpcp.config import FlowPCPConfig, enabled_flowpcp_envs
 from app.integrations.flowpcp.poll_decisoes import poll_decisoes_once
 from app.persistence import environments_repo, router
 from app.utils.logger import logger
 
 
 def _list_flowpcp_envs() -> list[tuple[str, FlowPCPConfig]]:
-    """(slug, config) só dos ambientes ATIVOS com flowpcp.enabled=true."""
-    active = set(router.list_env_slugs())
-    return [
-        (slug, cfg)
-        for slug, cfg in load_flowpcp_envs().items()
-        if cfg.enabled and slug in active
-    ]
+    """(slug, config) só dos ambientes ATIVOS com FlowPCP habilitado."""
+    return list(enabled_flowpcp_envs().items())
 
 
 def _open_env_conn(slug: str):

@@ -56,8 +56,11 @@ Todos com `coalesce=True`, `max_instances=1`, `misfire_grace_time=30s`.
 - Cursor + contador de tentativas persistidos em `flowpcp_repo`
   (`app/persistence/flowpcp_repo.py`, tabelas no `schema_env`).
 - Auth = `X-Service-Token` + `X-Tenant-Id` (NÃO Bearer).
-- Config per-ambiente via `FLOWPCP_ENVS` (JSON, fonte interina), gated aos
-  ambientes ativos — só o ambiente MM liga. Um ambiente ruim não derruba os outros.
+- Config per-ambiente persistida em `environments` (colunas `flowpcp_*`; token
+  cifrado via `secret_store`), lida por `enabled_flowpcp_envs()` /
+  `flowpcp_config_for_slug()` (`app/integrations/flowpcp/config.py`). Só ambientes
+  ativos com `flowpcp_enabled=1` entram — só o MM liga. Um ambiente ruim não
+  derruba os outros.
 
 ### poll_fire
 - `app/worker/jobs/poll_fire.py`
@@ -89,9 +92,10 @@ FIRE_TRIGGER_STATUS=       # status que dispara POST ao Gestor (vazio = desligad
 RETENTION_DAYS=180         # dias de retenção de lifecycle_events e audit_log
 BACKUP_DIR=                # diretório para backup VACUUM INTO (vazio = desligado)
 RATE_LIMIT_ENABLED=true    # false bypassa rate-limit (worker não usa, mas compartilha DB)
-FLOWPCP_ENVS=              # JSON {"<slug>": {"flowpcp": {...}}} (vazio = poll desligado).
-                           # Fonte interina até UI de config + secret_store por ambiente.
 ```
+
+> FlowPCP não usa env var: config é per-ambiente na tabela `environments`
+> (colunas `flowpcp_*`, token cifrado), editável em `/admin/ambientes`.
 
 ## Testes
 - `tests/test_worker_drain_outbox.py`

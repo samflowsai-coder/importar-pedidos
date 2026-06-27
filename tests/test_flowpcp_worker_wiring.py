@@ -70,19 +70,14 @@ def test_run_poll_invokes_once_per_enabled_env(monkeypatch):
     assert called.call_count == 1
 
 
-def test_list_flowpcp_envs_gates_to_active_and_enabled(monkeypatch):
-    monkeypatch.setattr(job.router, "list_env_slugs", lambda: ["mm", "other"])
-    monkeypatch.setattr(
-        job,
-        "load_flowpcp_envs",
-        lambda: {
-            "mm": FlowPCPConfig(enabled=True, tenant_id="t"),  # active + enabled
-            "nasmar": FlowPCPConfig(enabled=True, tenant_id="t"),  # enabled but not active
-            "other": FlowPCPConfig(enabled=False),  # active but disabled
-        },
-    )
+def test_list_flowpcp_envs_wraps_enabled_envs(monkeypatch):
+    # O gating (ativo + enabled) vive em enabled_flowpcp_envs (testado em
+    # test_flowpcp_config); aqui só garantimos que _list_flowpcp_envs o expõe.
+    cfg = FlowPCPConfig(enabled=True, base_url="x", service_token="t", tenant_id="mm")
+    monkeypatch.setattr(job, "enabled_flowpcp_envs", lambda: {"mm": cfg})
     result = dict(job._list_flowpcp_envs())
     assert set(result) == {"mm"}
+    assert result["mm"] is cfg
 
 
 def test_process_flowpcp_row_sends_and_marks_sent(monkeypatch):

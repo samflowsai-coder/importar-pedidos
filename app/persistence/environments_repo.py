@@ -29,6 +29,10 @@ _PUBLIC_FIELDS = (
     "id", "slug", "name", "watch_dir", "output_dir",
     "fb_path", "fb_host", "fb_port", "fb_user", "fb_charset",
     "is_active", "created_at", "updated_at",
+    # FlowPCP (não-secreto). O token cifrado fica fora do public view.
+    "flowpcp_enabled", "flowpcp_base_url", "flowpcp_tenant_id",
+    "flowpcp_timezone", "flowpcp_dry_run", "flowpcp_poll_interval_s",
+    "flowpcp_request_timeout_s",
 )
 
 
@@ -193,6 +197,58 @@ def get_password(env_id: str) -> str | None:
     with router.shared_connect() as conn:
         row = conn.execute(
             "SELECT fb_password_enc FROM environments WHERE id = ?", (env_id,)
+        ).fetchone()
+    if not row or not row[0]:
+        return None
+    return secret_store.decrypt(row[0])
+
+
+def set_flowpcp_config(
+    env_id: str,
+    *,
+    enabled: bool,
+    base_url: str | None,
+    tenant_id: str | None,
+    timezone: str = "America/Sao_Paulo",
+    dry_run: bool = False,
+    poll_interval_s: int = 30,
+    request_timeout_s: float = 30.0,
+    service_token: str | None = None,
+) -> dict[str, Any] | None:
+    """Grava a config FlowPCP do ambiente. Token cifrado via secret_store.
+
+    Semântica de `service_token` (igual à senha do Firebird):
+    - `None`  → mantém o token atual (edits que não mexem no segredo)
+    - `""`    → limpa (NULL)
+    - `"..."` → substitui (re-encrypt)
+
+    Desligar (`enabled=False`) NÃO apaga o token — re-ligar não exige redigitar.
+    """
+    fields: dict[str, Any] = {
+        "flowpcp_enabled": 1 if enabled else 0,
+        "flowpcp_base_url": base_url or None,
+        "flowpcp_tenant_id": tenant_id or None,
+        "flowpcp_timezone": timezone or "America/Sao_Paulo",
+        "flowpcp_dry_run": 1 if dry_run else 0,
+        "flowpcp_poll_interval_s": int(poll_interval_s),
+        "flowpcp_request_timeout_s": float(request_timeout_s),
+        "updated_at": _now(),
+    }
+    if service_token is not None:
+        fields["flowpcp_service_token_enc"] = (
+            secret_store.encrypt(service_token) if service_token else None
+        )
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [env_id]
+    with router.shared_connect() as conn:
+        conn.execute(f"UPDATE environments SET {sets} WHERE id = ?", values)
+    return get(env_id)
+
+
+def get_flowpcp_token(env_id: str) -> str | None:
+    with router.shared_connect() as conn:
+        row = conn.execute(
+            "SELECT flowpcp_service_token_enc FROM environments WHERE id = ?", (env_id,)
         ).fetchone()
     if not row or not row[0]:
         return None
