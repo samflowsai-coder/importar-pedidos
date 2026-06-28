@@ -287,6 +287,12 @@
         <span>Service token (deixe vazio para manter o atual)</span>
         <input name="flowpcp_service_token" type="password" autocomplete="new-password">
       </label>
+      <p class="hint">
+        Token compartilhado com o FlowPCP: deve ser <strong>idêntico</strong> ao
+        <code>IMPORTADOR_SERVICE_TOKEN</code> configurado no pcp-app. <strong>Em produção</strong>,
+        informe aqui o token de produção (o mesmo definido via <code>fly secrets</code> no FlowPCP).
+        Cada ambiente/deploy guarda o seu, cifrado — o token local de teste não vai para produção.
+      </p>
       <label>
         <span>Timezone</span>
         <input name="flowpcp_timezone" value="America/Sao_Paulo">
