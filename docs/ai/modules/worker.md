@@ -55,6 +55,13 @@ Todos com `coalesce=True`, `max_instances=1`, `misfire_grace_time=30s`.
   confirma `pedido_nao_encontrado_no_fire` após 5×.
 - Cursor + contador de tentativas persistidos em `flowpcp_repo`
   (`app/persistence/flowpcp_repo.py`, tabelas no `schema_env`).
+- **Avanço do cursor:** `processar_decisao` retorna `bool` (True = confirmada,
+  sai do feed; False = re-tentar). `poll_decisoes_once` só salva `proximo_cursor`
+  se TODAS as decisões do lote confirmaram. O cursor do Flow é watermark
+  `atualizado_em >=` com dedup `reconciliado_em IS NULL`; avançar com uma decisão
+  não-confirmada no meio do lote a deixaria atrás do watermark para sempre (perda
+  silenciosa). Manter o cursor é seguro: re-buscar é idempotente e o dedup do Flow
+  filtra as já confirmadas.
 - Auth = `X-Service-Token` + `X-Tenant-Id` (NÃO Bearer).
 - Config per-ambiente persistida em `environments` (colunas `flowpcp_*`; token
   cifrado via `secret_store`), lida por `enabled_flowpcp_envs()` /

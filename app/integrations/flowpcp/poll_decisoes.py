@@ -41,7 +41,11 @@ def processar_decisao(
     fire_conn,
     conn: sqlite3.Connection,
     config: FlowPCPConfig,
-) -> None:
+) -> bool:
+    """Processa uma decisão. Retorna True se ela foi CONFIRMADA (reconciliada →
+    sai do feed do Flow); False se não confirmou e deve ser re-tentada no próximo
+    poll (UPDATE no Fire falhou, ou pedido ainda não encontrado). O caller usa
+    isso para só avançar o cursor quando o lote inteiro confirmou."""
     # 1. Rejeitado → cancelamento manual no Fire; Importador só alerta.
     if decisao.status == "rejeitado":
         logger.warning(
@@ -55,12 +59,12 @@ def processar_decisao(
             AcaoReconciliacao.CANCELAMENTO_PENDENTE_MANUAL,
             observacoes=decisao.motivo_decisao,
         )
-        return
+        return True
 
     # 2. Aprovado, mas data não mudou.
     if decisao.prazo_pactuado is None or decisao.prazo_pactuado == decisao.prazo_entrega_original:
         _confirmar(client, conn, decisao.id, AcaoReconciliacao.SEM_ACAO_NECESSARIA)
-        return
+        return True
 
     # 3. Aprovado com data nova → UPDATE no Fire (ou dry_run).
     if config.dry_run:
@@ -75,7 +79,7 @@ def processar_decisao(
             fire_id_externo=decisao.pedido_erp,
             observacoes="DRY_RUN (sem escrita real no Fire)",
         )
-        return
+        return True
 
     try:
         rows = update_dt_entrega(
@@ -87,7 +91,7 @@ def processar_decisao(
         )
     except Exception as exc:  # timeout/lock — não confirma; re-tenta no próximo poll
         logger.error(f"flowpcp UPDATE Fire falhou decisao={decisao.id}: {exc}")
-        return
+        return False
 
     if rows == 0:
         attempts = flowpcp_repo.register_attempt(conn, decisao.id)
@@ -103,7 +107,8 @@ def processar_decisao(
                 AcaoReconciliacao.PEDIDO_NAO_ENCONTRADO_NO_FIRE,
                 observacoes=f"{attempts} tentativas",
             )
-        return
+            return True
+        return False  # ainda não encontrado → re-tenta no próximo poll
 
     _confirmar(
         client,
@@ -113,6 +118,7 @@ def processar_decisao(
         fire_id_externo=decisao.pedido_erp,
         observacoes=f"UPDATE OK (rows={rows})",
     )
+    return True
 
 
 def poll_decisoes_once(
@@ -126,13 +132,21 @@ def poll_decisoes_once(
         return 0
     cursor = flowpcp_repo.get_last_cursor(conn)
     resp = client.list_decisoes(cursor=cursor, limit=50)
+    todas_confirmadas = True
     for decisao in resp.decisoes:
         try:
-            processar_decisao(
+            confirmada = processar_decisao(
                 decisao, client=client, fire_conn=fire_conn, conn=conn, config=config
             )
         except Exception as exc:  # noqa: BLE001 — uma decisão ruim não derruba o lote
             logger.error(f"flowpcp erro processando decisão {decisao.id}: {exc}")
-    if resp.proximo_cursor:
+            confirmada = False
+        todas_confirmadas = todas_confirmadas and confirmada
+    # Só avança o cursor (watermark `atualizado_em >=` no Flow) se TODAS as
+    # decisões do lote foram confirmadas. Se alguma não confirmou, manter o
+    # cursor: avançar deixaria a não-confirmada atrás do watermark para sempre
+    # (perda silenciosa). Re-buscar é barato e idempotente — o dedup do Flow
+    # (`reconciliado_em IS NULL`) já filtra as que confirmaram.
+    if todas_confirmadas and resp.proximo_cursor:
         flowpcp_repo.save_last_cursor(conn, resp.proximo_cursor)
     return len(resp.decisoes)
