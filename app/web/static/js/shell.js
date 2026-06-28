@@ -81,7 +81,11 @@
   }
 
   function activeRoute() {
-    return ACTIVE_BY_PATH[location.pathname] || null;
+    const path = location.pathname;
+    if (ACTIVE_BY_PATH[path]) return ACTIVE_BY_PATH[path];
+    // Rotas dinâmicas (ex.: /admin/ambientes/<id> na edição) casam por prefixo.
+    if (path.startsWith('/admin/ambientes')) return 'admin-ambientes';
+    return null;
   }
 
   function renderSidebar(user) {
