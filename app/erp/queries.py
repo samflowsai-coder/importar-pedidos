@@ -205,3 +205,17 @@ UPDATE_DT_ENTREGA = """
      WHERE TRIM(PEDIDO_CLIENTE) = ?
        AND CLIENTE = ?
 """
+
+# ── Catálogo de produtos (sync Fire→Flow, Fase 0) ─────────────────────────────
+# Subconjunto de IDENTIDADE de PRODUTOS. SEQ é a PK durável (imutável) E o código
+# que o cliente usa (codigo = str(SEQ)). BLOQUEADO ∈ {'Sim','Nao'} → ativo =
+# (BLOQUEADO <> 'Sim'). IS_KIT = 1 se o SEQ é pai em PRODUTOS_KIT (215 kits) →
+# tipo 'kit'/'simples'. CODPROD_ALTERN ignorado (grade-code não-único).
+LIST_PRODUTOS_CATALOGO = """
+    SELECT P.SEQ, P.DESCRICAO, P.UNIDADE, P.CODIGO_EAN13, P.BLOQUEADO,
+           CASE WHEN EXISTS (
+               SELECT 1 FROM PRODUTOS_KIT K WHERE K.CODPRODUTO_PAI = P.SEQ
+           ) THEN 1 ELSE 0 END AS IS_KIT
+    FROM PRODUTOS P
+    ORDER BY P.SEQ
+"""
