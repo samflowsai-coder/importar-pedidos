@@ -9,6 +9,7 @@ Rodar do root do projeto:
   .venv/bin/python tools/sync_catalogo_fire.py            # dry-run (Fase 0)
   .venv/bin/python tools/sync_catalogo_fire.py --slug mm
 """
+
 from __future__ import annotations
 
 import argparse
@@ -42,32 +43,20 @@ def main() -> int:
         return 2
 
     print("\n== RELATÓRIO DE RECONCILIAÇÃO ==")
-    for campo in (
-        "match_limpo",
-        "ambiguo",
-        "flow_only",
-        "fire_only",
-        "criados",
-        "atualizados",
-        "inalterados",
-        "desativados",
-        "erros",
-        "fire_pk_presente",
-    ):
-        print(f"  {campo:<18} {getattr(rep, campo, None)}")
+    print(f"  dry_run          {rep.dry_run}")
+    print(f"  full_sync        {rep.full_sync}")
+    print(f"  fire_pk_presente {rep.fire_pk_presente}")
+    print("  contagens:")
+    c = rep.contagens
+    for campo in ("fire_total", "flow_total", "match_limpo", "ambiguo", "fire_only", "flow_only"):
+        print(f"    {campo:<12} {getattr(c, campo)}")
+    a = rep.amostras
+    print(
+        f"  amostras (qtd): ambiguo={len(a.ambiguo)} "
+        f"fire_only={len(a.fire_only)} flow_only={len(a.flow_only)}"
+    )
     extras = rep.model_dump(
-        exclude={
-            "match_limpo",
-            "ambiguo",
-            "flow_only",
-            "fire_only",
-            "criados",
-            "atualizados",
-            "inalterados",
-            "desativados",
-            "erros",
-            "fire_pk_presente",
-        }
+        exclude={"dry_run", "full_sync", "fire_pk_presente", "contagens", "amostras"}
     )
     if extras:
         print("\n  extras do Flow:", extras)

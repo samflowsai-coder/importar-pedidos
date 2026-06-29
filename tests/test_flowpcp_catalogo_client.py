@@ -53,13 +53,23 @@ def _req():
 
 
 def test_send_catalogo_posta_no_path_certo_e_parseia_relatorio():
-    out = _FakeOutbound(_Resp(200, {"match_limpo": 1, "fire_only": 3420, "fire_pk_presente": True}))
+    out = _FakeOutbound(
+        _Resp(
+            200,
+            {
+                "firePkPresente": "todos",
+                "contagens": {"matchLimpo": 1, "fireOnly": 3420},
+            },
+        )
+    )
     client = FlowPCPClient(base_url="http://x", service_token="t", tenant_id="tn", outbound=out)
     rep = client.send_catalogo(_req())
     assert out.last_path == "/api/portal-pedidos/catalogo"
     assert out.last_json["schema"] == "catalogo.produtos.v1"
     assert out.last_json["dryRun"] is True
-    assert rep.match_limpo == 1 and rep.fire_only == 3420 and rep.fire_pk_presente is True
+    assert rep.contagens.match_limpo == 1
+    assert rep.contagens.fire_only == 3420
+    assert rep.fire_pk_presente == "todos"
 
 
 def test_send_catalogo_erro_http_vira_FlowPCPClientError():  # noqa: N802
