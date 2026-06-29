@@ -17,7 +17,7 @@ def test_item_serializa_camelcase_e_aceita_snake_na_entrada():
     )
     dumped = item.model_dump(by_alias=True)
     assert dumped["fireProdutoId"] == "3566"
-    assert dumped["tipo"] is None  # Fire não tem tipo
+    assert dumped["tipo"] is None  # tipo default None quando o item é construído sem ele
     assert dumped["ativo"] is True
 
 

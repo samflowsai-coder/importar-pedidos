@@ -9,12 +9,12 @@ class CatalogoProdutoItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     fireProdutoId: str = Field(alias="fireProdutoId")  # noqa: N815 — PK imutável do Fire (SEQ)
-    codigo: str | None = None  # CODPROD_ALTERN — atributo, NÃO chave (grade-code, dups)
+    codigo: str | None = None  # str(SEQ) — o sequencial que o cliente usa (== fireProdutoId). CODPROD_ALTERN NÃO é usado.
     nome: str
     unidade: str | None = None
     ean: str | None = None
     ativo: bool
-    tipo: str | None = None  # Fire não fornece (CODTIPOPROD inútil) → sempre None
+    tipo: str | None = None  # 'kit' | 'simples' — derivado de PRODUTOS_KIT (CODTIPOPROD do Fire não é usado).
 
 
 class CatalogoOrigem(BaseModel):
