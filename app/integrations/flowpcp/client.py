@@ -4,6 +4,10 @@ from typing import Any
 
 from app.http.client import HttpError, OutboundClient
 from app.http.policies import idempotent_post_policy
+from app.integrations.flowpcp.catalogo_schema import (
+    CatalogoReconciliacaoResponse,
+    CatalogoRequest,
+)
 from app.integrations.flowpcp.schema import (
     ConfirmarReconciliacaoRequest,
     DecisoesResponse,
@@ -15,6 +19,7 @@ FLOWPCP_TARGET_NAME = "flowpcp"  # outbox.target identifier
 RECEBIMENTO_PATH = "/api/portal-pedidos/recebimento"
 _RECEBIMENTO_PATH = RECEBIMENTO_PATH
 _DECISOES_PATH = "/api/portal-pedidos/decisoes"
+_CATALOGO_PATH = "/api/portal-pedidos/catalogo"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 
@@ -103,6 +108,25 @@ class FlowPCPClient:
                 body=(resp.text or "")[:500],
             )
         return resp.json()
+
+    def send_catalogo(
+        self, request: CatalogoRequest
+    ) -> CatalogoReconciliacaoResponse:
+        body = request.model_dump(by_alias=True)
+        idem = f"catalogo-{int(request.dryRun)}-{len(request.itens)}"
+        try:
+            resp = self._client.post_json(_CATALOGO_PATH, json=body, idempotency_key=idem)
+        except HttpError as exc:
+            raise FlowPCPClientError(
+                f"send_catalogo falhou: {exc}", status_code=exc.status_code, body=exc.body
+            ) from exc
+        if not resp.is_success:
+            raise FlowPCPClientError(
+                f"catalogo status {resp.status_code}",
+                status_code=resp.status_code,
+                body=(resp.text or "")[:500],
+            )
+        return CatalogoReconciliacaoResponse.model_validate(resp.json())
 
     def _post(self, path: str, body: dict[str, Any], *, idempotency_key: str):
         try:
