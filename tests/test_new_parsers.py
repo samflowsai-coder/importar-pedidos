@@ -286,13 +286,18 @@ def test_kallan_all_quantities_positive():
 def test_magic_feet_splits_by_store():
     order = _process("Desmembramento Magic Feet.xlsx")
     assert order is not None
-    # Magic Feet has 9 stores with CNPJs → should generate 9 output files
+    # Magic Feet tem 8 lojas COM CNPJ. A coluna "MF" é o TOTAL/máster (soma das
+    # lojas), NÃO uma loja — não pode virar pedido nem duplicar a quantidade.
+    assert "MF" not in {it.delivery_name for it in order.items}
+    # Sem double-count: soma == grand total real (1560), não 3120.
+    assert sum(int(it.quantity) for it in order.items) == 1560
+
     import tempfile
 
     from app.exporters.erp_exporter import ERPExporter
     with tempfile.TemporaryDirectory() as tmp:
         paths = ERPExporter().export(order, tmp)
-        assert len(paths) == 9
+        assert len(paths) == 8  # 8 lojas reais (a coluna-total "MF" não gera arquivo)
 
 
 def test_authentic_feet_items():
