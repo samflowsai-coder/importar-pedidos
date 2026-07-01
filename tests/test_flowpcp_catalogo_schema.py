@@ -38,10 +38,34 @@ def test_request_usa_schema_alias_e_default_v1():
     assert body["itens"][0]["nome"] == "X"
 
 
-def test_response_tolera_campos_extra_do_flow():
+def test_response_parseia_shape_real_do_flow():
     resp = CatalogoReconciliacaoResponse.model_validate(
-        {"match_limpo": 10, "fire_only": 3400, "campo_novo_do_flow": "ok"}
+        {
+            "dryRun": True,
+            "fullSync": True,
+            "firePkPresente": "todos",
+            "contagens": {
+                "flowTotal": 827,
+                "fireTotal": 3421,
+                "matchLimpo": 261,
+                "ambiguo": 0,
+                "flowOnly": 566,
+                "fireOnly": 3160,
+            },
+            "amostras": {"ambiguo": [], "flowOnly": ["10791"], "fireOnly": ["1", "10"]},
+            "campo_novo_do_flow": "ok",  # extra="allow" tolera
+        }
     )
-    assert resp.match_limpo == 10
-    assert resp.fire_only == 3400
-    assert resp.criados == 0  # default
+    assert resp.dry_run is True
+    assert resp.fire_pk_presente == "todos"
+    assert resp.contagens.flow_total == 827
+    assert resp.contagens.match_limpo == 261
+    assert resp.contagens.fire_only == 3160
+    assert resp.amostras.fire_only == ["1", "10"]
+
+
+def test_response_defaults_quando_vazio():
+    resp = CatalogoReconciliacaoResponse.model_validate({})
+    assert resp.contagens.match_limpo == 0
+    assert resp.amostras.fire_only == []
+    assert resp.fire_pk_presente is None

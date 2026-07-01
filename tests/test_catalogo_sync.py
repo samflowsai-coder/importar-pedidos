@@ -1,6 +1,9 @@
 from app.erp.catalog_extract import ProdutoFireDTO
 from app.integrations.flowpcp import catalogo_sync
-from app.integrations.flowpcp.catalogo_schema import CatalogoReconciliacaoResponse
+from app.integrations.flowpcp.catalogo_schema import (
+    CatalogoContagens,
+    CatalogoReconciliacaoResponse,
+)
 
 
 class _FakeClient:
@@ -10,7 +13,8 @@ class _FakeClient:
     def send_catalogo(self, request):
         self.sent = request
         return CatalogoReconciliacaoResponse(
-            match_limpo=0, fire_only=len(request.itens), fire_pk_presente=True
+            contagens=CatalogoContagens(fire_only=len(request.itens)),
+            fire_pk_presente="todos",
         )
 
     def close(self):
@@ -38,7 +42,7 @@ def test_run_sync_extrai_empurra_e_devolve_relatorio(monkeypatch):
         _client=fake_client,
         _fire_conn=object(),
     )
-    assert rep.fire_only == 2 and rep.fire_pk_presente is True
+    assert rep.contagens.fire_only == 2 and rep.fire_pk_presente == "todos"
     assert fake_client.sent.dryRun is True
     assert fake_client.sent.fullSync is True
     assert len(fake_client.sent.itens) == 2

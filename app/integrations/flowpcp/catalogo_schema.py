@@ -9,12 +9,16 @@ class CatalogoProdutoItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     fireProdutoId: str = Field(alias="fireProdutoId")  # noqa: N815 — PK imutável do Fire (SEQ)
-    codigo: str | None = None  # str(SEQ) — o sequencial que o cliente usa (== fireProdutoId). CODPROD_ALTERN NÃO é usado.
+    codigo: str | None = (
+        None  # str(SEQ) — o sequencial que o cliente usa (== fireProdutoId). CODPROD_ALTERN NÃO é usado.
+    )
     nome: str
     unidade: str | None = None
     ean: str | None = None
     ativo: bool
-    tipo: str | None = None  # 'kit' | 'simples' — derivado de PRODUTOS_KIT (CODTIPOPROD do Fire não é usado).
+    tipo: str | None = (
+        None  # 'kit' | 'simples' — derivado de PRODUTOS_KIT (CODTIPOPROD do Fire não é usado).
+    )
 
 
 class CatalogoOrigem(BaseModel):
@@ -34,19 +38,39 @@ class CatalogoRequest(BaseModel):
     origem: CatalogoOrigem
 
 
-class CatalogoReconciliacaoResponse(BaseModel):
-    """Relatório devolvido pelo Flow (dry-run ou apply). O contrato é dono do
-    Flow → tolera campos extras (amostras/buckets) sem quebrar o parse."""
+class CatalogoContagens(BaseModel):
+    """Buckets do diff Fire×Flow. Wire é camelCase; atributos snake via alias."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    match_limpo: int = 0
+    flow_total: int = Field(default=0, alias="flowTotal")
+    fire_total: int = Field(default=0, alias="fireTotal")
+    match_limpo: int = Field(default=0, alias="matchLimpo")
     ambiguo: int = 0
-    flow_only: int = 0
-    fire_only: int = 0
-    criados: int = 0
-    atualizados: int = 0
-    inalterados: int = 0
-    desativados: int = 0
-    erros: int = 0
-    fire_pk_presente: bool | None = None
+    flow_only: int = Field(default=0, alias="flowOnly")
+    fire_only: int = Field(default=0, alias="fireOnly")
+
+
+class CatalogoAmostras(BaseModel):
+    """Amostras de IDs por bucket (inspeção)."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    ambiguo: list[str] = Field(default_factory=list)
+    flow_only: list[str] = Field(default_factory=list, alias="flowOnly")
+    fire_only: list[str] = Field(default_factory=list, alias="fireOnly")
+
+
+class CatalogoReconciliacaoResponse(BaseModel):
+    """Relatório devolvido pelo Flow (dry-run ou apply). O Flow é dono do
+    contrato: `contagens`/`amostras` aninhados (camelCase), `firePkPresente`
+    string ('todos'/'parcial'/...). `extra="allow"` tolera campos novos do Flow
+    (ex.: contadores de promote na Fase 1)."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    dry_run: bool | None = Field(default=None, alias="dryRun")
+    full_sync: bool | None = Field(default=None, alias="fullSync")
+    fire_pk_presente: str | None = Field(default=None, alias="firePkPresente")
+    contagens: CatalogoContagens = Field(default_factory=CatalogoContagens)
+    amostras: CatalogoAmostras = Field(default_factory=CatalogoAmostras)
