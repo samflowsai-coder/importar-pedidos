@@ -333,6 +333,22 @@ def test_authentic_fit_first_item():
     assert "BRANCO" in desc
 
 
+def test_magic_feet_pedido_loja_unica():
+    # Pedido single-store Magic Feet (mesmo template do Authentic Feet). BUG: caía
+    # no GenericParser, que lia o REF COR (cor=100) no lugar da quantidade. Correto:
+    # quantidade = TOTAL KITS (36); cliente/CNPJ/código/preço vêm do formulário.
+    order = _process("Pedido Magic Feet MF048.xlsx")
+    assert order is not None
+    assert order.header.customer_cnpj == "25.014.621/0001-55"
+    assert "CALÇADOS" in (order.header.customer_name or "").upper()
+    assert len(order.items) == 9
+    item = order.items[0]
+    assert item.product_code == "MFK3C-B-100-1922"
+    assert item.quantity == 36  # TOTAL KITS — não 100 (REF COR/cor)
+    assert item.unit_price == 8.99
+    assert sum(int(it.quantity) for it in order.items) == 324
+
+
 def test_authentic_fit_does_not_match_desmembramento():
     """Não-regressão: o sample de desmembramento continua indo para
     DesmembramentoXlsParser, mesmo com AuthenticFeetParser registrado antes."""

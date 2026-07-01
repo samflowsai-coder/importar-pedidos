@@ -7,16 +7,19 @@ from app.models.order import Order, OrderHeader, OrderItem
 from app.parsers.base_parser import BaseParser
 
 _CNPJ_RE = re.compile(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}")
-_SIGNATURE_TEXT = "AUTHENTICFEET"
+# Mesmo template de "Pedido" single-customer é usado por lojas Authentic Feet e
+# Magic Feet (mesmo fornecedor). A quantidade real fica em TOTAL KITS; sem este
+# parser o arquivo cai no GenericParser, que lê o REF COR (cor) como quantidade.
+_SIGNATURE_TEXTS = ("AUTHENTICFEET", "MAGICFEET")
 _HEADER_TOKENS = ("REF.", "DESCRIÇÃO PRODUTO", "TOTAL KITS", "TOTAL R$")
 
 
 class AuthenticFeetParser(BaseParser):
-    """Parser para pedidos single-customer da rede Authentic Feet (XLSX)."""
+    """Parser para pedidos single-customer da rede Authentic Feet / Magic Feet (XLSX)."""
 
     def can_parse(self, extracted: dict) -> bool:
         text_upper = extracted.get("text", "").upper()
-        if _SIGNATURE_TEXT not in text_upper:
+        if not any(sig in text_upper for sig in _SIGNATURE_TEXTS):
             return False
         rows = extracted.get("rows", [])
         for row in rows[:30]:
