@@ -152,6 +152,14 @@ class DesmembramentoXlsParser(BaseParser):
                 cnpj = cnpjs_by_col.get(j)
                 store_cols.append((j, col_name, cnpj))
 
+        # Magic Feet: quando ALGUMAS colunas de loja têm CNPJ (layout CNPJ-por-loja),
+        # uma coluna na faixa SEM CNPJ é o total/máster (ex. coluna "MF" = soma das
+        # lojas), NÃO uma loja — mantê-la importaria o TOTAL como pedido de loja,
+        # duplicando a quantidade. Excluir. Se NENHUMA tem CNPJ (Authentic Feet, NBA:
+        # split por nome), manter todas as colunas detectadas.
+        if any(cnpj for (_, _, cnpj) in store_cols):
+            store_cols = [(j, name, cnpj) for (j, name, cnpj) in store_cols if cnpj]
+
         return header_idx, col_map, store_cols
 
     def _is_header_row(self, cells: list[str]) -> bool:
