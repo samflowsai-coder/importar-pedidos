@@ -349,6 +349,33 @@ def test_magic_feet_pedido_loja_unica():
     assert sum(int(it.quantity) for it in order.items) == 324
 
 
+def test_afeet_pulmao_blank_form_parses():
+    # Pedido "Pulmão" do Grupo Afeet: mesmo template de kits (REF. / DESCRIÇÃO
+    # PRODUTO / TOTAL KITS / TOTAL R$), mas com os campos de cliente EM BRANCO —
+    # o conteúdo não tem nenhum texto 'AUTHENTICFEET'/'MAGICFEET' (a marca só
+    # aparece no nome do arquivo). BUG: o gate por assinatura de marca falhava →
+    # caía no GenericParser, que lia o REF COR (100) como quantidade. Correto: o
+    # gate é o cabeçalho do template; quantidade = TOTAL KITS.
+    order = _process("Pedido Grupo Afeet Pulmao.xlsx")
+    assert order is not None
+    assert len(order.items) == 82
+    assert order.header.customer_cnpj == "34.513.679/0001-34"
+    item = order.items[0]
+    assert item.product_code == "AWK3S-A-100-3338"
+    assert item.quantity == 1200  # TOTAL KITS — não 100 (REF COR/cor)
+    assert item.unit_price == 11.96
+    # single-customer → sem split por loja
+    assert not any(it.delivery_cnpj or it.delivery_name for it in order.items)
+
+
+def test_afeet_blank_razao_social_not_next_label():
+    # RAZÃO SOCIAL em branco não pode capturar o rótulo seguinte (FANTASIA:) como
+    # nome do cliente — o valor à direita é vazio, não o próximo campo.
+    order = _process("Pedido Grupo Afeet Pulmao.xlsx")
+    name = (order.header.customer_name or "").upper()
+    assert "FANTASIA" not in name
+
+
 def test_authentic_fit_does_not_match_desmembramento():
     """Não-regressão: o sample de desmembramento continua indo para
     DesmembramentoXlsParser, mesmo com AuthenticFeetParser registrado antes."""
