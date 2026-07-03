@@ -7,10 +7,13 @@ from app.models.order import Order, OrderHeader, OrderItem
 from app.parsers.base_parser import BaseParser
 
 _CNPJ_RE = re.compile(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}")
-# Mesmo template de "Pedido" single-customer é usado por lojas Authentic Feet e
-# Magic Feet (mesmo fornecedor). A quantidade real fica em TOTAL KITS; sem este
-# parser o arquivo cai no GenericParser, que lê o REF COR (cor) como quantidade.
-_SIGNATURE_TEXTS = ("AUTHENTICFEET", "MAGICFEET")
+# Mesmo template de "Pedido" single-customer é usado por Authentic Feet, Magic
+# Feet e pedidos "Pulmão" do Grupo Afeet (mesmo fornecedor). A assinatura é o
+# CABEÇALHO do template — não o nome da marca: pedidos Pulmão vêm com os campos
+# de cliente em branco, sem nenhum texto 'AUTHENTICFEET'/'MAGICFEET' no conteúdo
+# (a marca só aparece no nome do arquivo). O conjunto de 4 colunas abaixo é único
+# deste fornecedor. A quantidade real fica em TOTAL KITS; sem este parser o
+# arquivo cai no GenericParser, que lê o REF COR (cor) como quantidade.
 _HEADER_TOKENS = ("REF.", "DESCRIÇÃO PRODUTO", "TOTAL KITS", "TOTAL R$")
 
 
@@ -18,13 +21,12 @@ class AuthenticFeetParser(BaseParser):
     """Parser para pedidos single-customer da rede Authentic Feet / Magic Feet (XLSX)."""
 
     def can_parse(self, extracted: dict) -> bool:
-        text_upper = extracted.get("text", "").upper()
-        if not any(sig in text_upper for sig in _SIGNATURE_TEXTS):
-            return False
+        # O cabeçalho completo do template de kits é a assinatura confiável (não o
+        # nome da marca, que pode estar ausente). Alinhado com _find_header_row.
         rows = extracted.get("rows", [])
         for row in rows[:30]:
             cells = [str(c).strip() if c is not None else "" for c in row]
-            if "REF." in cells and "TOTAL KITS" in cells:
+            if all(tok in cells for tok in _HEADER_TOKENS):
                 return True
         return False
 
@@ -93,13 +95,21 @@ class AuthenticFeetParser(BaseParser):
 
     def _next_raw(self, cells: list, label_idx: int):
         """Devolve o primeiro valor não-vazio à direita do label, preservando o tipo
-        (datetime, float, str). Stringificar é responsabilidade do chamador."""
+        (datetime, float, str). Stringificar é responsabilidade do chamador.
+
+        Se o primeiro não-vazio for OUTRO rótulo (string terminando em ':', como
+        'FANTASIA:' logo após um 'RAZÃO SOCIAL:' em branco), o campo está vazio →
+        devolve None em vez de capturar o rótulo do campo seguinte."""
         for k in range(label_idx + 1, len(cells)):
             v = cells[k]
             if v is None:
                 continue
-            if isinstance(v, str) and not v.strip():
-                continue
+            if isinstance(v, str):
+                s = v.strip()
+                if not s:
+                    continue
+                if s.endswith(":"):
+                    return None
             return v
         return None
 
