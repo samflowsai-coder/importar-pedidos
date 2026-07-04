@@ -315,6 +315,19 @@
         <button type="button" id="btn-save-flowpcp" class="btn btn-primary">Salvar FlowPCP</button>
         <span id="flowpcp-status" class="flowpcp-status"></span>
       </div>
+
+      <!-- Full-load de catálogo (produtos Fire → Flow), direção IDA. -->
+      <div style="margin-top:1.25rem;border-top:1px solid var(--border,#2a2a2a);padding-top:1rem">
+        <div style="font-size:.85em;color:var(--text-muted,#9aa);margin-bottom:.6rem;line-height:1.5">
+          Full load dos produtos do Fire → FlowPCP. <strong>Simular</strong> reconcilia e mostra o
+          relatório <em>sem escrever</em>. <strong>Promover</strong> grava de verdade no catálogo do
+          Flow (Fase 1). Salve o FlowPCP e teste o Firebird antes.
+        </div>
+        <button type="button" id="btn-sync-catalogo" class="btn btn-secondary">Simular (dry-run)</button>
+        <button type="button" id="btn-promover-catalogo" class="btn btn-primary">Promover no Flow</button>
+        <span id="sync-catalogo-status" class="flowpcp-status"></span>
+        <div id="sync-catalogo-result" hidden style="margin-top:.75rem;font-size:.85em;line-height:1.6"></div>
+      </div>
     </fieldset>
   </main>
 
@@ -483,6 +496,60 @@
         btn.disabled = false;
       }
     });
+
+    // Full-load de catálogo: apply=false simula (dry-run), apply=true promove
+    // (escreve no Flow, com confirmação). Mostra as contagens que o Flow devolve.
+    async function rodarSyncCatalogo(apply) {
+      const st = document.getElementById('sync-catalogo-status');
+      const out = document.getElementById('sync-catalogo-result');
+      const btns = [document.getElementById('btn-sync-catalogo'), document.getElementById('btn-promover-catalogo')];
+      if (apply && !confirm('PROMOVER: isto grava os produtos do Fire direto no catálogo do Flow (Fase 1). Confirmar?')) return;
+      st.textContent = apply ? 'Promovendo… pode levar alguns segundos.' : 'Simulando… pode levar alguns segundos.';
+      st.className = 'flowpcp-status';
+      out.hidden = true;
+      btns.forEach(b => b.disabled = true);
+      try {
+        const url = '/api/admin/environments/' + envId + '/flowpcp/sync-catalogo' + (apply ? '?apply=true' : '');
+        const r = await fetch(url, { method: 'POST' });
+        const t = await r.text();
+        if (!r.ok) {
+          let msg; try { msg = JSON.parse(t).detail || t; } catch { msg = t || ('Erro ' + r.status); }
+          st.textContent = '✗ ' + msg; st.classList.add('err'); return;
+        }
+        const rep = JSON.parse(t);
+        const c = rep.contagens || {};
+        const p = rep.promote;
+        st.textContent = apply ? '✓ Promovido no Flow' : '✓ Simulação concluída (dry-run)';
+        st.classList.add('ok');
+        out.hidden = false;
+        const linhas = p
+          ? [
+              ['Criados no Flow', p.criados],
+              ['Atualizados', p.atualizados],
+              ['Desativados', p.desativados],
+              ['Divergências (só no Flow)', p.flowOnly],
+              ['Ambíguos por nome', p.nomeAmbiguo],
+              ['Sem PK do Fire', p.semPk],
+              ['Erros', p.erros],
+            ]
+          : [
+              ['Produtos no Fire', c.fire_total],
+              ['Produtos no Flow', c.flow_total],
+              ['Casaram (match limpo)', c.match_limpo],
+              ['Só no Fire (entrariam)', c.fire_only],
+              ['Só no Flow', c.flow_only],
+              ['Ambíguos', c.ambiguo],
+              ['PK do Fire presente', rep.fire_pk_presente],
+            ];
+        out.innerHTML = linhas.map(([k, v]) => '<div>' + k + ': <strong>' + (v ?? '—') + '</strong></div>').join('');
+      } catch (err) {
+        st.textContent = '✗ ' + err.message; st.classList.add('err');
+      } finally {
+        btns.forEach(b => b.disabled = false);
+      }
+    }
+    document.getElementById('btn-sync-catalogo').addEventListener('click', () => rodarSyncCatalogo(false));
+    document.getElementById('btn-promover-catalogo').addEventListener('click', () => rodarSyncCatalogo(true));
 
     // ── Filesystem browser (pastas e arquivos) ─────────────────────
     // Modo "dir": clica em "Selecionar aqui" pra escolher o diretório atual

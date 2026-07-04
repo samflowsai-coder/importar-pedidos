@@ -47,3 +47,6 @@ plans/
 # Local UI-editable config + Fernet key (NEVER commit)
 app/firebird.json
 app/.secret.key
+
+# Bat com token de PROD embutido (client-specific) — nunca commitar
+promover-prod.bat

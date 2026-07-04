@@ -22,6 +22,10 @@ mkdir -p "$STAGE"
 cp -R app scripts tools "$STAGE/"
 cp ui.py main.py pyproject.toml .env.example "$STAGE/"
 cp instalar.bat iniciar.bat atualizar.bat setup-service.bat desinstalar.bat "$STAGE/"
+cp configurar-integracao.bat sincronizar-catalogo.bat "$STAGE/"
+# promover-prod.bat carrega o token de prod embutido — específico do cliente,
+# fora do git (.gitignore). Só entra no pacote se existir no working tree.
+[ -f promover-prod.bat ] && cp promover-prod.bat "$STAGE/"
 cp README.md INSTALACAO-SERVIDOR.md "$STAGE/"
 
 # Nao empacotar o proprio script de build
