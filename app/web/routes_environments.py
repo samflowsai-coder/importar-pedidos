@@ -107,6 +107,34 @@ def set_environment_flowpcp(
     return environments_repo.set_flowpcp_config(env_id, **payload.model_dump())
 
 
+@router.post("/{env_id}/flowpcp/sync-catalogo")
+def sync_catalogo_flowpcp(env_id: str, _=Depends(require_admin)):
+    """Força um full-load do catálogo (produtos Fire → FlowPCP), direção IDA.
+
+    Lê TODOS os produtos (`PRODUTOS`) do Fire do ambiente e empurra pro Flow.
+    Hoje roda em **dry-run** (`full_sync=True`): reconcilia contra o catálogo do
+    Flow e devolve o relatório — NÃO promove. A escrita real no catálogo do Flow
+    depende da Fase 1 (migration de `fire_produto_id`), que o `/catalogo` do Flow
+    ainda recusa (`dryRun=false → 422`). Blocking (Firebird + HTTP) → FastAPI roda
+    esta rota `def` no threadpool.
+    """
+    env = environments_repo.get(env_id)
+    if not env:
+        raise HTTPException(404, "Ambiente não encontrado")
+    if not env.get("flowpcp_enabled"):
+        raise HTTPException(409, "FlowPCP não está habilitado neste ambiente")
+
+    from app.integrations.flowpcp.catalogo_sync import run_catalogo_sync
+
+    try:
+        rep = run_catalogo_sync(env["slug"], dry_run=True, full_sync=True)
+    except Exception as exc:  # noqa: BLE001 — vira erro HTTP legível pro operador
+        raise HTTPException(502, f"Falha no sync de catálogo: {exc}") from exc
+    if rep is None:
+        raise HTTPException(409, "FlowPCP não está habilitado neste ambiente")
+    return rep.model_dump()
+
+
 @router.delete("/{env_id}", status_code=204)
 def delete_environment(env_id: str, _=Depends(require_admin)):
     if not environments_repo.get(env_id):

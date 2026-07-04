@@ -15,6 +15,13 @@ if errorlevel 1 (
     echo.
     echo  Atualizacao nao foi concluida. Veja as mensagens acima.
     echo.
+    pause
+    exit /b 1
 )
+
+echo.
+set "RESP="
+set /p "RESP=Configurar / ligar a integracao FlowPCP agora? (S/N): "
+if /I "%RESP%"=="S" call "%~dp0configurar-integracao.bat"
 
 pause

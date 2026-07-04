@@ -315,6 +315,18 @@
         <button type="button" id="btn-save-flowpcp" class="btn btn-primary">Salvar FlowPCP</button>
         <span id="flowpcp-status" class="flowpcp-status"></span>
       </div>
+
+      <!-- Full-load de catálogo (produtos Fire → Flow), direção IDA. -->
+      <div style="margin-top:1.25rem;border-top:1px solid var(--border,#2a2a2a);padding-top:1rem">
+        <div style="font-size:.85em;color:var(--text-muted,#9aa);margin-bottom:.6rem;line-height:1.5">
+          Envia <strong>todos</strong> os produtos do Fire pro FlowPCP (full load). Hoje roda em
+          <strong>dry-run</strong>: reconcilia e devolve o relatório — a escrita real no catálogo do
+          Flow depende da Fase 1. Salve o FlowPCP e teste o Firebird antes.
+        </div>
+        <button type="button" id="btn-sync-catalogo" class="btn btn-secondary">Forçar sincronização de produtos</button>
+        <span id="sync-catalogo-status" class="flowpcp-status"></span>
+        <div id="sync-catalogo-result" hidden style="margin-top:.75rem;font-size:.85em;line-height:1.6"></div>
+      </div>
     </fieldset>
   </main>
 
@@ -479,6 +491,44 @@
           flowStatus.textContent = '✗ ' + msg;
           flowStatus.classList.add('err');
         }
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    // Full-load de catálogo: dispara run_catalogo_sync(dry_run) no ambiente e
+    // mostra as contagens de reconciliação que o Flow devolve.
+    document.getElementById('btn-sync-catalogo').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const st = document.getElementById('sync-catalogo-status');
+      const out = document.getElementById('sync-catalogo-result');
+      st.textContent = 'Enviando full load… pode levar alguns segundos.';
+      st.className = 'flowpcp-status';
+      out.hidden = true;
+      btn.disabled = true;
+      try {
+        const r = await fetch('/api/admin/environments/' + envId + '/flowpcp/sync-catalogo', { method: 'POST' });
+        const t = await r.text();
+        if (!r.ok) {
+          let msg; try { msg = JSON.parse(t).detail || t; } catch { msg = t || ('Erro ' + r.status); }
+          st.textContent = '✗ ' + msg; st.classList.add('err'); return;
+        }
+        const rep = JSON.parse(t);
+        const c = rep.contagens || {};
+        st.textContent = '✓ Full load enviado (dry-run)';
+        st.classList.add('ok');
+        out.hidden = false;
+        out.innerHTML = [
+          ['Produtos no Fire', c.fire_total],
+          ['Produtos no Flow', c.flow_total],
+          ['Casaram (match limpo)', c.match_limpo],
+          ['Só no Fire (entrariam na Fase 1)', c.fire_only],
+          ['Só no Flow', c.flow_only],
+          ['Ambíguos', c.ambiguo],
+          ['PK do Fire presente', rep.fire_pk_presente],
+        ].map(([k, v]) => '<div>' + k + ': <strong>' + (v ?? '—') + '</strong></div>').join('');
+      } catch (err) {
+        st.textContent = '✗ ' + err.message; st.classList.add('err');
       } finally {
         btn.disabled = false;
       }
