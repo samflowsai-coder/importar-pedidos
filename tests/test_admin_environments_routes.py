@@ -295,3 +295,38 @@ def test_sync_catalogo_409_se_flowpcp_desligado(setup):
 def test_sync_catalogo_404_ambiente_inexistente(setup):
     r = _client().post("/api/admin/environments/nao-existe/flowpcp/sync-catalogo")
     assert r.status_code == 404
+
+
+def test_sync_catalogo_apply_promove_passa_dry_run_false(setup, monkeypatch):
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir=str(setup), output_dir=str(setup),
+        fb_path=str(setup / "x.fdb"),
+    )
+    _enable_flowpcp(env["id"])
+    import app.integrations.flowpcp.catalogo_sync as cs
+    capturado = {}
+
+    def fake(slug, **kw):
+        capturado.update(kw)
+        capturado["slug"] = slug
+        return _FakeReport()
+
+    monkeypatch.setattr(cs, "run_catalogo_sync", fake)
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?apply=true")
+    assert r.status_code == 200
+    assert capturado["dry_run"] is False
+    assert capturado["full_sync"] is True
+
+
+def test_sync_catalogo_default_e_dry_run(setup, monkeypatch):
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir=str(setup), output_dir=str(setup),
+        fb_path=str(setup / "x.fdb"),
+    )
+    _enable_flowpcp(env["id"])
+    import app.integrations.flowpcp.catalogo_sync as cs
+    capturado = {}
+    monkeypatch.setattr(cs, "run_catalogo_sync", lambda slug, **kw: capturado.update(kw) or _FakeReport())
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo")
+    assert r.status_code == 200
+    assert capturado["dry_run"] is True

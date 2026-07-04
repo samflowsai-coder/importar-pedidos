@@ -108,15 +108,15 @@ def set_environment_flowpcp(
 
 
 @router.post("/{env_id}/flowpcp/sync-catalogo")
-def sync_catalogo_flowpcp(env_id: str, _=Depends(require_admin)):
-    """Força um full-load do catálogo (produtos Fire → FlowPCP), direção IDA.
+def sync_catalogo_flowpcp(env_id: str, apply: bool = False, _=Depends(require_admin)):
+    """Full-load do catálogo (produtos Fire → FlowPCP), direção IDA.
 
     Lê TODOS os produtos (`PRODUTOS`) do Fire do ambiente e empurra pro Flow.
-    Hoje roda em **dry-run** (`full_sync=True`): reconcilia contra o catálogo do
-    Flow e devolve o relatório — NÃO promove. A escrita real no catálogo do Flow
-    depende da Fase 1 (migration de `fire_produto_id`), que o `/catalogo` do Flow
-    ainda recusa (`dryRun=false → 422`). Blocking (Firebird + HTTP) → FastAPI roda
-    esta rota `def` no threadpool.
+    - `apply=false` (default): **dry-run** — reconcilia e devolve o relatório,
+      NÃO escreve no catálogo do Flow. Seguro pra rodar quando quiser.
+    - `apply=true`: **promove** — o Flow linka + grava de verdade (Fase 1). Exige
+      o `/catalogo` do Flow com o promote no ar (senão devolve 422 → 502 aqui).
+    Blocking (Firebird + HTTP) → FastAPI roda esta rota `def` no threadpool.
     """
     env = environments_repo.get(env_id)
     if not env:
@@ -127,7 +127,7 @@ def sync_catalogo_flowpcp(env_id: str, _=Depends(require_admin)):
     from app.integrations.flowpcp.catalogo_sync import run_catalogo_sync
 
     try:
-        rep = run_catalogo_sync(env["slug"], dry_run=True, full_sync=True)
+        rep = run_catalogo_sync(env["slug"], dry_run=not apply, full_sync=True)
     except Exception as exc:  # noqa: BLE001 — vira erro HTTP legível pro operador
         raise HTTPException(502, f"Falha no sync de catálogo: {exc}") from exc
     if rep is None:
