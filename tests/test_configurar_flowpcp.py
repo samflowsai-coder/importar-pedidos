@@ -92,3 +92,19 @@ def test_ligar_push_pedido_grava_both(tmp_path, monkeypatch):
     monkeypatch.setattr(app_config, "_CONFIG_FILE", tmp_path / "config.json")
     cfg = cfgtool.ligar_push_pedido()
     assert cfg["export_mode"] == "both"
+
+
+def test_gravar_flowpcp_timeout_300_default(mm_env):
+    env = cfgtool.gravar_flowpcp("mm", service_token="t")
+    assert float(env["flowpcp_request_timeout_s"]) == 300.0
+
+
+def test_promover_catalogo_simula_depois_promove(mm_env, monkeypatch):
+    import app.integrations.flowpcp.catalogo_sync as cs
+    ordem = []
+    monkeypatch.setattr(
+        cs, "run_catalogo_sync",
+        lambda slug, **kw: (ordem.append(kw["dry_run"]), object())[1],
+    )
+    cfgtool.promover_catalogo("mm")
+    assert ordem == [True, False]  # simula (dry-run) antes de promover

@@ -65,9 +65,11 @@ def gravar_flowpcp(
     service_token: str | None,
     base_url: str = BASE_URL_PROD,
     tenant_id: str = TENANT_MM_PROD,
+    request_timeout_s: float = 300.0,
 ) -> dict:
-    """Liga o FlowPCP no ambiente `slug` (enabled=1, url, tenant, token).
+    """Liga o FlowPCP no ambiente `slug` (enabled=1, url, tenant, token, timeout).
     `service_token=None` mantém o token atual; string vazia limpa; valor substitui.
+    `request_timeout_s=300` por padrão — o promote de milhares de itens é lento.
     dry_run=1 por segurança (só afeta a VOLTA, que não usamos hoje)."""
     from app.persistence import environments_repo
 
@@ -83,9 +85,21 @@ def gravar_flowpcp(
         base_url=base_url,
         tenant_id=tenant_id,
         dry_run=True,
+        request_timeout_s=request_timeout_s,
         service_token=service_token,
     )
     return environments_repo.get_by_slug(slug)
+
+
+def promover_catalogo(slug: str):
+    """Simula (dry-run) e DEPOIS promove (apply) o catálogo do Fire do ambiente
+    `slug` no FlowPCP. Retorna (relatorio_simulacao, relatorio_promote). Import
+    tardio de `run_catalogo_sync` pra permitir monkeypatch nos testes."""
+    from app.integrations.flowpcp.catalogo_sync import run_catalogo_sync
+
+    sim = run_catalogo_sync(slug, dry_run=True, full_sync=True)
+    prom = run_catalogo_sync(slug, dry_run=False, full_sync=True)
+    return sim, prom
 
 
 def gravar_senha_firebird(slug: str, fb_password: str | None) -> dict:
@@ -136,6 +150,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="não pergunta nada (usa só flags/valores atuais; não liga push)",
     )
+    parser.add_argument(
+        "--token", default=None, help="service token (evita o prompt; p/ execução automática)"
+    )
+    parser.add_argument(
+        "--promover",
+        action="store_true",
+        help="após configurar+testar, roda Simular + Promover o catálogo (sem prompt)",
+    )
     args = parser.parse_args(argv)
 
     _bootstrap_env()
@@ -145,11 +167,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Ambiente: {args.slug}   Flow: {args.base_url}")
     print("=" * 62)
 
-    token = None
+    token = args.token
     fb_pw = None
-    if not args.nao_interativo:
+    if not (args.nao_interativo or args.promover):
         print("\n[1] Segredos (colados aqui, nunca ficam no pacote):")
-        token = _prompt_segredo("Service token do FlowPCP")
+        if token is None:
+            token = _prompt_segredo("Service token do FlowPCP")
         fb_pw = _prompt_segredo("Senha do Firebird (SYSDBA) deste ambiente")
 
     # 2) Grava a config FlowPCP (enabled + url + tenant + token)
@@ -174,7 +197,27 @@ def main(argv: list[str] | None = None) -> int:
         print("    Corrija a senha/engine Firebird e rode este configurador de novo.")
         return 1
 
-    # 4) Produto (catálogo) já está pronto — read-only + dry-run
+    # 4) Modo automático: Simular + Promover o catálogo em prod (1 clique).
+    if args.promover:
+        print("\n[4] Catálogo — Simulando e Promovendo...")
+        sim, prom = promover_catalogo(args.slug)
+        cg = sim.contagens
+        print(
+            f"      Simular:  fire={cg.fire_total} flow={cg.flow_total} "
+            f"match={cg.match_limpo} criar={cg.fire_only} flow_only={cg.flow_only}"
+        )
+        pm = prom.model_dump().get("promote") or {}
+        print(
+            f"      Promover: criados={pm.get('criados')} atualizados={pm.get('atualizados')} "
+            f"desativados={pm.get('desativados')} flow_only={pm.get('flowOnly')} "
+            f"erros={pm.get('erros')}"
+        )
+        print("\n" + "=" * 62)
+        print("  Promote concluído.")
+        print("=" * 62)
+        return 0
+
+    # 4b) Produto (catálogo) já está pronto — read-only + dry-run
     print("\n[4] Produto (catálogo): pronto.")
     print("      Rode:  SINCRONIZAR-CATALOGO.bat   (ou tools/sync_catalogo_fire.py --slug "
           f"{args.slug})")
