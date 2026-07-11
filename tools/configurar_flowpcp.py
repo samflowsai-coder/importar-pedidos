@@ -200,12 +200,19 @@ def main(argv: list[str] | None = None) -> int:
     fb_ok, fb_err = testar_firebird(env)
     if fb_ok:
         print("      OK — conectou e rodou SELECT 1.")
-    else:
+    elif args.promover:
+        # Promover LÊ o catálogo do Fire — sem Firebird, aborta.
         print(f"      FALHOU — {fb_err}")
-        print("\n  ► FlowPCP ficou CONFIGURADO, mas dormente (modo de exportação intacto).")
-        print("    Sem Firebird conectável, produto e pedido não têm como rodar.")
-        print("    Corrija a senha/engine Firebird e rode este configurador de novo.")
+        print("\n  ► Sem Firebird conectável não dá pra puxar o catálogo. FlowPCP ficou")
+        print("    CONFIGURADO (pedido→Flow ativo), mas o promote não rodou.")
+        print("    Corrija a senha/engine Firebird e rode de novo.")
         return 1
+    else:
+        # Pedido→Flow NÃO usa Firebird (empurra o snapshot do pedido). Só o
+        # catálogo depende dele — então avisa, mas não bloqueia.
+        print(f"      AVISO — Firebird não conectou: {fb_err}")
+        print("      Pedido→Flow segue ATIVO (não usa Firebird). O catálogo só")
+        print("      sincroniza quando o Firebird conectar (configurar-integracao.bat).")
 
     # 4) Modo automático: Simular + Promover o catálogo em prod (1 clique).
     if args.promover:

@@ -50,3 +50,5 @@ app/.secret.key
 
 # Bat com token de PROD embutido (client-specific) — nunca commitar
 promover-prod.bat
+ligar-flowpcp.bat
+enviar-catalogo-flow.bat

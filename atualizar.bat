@@ -20,16 +20,16 @@ if errorlevel 1 (
 )
 
 echo.
-if exist "%~dp0promover-prod.bat" goto _promoprompt
+if exist "%~dp0ligar-flowpcp.bat" goto _flowprompt
 set "RESP="
 set /p "RESP=Configurar / ligar a integracao FlowPCP agora? (S/N): "
 if /I "%RESP%"=="S" call "%~dp0configurar-integracao.bat"
 goto _fim
 
-:_promoprompt
+:_flowprompt
 set "RESP="
-set /p "RESP=Configurar PROD e PROMOVER produtos agora? (S/N): "
-if /I "%RESP%"=="S" call "%~dp0promover-prod.bat"
+set /p "RESP=Ligar FlowPCP (pedido -> Flow + catalogo local) agora? (S/N): "
+if /I "%RESP%"=="S" call "%~dp0ligar-flowpcp.bat"
 
 :_fim
 pause
