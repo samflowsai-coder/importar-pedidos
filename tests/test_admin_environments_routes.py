@@ -330,3 +330,36 @@ def test_sync_catalogo_default_e_dry_run(setup, monkeypatch):
     r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo")
     assert r.status_code == 200
     assert capturado["dry_run"] is True
+
+
+def test_sync_catalogo_local_only_quando_gate_off(setup, monkeypatch):
+    """Gate OFF → 200 com local_only=True (catálogo só atualizado no importador)."""
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir=str(setup), output_dir=str(setup),
+        fb_path=str(setup / "x.fdb"),
+    )
+    _enable_flowpcp(env["id"])
+    import app.integrations.flowpcp.catalogo_sync as cs
+    monkeypatch.setattr(
+        cs, "run_catalogo_sync",
+        lambda *a, **k: cs.CatalogoLocalResult(itens=3421, extraido_em="2026-07-11T10:00:00Z"),
+    )
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["local_only"] is True
+    assert body["itens"] == 3421
+
+
+def test_put_flowpcp_aceita_catalogo_push(setup):
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir=str(setup), output_dir=str(setup),
+        fb_path=str(setup / "x.fdb"),
+    )
+    r = _client().put(
+        f"/api/admin/environments/{env['id']}/flowpcp",
+        json={"enabled": True, "base_url": "https://x", "tenant_id": "t",
+              "catalogo_push": True},
+    )
+    assert r.status_code == 200
+    assert r.json()["flowpcp_catalogo_push"] == 1

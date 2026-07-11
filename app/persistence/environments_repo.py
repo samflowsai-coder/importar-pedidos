@@ -32,7 +32,7 @@ _PUBLIC_FIELDS = (
     # FlowPCP (não-secreto). O token cifrado fica fora do public view.
     "flowpcp_enabled", "flowpcp_base_url", "flowpcp_tenant_id",
     "flowpcp_timezone", "flowpcp_dry_run", "flowpcp_poll_interval_s",
-    "flowpcp_request_timeout_s",
+    "flowpcp_request_timeout_s", "flowpcp_catalogo_push",
 )
 
 
@@ -213,6 +213,7 @@ def set_flowpcp_config(
     dry_run: bool = False,
     poll_interval_s: int = 30,
     request_timeout_s: float = 30.0,
+    catalogo_push: bool = False,
     service_token: str | None = None,
 ) -> dict[str, Any] | None:
     """Grava a config FlowPCP do ambiente. Token cifrado via secret_store.
@@ -232,6 +233,7 @@ def set_flowpcp_config(
         "flowpcp_dry_run": 1 if dry_run else 0,
         "flowpcp_poll_interval_s": int(poll_interval_s),
         "flowpcp_request_timeout_s": float(request_timeout_s),
+        "flowpcp_catalogo_push": 1 if catalogo_push else 0,
         "updated_at": _now(),
     }
     if service_token is not None:

@@ -1623,3 +1623,76 @@ def test_export_xlsx_passes_with_ack(monkeypatch, tmp_path):
 
     r = client.post(f"/api/imported/{entry_id}/export-xlsx")
     assert r.status_code == 200, r.text
+
+
+def _insert_parsed_import(entry_id: str, order_number: str = "PUSH-1"):
+    import uuid as _uuid  # noqa: F401
+    from datetime import datetime
+
+    from app.persistence import repo
+
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "pedido.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": order_number,
+            "customer": "ACME",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {
+                "header": {"order_number": order_number, "customer_name": "ACME"},
+                "items": [{"description": "x", "quantity": 1.0}],
+                "source_file": "",
+            },
+        }
+    )
+
+
+def test_export_xlsx_dispara_push_flowpcp(monkeypatch, tmp_path):
+    """Gerar XLS (modo xlsx) TAMBÉM empurra o pedido pro FlowPCP — Fire fica
+    manual (XLS) mas o Flow já recebe. Best-effort: gated por flowpcp_enabled
+    dentro do hook; aqui provamos que o hook é chamado com o slug do ambiente."""
+    import uuid
+
+    from app.erp import product_check as pc_mod
+    from app.web import server as server_mod
+
+    entry_id = str(uuid.uuid4())
+    _insert_parsed_import(entry_id)
+
+    # Env fake não tem Firebird — stub do price-check (não é o que se testa aqui).
+    monkeypatch.setattr(
+        pc_mod, "check_order",
+        lambda order, **kw: {"available": False, "items": [], "summary": {}},
+    )
+
+    pushes: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        server_mod, "push_new_order",
+        lambda order, *, import_id, slug: pushes.append((import_id, slug)) or True,
+    )
+
+    cfg = {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx"}
+    out = server_mod._export_one_xlsx(entry_id, cfg, request_env={"slug": "mm"})
+    assert out.ok, out.detail
+    assert pushes == [(entry_id, "mm")]
+
+
+def test_export_xlsx_sem_ambiente_nao_chama_push(monkeypatch, tmp_path):
+    import uuid
+
+    from app.web import server as server_mod
+
+    entry_id = str(uuid.uuid4())
+    _insert_parsed_import(entry_id, order_number="PUSH-2")
+
+    pushes = []
+    monkeypatch.setattr(
+        server_mod, "push_new_order",
+        lambda order, *, import_id, slug: pushes.append(slug) or True,
+    )
+    cfg = {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx"}
+    out = server_mod._export_one_xlsx(entry_id, cfg, request_env=None)
+    assert out.ok
+    assert pushes == []
