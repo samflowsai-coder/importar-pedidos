@@ -104,6 +104,19 @@ CREATE TABLE IF NOT EXISTS flowpcp_cursor_state (
     last_cursor   TEXT,
     atualizado_em TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Cópia local do catálogo do Fire ("manter no importador"). Snapshot
+-- substitutivo a cada sync; envio ao Flow é gated por flowpcp_catalogo_push.
+CREATE TABLE IF NOT EXISTS catalogo_fire (
+    fire_produto_id TEXT PRIMARY KEY,
+    codigo          TEXT NOT NULL,
+    nome            TEXT NOT NULL,
+    unidade         TEXT,
+    ean             TEXT,
+    ativo           INTEGER NOT NULL DEFAULT 1,
+    tipo            TEXT NOT NULL DEFAULT 'simples',
+    extraido_em     TEXT NOT NULL
+);
 """
 
 INDEXES_SQL = """

@@ -60,6 +60,8 @@ class FlowPCPConfigRequest(BaseModel):
     dry_run: bool = False
     poll_interval_s: int = Field(default=30, ge=5)
     request_timeout_s: float = Field(default=30.0, gt=0)
+    # Gate do envio de catálogo ao Flow (OFF = sync só atualiza a cópia local)
+    catalogo_push: bool = False
     # None = mantém token atual; "" = limpa; valor = substitui
     service_token: str | None = None
 
@@ -124,7 +126,7 @@ def sync_catalogo_flowpcp(env_id: str, apply: bool = False, _=Depends(require_ad
     if not env.get("flowpcp_enabled"):
         raise HTTPException(409, "FlowPCP não está habilitado neste ambiente")
 
-    from app.integrations.flowpcp.catalogo_sync import run_catalogo_sync
+    from app.integrations.flowpcp.catalogo_sync import CatalogoLocalResult, run_catalogo_sync
 
     try:
         rep = run_catalogo_sync(env["slug"], dry_run=not apply, full_sync=True)
@@ -132,6 +134,9 @@ def sync_catalogo_flowpcp(env_id: str, apply: bool = False, _=Depends(require_ad
         raise HTTPException(502, f"Falha no sync de catálogo: {exc}") from exc
     if rep is None:
         raise HTTPException(409, "FlowPCP não está habilitado neste ambiente")
+    if isinstance(rep, CatalogoLocalResult):
+        # Gate OFF: catálogo atualizado só no importador — nada foi ao Flow.
+        return {"local_only": True, "itens": rep.itens, "extraido_em": rep.extraido_em}
     return rep.model_dump()
 
 

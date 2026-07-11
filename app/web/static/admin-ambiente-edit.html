@@ -311,6 +311,10 @@
         <input type="checkbox" name="flowpcp_dry_run">
         <span>Dry-run (loga o UPDATE, não escreve no Fire)</span>
       </label>
+      <label class="check">
+        <input type="checkbox" name="flowpcp_catalogo_push">
+        <span>Enviar catálogo ao Flow (desligado = sincronizar só atualiza a cópia local)</span>
+      </label>
       <div class="actions" style="margin-top:1rem">
         <button type="button" id="btn-save-flowpcp" class="btn btn-primary">Salvar FlowPCP</button>
         <span id="flowpcp-status" class="flowpcp-status"></span>
@@ -401,6 +405,7 @@
         fv('flowpcp_poll_interval_s').value = env.flowpcp_poll_interval_s ?? 30;
         fv('flowpcp_request_timeout_s').value = env.flowpcp_request_timeout_s ?? 30;
         fv('flowpcp_dry_run').checked = !!env.flowpcp_dry_run;
+        fv('flowpcp_catalogo_push').checked = !!env.flowpcp_catalogo_push;
         flowFs.hidden = false;
       }).catch(e => showError(e.message));
     }
@@ -471,6 +476,7 @@
         dry_run: fv('flowpcp_dry_run').checked,
         poll_interval_s: parseInt(fv('flowpcp_poll_interval_s').value, 10) || 30,
         request_timeout_s: parseFloat(fv('flowpcp_request_timeout_s').value) || 30,
+        catalogo_push: fv('flowpcp_catalogo_push').checked,
       };
       const tok = fv('flowpcp_service_token').value;
       if (tok !== '') payload.service_token = tok;  // vazio = mantém atual
@@ -517,6 +523,11 @@
           st.textContent = '✗ ' + msg; st.classList.add('err'); return;
         }
         const rep = JSON.parse(t);
+        if (rep.local_only) {
+          st.textContent = '✓ Catálogo atualizado localmente (' + rep.itens + ' produtos). Envio ao Flow DESLIGADO — ligue "Enviar catálogo ao Flow" acima e salve.';
+          st.classList.add('ok');
+          return;
+        }
         const c = rep.contagens || {};
         const p = rep.promote;
         st.textContent = apply ? '✓ Promovido no Flow' : '✓ Simulação concluída (dry-run)';

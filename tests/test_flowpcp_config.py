@@ -63,3 +63,18 @@ def test_enabled_envs_gates_to_enabled_only(fresh_shared):
     envs = enabled_flowpcp_envs()
     assert set(envs) == {"mm"}
     assert envs["mm"].service_token == "tok"
+
+
+def test_catalogo_push_default_off_e_ligavel(fresh_shared):
+    """Gate do envio de catálogo ao Flow: default OFF; setável por ambiente."""
+    env = _mk_env("mm", enabled=True, base_url="https://x", tenant_id="t")
+    cfg = flowpcp_config_for_slug("mm")
+    assert cfg.catalogo_push is False  # default: puxa do Fire, NÃO envia ao Flow
+
+    environments_repo.set_flowpcp_config(
+        env["id"], enabled=True, base_url="https://x", tenant_id="t", catalogo_push=True
+    )
+    cfg2 = flowpcp_config_for_slug("mm")
+    assert cfg2.catalogo_push is True
+    # e aparece no public view (UI lê daqui)
+    assert environments_repo.get_by_slug("mm")["flowpcp_catalogo_push"] == 1

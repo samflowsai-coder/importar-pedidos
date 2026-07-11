@@ -16,6 +16,8 @@ class FlowPCPConfig:
     dry_run: bool = False
     poll_interval_s: int = 30
     request_timeout_s: float = 30.0
+    # Gate do envio de catálogo ao Flow: OFF = sync só atualiza a cópia local.
+    catalogo_push: bool = False
 
 
 def flowpcp_config_from_env(env: dict[str, Any], *, service_token: str | None) -> FlowPCPConfig:
@@ -30,6 +32,7 @@ def flowpcp_config_from_env(env: dict[str, Any], *, service_token: str | None) -
         dry_run=bool(env.get("flowpcp_dry_run")),
         poll_interval_s=int(env.get("flowpcp_poll_interval_s") or 30),
         request_timeout_s=float(env.get("flowpcp_request_timeout_s") or 30.0),
+        catalogo_push=bool(env.get("flowpcp_catalogo_push")),
     )
 
 

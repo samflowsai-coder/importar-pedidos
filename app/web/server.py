@@ -1850,6 +1850,15 @@ def _export_one_xlsx(
         repo.update_fire_metadata(import_id, output_files=output_files)
         repo.append_audit(import_id, "xlsx_exported", {"files": output_files})
 
+        # Ponte FlowPCP (IDA): mesmo com o Fire manual (XLS), o pedido já vai
+        # pro Flow. Gated por flowpcp_enabled dentro do hook; o Flow deduplica
+        # por externalId (re-export não cria duplicata). Best-effort: falha
+        # vira outbox/log e nunca derruba a geração do XLS.
+        slug = (request_env or {}).get("slug")
+        if slug:
+            pushed = push_new_order(order, import_id=import_id, slug=slug)
+            repo.append_audit(import_id, "flowpcp_push", {"ok": pushed})
+
         return _XlsxExportOutcome(True, output_files=output_files)
 
 

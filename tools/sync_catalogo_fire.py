@@ -33,7 +33,7 @@ def main() -> int:
     load_dotenv(base / ".env")
     os.environ.setdefault("APP_DATA_DIR", str(base / "data"))
 
-    from app.integrations.flowpcp.catalogo_sync import run_catalogo_sync
+    from app.integrations.flowpcp.catalogo_sync import CatalogoLocalResult, run_catalogo_sync
 
     dry_run = not args.apply
     print(f"== Catálogo Fire->FlowPCP | slug={args.slug} | dry_run={dry_run} ==")
@@ -41,6 +41,10 @@ def main() -> int:
     if rep is None:
         print("✗ ambiente sem FlowPCP habilitado.")
         return 2
+    if isinstance(rep, CatalogoLocalResult):
+        print(f"✓ cópia local atualizada: {rep.itens} produtos (extraído em {rep.extraido_em}).")
+        print("  Envio ao Flow DESLIGADO — ligue 'Enviar catálogo ao Flow' no ambiente pra enviar.")
+        return 0
 
     print("\n== RELATÓRIO DE RECONCILIAÇÃO ==")
     print(f"  dry_run          {rep.dry_run}")

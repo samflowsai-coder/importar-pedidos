@@ -66,9 +66,12 @@ def gravar_flowpcp(
     base_url: str = BASE_URL_PROD,
     tenant_id: str = TENANT_MM_PROD,
     request_timeout_s: float = 300.0,
+    catalogo_push: bool | None = None,
 ) -> dict:
     """Liga o FlowPCP no ambiente `slug` (enabled=1, url, tenant, token, timeout).
     `service_token=None` mantém o token atual; string vazia limpa; valor substitui.
+    `catalogo_push=None` PRESERVA o gate atual (re-rodar o configurador não pode
+    desligar o que o admin ligou); True/False seta explicitamente.
     `request_timeout_s=300` por padrão — o promote de milhares de itens é lento.
     dry_run=1 por segurança (só afeta a VOLTA, que não usamos hoje)."""
     from app.persistence import environments_repo
@@ -79,6 +82,8 @@ def gravar_flowpcp(
         raise SystemExit(
             f"Ambiente '{slug}' não encontrado. Ambientes existentes: {disponiveis}"
         )
+    if catalogo_push is None:
+        catalogo_push = bool(env.get("flowpcp_catalogo_push"))
     environments_repo.set_flowpcp_config(
         env["id"],
         enabled=True,
@@ -86,6 +91,7 @@ def gravar_flowpcp(
         tenant_id=tenant_id,
         dry_run=True,
         request_timeout_s=request_timeout_s,
+        catalogo_push=catalogo_push,
         service_token=service_token,
     )
     return environments_repo.get_by_slug(slug)
@@ -175,14 +181,18 @@ def main(argv: list[str] | None = None) -> int:
             token = _prompt_segredo("Service token do FlowPCP")
         fb_pw = _prompt_segredo("Senha do Firebird (SYSDBA) deste ambiente")
 
-    # 2) Grava a config FlowPCP (enabled + url + tenant + token)
+    # 2) Grava a config FlowPCP (enabled + url + tenant + token).
+    # --promover liga o gate de envio de catálogo (é o "setar para enviar");
+    # sem ele o gate atual é preservado.
     env = gravar_flowpcp(
-        args.slug, service_token=token, base_url=args.base_url, tenant_id=args.tenant_id
+        args.slug, service_token=token, base_url=args.base_url, tenant_id=args.tenant_id,
+        catalogo_push=True if args.promover else None,
     )
     print("\n[2] FlowPCP habilitado neste ambiente:")
-    print(f"      enabled   = {bool(env['flowpcp_enabled'])}")
-    print(f"      base_url  = {env['flowpcp_base_url']}")
-    print(f"      tenant_id = {env['flowpcp_tenant_id']}")
+    print(f"      enabled        = {bool(env['flowpcp_enabled'])}")
+    print(f"      base_url       = {env['flowpcp_base_url']}")
+    print(f"      tenant_id      = {env['flowpcp_tenant_id']}")
+    print(f"      envia catálogo = {bool(env['flowpcp_catalogo_push'])}")
 
     # 3) Firebird: grava senha (se dada) e testa a conexão
     env = gravar_senha_firebird(args.slug, fb_pw)
@@ -217,23 +227,25 @@ def main(argv: list[str] | None = None) -> int:
         print("=" * 62)
         return 0
 
-    # 4b) Produto (catálogo) já está pronto — read-only + dry-run
+    # 4b) Produto (catálogo): sync puxa do Fire e guarda no importador; o envio
+    # ao Flow depende do gate "Enviar catálogo ao Flow" (flowpcp_catalogo_push).
     print("\n[4] Produto (catálogo): pronto.")
     print("      Rode:  SINCRONIZAR-CATALOGO.bat   (ou tools/sync_catalogo_fire.py --slug "
           f"{args.slug})")
-    print("      É read-only no Fire e dry-run no Flow (não escreve catálogo ainda — Fase 1).")
+    print("      Sempre atualiza a cópia local (puxa do Fire). Envio ao Flow: "
+          f"{'LIGADO' if env['flowpcp_catalogo_push'] else 'DESLIGADO — ligue na tela do ambiente quando quiser enviar'}.")
 
-    # 5) Pedido: liga o push só com confirmação explícita (muda modo GLOBAL)
-    print("\n[5] Pedido (push): hoje o cliente gera planilha (xlsx).")
-    print("    Pra empurrar pedido pro Flow, o Importador precisa GRAVAR no Fire (EXPORT_MODE=both).")
-    print("    ⚠️  Isso é GLOBAL — vale MM **e Nasmar** (ambos passam a gravar direto no ERP).")
+    # 5) Pedido: com FlowPCP habilitado, o push ao Flow JÁ dispara no Gerar XLS.
+    # EXPORT_MODE=both é outra coisa (gravar direto no Fire) e segue opcional.
+    print("\n[5] Pedido (push ao Flow): dispara automaticamente no 'Gerar XLS'.")
+    print("    O Fire continua via planilha/manual — nada muda na operação.")
     if args.nao_interativo:
-        print("      (modo não-interativo: push NÃO ligado — modo de exportação intacto.)")
-    elif _confirmar("Ligar o push de pedido agora (EXPORT_MODE=both)?"):
+        print("      (modo não-interativo: EXPORT_MODE intacto.)")
+    elif _confirmar("OPCIONAL: gravar pedidos DIRETO no Fire também (EXPORT_MODE=both, global MM+Nasmar)?"):
         cfg = ligar_push_pedido()
-        print(f"      OK — export_mode = {cfg['export_mode']}. Pedido cadastrado no Fire vai pro Flow.")
+        print(f"      OK — export_mode = {cfg['export_mode']}.")
     else:
-        print("      Mantido em xlsx. FlowPCP fica pronto; ligue depois rodando de novo.")
+        print("      Mantido em xlsx (Fire manual). Push ao Flow segue ativo no Gerar XLS.")
 
     print("\n" + "=" * 62)
     print("  Concluído. VOLTA (Flow→Fire) e worker = backlog, não configurados.")

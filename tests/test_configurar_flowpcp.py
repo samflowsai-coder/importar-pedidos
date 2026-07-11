@@ -108,3 +108,18 @@ def test_promover_catalogo_simula_depois_promove(mm_env, monkeypatch):
     )
     cfgtool.promover_catalogo("mm")
     assert ordem == [True, False]  # simula (dry-run) antes de promover
+
+
+def test_gravar_flowpcp_preserva_catalogo_push_existente(mm_env):
+    """Rodar o configurador de novo NÃO pode desligar o gate que o admin ligou."""
+    env = environments_repo.get_by_slug("mm")
+    environments_repo.set_flowpcp_config(
+        env["id"], enabled=True, base_url="https://x", tenant_id="t", catalogo_push=True
+    )
+    env2 = cfgtool.gravar_flowpcp("mm", service_token=None)  # re-run sem mexer no gate
+    assert env2["flowpcp_catalogo_push"] == 1
+
+
+def test_gravar_flowpcp_catalogo_push_explicito(mm_env):
+    env = cfgtool.gravar_flowpcp("mm", service_token="t", catalogo_push=True)
+    assert env["flowpcp_catalogo_push"] == 1

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.erp.catalog_extract import extract_produtos
@@ -9,10 +10,19 @@ from app.integrations.flowpcp.catalogo_mapper import build_catalogo_request
 from app.integrations.flowpcp.catalogo_schema import CatalogoReconciliacaoResponse
 from app.integrations.flowpcp.client import FlowPCPClient
 from app.integrations.flowpcp.config import flowpcp_config_for_slug
-from app.persistence import environments_repo
+from app.persistence import catalogo_fire_repo, environments_repo, router
 from app.utils.logger import logger
 
 _IMPORTADOR_VERSAO = "1.0.0"
+
+
+@dataclass(frozen=True)
+class CatalogoLocalResult:
+    """Resultado do sync quando o envio ao Flow está DESLIGADO
+    (flowpcp_catalogo_push=0): a extração foi gravada só na cópia local."""
+
+    itens: int
+    extraido_em: str
 
 
 def _build_client(cfg) -> FlowPCPClient:
@@ -32,18 +42,23 @@ def run_catalogo_sync(
     now_iso: str | None = None,
     _client=None,
     _fire_conn=None,
-) -> CatalogoReconciliacaoResponse | None:
-    """Extrai o catálogo do Fire do ambiente `slug` e empurra ao FlowPCP.
-    Fase 0: dry_run=True (não promove). Retorna o relatório, ou None se o
-    ambiente não tem FlowPCP habilitado. `_client`/`_fire_conn` são injeção
-    de teste (default constrói os reais)."""
+    _env_conn=None,
+) -> CatalogoReconciliacaoResponse | CatalogoLocalResult | None:
+    """Extrai o catálogo do Fire do ambiente `slug`, SEMPRE grava a cópia local
+    (`catalogo_fire` no db do ambiente) e — só se `flowpcp_catalogo_push` estiver
+    ligado — empurra ao FlowPCP.
+
+    Retorna:
+    - `CatalogoReconciliacaoResponse` — enviado ao Flow (gate ON)
+    - `CatalogoLocalResult` — só cópia local atualizada (gate OFF)
+    - `None` — ambiente sem FlowPCP habilitado
+    `_client`/`_fire_conn`/`_env_conn` são injeção de teste (default constrói os reais)."""
     cfg = flowpcp_config_for_slug(slug)
     if cfg is None or not getattr(cfg, "enabled", False):
         logger.info(f"catalogo sync: ambiente {slug} sem FlowPCP habilitado — skip")
         return None
 
     extraido_em = now_iso or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    client = _client or _build_client(cfg)
 
     if _fire_conn is not None:
         fire_ctx = nullcontext(_fire_conn)
@@ -51,9 +66,21 @@ def run_catalogo_sync(
         env = environments_repo.get_by_slug(slug)
         fire_ctx = FirebirdConnection().connect_with_config(environments_repo.to_fb_config(env))
 
+    with fire_ctx as fire_conn:
+        dtos = extract_produtos(fire_conn)
+
+    # Cópia local SEMPRE — "manter no importador" independe do envio ao Flow.
+    env_ctx = nullcontext(_env_conn) if _env_conn is not None else router.env_connect(slug)
+    with env_ctx as env_conn:
+        catalogo_fire_repo.replace_all(env_conn, dtos, extraido_em=extraido_em)
+    logger.info(f"catalogo sync env={slug} itens={len(dtos)} — cópia local atualizada")
+
+    if not getattr(cfg, "catalogo_push", False):
+        logger.info(f"catalogo sync env={slug}: envio ao Flow DESLIGADO (catalogo_push=0)")
+        return CatalogoLocalResult(itens=len(dtos), extraido_em=extraido_em)
+
+    client = _client or _build_client(cfg)
     try:
-        with fire_ctx as fire_conn:
-            dtos = extract_produtos(fire_conn)
         request = build_catalogo_request(
             dtos,
             dry_run=dry_run,

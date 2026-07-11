@@ -45,7 +45,7 @@ API pública para páginas-filho:
 - `POST /api/firebird/config` → salva config + chama `apply_to_env` (`require_admin`). Body: `{path, host, port, user, charset, password?}`. Senha omitida = mantém atual; vazia = limpa.
 - `POST /api/firebird/test` → testa conexão com config salva ou payload ad-hoc (`require_admin`). Retorna `{ok: bool, error?, traceId}` (`current_trace_id()` injetado).
 - `POST /api/process` → upload + parse + cache de preview.
-- `POST /api/imported/{id}/export-xlsx` → gera XLSX do pedido `parsed` **sem** tocar Firebird (`require_user`). Mantém `portal_status='parsed'`. Retorna `{entry_id, output_files, portal_status}`. Usado quando `EXPORT_MODE='xlsx'`.
+- `POST /api/imported/{id}/export-xlsx` → gera XLSX do pedido `parsed` **sem** tocar Firebird (`require_user`). Mantém `portal_status='parsed'`. Retorna `{entry_id, output_files, portal_status}`. Usado quando `EXPORT_MODE='xlsx'`. **Também dispara `push_new_order` pro FlowPCP** (gated por `flowpcp_enabled` do ambiente; best-effort; o Flow deduplica por `externalId` — re-export não duplica; audita `flowpcp_push {ok}`).
 - `POST /api/batch/export-xlsx` → versão lote do anterior (mesmo limite 1..100).
 - `GET /api/download?path=` → download xlsx (whitelisted, path traversal bloqueado).
 - `GET /api/fs?path=` → listagem de pastas (usado pelo browser de `/configuracoes/diretorios`).

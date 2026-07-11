@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS environments (
     flowpcp_poll_interval_s   INTEGER NOT NULL DEFAULT 30,
     flowpcp_request_timeout_s REAL NOT NULL DEFAULT 30.0,
     flowpcp_service_token_enc TEXT,
+    -- Gate do envio de catálogo Fire→Flow: OFF = sync só atualiza a cópia
+    -- local (catalogo_fire no db do ambiente); ON = também envia ao Flow.
+    flowpcp_catalogo_push     INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -121,4 +124,6 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
      "ALTER TABLE environments ADD COLUMN flowpcp_request_timeout_s REAL NOT NULL DEFAULT 30.0"),
     ("environments", "flowpcp_service_token_enc",
      "ALTER TABLE environments ADD COLUMN flowpcp_service_token_enc TEXT"),
+    ("environments", "flowpcp_catalogo_push",
+     "ALTER TABLE environments ADD COLUMN flowpcp_catalogo_push INTEGER NOT NULL DEFAULT 0"),
 )
