@@ -123,3 +123,19 @@ def test_gravar_flowpcp_preserva_catalogo_push_existente(mm_env):
 def test_gravar_flowpcp_catalogo_push_explicito(mm_env):
     env = cfgtool.gravar_flowpcp("mm", service_token="t", catalogo_push=True)
     assert env["flowpcp_catalogo_push"] == 1
+
+
+def test_main_nao_interativo_firebird_falho_nao_bloqueia_pedido(mm_env, monkeypatch, capsys):
+    """Pedido→Flow NÃO precisa de Firebird — se o FB falhar, o FlowPCP fica
+    LIGADO (config gravada) e o rc é 0. Só o catálogo depende do Firebird."""
+    monkeypatch.setattr(cfgtool, "testar_firebird", lambda env: (False, "sem fb"))
+    rc = cfgtool.main(["--slug", "mm", "--token", "tok", "--nao-interativo"])
+    assert rc == 0
+    assert environments_repo.get_by_slug("mm")["flowpcp_enabled"] == 1
+
+
+def test_main_promover_firebird_falho_aborta(mm_env, monkeypatch):
+    """Promover LÊ o Firebird (catálogo) — sem ele, aborta com rc 1."""
+    monkeypatch.setattr(cfgtool, "testar_firebird", lambda env: (False, "sem fb"))
+    rc = cfgtool.main(["--slug", "mm", "--token", "tok", "--promover"])
+    assert rc == 1
