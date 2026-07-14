@@ -1,51 +1,26 @@
-"""Montagem do DSN na conexão Firebird (embedded vs TCP).
+"""Montagem do DSN do firebird-driver (embedded vs TCP).
 
-O firebird-driver espera `connect(database, ...)` com o DSN — no TCP,
-`host/port:database`. O path TCP nunca era exercitado (só usávamos embedded).
+Função pura — sem tocar no driver/lib nativa (roda igual no CI). O
+firebird-driver espera `connect(database, ...)` com o DSN; no TCP é
+`host/port:database` (o path é do servidor; drive-letter do Windows é OK).
+O path TCP nunca era exercitado — só usávamos embedded.
 """
 from __future__ import annotations
 
-import firebird.driver as drv
-import pytest
-
-from app.erp.connection import FirebirdConnection
-from app.erp.exceptions import FirebirdConnectionError
+from app.erp.connection import _build_fb_dsn
 
 
-def _capture_connect(monkeypatch):
-    captured: dict = {}
-
-    def fake_connect(database, **kw):
-        captured["database"] = database
-        captured.update(kw)
-        raise RuntimeError("stop-after-capture")
-
-    monkeypatch.setattr(drv, "connect", fake_connect)
-    return captured
+def test_tcp_monta_dsn_host_port_database():
+    assert _build_fb_dsn("192.168.15.4", "3050", r"C:\Fire\x.fdb") == r"192.168.15.4/3050:C:\Fire\x.fdb"
 
 
-def test_tcp_monta_dsn_host_port_database(monkeypatch):
-    captured = _capture_connect(monkeypatch)
-    cfg = {
-        "host": "192.168.15.4", "port": "3050", "path": r"C:\Fire\x.fdb",
-        "user": "samuel", "password": "p", "charset": "WIN1252",
-    }
-    with pytest.raises(FirebirdConnectionError):
-        with FirebirdConnection().connect_with_config(cfg):
-            pass
-    assert captured["database"] == r"192.168.15.4/3050:C:\Fire\x.fdb"
-    assert captured["user"] == "samuel"
-    assert captured["password"] == "p"
-    assert captured["charset"] == "WIN1252"
+def test_embedded_usa_path_direto():
+    assert _build_fb_dsn("", "", "/tmp/x.fdb") == "/tmp/x.fdb"
 
 
-def test_embedded_usa_path_direto(monkeypatch):
-    captured = _capture_connect(monkeypatch)
-    cfg = {
-        "host": "", "port": "", "path": "/tmp/x.fdb",
-        "user": "SYSDBA", "password": "", "charset": "WIN1252",
-    }
-    with pytest.raises(FirebirdConnectionError):
-        with FirebirdConnection().connect_with_config(cfg):
-            pass
-    assert captured["database"] == "/tmp/x.fdb"  # sem host/port
+def test_porta_default_3050_quando_vazia():
+    assert _build_fb_dsn("host", "", "db") == "host/3050:db"
+
+
+def test_host_com_espacos_e_normalizado():
+    assert _build_fb_dsn("  10.0.0.1  ", "3055", "db") == "10.0.0.1/3055:db"

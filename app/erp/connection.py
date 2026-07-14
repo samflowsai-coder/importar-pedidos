@@ -12,6 +12,16 @@ def _get_env(key: str, default: str = "") -> str:
     return os.environ.get(key, default).strip()
 
 
+def _build_fb_dsn(host: str, port: str, database: str) -> str:
+    """DSN do firebird-driver. TCP → `host/port:database`; embedded → só o path.
+    O caminho é do servidor; drive-letter do Windows (`C:\\`) fica OK após o 1º ':'."""
+    host = (host or "").strip()
+    if not host:
+        return database
+    port = (port or "3050").strip() or "3050"
+    return f"{host}/{port}:{database}"
+
+
 class FirebirdConnection:
     """
     Manages Firebird connections in two modes:
@@ -73,7 +83,6 @@ class FirebirdConnection:
 
         host = (cfg.get("host") or "").strip()
         port_raw = (cfg.get("port") or "3050").strip()
-        port = int(port_raw) if port_raw else 3050
         user = (cfg.get("user") or "SYSDBA").strip()
         password = cfg.get("password") or ""
         charset = (cfg.get("charset") or "WIN1252").strip()
@@ -81,9 +90,8 @@ class FirebirdConnection:
         mode = f"TCP {host}" if host else "embedded"
         logger.debug(f"Conectando ao Firebird: {mode} → {database} [charset={charset}]")
 
-        # firebird-driver espera o DSN em `database`. TCP = `host/port:caminho`
-        # (o caminho é o do servidor; drive-letter do Windows é OK após o 1º ':').
-        dsn = f"{host}/{port}:{database}" if host else database
+        # firebird-driver espera o DSN em `database` (TCP = host/port:caminho).
+        dsn = _build_fb_dsn(host, port_raw, database)
         try:
             conn = connect(dsn, user=user, password=password, charset=charset)
         except Exception as exc:
