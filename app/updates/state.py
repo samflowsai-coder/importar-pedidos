@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 
 _STATUS = "status.json"
@@ -18,18 +19,27 @@ def read_status(updates_dir: Path) -> dict:
     if not p.exists():
         return {"status": "idle"}
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return {"status": "idle"}
+    if not isinstance(data, dict):
+        return {"status": "idle"}
+    return data
 
 
 def write_status(updates_dir: Path, **fields) -> None:
     _ensure(updates_dir)
     cur = read_status(updates_dir)
     cur.update(fields)
-    tmp = updates_dir / (_STATUS + ".tmp")
-    tmp.write_text(json.dumps(cur, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(updates_dir / _STATUS)
+    fd, tmp_name = tempfile.mkstemp(dir=updates_dir, prefix="status.", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(cur, ensure_ascii=False))
+        tmp.replace(updates_dir / _STATUS)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def append_history(updates_dir: Path, entry: dict) -> None:
