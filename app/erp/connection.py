@@ -81,16 +81,11 @@ class FirebirdConnection:
         mode = f"TCP {host}" if host else "embedded"
         logger.debug(f"Conectando ao Firebird: {mode} → {database} [charset={charset}]")
 
+        # firebird-driver espera o DSN em `database`. TCP = `host/port:caminho`
+        # (o caminho é o do servidor; drive-letter do Windows é OK após o 1º ':').
+        dsn = f"{host}/{port}:{database}" if host else database
         try:
-            if host:
-                conn = connect(
-                    host=host, port=port, database=database,
-                    user=user, password=password, charset=charset,
-                )
-            else:
-                conn = connect(
-                    database=database, user=user, password=password, charset=charset,
-                )
+            conn = connect(dsn, user=user, password=password, charset=charset)
         except Exception as exc:
             raise FirebirdConnectionError(f"Falha ao conectar ao Firebird: {exc}") from exc
 
