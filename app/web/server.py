@@ -106,6 +106,11 @@ from app.web.routes_environments import router as environments_router  # noqa: E
 
 app.include_router(environments_router)
 
+# Auto-update: rotas admin de upload/apply/status do pacote de atualização.
+from app.web import routes_update  # noqa: E402
+
+app.include_router(routes_update.router)
+
 
 # ── Internal helpers ──────────────────────────────────────────────────────
 
