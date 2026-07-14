@@ -42,6 +42,32 @@ find "$STAGE" -type f \( \
     -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \
     \) ! -name '.env.example' -delete
 
+# ── manifest.json (fonte de versão + hash de deps p/ o auto-update) ──────────
+STAMP_HHMM="$(date +%Y%m%d-%H%M)"
+BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+GIT_COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# deps_sha256: bloco [project].dependencies normalizado (linhas trimadas, ordenadas)
+DEPS_SHA="$(python3 - "$ROOT/pyproject.toml" <<'PY'
+import sys, hashlib, tomllib
+data = tomllib.load(open(sys.argv[1], "rb"))
+deps = data.get("project", {}).get("dependencies", [])
+opt = data.get("project", {}).get("optional-dependencies", {})
+for v in opt.values():
+    deps = deps + list(v)
+norm = "\n".join(sorted(d.strip() for d in deps if d.strip()))
+print(hashlib.sha256(norm.encode()).hexdigest())
+PY
+)"
+cat > "$STAGE/manifest.json" <<JSON
+{
+  "name": "portal-pedidos",
+  "version": "$STAMP_HHMM",
+  "built_at": "$BUILT_AT",
+  "git_commit": "$GIT_COMMIT",
+  "deps_sha256": "$DEPS_SHA"
+}
+JSON
+
 # ── Quebras de linha CRLF para os arquivos executados no Windows ─────────────
 # .bat exige CRLF (LF puro pode quebrar goto/labels); .ps1 e o template .env
 # tambem ficam CRLF por seguranca.
