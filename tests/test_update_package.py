@@ -98,11 +98,47 @@ def test_name_divergente_rejeita(tmp_path):
         "portal-pedidos/.env",
         "portal-pedidos/x.db",
         "portal-pedidos/naoexiste_na_allowlist.txt",
+        # Achado 1 — deny-list precisa ser case-insensitive (NTFS é case-insensitive)
+        "portal-pedidos/app/firebird.JSON",
+        "portal-pedidos/app/CONFIG.JSON",
+        "portal-pedidos/app/backup.DB",
+        "portal-pedidos/app/.SECRET.KEY",
+        "portal-pedidos/Data/x.txt",
+        # Achado 2 — traversal não pode depender do OS do host (backslash é separador
+        # em NTFS mesmo rodando o parser em POSIX)
+        r"portal-pedidos/app/evil\..\..\pwned.txt",
+        r"portal-pedidos/app/C:\evil.exe",
     ],
 )
 def test_membros_proibidos_rejeitam(tmp_path, bad):
     m = _base_members()
     m[bad] = b"x"
+    with pytest.raises(pkg.PackageError):
+        pkg.validate_and_stage(
+            _make_zip(tmp_path, m),
+            tmp_path / "st",
+            _pyproject(tmp_path / "pp", ["fastapi"]),
+            update_id="u1",
+        )
+
+
+def test_arquivo_nao_zip_rejeita(tmp_path):
+    naozip = tmp_path / "pacote.zip"
+    naozip.write_bytes(b"isto nao e um zip valido")
+    with pytest.raises(pkg.PackageError):
+        pkg.validate_and_stage(
+            naozip,
+            tmp_path / "st",
+            _pyproject(tmp_path / "pp", ["fastapi"]),
+            update_id="u1",
+        )
+
+
+def test_manifesto_sem_built_at_rejeita(tmp_path):
+    m = _base_members()
+    manifest = json.loads(m["portal-pedidos/manifest.json"])
+    del manifest["built_at"]
+    m["portal-pedidos/manifest.json"] = json.dumps(manifest).encode()
     with pytest.raises(pkg.PackageError):
         pkg.validate_and_stage(
             _make_zip(tmp_path, m),

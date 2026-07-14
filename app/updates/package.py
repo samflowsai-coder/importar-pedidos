@@ -57,13 +57,18 @@ class StagedPackage:
 def _member_ok(name: str) -> None:
     if not name.startswith(ROOT + "/"):
         raise PackageError(f"membro fora da raiz do pacote: {name}")
-    rel = name[len(ROOT) + 1 :]
+    rel = name[len(ROOT) + 1 :].replace("\\", "/")
     if rel == "" or rel.endswith("/"):
         return  # diretório
-    if ".." in Path(rel).parts or Path(rel).is_absolute() or (len(rel) > 1 and rel[1] == ":"):
+    segments = rel.split("/")
+    if (
+        ".." in segments
+        or Path(rel).is_absolute()
+        or any(len(seg) > 1 and seg[1] == ":" for seg in segments)
+    ):
         raise PackageError(f"caminho inseguro: {name}")
-    base = Path(rel).name
-    if base in DENY_NAME or base.endswith(DENY_SUFFIX) or rel.split("/")[0] == "data":
+    base = segments[-1].lower()
+    if base in DENY_NAME or base.endswith(DENY_SUFFIX) or segments[0].lower() == "data":
         raise PackageError(f"membro proibido (segredo/dado): {name}")
     top = rel.split("/")[0]
     if not (top in ALLOWED_TOP or top.endswith(".bat")):
