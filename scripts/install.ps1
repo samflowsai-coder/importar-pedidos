@@ -90,10 +90,17 @@ if (-not $PythonCmd) {
         exit 1
     }
 } else {
-    $verDisplay = if ($PythonCmd -eq "py311") {
-        (& py @("-3.11", "--version") 2>&1)
-    } else {
-        (& $PythonCmd --version 2>&1)
+    # try/catch: os "--version 2>&1" sob EAP=Stop poderiam ser promovidos a
+    # erro terminante se o python emitir algo no stderr. E so um texto de
+    # exibicao -- fallback fixo se algo der errado.
+    try {
+        $verDisplay = if ($PythonCmd -eq "py311") {
+            (& py @("-3.11", "--version") 2>&1)
+        } else {
+            (& $PythonCmd --version 2>&1)
+        }
+    } catch {
+        $verDisplay = "Python 3.11"
     }
     Write-OK "$verDisplay detectado."
 }
@@ -143,17 +150,25 @@ if (-not $venvOk) {
 Write-Step "3/6" "Instalando/atualizando dependencias (pode levar alguns minutos)..."
 Write-Host "        Aguarde..." -ForegroundColor Gray
 
-& $VenvPip install -e $AppDir --quiet --no-warn-script-location 2>&1 | Out-Null
+# pip escreve avisos no stderr (ex.: "[notice] A new release of pip is
+# available") MESMO num install bem-sucedido. Sob $ErrorActionPreference="Stop"
+# (topo do script) + "2>&1", o PowerShell 5.1 promove esse stderr a erro
+# terminante e o install "falha" com pip exit 0. Rebaixa o EAP para "Continue"
+# so ao redor da chamada nativa (restaurado no finally) e decide sucesso/falha
+# SO por $LASTEXITCODE. Mesmo tratamento de update.ps1 / apply-update.ps1.
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    $pipOut = & $VenvPip install -e $AppDir --no-warn-script-location 2>&1
+} finally {
+    $ErrorActionPreference = $prevEAP
+}
 
 if ($LASTEXITCODE -ne 0) {
-    # Tentar novamente com output para diagnostico
+    Write-Host ($pipOut | Out-String) -ForegroundColor DarkGray
     Write-Fail "Falha ao instalar dependencias."
-    Write-Host "  Tentando novamente com detalhes:" -ForegroundColor Yellow
-    & $VenvPip install -e $AppDir --no-warn-script-location
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  Verifique a conexao com a internet e tente novamente." -ForegroundColor White
-        exit 1
-    }
+    Write-Host "  Verifique a conexao com a internet e tente novamente." -ForegroundColor White
+    exit 1
 }
 Write-OK "Dependencias instaladas."
 
@@ -274,7 +289,18 @@ db.init()
 sys.exit(0 if users_repo.count_active_users() > 0 else 1)
 "@
 
-& $VenvPython -c $checkScript 2>$null
+# EAP=Continue ao redor do nativo: no WinPS 5.1, QUALQUER redirecionamento de
+# stderr (inclusive 2>$null) sob EAP=Stop promove a 1a linha do stderr a erro
+# terminante antes do descarte -- e este check importa app.persistence (a app
+# toda), onde um unico warning (pydantic/loguru/pkg_resources) abortaria a
+# instalacao. Decide por $LASTEXITCODE.
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    & $VenvPython -c $checkScript 2>$null
+} finally {
+    $ErrorActionPreference = $prevEAP
+}
 $usersExist = ($LASTEXITCODE -eq 0)
 
 if ($usersExist) {
@@ -303,8 +329,26 @@ if ($usersExist) {
         elseif ($p1.Length -lt 8) { Write-Host "  Senha muito curta (minimo 8 caracteres)." -ForegroundColor Yellow; $p1 = "" }
     } while ($p1 -ne $p2 -or $p1.Length -lt 8)
 
-    # Pipar senha via stdin para create_user.py (modo nao-interativo)
-    $result = $p1 | & $VenvPython (Join-Path $AppDir "tools\create_user.py") $AdminEmail --role admin 2>&1
+    # Pipar senha via stdin para create_user.py (modo nao-interativo).
+    # (1) $OutputEncoding default do WinPS 5.1 e ASCII: senha com caractere
+    #     nao-ASCII chegaria corrompida no python (login falharia depois).
+    #     Forcamos UTF-8 no pipe e no lado do python (PYTHONIOENCODING).
+    # (2) EAP=Continue ao redor do nativo: create_user.py pode escrever
+    #     warnings no stderr num sucesso; sob EAP=Stop + 2>&1 isso abortaria
+    #     a instalacao mesmo com exit 0. Decide por $LASTEXITCODE.
+    $prevOutEnc = $OutputEncoding
+    $prevPyEnc  = $env:PYTHONIOENCODING
+    $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $env:PYTHONIOENCODING = "utf-8"
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $result = $p1 | & $VenvPython (Join-Path $AppDir "tools\create_user.py") $AdminEmail --role admin 2>&1
+    } finally {
+        $ErrorActionPreference = $prevEAP
+        $OutputEncoding = $prevOutEnc
+        $env:PYTHONIOENCODING = $prevPyEnc
+    }
 
     if ($LASTEXITCODE -eq 0) {
         Write-OK "Admin '$AdminEmail' criado."

@@ -352,7 +352,11 @@ function Apply-StagedFiles {
     $secretTmp = Backup-SecretKey
     $appDest = Join-Path $AppDir "app"
     if (Test-Path $appDest) { Remove-Item -Path $appDest -Recurse -Force }
-    Move-Item -Path $stagedApp -Destination $appDest
+    # Copy (nao Move): Move-Item de DIRETORIO entre volumes falha no WinPS 5.1
+    # ("Move will not work across volumes") -- dispara quando APP_DATA_DIR (e o
+    # staging) esta em outro drive que o app/ (ex.: staging em D:, app/ em C:).
+    # O staging so e apagado apos SUCESSO (fim do fluxo), entao copiar e seguro.
+    Copy-Item -Path $stagedApp -Destination $appDest -Recurse -Force
     Restore-SecretKey -SecretTmp $secretTmp
 
     Copy-AllowlistOverTop -SourceRoot $StagingPath
@@ -377,9 +381,16 @@ function Restore-Backup {
 function Remove-OldBackups {
     param([int]$Keep = 2)
     if (-not (Test-Path $BackupsRoot)) { return }
-    $dirs = Get-ChildItem -Path $BackupsRoot -Directory -ErrorAction SilentlyContinue |
-        Sort-Object CreationTime -Descending
-    if (-not $dirs -or $dirs.Count -le $Keep) { return }
+    # @(...) forca array: com exatamente 1 backup, Get-ChildItem retorna um
+    # DirectoryInfo ESCALAR e $dirs.Count lanca PropertyNotFoundException sob
+    # Set-StrictMode -Version Latest no WinPS 5.1 (o .Count intrinseco de
+    # escalar so existe no PS Core 6.1+). Dispara no PRIMEIRO auto-update de
+    # qualquer instalacao (unico backup = o dele) -- e como isto roda apos o
+    # status "succeeded", o throw cairia no catch e faria rollback de um
+    # update saudavel.
+    $dirs = @(Get-ChildItem -Path $BackupsRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object CreationTime -Descending)
+    if ($dirs.Count -le $Keep) { return }
     $dirs | Select-Object -Skip $Keep | ForEach-Object {
         Write-Log "Podando backup antigo: $($_.FullName)"
         Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue

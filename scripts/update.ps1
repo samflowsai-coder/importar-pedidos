@@ -137,7 +137,7 @@ $serviceWasRunning = $false
 
 if ($task -and $task.State -eq "Running") {
     Write-Host "        Parando '$TaskName' para atualizar..." -ForegroundColor Gray
-    Stop-ScheduledTask -TaskName $TaskName
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
     $serviceWasRunning = $true
     Write-OK "Servico parado."
@@ -156,6 +156,13 @@ if ($isGit) {
 
     if ($gitOk) {
         Push-Location $AppDir
+        # git escreve o progresso do fetch ("From https://...", contadores) no
+        # STDERR em todo pull que baixa algo. Sob EAP=Stop + "2>&1" o PS 5.1
+        # promove a 1a linha a erro terminante ANTES do check de $LASTEXITCODE,
+        # e o bloco tem finally mas nao catch -> mataria o script com o servico
+        # ja parado. Rebaixa o EAP so ao redor do git (mesmo padrao do pip).
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
         try {
             $pullOut = & git pull 2>&1
             if ($LASTEXITCODE -ne 0) {
@@ -165,6 +172,7 @@ if ($isGit) {
                 Write-OK "Codigo atualizado: $($pullOut | Select-Object -Last 1)"
             }
         } finally {
+            $ErrorActionPreference = $prevEAP
             Pop-Location
         }
     } else {

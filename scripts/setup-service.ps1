@@ -68,6 +68,13 @@ Write-Step "2/4" "Registrando tarefa '$TaskName' no Agendador de Tarefas..."
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($existing) {
     Write-Host "        Removendo tarefa anterior..." -ForegroundColor Gray
+    # Unregister nao mata o processo em execucao: se o app estiver no ar, o
+    # pythonw antigo continua segurando a porta e o Start-ScheduledTask do
+    # passo 4 sobe uma 2a instancia que morre no bind. Parar antes evita isso.
+    if ($existing.State -eq "Running") {
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
 
@@ -82,7 +89,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit      ([TimeSpan]::Zero) `
     -RestartCount            5 `
     -RestartInterval         (New-TimeSpan -Minutes 2) `
-    -StartWhenAvailable      $true `
+    -StartWhenAvailable:$true `
     -MultipleInstances       IgnoreNew
 
 # Rodar como SYSTEM para iniciar sem usuario logado
@@ -149,18 +156,21 @@ $watchdogAction = New-ScheduledTaskAction `
     -Argument         "-NoProfile -ExecutionPolicy Bypass -File `"$WatchdogScript`"" `
     -WorkingDirectory $AppDir
 
-# Trigger "Once" disparado agora + repeticao a cada 1 min "para sempre"
-# ([TimeSpan]::MaxValue e o idioma padrao do Agendador de Tarefas do Windows
-# para "sem data de termino" -- nao ha uma opcao "indefinido" dedicada).
+# Trigger "Once" disparado agora + repeticao a cada 1 min "para sempre".
+# NAO usar -RepetitionDuration ([TimeSpan]::MaxValue): no Windows 10 /
+# Server 2016+ o Register-ScheduledTask REJEITA (MaxValue serializa como
+# P10675199DT2H48M5.4775807S e o Task Scheduler recusa os segundos
+# fracionarios -- "value incorrectly formatted or out of range"), abortando
+# o setup sob EAP=Stop e deixando o app sem subir. Omitir a duracao com
+# -RepetitionInterval ja significa "repetir indefinidamente" nessas builds.
 $watchdogTrigger = New-ScheduledTaskTrigger `
     -Once `
     -At                 (Get-Date) `
-    -RepetitionInterval (New-TimeSpan -Minutes 1) `
-    -RepetitionDuration ([TimeSpan]::MaxValue)
+    -RepetitionInterval (New-TimeSpan -Minutes 1)
 
 $watchdogSettings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit ([TimeSpan]::Zero) `
-    -StartWhenAvailable $true `
+    -StartWhenAvailable:$true `
     -MultipleInstances  IgnoreNew
 
 Register-ScheduledTask `

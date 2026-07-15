@@ -47,13 +47,28 @@ Write-Step "1/5" "Removendo servico agendado..."
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($task) {
     if ($task.State -eq "Running") {
-        Stop-ScheduledTask -TaskName $TaskName
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
     }
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     Write-OK "Tarefa '$TaskName' removida."
 } else {
     Write-OK "Tarefa '$TaskName' nao estava registrada."
+}
+
+# Tarefas auxiliares do auto-update (updater on-demand + watchdog): removidas
+# junto -- senao o watchdog continua rodando a cada 1 min PARA SEMPRE numa
+# instalacao ja sem .venv, logando erro eternamente.
+foreach ($aux in @("PortalPedidosUpdater", "PortalPedidosWatchdog")) {
+    $auxTask = Get-ScheduledTask -TaskName $aux -ErrorAction SilentlyContinue
+    if ($auxTask) {
+        if ($auxTask.State -eq "Running") {
+            Stop-ScheduledTask -TaskName $aux -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+        }
+        Unregister-ScheduledTask -TaskName $aux -Confirm:$false -ErrorAction SilentlyContinue
+        Write-OK "Tarefa '$aux' removida."
+    }
 }
 
 # -- [2/5] Remover regra de firewall ------------------------------------------
@@ -87,7 +102,10 @@ Write-Step "4/5" "Dados de saida (output\)..."
 
 $outputPath = Join-Path $AppDir "output"
 if (Test-Path $outputPath) {
-    $fileCount = (Get-ChildItem $outputPath -Recurse -File -ErrorAction SilentlyContinue).Count
+    # @(...): com 0 arquivos (resultado nulo) ou 1 (FileInfo escalar), o .Count
+    # lanca sob Set-StrictMode -Version Latest no WinPS 5.1. So funcionava por
+    # acaso com >=2 arquivos.
+    $fileCount = @(Get-ChildItem $outputPath -Recurse -File -ErrorAction SilentlyContinue).Count
     if ($fileCount -gt 0) {
         Write-Host ""
         Write-Host "  Encontrados $fileCount arquivo(s) em output\." -ForegroundColor White
