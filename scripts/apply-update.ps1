@@ -254,7 +254,7 @@ function Get-StagedManifest {
     } catch {
         throw "manifest.json invalido em $manifestPath -- $($_.Exception.Message)"
     }
-    foreach ($field in @("version", "git_commit")) {
+    foreach ($field in @("version", "git_commit", "deps_sha256")) {
         if (-not $obj.PSObject.Properties[$field] -or -not $obj.$field) {
             throw "manifest.json em $manifestPath sem campo obrigatorio: $field"
         }
