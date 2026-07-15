@@ -23,12 +23,19 @@
     (in_progress durante a execucao; apply_requested/staged/idle sao
     escritos pela camada web, nao por este script).
 
-    Le:   data/updates/status.json (update_id, deps_changed)
-          data/updates/staging/<id>/portal-pedidos/  (manifest.json, app/, ...)
-          .env (PORTAL_PORT)
-    Escreve: data/updates/status.json, data/updates/update.lock,
-             backups/update/<id>/, data/applied_update.json,
-             data/updates/history.jsonl, logs/update-apply.log
+    Le:   <DataDir>/updates/status.json (update_id, deps_changed)
+          <DataDir>/updates/staging/<id>/portal-pedidos/  (manifest.json, app/, ...)
+          .env (PORTAL_PORT, APP_DATA_DIR)
+    Escreve: <DataDir>/updates/status.json, <DataDir>/updates/update.lock,
+             backups/update/<id>/ (sempre sob AppDir, nunca sob DataDir),
+             <DataDir>/applied_update.json, <DataDir>/updates/history.jsonl,
+             logs/update-apply.log (sob AppDir)
+
+    <DataDir> = APP_DATA_DIR (do .env), se setado -- absoluto usado como
+    esta, relativo resolvido contra AppDir; senao "<AppDir>\data" (legado).
+    Mesma regra de app/web/routes_update.py::_data_dir(), para que o web e
+    o updater leiam/escrevam status.json e applied_update.json no MESMO
+    lugar em deploys multi-ambiente (ex.: APP_DATA_DIR=D:\PortalData\MM).
 #>
 
 Set-StrictMode -Version Latest
@@ -38,9 +45,59 @@ $ProgressPreference = "SilentlyContinue"   # Invoke-WebRequest sem barra de prog
 # ── Caminhos ──────────────────────────────────────────────────────────────────
 
 $AppDir       = Split-Path -Parent $PSScriptRoot
-$DataDir      = Join-Path $AppDir "data"
+
+# Le uma chave de um arquivo .env com o MESMO estilo de parsing usado por
+# Get-PortalPort mais abaixo (regex ancorado por linha -- ignora
+# comentarios e linhas em branco, ja que so uma linha comecando EXATAMENTE
+# com "CHAVE=" da match), com o adicional de desaspar o valor (aspas
+# simples ou duplas), necessario aqui porque paths podem vir aspados no
+# .env. Definida aqui (antes do resto de "Caminhos", ao contrario de
+# Get-PortalPort, que so e chamada de dentro de funcoes executadas bem
+# mais tarde) porque o DataDir precisa estar resolvido JA nesta secao --
+# tudo que segue (Updates/StagingRoot/LockPath/StatusPath/HistoryPath)
+# deriva dele.
+function Get-DotEnvValue {
+    param([string]$EnvPath, [string]$Key)
+    if (-not (Test-Path $EnvPath)) { return $null }
+    $value = $null
+    (Get-Content $EnvPath -Encoding UTF8 -ErrorAction SilentlyContinue) | ForEach-Object {
+        if ($_ -match "^$Key=(.+)$") {
+            $v = $Matches[1].Trim()
+            if ($v -match '^"(.*)"$') { $v = $Matches[1] }
+            elseif ($v -match "^'(.*)'$") { $v = $Matches[1] }
+            if ($v) { $value = $v }
+        }
+    }
+    return $value
+}
+
+# Resolve o data dir EXATAMENTE como o web (app/web/routes_update.py):
+#   def _data_dir(): return Path(os.environ.get("APP_DATA_DIR") or (_app_dir() / "data"))
+# Sem isso, um APP_DATA_DIR absoluto (deploy multi-ambiente, ex.
+# D:\PortalData\MM) faria o web ler/escrever staging/status.json la, e
+# este script continuar lendo/escrevendo em "<AppDir>\data" -- o updater
+# gravaria o resultado (succeeded/rolled_back) no arquivo ERRADO e a UI
+# ficaria pendurada em "em andamento" para sempre (falha silenciosa).
+$AppDataDirRaw = Get-DotEnvValue -EnvPath (Join-Path $AppDir ".env") -Key "APP_DATA_DIR"
+if ($AppDataDirRaw -and [System.IO.Path]::IsPathRooted($AppDataDirRaw)) {
+    # Absoluto -- usar como esta (paridade com Path(os.environ["APP_DATA_DIR"])
+    # quando o valor ja e absoluto).
+    $DataDir = $AppDataDirRaw
+} elseif ($AppDataDirRaw) {
+    # Relativo (ex. "data_mm") -- Python resolveria contra o CWD do
+    # processo, que em producao E o AppDir (o app roda com cwd = raiz da
+    # instalacao); replicamos isso resolvendo contra $AppDir.
+    $DataDir = Join-Path $AppDir $AppDataDirRaw
+} else {
+    # Ausente/vazio -- comportamento legado inalterado.
+    $DataDir = Join-Path $AppDir "data"
+}
+
 $Updates      = Join-Path $DataDir "updates"
 $StagingRoot  = Join-Path $Updates "staging"
+# backups/ NAO e "data" do app (e o cofre do proprio updater) -- fica
+# sempre sob AppDir, nunca sob DataDir/APP_DATA_DIR (mantido igual ao
+# comportamento original).
 $BackupsRoot  = Join-Path $AppDir "backups\update"
 $LockPath     = Join-Path $Updates "update.lock"
 $StatusPath   = Join-Path $Updates "status.json"
@@ -408,10 +465,34 @@ function Wait-Healthy {
     return $false
 }
 
+
+# Gotcha do PowerShell 5.1: com $ErrorActionPreference = "Stop" (setado
+# globalmente no topo do script), stderr NATIVO mesclado via 2>&1 pode ser
+# promovido a ErrorRecord TERMINANTE assim que a primeira linha chega no
+# stream de erro -- mesmo que o processo depois termine com exit code 0.
+# pip costuma escrever warnings em stderr (ex. dependencia desatualizada)
+# numa atualizacao legitima com deps mudadas -- um desses warnings
+# dispararia rollback espurio ANTES de chegarmos no `if ($LASTEXITCODE)`
+# abaixo. Por isso o sucesso/falha do pip e decidido EXCLUSIVAMENTE por
+# $LASTEXITCODE (o exit code real do processo), nunca pelo conteudo do
+# stderr -- e o EAP e rebaixado para "Continue" so ao redor da chamada
+# nativa, sempre restaurado depois (mesmo se algo lancar no meio).
+# Usada tanto pela fase "pip" do apply quanto pelo re-pip do rollback --
+# uma unica funcao, sem duplicar a logica/o gate em dois lugares.
 function Install-Dependencies {
     $pip = Join-Path $AppDir ".venv\Scripts\pip.exe"
     if (-not (Test-Path $pip)) { throw "pip.exe nao encontrado em $pip" }
-    $out = & $pip install -e $AppDir --no-warn-script-location 2>&1
+
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $out = & $pip install -e $AppDir --no-warn-script-location 2>&1
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+
+    Write-Log "pip install -e (exit $LASTEXITCODE): $($out -join ' | ')"
+
     if ($LASTEXITCODE -ne 0) {
         $tail = (($out | Select-Object -Last 20) -join " | ")
         throw "pip install -e falhou (exit $LASTEXITCODE): $tail"
@@ -498,6 +579,7 @@ function Invoke-Rollback {
 # ── Execucao principal ────────────────────────────────────────────────────────
 
 Write-Log "==== apply-update.ps1 iniciado (PID $PID) ===="
+Write-Log "DataDir resolvido: $DataDir (APP_DATA_DIR no .env: '$AppDataDirRaw'; AppDir: $AppDir)"
 
 # 1) Lock -- guarda atomica. New-Item falha se o arquivo ja existe: e assim
 #    que detectamos uma segunda instancia concorrente. CRITICO: se falhar
