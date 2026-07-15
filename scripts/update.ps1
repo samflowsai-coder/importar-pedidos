@@ -206,10 +206,25 @@ if (-not (Test-Path $ManifestPath)) {
 
 if ($runPip) {
     Write-Host "        $pipReason" -ForegroundColor Gray
-    & $VenvPip install -e $AppDir --quiet --no-warn-script-location 2>&1 | Out-Null
+    # pip escreve avisos no stderr (ex.: "[notice] A new release of pip is
+    # available") MESMO num install bem-sucedido. Sob $ErrorActionPreference=
+    # "Stop" (topo do script) + "2>&1", o PowerShell 5.1 promove esse stderr a
+    # erro terminante e o install "falha" com o pip tendo dado exit 0. Rebaixa
+    # o EAP para "Continue" so ao redor da chamada nativa (restaurado no
+    # finally) e decide sucesso/falha SO por $LASTEXITCODE. Mesmo tratamento de
+    # scripts/apply-update.ps1 (fase pip). Sem --quiet: se falhar de verdade,
+    # a saida completa do pip aparece para diagnostico.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $pipOut = & $VenvPip install -e $AppDir --no-warn-script-location 2>&1
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
 
     if ($LASTEXITCODE -ne 0) {
-        Write-Fail "Falha ao atualizar dependencias."
+        Write-Host ($pipOut | Out-String) -ForegroundColor DarkGray
+        Write-Fail "Falha ao atualizar dependencias (pip exit $LASTEXITCODE)."
         exit 1
     }
     Write-OK "Dependencias atualizadas."
