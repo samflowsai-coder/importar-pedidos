@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portal de Pedidos — Atualização</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=1">
+  <link rel="stylesheet" href="/static/css/shell.css?v=1">
+  <script src="/static/js/shell.js?v=1" defer></script>
+  <style>
+    .main { padding: 32px 32px 96px; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 720px; }
+
+    .breadcrumb {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+    .breadcrumb a { color: var(--text-muted); text-decoration: none; }
+    .breadcrumb a:hover { color: var(--text-secondary); }
+
+    .page-title { font-size: 24px; font-weight: 600; letter-spacing: -.02em; margin-bottom: 6px; }
+    .page-subtitle { font-size: 13.5px; color: var(--text-muted); margin-bottom: 28px; line-height: 1.6; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 24px 26px;
+      box-shadow: var(--shadow-md);
+    }
+    .card + .card { margin-top: 18px; }
+    .card-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .card-desc { font-size: 12.5px; color: var(--text-muted); margin-bottom: 18px; line-height: 1.55; }
+
+    .mono { font-family: var(--font-mono); font-size: 12px; }
+
+    /* ── Versão atual ── */
+    .version-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .version-value { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+    .version-applied { font-size: 12px; color: var(--text-muted); }
+
+    /* ── Dropzone ── */
+    .dropzone {
+      display: flex; flex-direction: column; align-items: center; gap: 8px;
+      padding: 36px 24px;
+      border: 1.5px dashed var(--border-hover);
+      border-radius: var(--radius);
+      background: var(--bg);
+      color: var(--text-muted); font-size: 13px;
+      cursor: pointer; text-align: center;
+      transition: background 120ms, border-color 120ms, color 120ms;
+    }
+    .dropzone:hover, .dropzone:focus-visible, .dropzone.dragover {
+      background: var(--accent-bg); border-color: var(--accent);
+      color: var(--accent-hover); outline: none;
+    }
+    .dz-icon { color: inherit; opacity: .8; margin-bottom: 4px; }
+    .dz-title { font-size: 13.5px; font-weight: 500; color: var(--text-secondary); }
+    .dropzone:hover .dz-title, .dropzone.dragover .dz-title { color: inherit; }
+    .dz-sub { font-size: 12px; }
+    .dz-uploading { display: flex; align-items: center; gap: 8px; padding: 20px 0; justify-content: center; }
+
+    /* ── Resumo do pacote staged ── */
+    .summary-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px 20px;
+      margin-bottom: 18px;
+    }
+    .summary-label {
+      display: block; font-size: 10.5px; font-weight: 600;
+      color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em;
+      margin-bottom: 4px;
+    }
+    .summary-value { font-size: 13.5px; color: var(--text); }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11px; font-weight: 500;
+      padding: 3px 9px; border-radius: 20px;
+      background: var(--warn-bg); color: var(--warn);
+      margin-bottom: 16px;
+    }
+
+    .actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+    .btn {
+      height: 36px; padding: 0 14px;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--surface); color: var(--text-secondary);
+      font-size: 13px; font-weight: 500; font-family: inherit;
+      cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+      white-space: nowrap;
+      transition: background 120ms, color 120ms, border-color 120ms;
+    }
+    .btn:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-hover); }
+    .btn:disabled { opacity: .4; pointer-events: none; }
+    .btn-primary { background: var(--accent); border-color: transparent; color: #FFFFFF; font-weight: 600; }
+    .btn-primary:hover { background: var(--accent-hover); color: #FFFFFF; }
+    .btn-danger { color: var(--error); border-color: var(--border); }
+    .btn-danger:hover { background: var(--error-bg); border-color: var(--error); color: var(--error); }
+
+    .hint {
+      font-size: 12px; color: var(--text-muted); line-height: 1.55;
+      margin-top: 14px; padding: 10px 12px;
+      background: var(--bg); border-left: 2px solid var(--border);
+      border-radius: 4px;
+    }
+
+    /* ── Spinner ── */
+    .spin-dark {
+      width: 14px; height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--text-muted); border-radius: 50%;
+      animation: spin .65s linear infinite; flex-shrink: 0;
+    }
+    .spin-accent {
+      width: 12px; height: 12px;
+      border: 2px solid var(--accent-bg);
+      border-top-color: var(--accent); border-radius: 50%;
+      animation: spin .65s linear infinite; flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Timeline (em andamento) ── */
+    .timeline { display: flex; flex-direction: column; }
+    .tl-step { display: flex; gap: 12px; position: relative; padding-bottom: 22px; }
+    .tl-step:last-child { padding-bottom: 0; }
+    .tl-step:not(:last-child)::before {
+      content: ''; position: absolute; left: 9px; top: 20px; bottom: 0;
+      width: 2px; background: var(--border);
+    }
+    .tl-dot {
+      width: 20px; height: 20px; border-radius: 50%;
+      background: var(--bg); border: 2px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; position: relative; z-index: 1;
+    }
+    .tl-dot svg { width: 11px; height: 11px; }
+    .tl-step.done .tl-dot { background: var(--success); border-color: var(--success); color: #fff; }
+    .tl-step.done:not(:last-child)::before { background: var(--success); }
+    .tl-step.current .tl-dot { border-color: var(--accent); }
+    .tl-body { padding-top: 1px; }
+    .tl-label { font-size: 13px; font-weight: 500; color: var(--text-muted); }
+    .tl-step.done .tl-label { color: var(--text-secondary); }
+    .tl-step.current .tl-label { color: var(--text); font-weight: 600; }
+    .tl-sub { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+
+    .progress-foot {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-subtle);
+      font-size: 11.5px; color: var(--text-muted);
+    }
+
+    /* ── Resultado ── */
+    .result-icon { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 14px; }
+    .result-success .result-icon { background: var(--success-bg); color: var(--success); }
+    .result-warn .result-icon { background: var(--warn-bg); color: var(--warn); }
+    .result-error .result-icon { background: var(--error-bg); color: var(--error); }
+    .result-title { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+    .result-body { font-size: 13px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 16px; }
+    .result-body code { background: var(--surface-hover); padding: 1px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 12px; }
+
+    .err-banner {
+      font-size: 13px; color: var(--error); background: var(--error-bg);
+      border: 1px solid rgba(220,38,38,.18); border-radius: var(--radius);
+      padding: 10px 12px; margin-bottom: 16px;
+    }
+
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+
+<div id="app-shell"></div>
+
+<main class="main">
+  <div class="container">
+    <div class="breadcrumb">
+      <a href="/">Pedidos</a>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      <span>Configurações</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      <span>Atualização</span>
+    </div>
+
+    <h1 class="page-title">Atualização do sistema</h1>
+    <p class="page-subtitle">
+      Envie um pacote <code class="mono">.zip</code> gerado por <code class="mono">build_package.sh</code>
+      para atualizar o Portal. O servidor fica indisponível por 1–3 minutos durante a aplicação.
+    </p>
+
+    <div id="err-banner" class="err-banner" hidden></div>
+
+    <!-- Versão atual (sempre visível) -->
+    <div class="card" id="version-card">
+      <div class="card-title">Versão atual</div>
+      <div class="version-row">
+        <span class="version-value mono" id="current-version">—</span>
+        <span class="version-applied" id="current-applied" hidden></span>
+      </div>
+    </div>
+
+    <!-- Idle: dropzone -->
+    <div class="card" id="upload-card" hidden>
+      <div class="card-title">Enviar novo pacote</div>
+      <div class="card-desc">Somente um pacote pode ficar pendente por vez — um novo envio substitui o anterior.</div>
+      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Selecionar pacote de atualização .zip">
+        <svg class="dz-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M12 4l-4 4M12 4l4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+        <p class="dz-title">Arraste o pacote <code>.zip</code> aqui</p>
+        <p class="dz-sub">ou clique para selecionar um arquivo</p>
+      </div>
+      <div class="dz-uploading" id="dz-uploading" hidden>
+        <span class="spin-dark"></span>
+        <span>Enviando e validando pacote…</span>
+      </div>
+      <input type="file" id="file-input" accept=".zip" hidden>
+    </div>
+
+    <!-- Staged: resumo + ações -->
+    <div class="card" id="staged-card" hidden>
+      <div class="card-title">Pacote pronto para aplicar</div>
+      <div class="card-desc">Confira os dados abaixo antes de aplicar a atualização.</div>
+      <div class="summary-grid">
+        <div>
+          <span class="summary-label">Versão</span>
+          <span class="summary-value mono" id="st-version">—</span>
+        </div>
+        <div>
+          <span class="summary-label">Commit</span>
+          <span class="summary-value mono" id="st-commit">—</span>
+        </div>
+        <div>
+          <span class="summary-label">Build</span>
+          <span class="summary-value" id="st-built">—</span>
+        </div>
+        <div>
+          <span class="summary-label">Arquivos</span>
+          <span class="summary-value" id="st-files">—</span>
+        </div>
+      </div>
+      <div class="badge" id="st-deps-badge" hidden>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/></svg>
+        dependências mudaram — atualização ~2 min mais lenta
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" id="btn-apply">Aplicar atualização</button>
+        <button class="btn btn-danger" id="btn-discard">Descartar</button>
+      </div>
+      <div class="hint">
+        "Descartar" só limpa esta tela para você escolher outro arquivo — o pacote enviado
+        continua salvo no servidor até ser substituído por um novo envio ou aplicado.
+      </div>
+    </div>
+
+    <!-- Em andamento: timeline -->
+    <div class="card" id="progress-card" hidden>
+      <div class="card-title">Aplicando atualização</div>
+      <div class="card-desc">Não feche esta aba. O portal ficará fora do ar por alguns minutos.</div>
+      <div class="timeline" id="timeline"></div>
+      <div class="progress-foot">
+        <span id="progress-elapsed">0s</span>
+        <span id="progress-note"></span>
+      </div>
+    </div>
+
+    <!-- Resultado -->
+    <div class="card" id="result-card" hidden>
+      <div class="result-icon" id="result-icon"></div>
+      <div class="result-title" id="result-title"></div>
+      <div class="result-body" id="result-body"></div>
+      <div class="actions">
+        <button class="btn btn-primary" id="btn-reload">Recarregar página</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+  const API = '/api/admin/update';
+  const TERMINAL = new Set(['succeeded', 'rolled_back', 'rollback_failed']);
+  const POLL_INTERVAL_MS = 3000;
+  const POLL_CAP_MS = 5 * 60 * 1000;
+
+  // Ordem canônica das fases (espelha a spec § 4, passo 8a–8h). O updater
+  // (scripts/apply-update.ps1) ainda vai definir a string exata de `phase`;
+  // o matcher abaixo aceita variações plausíveis e cai num modo genérico
+  // se não reconhecer nada, para nunca travar a UI por causa de um nome
+  // de fase inesperado.
+  const PHASE_STEPS = [
+    { keys: ['lock', 'revalidate', 'backup'], label: 'Backup' },
+    { keys: ['stop', 'parando', 'stopping'], label: 'Parando serviço' },
+    { keys: ['apply', 'aplicando', 'extract', 'replace'], label: 'Aplicando arquivos' },
+    { keys: ['pip', 'dependencias', 'dependências', 'deps'], label: 'Instalando dependências' },
+    { keys: ['start', 'reiniciando', 'restart', 'restarting'], label: 'Reiniciando' },
+    { keys: ['healthcheck', 'health', 'verificando'], label: 'Verificando' },
+  ];
+  const RESTARTING_STEP_INDEX = 4; // "Reiniciando" — usado quando o fetch falha (servidor fora do ar)
+
+  let staged = null;       // resumo mais recente do /upload (fonte mais rica que o /status)
+  let pollTimer = null;
+  let pollStartedAt = null;
+  let pollAttempts = 0;
+
+  function $(id) { return document.getElementById(id); }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  async function api(method, url, body) {
+    const opts = { method, credentials: 'same-origin', headers: {}, cache: 'no-store' };
+    if (body !== undefined) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(body);
+    }
+    const r = await fetch(url, opts);
+    const data = await r.json().catch(() => ({}));
+    return { ok: r.ok, status: r.status, data };
+  }
+
+  function showError(msg) {
+    const b = $('err-banner');
+    b.textContent = msg;
+    b.hidden = false;
+  }
+  function clearError() { $('err-banner').hidden = true; }
+
+  function showRestricted() {
+    document.body.innerHTML = '<main class="main"><div class="container">'
+      + '<h1 class="page-title">Acesso restrito</h1>'
+      + '<p class="page-subtitle">Apenas administradores podem ver esta página.</p>'
+      + '<a class="btn btn-primary" href="/">Voltar ao portal</a></div></main>';
+  }
+
+  function hideAllStateCards() {
+    ['upload-card', 'staged-card', 'progress-card', 'result-card'].forEach((id) => { $(id).hidden = true; });
+  }
+
+  function renderVersion(data) {
+    $('current-version').textContent = data.current_version || 'desconhecida';
+    const applied = $('current-applied');
+    if (data.applied_at) {
+      applied.textContent = 'aplicado em ' + fmtDate(data.applied_at);
+      applied.hidden = false;
+    } else {
+      applied.hidden = true;
+    }
+  }
+
+  // ── Idle / dropzone ──────────────────────────────────────────────
+  function renderIdle() {
+    hideAllStateCards();
+    $('upload-card').hidden = false;
+    $('dropzone').hidden = false;
+    $('dz-uploading').hidden = true;
+  }
+
+  async function handleFile(file) {
+    clearError();
+    if (!file.name.toLowerCase().endsWith('.zip')) {
+      showError('Envie um arquivo .zip.');
+      return;
+    }
+    $('dropzone').hidden = true;
+    $('dz-uploading').hidden = false;
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const r = await fetch(`${API}/upload`, { method: 'POST', credentials: 'same-origin', body: form });
+      const data = await r.json().catch(() => ({}));
+      if (r.status === 401) { location.href = '/login'; return; }
+      if (!r.ok) {
+        showError(data.detail || `Falha ao enviar (${r.status}).`);
+        $('dropzone').hidden = false;
+        $('dz-uploading').hidden = true;
+        return;
+      }
+      staged = data;
+      renderVersion(data);
+      renderStaged(data);
+    } catch (e) {
+      showError('Falha de rede ao enviar o pacote.');
+      $('dropzone').hidden = false;
+      $('dz-uploading').hidden = true;
+    }
+  }
+
+  function bindDropzone() {
+    const dz = $('dropzone');
+    const input = $('file-input');
+    dz.addEventListener('click', () => input.click());
+    dz.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); }
+    });
+    input.addEventListener('change', () => {
+      const f = input.files && input.files[0];
+      input.value = '';
+      if (f) handleFile(f);
+    });
+    ['dragenter', 'dragover'].forEach((ev) => dz.addEventListener(ev, (e) => {
+      e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover');
+    }));
+    ['dragleave', 'drop'].forEach((ev) => dz.addEventListener(ev, (e) => {
+      e.preventDefault(); e.stopPropagation(); dz.classList.remove('dragover');
+    }));
+    dz.addEventListener('drop', (e) => {
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) handleFile(f);
+    });
+  }
+
+  // ── Staged ────────────────────────────────────────────────────────
+  function renderStaged(data) {
+    hideAllStateCards();
+    $('staged-card').hidden = false;
+    $('st-version').textContent = data.version || '—';
+    $('st-commit').textContent = (data.git_commit || '—').toString().slice(0, 12);
+    $('st-built').textContent = data.built_at ? fmtDate(data.built_at) : '—';
+    $('st-files').textContent = (data.files_count ?? '—').toString();
+    $('st-deps-badge').hidden = !data.deps_changed;
+    $('btn-apply').disabled = false;
+  }
+
+  function bindStagedActions() {
+    $('btn-apply').addEventListener('click', async () => {
+      if (!staged || !staged.update_id) return;
+      if (!confirm('O portal ficará indisponível 1–3 min. Confirmar?')) return;
+      clearError();
+      const btn = $('btn-apply');
+      btn.disabled = true;
+      try {
+        const { ok, status, data } = await api('POST', `${API}/apply`, { update_id: staged.update_id });
+        if (status === 401) { location.href = '/login'; return; }
+        if (!ok) {
+          showError(data.detail || `Falha ao iniciar a atualização (${status}).`);
+          btn.disabled = false;
+          return;
+        }
+        startProgress();
+      } catch (e) {
+        showError('Falha de rede ao iniciar a atualização.');
+        btn.disabled = false;
+      }
+    });
+
+    $('btn-discard').addEventListener('click', () => {
+      staged = null;
+      clearError();
+      renderIdle();
+    });
+  }
+
+  // ── Em andamento (poll) ──────────────────────────────────────────
+  function matchPhaseIndex(phase) {
+    if (!phase) return -1;
+    const p = String(phase).toLowerCase();
+    for (let i = 0; i < PHASE_STEPS.length; i++) {
+      if (PHASE_STEPS[i].keys.some((k) => p === k || p.includes(k))) return i;
+    }
+    return -1;
+  }
+
+  function renderTimeline(activeIndex, opts) {
+    opts = opts || {};
+    const html = PHASE_STEPS.map((step, i) => {
+      let cls = 'pending';
+      let icon = '';
+      if (activeIndex === -1) {
+        // fase desconhecida/ainda não relatada: mantém tudo pendente, sem
+        // fingir progresso que não temos como confirmar.
+        cls = i === 0 ? 'current' : 'pending';
+      } else if (i < activeIndex) {
+        cls = 'done';
+        icon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+      } else if (i === activeIndex) {
+        cls = 'current';
+      }
+      const dotInner = cls === 'current' ? '<span class="spin-accent"></span>' : icon;
+      const sub = cls === 'current' && opts.restarting
+        ? `<div class="tl-sub">tentando reconectar…</div>` : '';
+      return `<div class="tl-step ${cls}">
+        <div class="tl-dot">${dotInner}</div>
+        <div class="tl-body"><div class="tl-label">${esc(step.label)}</div>${sub}</div>
+      </div>`;
+    }).join('');
+    $('timeline').innerHTML = html;
+  }
+
+  function startProgress() {
+    hideAllStateCards();
+    $('progress-card').hidden = false;
+    pollStartedAt = Date.now();
+    pollAttempts = 0;
+    $('progress-note').textContent = '';
+    renderTimeline(-1, {});
+    tickElapsed();
+    poll();
+  }
+
+  function tickElapsed() {
+    if (!pollStartedAt) return;
+    const s = Math.floor((Date.now() - pollStartedAt) / 1000);
+    $('progress-elapsed').textContent = `${s}s`;
+    if (!TERMINAL.has(lastKnownStatus)) {
+      setTimeout(tickElapsed, 1000);
+    }
+  }
+
+  let lastKnownStatus = null;
+
+  async function poll() {
+    clearTimeout(pollTimer);
+    const elapsed = Date.now() - pollStartedAt;
+    if (elapsed > POLL_CAP_MS) {
+      renderProgressTimeout();
+      return;
+    }
+    pollAttempts++;
+    let data = null;
+    let networkError = false;
+    try {
+      const r = await fetch(`${API}/status`, { credentials: 'same-origin', cache: 'no-store' });
+      if (r.ok) {
+        data = await r.json();
+      } else {
+        // Durante o restart o processo antigo pode responder com erro (ou um
+        // proxy intermediário) antes de cair de vez — trata como "ainda
+        // reiniciando", igual a uma falha de rede, em vez de travar a UI.
+        networkError = true;
+      }
+    } catch (e) {
+      networkError = true;
+    }
+
+    if (networkError || !data) {
+      $('progress-note').textContent = `tentativa ${pollAttempts}`;
+      renderTimeline(RESTARTING_STEP_INDEX, { restarting: true });
+      pollTimer = setTimeout(poll, POLL_INTERVAL_MS);
+      return;
+    }
+
+    lastKnownStatus = data.status;
+    if (TERMINAL.has(data.status)) {
+      renderResult(data);
+      return;
+    }
+
+    const idx = matchPhaseIndex(data.phase);
+    renderTimeline(idx, {});
+    pollTimer = setTimeout(poll, POLL_INTERVAL_MS);
+  }
+
+  function renderProgressTimeout() {
+    $('progress-note').textContent = '';
+    showError('A verificação está demorando mais que o esperado. O servidor pode ainda estar reiniciando — recarregue a página em alguns minutos.');
+  }
+
+  // ── Resultado ────────────────────────────────────────────────────
+  function renderResult(data) {
+    clearTimeout(pollTimer);
+    hideAllStateCards();
+    $('result-card').hidden = false;
+    const card = $('result-card');
+    const icon = $('result-icon');
+    const title = $('result-title');
+    const body = $('result-body');
+
+    if (data.status === 'succeeded') {
+      card.className = 'card result-success';
+      icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+      title.textContent = 'Atualização concluída';
+      body.innerHTML = `Nova versão em produção: <code>${esc(data.version || data.current_version || '—')}</code>`;
+      renderVersion(data);
+    } else if (data.status === 'rolled_back') {
+      card.className = 'card result-warn';
+      icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>';
+      title.textContent = 'Atualização revertida';
+      body.innerHTML = 'A atualização falhou e o sistema voltou automaticamente para a versão anterior.'
+        + (data.error ? `<br>Erro original: <code>${esc(data.error)}</code>` : '');
+    } else {
+      card.className = 'card result-error';
+      icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/></svg>';
+      title.textContent = 'Falha crítica — reversão não concluída';
+      body.innerHTML = 'A atualização falhou e a reversão automática também falhou. '
+        + '<strong>É necessária intervenção manual no servidor.</strong>'
+        + (data.error ? `<br>Erro: <code>${esc(data.error)}</code>` : '');
+    }
+  }
+
+  function bindResultActions() {
+    $('btn-reload').addEventListener('click', () => location.reload());
+  }
+
+  // ── Boot ─────────────────────────────────────────────────────────
+  async function boot() {
+    bindDropzone();
+    bindStagedActions();
+    bindResultActions();
+
+    let r;
+    try {
+      r = await fetch(`${API}/status`, { credentials: 'same-origin', cache: 'no-store' });
+    } catch (e) {
+      showError('Não foi possível conectar ao servidor.');
+      return;
+    }
+    if (r.status === 401) { location.href = '/login'; return; }
+    if (r.status === 403) { showRestricted(); return; }
+    if (!r.ok) { showError(`Falha ao carregar status (${r.status}).`); return; }
+
+    const data = await r.json();
+    lastKnownStatus = data.status;
+    renderVersion(data);
+
+    if (data.status === 'idle') {
+      renderIdle();
+    } else if (data.status === 'staged') {
+      // Reload sem o resumo rico do /upload em memória: mostra o que o
+      // /status tem (versão, deps_changed) — commit/build/arquivos ficam
+      // "—" até um novo upload nesta sessão.
+      staged = { update_id: data.update_id, version: data.version, deps_changed: data.deps_changed };
+      renderStaged(staged);
+    } else if (data.status === 'apply_requested' || data.status === 'in_progress') {
+      startProgress();
+    } else if (TERMINAL.has(data.status)) {
+      renderResult(data);
+    } else {
+      renderIdle();
+    }
+  }
+
+  boot();
+</script>
+</body>
+</html>

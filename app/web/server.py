@@ -370,6 +370,14 @@ def admin_env_edit_page(env_id: str, request: Request):  # noqa: ARG001 — env_
     return FileResponse(str(STATIC_DIR / "admin-ambiente-edit.html"))
 
 
+@app.get("/admin/atualizacao")
+def admin_atualizacao_page(request: Request):
+    """Tela de auto-update do portal (admin-only). API enforce o role."""
+    if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
+        return RedirectResponse(url="/login")
+    return FileResponse(str(STATIC_DIR / "admin-atualizacao.html"))
+
+
 @app.get("/admin/usuarios")
 def admin_users_legacy() -> RedirectResponse:
     """Legacy URL — moved under /configuracoes/usuarios with the redesign."""

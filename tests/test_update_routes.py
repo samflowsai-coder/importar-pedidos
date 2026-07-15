@@ -131,3 +131,8 @@ def test_upload_sem_auth_401(setup, real_auth):
 def test_apply_sem_auth_401(setup, real_auth):
     r = _client().post("/api/admin/update/apply", json={"update_id": "x"})
     assert r.status_code == 401
+
+
+def test_pagina_atualizacao_serve(setup):
+    r = _client().get("/admin/atualizacao")
+    assert r.status_code == 200 and b"atualiza" in r.content.lower()
