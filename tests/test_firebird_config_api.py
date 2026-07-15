@@ -184,11 +184,9 @@ def test_test_connection_success(isolated_app, monkeypatch):
 
     fake_module = MagicMock()
     fake_module.connect.return_value = fake_conn
-    monkeypatch.setitem(__import__("sys").modules, "firebird.driver", fake_module)
-    # Connection module imports lazily inside connect(); ensure our stub is what gets imported
+    # connection.py importa `fdb` lazy dentro do connect(); injetamos o stub.
     import sys
-    sys.modules["firebird"] = MagicMock(driver=fake_module)
-    sys.modules["firebird.driver"] = fake_module
+    monkeypatch.setitem(sys.modules, "fdb", fake_module)
 
     c = TestClient(app)
     _bootstrap_admin(c)
@@ -213,8 +211,7 @@ def test_test_connection_driver_error_returns_400_with_trace(isolated_app, monke
 
     fake_module = MagicMock()
     fake_module.connect.side_effect = boom
-    sys.modules["firebird"] = MagicMock(driver=fake_module)
-    sys.modules["firebird.driver"] = fake_module
+    monkeypatch.setitem(sys.modules, "fdb", fake_module)
 
     c = TestClient(app)
     _bootstrap_admin(c)

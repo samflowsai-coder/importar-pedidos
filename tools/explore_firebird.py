@@ -60,16 +60,17 @@ def _decode_trigger_type(ttype: int) -> str:
 
 def _connect(args: argparse.Namespace):
     try:
-        from firebird.driver import connect, driver_config  # type: ignore[import]
+        import fdb  # type: ignore[import]
     except ImportError:
-        print("ERRO: firebird-driver não instalado. Rode: pip install firebird-driver",
+        print("ERRO: fdb não instalado. Rode: pip install fdb",
               file=sys.stderr)
         sys.exit(1)
+    connect = fdb.connect
 
     # Optional: custom Firebird client library (for extracted/non-installed Firebird)
     client_lib = args.client_library or os.environ.get("FB_CLIENT_LIBRARY", "")
     if client_lib:
-        driver_config.fb_client_library.value = client_lib
+        fdb.load_api(client_lib)
 
     database = args.database or os.environ.get("FB_DATABASE", "")
     host = args.host or os.environ.get("FB_HOST", "")
