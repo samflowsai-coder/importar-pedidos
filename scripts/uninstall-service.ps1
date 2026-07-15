@@ -33,9 +33,9 @@ if ($task) {
 
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 
-    Write-Host "        OK — tarefa '$TaskName' removida." -ForegroundColor Green
+    Write-Host "        OK - tarefa '$TaskName' removida." -ForegroundColor Green
 } else {
-    Write-Host "        Tarefa '$TaskName' nao encontrada — nada a remover." -ForegroundColor Yellow
+    Write-Host "        Tarefa '$TaskName' nao encontrada - nada a remover." -ForegroundColor Yellow
 }
 
 # As duas tarefas auxiliares (updater on-demand, sem estado "Running"
@@ -46,9 +46,9 @@ foreach ($auxTaskName in @($UpdaterTaskName, $WatchdogTaskName)) {
     $auxTask = Get-ScheduledTask -TaskName $auxTaskName -ErrorAction SilentlyContinue
     if ($auxTask) {
         Unregister-ScheduledTask -TaskName $auxTaskName -Confirm:$false -ErrorAction SilentlyContinue
-        Write-Host "        OK — tarefa '$auxTaskName' removida." -ForegroundColor Green
+        Write-Host "        OK - tarefa '$auxTaskName' removida." -ForegroundColor Green
     } else {
-        Write-Host "        Tarefa '$auxTaskName' nao encontrada — nada a remover." -ForegroundColor Yellow
+        Write-Host "        Tarefa '$auxTaskName' nao encontrada - nada a remover." -ForegroundColor Yellow
     }
 }
 

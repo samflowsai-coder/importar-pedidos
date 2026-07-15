@@ -23,7 +23,7 @@ function Write-Step([string]$N, [string]$Msg) {
     Write-Host "  [$N] $Msg" -ForegroundColor Cyan
 }
 
-function Write-OK([string]$Msg)   { Write-Host "        OK — $Msg" -ForegroundColor Green }
+function Write-OK([string]$Msg)   { Write-Host "        OK - $Msg" -ForegroundColor Green }
 function Write-Warn([string]$Msg) { Write-Host "        AVISO: $Msg" -ForegroundColor Yellow }
 function Write-Fail([string]$Msg) { Write-Host ""; Write-Host "  [ERRO] $Msg" -ForegroundColor Red; Write-Host "" }
 
@@ -128,7 +128,7 @@ if (-not (Test-Path $VenvPython)) {
     exit 1
 }
 
-# ── [1/4] Parar servico (se registrado) ──────────────────────────────────────
+# -- [1/4] Parar servico (se registrado) --------------------------------------
 
 Write-Step "1/4" "Verificando servico ativo..."
 
@@ -145,7 +145,7 @@ if ($task -and $task.State -eq "Running") {
     Write-OK "Servico nao estava ativo (ou nao registrado)."
 }
 
-# ── [2/4] Atualizar codigo-fonte (git pull) ───────────────────────────────────
+# -- [2/4] Atualizar codigo-fonte (git pull) -----------------------------------
 
 Write-Step "2/4" "Atualizando codigo-fonte..."
 
@@ -168,13 +168,13 @@ if ($isGit) {
             Pop-Location
         }
     } else {
-        Write-Warn "git nao encontrado no PATH — pulando atualizacao de codigo."
+        Write-Warn "git nao encontrado no PATH - pulando atualizacao de codigo."
     }
 } else {
-    Write-OK "Nao e um repositorio git — pulando git pull."
+    Write-OK "Nao e um repositorio git - pulando git pull."
 }
 
-# ── [3/4] Atualizar dependencias (pip condicional) ────────────────────────────
+# -- [3/4] Atualizar dependencias (pip condicional) ----------------------------
 
 Write-Step "3/4" "Verificando dependencias..."
 
@@ -232,7 +232,7 @@ if (Test-Path $ManifestPath) {
     Write-OK "Estado registrado em applied_update.json (versao $manifestVersion)."
 }
 
-# ── [4/4] Reiniciar servico ───────────────────────────────────────────────────
+# -- [4/4] Reiniciar servico ---------------------------------------------------
 
 Write-Step "4/4" "Reiniciando servico..."
 
@@ -245,7 +245,7 @@ if ($taskAfter) {
 } elseif ($serviceWasRunning) {
     Write-Warn "Tarefa agendada nao encontrada para reiniciar. Use iniciar.bat."
 } else {
-    Write-OK "Servico nao estava registrado — nada a reiniciar."
+    Write-OK "Servico nao estava registrado - nada a reiniciar."
 }
 
 $port = "3636"

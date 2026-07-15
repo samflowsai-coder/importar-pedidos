@@ -42,7 +42,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"   # Invoke-WebRequest sem barra de progresso (evita lentidao)
 
-# ── Caminhos ──────────────────────────────────────────────────────────────────
+# -- Caminhos ------------------------------------------------------------------
 
 $AppDir       = Split-Path -Parent $PSScriptRoot
 
@@ -126,7 +126,7 @@ $script:LockAcquired     = $false
 $script:AppStopAttempted = $false
 $script:FilesModified    = $false
 
-# ── Logging (best-effort; nunca deve derrubar o updater) ─────────────────────
+# -- Logging (best-effort; nunca deve derrubar o updater) ---------------------
 
 function Write-Log {
     param([string]$Message)
@@ -140,7 +140,7 @@ function Write-Log {
     }
 }
 
-# ── Tempo ─────────────────────────────────────────────────────────────────────
+# -- Tempo ---------------------------------------------------------------------
 
 function Get-UnixTime {
     return [int64](([DateTimeOffset]::UtcNow).ToUnixTimeSeconds())
@@ -150,7 +150,7 @@ function Get-IsoNow {
     return (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 }
 
-# ── status.json (merge semantics equivalentes a app/updates/state.py) ────────
+# -- status.json (merge semantics equivalentes a app/updates/state.py) --------
 # state.write_status() faz cur.update(fields) -- so sobrescreve as chaves
 # passadas, preservando as demais (update_id, version, deps_changed setados
 # pelo upload). Replicamos aqui para nao perder esses campos quando o
@@ -212,7 +212,7 @@ function Append-History {
     [System.IO.File]::AppendAllText($HistoryPath, $line + "`n", $utf8NoBom)
 }
 
-# ── .env / porta ──────────────────────────────────────────────────────────────
+# -- .env / porta --------------------------------------------------------------
 
 function Get-PortalPort {
     $port = 3636
@@ -225,7 +225,7 @@ function Get-PortalPort {
     return [int]$port
 }
 
-# ── Validacao do staging ──────────────────────────────────────────────────────
+# -- Validacao do staging ------------------------------------------------------
 
 function Assert-StagingValid {
     param([string]$StagingPath, [string]$UpdateId)
@@ -262,7 +262,7 @@ function Get-StagedManifest {
     return $obj
 }
 
-# ── Backup / restore ──────────────────────────────────────────────────────────
+# -- Backup / restore ----------------------------------------------------------
 
 function Backup-CurrentInstall {
     param([string]$Destination)
@@ -386,7 +386,7 @@ function Remove-OldBackups {
     }
 }
 
-# ── Stop / start / health ─────────────────────────────────────────────────────
+# -- Stop / start / health -----------------------------------------------------
 
 # Para a task PortalPedidos e espera a porta liberar (ate 30s). Fallback:
 # mata o processo dono da porta SOMENTE se o executavel estiver sob
@@ -499,7 +499,7 @@ function Install-Dependencies {
     }
 }
 
-# ── Rollback ───────────────────────────────────────────────────────────────────
+# -- Rollback -------------------------------------------------------------------
 
 function Invoke-Rollback {
     param(
@@ -576,7 +576,7 @@ function Invoke-Rollback {
     }
 }
 
-# ── Execucao principal ────────────────────────────────────────────────────────
+# -- Execucao principal --------------------------------------------------------
 
 Write-Log "==== apply-update.ps1 iniciado (PID $PID) ===="
 Write-Log "DataDir resolvido: $DataDir (APP_DATA_DIR no .env: '$AppDataDirRaw'; AppDir: $AppDir)"

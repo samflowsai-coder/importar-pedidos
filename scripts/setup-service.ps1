@@ -23,10 +23,10 @@ function Write-Step([string]$N, [string]$Msg) {
     Write-Host "  [$N] $Msg" -ForegroundColor Cyan
 }
 
-function Write-OK([string]$Msg)   { Write-Host "        OK — $Msg" -ForegroundColor Green }
+function Write-OK([string]$Msg)   { Write-Host "        OK - $Msg" -ForegroundColor Green }
 function Write-Fail([string]$Msg) { Write-Host ""; Write-Host "  [ERRO] $Msg" -ForegroundColor Red; Write-Host "" }
 
-# ── [1/4] Verificar pre-requisitos ───────────────────────────────────────────
+# -- [1/4] Verificar pre-requisitos -------------------------------------------
 
 Write-Step "1/4" "Verificando pre-requisitos..."
 
@@ -60,7 +60,7 @@ if (-not (Test-Path $WatchdogScript)) {
 
 Write-OK "Pre-requisitos OK."
 
-# ── [2/4] Registrar tarefa agendada ──────────────────────────────────────────
+# -- [2/4] Registrar tarefa agendada ------------------------------------------
 
 Write-Step "2/4" "Registrando tarefa '$TaskName' no Agendador de Tarefas..."
 
@@ -101,7 +101,7 @@ $task = Register-ScheduledTask `
 
 Write-OK "Tarefa '$TaskName' registrada."
 
-# ── [3/4] Registrar tarefas auxiliares (updater on-demand + watchdog) ───────
+# -- [3/4] Registrar tarefas auxiliares (updater on-demand + watchdog) -------
 
 Write-Step "3/4" "Registrando tarefas auxiliares '$UpdaterTaskName' e '$WatchdogTaskName'..."
 
@@ -173,7 +173,7 @@ Register-ScheduledTask `
 
 Write-OK "Tarefa '$WatchdogTaskName' registrada (repete a cada 1 minuto)."
 
-# ── [4/4] Iniciar agora ───────────────────────────────────────────────────────
+# -- [4/4] Iniciar agora -------------------------------------------------------
 
 Write-Step "4/4" "Iniciando o servidor..."
 

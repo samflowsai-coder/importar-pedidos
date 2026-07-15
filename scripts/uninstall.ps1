@@ -5,7 +5,7 @@
 .DESCRIPTION
     Para e remove o servico agendado, remove o .venv e pergunta
     sobre dados (output/, .env) antes de remover. Nao apaga o
-    codigo-fonte — a pasta pode ser removida manualmente depois.
+    codigo-fonte - a pasta pode ser removida manualmente depois.
 #>
 
 Set-StrictMode -Version Latest
@@ -21,7 +21,7 @@ function Write-Step([string]$N, [string]$Msg) {
     Write-Host "  [$N] $Msg" -ForegroundColor Cyan
 }
 
-function Write-OK([string]$Msg)   { Write-Host "        OK — $Msg" -ForegroundColor Green }
+function Write-OK([string]$Msg)   { Write-Host "        OK - $Msg" -ForegroundColor Green }
 function Write-Warn([string]$Msg) { Write-Host "        AVISO: $Msg" -ForegroundColor Yellow }
 
 Write-Host ""
@@ -40,7 +40,7 @@ if ($confirm -ne "s") {
     exit 0
 }
 
-# ── [1/5] Parar e remover servico ────────────────────────────────────────────
+# -- [1/5] Parar e remover servico --------------------------------------------
 
 Write-Step "1/5" "Removendo servico agendado..."
 
@@ -56,7 +56,7 @@ if ($task) {
     Write-OK "Tarefa '$TaskName' nao estava registrada."
 }
 
-# ── [2/5] Remover regra de firewall ──────────────────────────────────────────
+# -- [2/5] Remover regra de firewall ------------------------------------------
 
 Write-Step "2/5" "Removendo regra de firewall (se existir)..."
 
@@ -69,7 +69,7 @@ try {
     Write-Host "        Remove-NetFirewallRule -DisplayName 'Portal de Pedidos'" -ForegroundColor Gray
 }
 
-# ── [3/5] Remover .venv ───────────────────────────────────────────────────────
+# -- [3/5] Remover .venv -------------------------------------------------------
 
 Write-Step "3/5" "Removendo ambiente virtual (.venv)..."
 
@@ -78,10 +78,10 @@ if (Test-Path $venvPath) {
     Remove-Item $venvPath -Recurse -Force
     Write-OK ".venv removido."
 } else {
-    Write-OK ".venv nao encontrado — nada a remover."
+    Write-OK ".venv nao encontrado - nada a remover."
 }
 
-# ── [4/5] Dados de output ─────────────────────────────────────────────────────
+# -- [4/5] Dados de output -----------------------------------------------------
 
 Write-Step "4/5" "Dados de saida (output\)..."
 
@@ -99,11 +99,11 @@ if (Test-Path $outputPath) {
             Write-OK "output\ mantido."
         }
     } else {
-        Write-OK "output\ vazio — mantido."
+        Write-OK "output\ vazio - mantido."
     }
 }
 
-# ── [5/5] Configuracao (.env) ─────────────────────────────────────────────────
+# -- [5/5] Configuracao (.env) -------------------------------------------------
 
 Write-Step "5/5" "Arquivo de configuracao (.env)..."
 

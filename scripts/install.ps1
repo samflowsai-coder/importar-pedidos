@@ -15,7 +15,7 @@ $AppDir = Split-Path -Parent $PSScriptRoot
 
 . (Join-Path $PSScriptRoot "network.ps1")
 
-# ── Helpers de output ─────────────────────────────────────────────────────────
+# -- Helpers de output ---------------------------------------------------------
 
 function Write-Step([string]$N, [string]$Msg) {
     Write-Host ""
@@ -23,7 +23,7 @@ function Write-Step([string]$N, [string]$Msg) {
 }
 
 function Write-OK([string]$Msg) {
-    Write-Host "        OK — $Msg" -ForegroundColor Green
+    Write-Host "        OK - $Msg" -ForegroundColor Green
 }
 
 function Write-Warn([string]$Msg) {
@@ -36,7 +36,7 @@ function Write-Fail([string]$Msg) {
     Write-Host ""
 }
 
-# ── [1/6] Python 3.11+ ────────────────────────────────────────────────────────
+# -- [1/6] Python 3.11+ --------------------------------------------------------
 
 Write-Step "1/6" "Verificando Python 3.11+..."
 
@@ -98,7 +98,7 @@ if (-not $PythonCmd) {
     Write-OK "$verDisplay detectado."
 }
 
-# ── [2/6] Ambiente virtual ────────────────────────────────────────────────────
+# -- [2/6] Ambiente virtual ----------------------------------------------------
 
 Write-Step "2/6" "Verificando ambiente virtual (.venv)..."
 
@@ -112,7 +112,7 @@ if (Test-Path $VenvPython) {
         $v = & $VenvPython --version 2>&1
         if ($v -match "Python (\d+)\.(\d+)" -and [int]$Matches[1] -eq 3 -and [int]$Matches[2] -ge 11) {
             $venvOk = $true
-            Write-OK ".venv existente com $v — mantido."
+            Write-OK ".venv existente com $v - mantido."
         }
     } catch {}
 }
@@ -120,7 +120,7 @@ if (Test-Path $VenvPython) {
 if (-not $venvOk) {
     $venvPath = Join-Path $AppDir ".venv"
     if (Test-Path $venvPath) {
-        Write-Warn ".venv com versao incompativel — recriando..."
+        Write-Warn ".venv com versao incompativel - recriando..."
         Remove-Item $venvPath -Recurse -Force
     }
     Write-Host "        Criando .venv..." -ForegroundColor Gray
@@ -138,7 +138,7 @@ if (-not $venvOk) {
     Write-OK ".venv criado."
 }
 
-# ── [3/6] Dependencias ────────────────────────────────────────────────────────
+# -- [3/6] Dependencias --------------------------------------------------------
 
 Write-Step "3/6" "Instalando/atualizando dependencias (pode levar alguns minutos)..."
 Write-Host "        Aguarde..." -ForegroundColor Gray
@@ -157,14 +157,14 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-OK "Dependencias instaladas."
 
-# ── [4/6] Configurar .env ─────────────────────────────────────────────────────
+# -- [4/6] Configurar .env -----------------------------------------------------
 
 Write-Step "4/6" "Configurando .env..."
 
 $EnvFile = Join-Path $AppDir ".env"
 
 if (Test-Path $EnvFile) {
-    Write-OK ".env ja existe — mantido. (Para reconfigurar: delete .env e rode instalar.bat novamente.)"
+    Write-OK ".env ja existe - mantido. (Para reconfigurar: delete .env e rode instalar.bat novamente.)"
 } else {
     Write-Host ""
     Write-Host "  Vamos configurar o sistema. Responda as perguntas abaixo." -ForegroundColor White
@@ -172,7 +172,7 @@ if (Test-Path $EnvFile) {
     Write-Host ""
 
     # OPENROUTER_API_KEY
-    Write-Host "  OpenRouter API Key — necessaria para processar PDFs complexos." -ForegroundColor White
+    Write-Host "  OpenRouter API Key - necessaria para processar PDFs complexos." -ForegroundColor White
     Write-Host "  Obtencao gratuita em: https://openrouter.ai/keys" -ForegroundColor Gray
     $ApiKey = ""
     while ([string]::IsNullOrWhiteSpace($ApiKey)) {
@@ -185,9 +185,9 @@ if (Test-Path $EnvFile) {
     # EXPORT_MODE
     Write-Host ""
     Write-Host "  Modo de exportacao (vale para todas as empresas):" -ForegroundColor White
-    Write-Host "    [1] xlsx  — gera arquivo .xlsx para importar no ERP (recomendado)" -ForegroundColor Gray
-    Write-Host "    [2] db    — escreve direto no Firebird (avancado)" -ForegroundColor Gray
-    Write-Host "    [3] both  — gera .xlsx E escreve no Firebird" -ForegroundColor Gray
+    Write-Host "    [1] xlsx  - gera arquivo .xlsx para importar no ERP (recomendado)" -ForegroundColor Gray
+    Write-Host "    [2] db    - escreve direto no Firebird (avancado)" -ForegroundColor Gray
+    Write-Host "    [3] both  - gera .xlsx E escreve no Firebird" -ForegroundColor Gray
     $modeInput = (Read-Host "  Escolha [1/2/3] (Enter = 1)").Trim()
     $ExportMode = switch ($modeInput) { "2" { "db" } "3" { "both" } default { "xlsx" } }
 
@@ -199,7 +199,7 @@ if (Test-Path $EnvFile) {
     # Acesso pela rede
     Write-Host ""
     Write-Host "  Acesso pela rede:" -ForegroundColor White
-    Write-Host "    [1] Rede local — outros PCs e celulares na mesma rede acessam pelo IP (recomendado)" -ForegroundColor Gray
+    Write-Host "    [1] Rede local - outros PCs e celulares na mesma rede acessam pelo IP (recomendado)" -ForegroundColor Gray
     Write-Host "    [2] Somente este computador (localhost)" -ForegroundColor Gray
     Write-Host "  Em ambos os casos o Portal NAO fica exposto na internet." -ForegroundColor Gray
     $netInput = (Read-Host "  Escolha [1/2] (Enter = 1)").Trim()
@@ -236,7 +236,7 @@ if (Test-Path $EnvFile) {
     Write-OK ".env criado com modo '$ExportMode' na porta $Port."
 }
 
-# ── [5/6] Diretorios ──────────────────────────────────────────────────────────
+# -- [5/6] Diretorios ----------------------------------------------------------
 
 Write-Step "5/6" "Verificando diretorios..."
 
@@ -250,7 +250,7 @@ foreach ($d in @("input", "output", "logs", "data")) {
 }
 Write-OK "data\  logs\  presentes (input\ e output\ servem so como exemplo)."
 
-# ── [6/6] Primeiro usuario admin ──────────────────────────────────────────────
+# -- [6/6] Primeiro usuario admin ----------------------------------------------
 
 Write-Step "6/6" "Configurando usuario administrador..."
 
@@ -278,7 +278,7 @@ sys.exit(0 if users_repo.count_active_users() > 0 else 1)
 $usersExist = ($LASTEXITCODE -eq 0)
 
 if ($usersExist) {
-    Write-OK "Usuarios ja configurados — pulando."
+    Write-OK "Usuarios ja configurados - pulando."
 } else {
     Write-Host ""
     Write-Host "  Criando o primeiro usuario administrador do sistema." -ForegroundColor White
@@ -309,7 +309,7 @@ if ($usersExist) {
     if ($LASTEXITCODE -eq 0) {
         Write-OK "Admin '$AdminEmail' criado."
     } elseif ($result -match "ja existe") {
-        Write-OK "Usuario '$AdminEmail' ja existe — mantido."
+        Write-OK "Usuario '$AdminEmail' ja existe - mantido."
     } else {
         Write-Warn "Falha ao criar admin: $result"
         Write-Host ""
@@ -318,7 +318,7 @@ if ($usersExist) {
     }
 }
 
-# ── Rede / Firewall ─────────────────────────────────────────────────────────
+# -- Rede / Firewall ---------------------------------------------------------
 
 $port       = "3636"
 $portalHost = "127.0.0.1"
@@ -340,7 +340,7 @@ if ($portalHost -eq "0.0.0.0") {
     }
 }
 
-# ── Finalizacao ───────────────────────────────────────────────────────────────
+# -- Finalizacao ---------------------------------------------------------------
 
 Write-Host ""
 Write-Host "  ============================================================" -ForegroundColor Green

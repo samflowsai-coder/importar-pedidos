@@ -46,7 +46,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"   # Invoke-WebRequest sem barra de progresso (evita lentidao)
 
-# ── Caminhos ──────────────────────────────────────────────────────────────────
+# -- Caminhos ------------------------------------------------------------------
 
 $AppDir = Split-Path -Parent $PSScriptRoot
 
@@ -106,7 +106,7 @@ $AntiFlapSkipCycles = 3
 $HealthTimeoutSec   = 10
 $PortFreeWaitSec    = 30
 
-# ── Logging (best-effort; nunca deve derrubar o watchdog) ────────────────────
+# -- Logging (best-effort; nunca deve derrubar o watchdog) --------------------
 
 function Write-Log {
     param([string]$Message)
@@ -131,13 +131,13 @@ function Write-Log {
     }
 }
 
-# ── Tempo ─────────────────────────────────────────────────────────────────────
+# -- Tempo ---------------------------------------------------------------------
 
 function Get-IsoNow {
     return (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 }
 
-# ── .env / porta (copiada verbatim de scripts/apply-update.ps1) ─────────────
+# -- .env / porta (copiada verbatim de scripts/apply-update.ps1) -------------
 
 function Get-PortalPort {
     $port = 3636
@@ -150,7 +150,7 @@ function Get-PortalPort {
     return [int]$port
 }
 
-# ── watchdog_state.json ──────────────────────────────────────────────────────
+# -- watchdog_state.json ------------------------------------------------------
 # Forma: { "consecutive_failures": int, "skip_cycles": int, "last_updated": iso }
 # consecutive_failures -- falhas de health-check seguidas (zera em sucesso ou
 #                          apos um restart).
@@ -205,7 +205,7 @@ function Save-WatchdogState {
     Move-Item -Path $tmp -Destination $StateFilePath -Force
 }
 
-# ── Restart do app ────────────────────────────────────────────────────────────
+# -- Restart do app ------------------------------------------------------------
 # Para a task PortalPedidos, espera a porta liberar (ate $PortFreeWaitSec) e,
 # se ainda presa, mata o processo dono da porta SOMENTE se o executavel
 # estiver sob <AppDir>\.venv\ (nunca mata processo alheio -- mesma guarda de
@@ -274,7 +274,7 @@ function Restart-PortalApp {
     }
 }
 
-# ── Execucao principal ────────────────────────────────────────────────────────
+# -- Execucao principal --------------------------------------------------------
 
 try {
     # 1) Lock: update em andamento? A idade e medida pelo LastWriteTime do

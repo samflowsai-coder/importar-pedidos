@@ -76,6 +76,21 @@ while IFS= read -r -d '' f; do
 done < <(find "$STAGE" -type f \( -name '*.bat' -o -name '*.ps1' \) -print0)
 perl -i -pe 's/\r?\n/\r\n/' "$STAGE/.env.example"
 
+# Guarda ASCII para .ps1: o PowerShell 5.1 do cliente le arquivos .ps1 SEM BOM
+# como ANSI (Windows-1252), nao UTF-8 -- qualquer caractere nao-ASCII (traco
+# longo, box-drawing, acento) vira bytes que quebram o PARSE do script (string
+# sem terminador). Nao ha pwsh no CI para pegar isso, entao falhamos o build
+# aqui: .ps1 tem que ser 100% ASCII. Usa perl (ja dependencia deste script,
+# ver CRLF acima) -- portavel e sem engolir erro (grep -P nao existe no BSD
+# grep do macOS). Se disparar, sanitize com:
+#   python3 -c "import glob,io; [io.open(f,'w').write(io.open(f,encoding='utf-8').read().replace(chr(0x2014),'-').replace(chr(0x2500),'-')) for f in glob.glob('scripts/*.ps1')]"
+ascii_report="$(perl -ne 'print "    $ARGV:$.: $_" if /[^\x00-\x7F]/' "$STAGE"/scripts/*.ps1)"
+if [ -n "$ascii_report" ]; then
+    echo "ERRO: caractere nao-ASCII em .ps1 (quebra o parse no PowerShell 5.1 do cliente):" >&2
+    echo "$ascii_report" >&2
+    exit 1
+fi
+
 # ── Empacotar ────────────────────────────────────────────────────────────────
 mkdir -p "$ROOT/dist"
 OUT="$ROOT/dist/${NAME}-${STAMP}.zip"
