@@ -7,7 +7,10 @@ quando há host; embedded quando não há.
 """
 from __future__ import annotations
 
+import pytest
+
 from app.erp.connection import _fb_connect_kwargs
+from app.erp.exceptions import FirebirdConnectionError
 
 
 def test_tcp_inclui_host_e_port():
@@ -39,3 +42,10 @@ def test_host_e_valores_normalizados():
     assert k["host"] == "10.0.0.1"
     assert k["port"] == 3055
     assert k["user"] == "SYSDBA"
+
+
+def test_porta_nao_numerica_levanta_firebird_error():
+    # campo de porta é texto livre em /admin/ambientes; um typo tem que virar
+    # FirebirdConnectionError (contrato de erro do app), não ValueError cru.
+    with pytest.raises(FirebirdConnectionError):
+        _fb_connect_kwargs({"path": "db", "host": "h", "port": "abc"})

@@ -20,9 +20,13 @@ def _fb_connect_kwargs(cfg: dict) -> dict:
     """Traduz a config do ambiente para os kwargs de `fdb.connect`.
 
     `host` presente → TCP (host/port + database = caminho no SERVIDOR); ausente
-    → embedded (só database). Passamos os campos SEPARADOS em vez de um DSN
-    `host/port:C:\\...` de propósito: o drive-letter do Windows (`C:`) faz o
-    parser de DSN tropeçar no 2º `:`. Com kwargs separados não há ambiguidade.
+    → embedded (só database). Passamos os campos SEPARADOS (forma idiomática do
+    `fdb`) em vez de montar um DSN `host/port:C:\\...` na mão — mais limpo, e o
+    `fdb` remonta a string interna sozinho.
+
+    Levanta FirebirdConnectionError se a porta não for numérica (o campo em
+    /admin/ambientes é texto livre; sem isto o ValueError escaparia cru, fora do
+    contrato de erro que o resto do app espera).
     """
     kwargs: dict = {
         "database": (cfg.get("path") or "").strip(),
@@ -33,7 +37,11 @@ def _fb_connect_kwargs(cfg: dict) -> dict:
     host = (cfg.get("host") or "").strip()
     if host:
         kwargs["host"] = host
-        kwargs["port"] = int((cfg.get("port") or "3050").strip() or "3050")
+        port_raw = (cfg.get("port") or "3050").strip() or "3050"
+        try:
+            kwargs["port"] = int(port_raw)
+        except ValueError as exc:
+            raise FirebirdConnectionError(f"Porta do Firebird inválida: {port_raw!r}") from exc
     return kwargs
 
 
