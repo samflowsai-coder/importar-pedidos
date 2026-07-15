@@ -37,7 +37,7 @@ def staging_dir() -> Path:
 
 
 def _current_version() -> str:
-    p = _app_dir() / "data" / "applied_update.json"
+    p = _data_dir() / "applied_update.json"
     if p.exists():
         try:
             import json
@@ -70,7 +70,9 @@ async def upload(file: UploadFile = File(...), _=Depends(require_admin)):
         raise HTTPException(400, "envie um arquivo .zip")
     if state.is_locked(updates_dir()):
         raise HTTPException(409, "há um update em andamento")
-    tmp = Path(tempfile.mkstemp(suffix=".zip")[1])
+    fd, tmp_name = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
+    tmp = Path(tmp_name)
     size = 0
     try:
         with open(tmp, "wb") as out:
@@ -80,17 +82,20 @@ async def upload(file: UploadFile = File(...), _=Depends(require_admin)):
                     raise HTTPException(413, "pacote excede o limite de 100MB")
                 out.write(chunk)
         update_id = uuid.uuid4().hex[:12]
-        # limpa staging anterior (só um staged por vez)
         sd = staging_dir()
-        if sd.exists():
-            import shutil
-            shutil.rmtree(sd)
         try:
             res = package.validate_and_stage(
                 tmp, sd, _app_dir() / "pyproject.toml", update_id=update_id
             )
         except package.PackageError as e:
             raise HTTPException(422, e.reason) from None
+        # só depois de validar com sucesso: limpa staging anterior (um staged
+        # por vez), preservando o pacote recém-validado
+        import shutil
+
+        for child in sd.iterdir():
+            if child.name != res.update_id:
+                shutil.rmtree(child, ignore_errors=True)
         state.write_status(updates_dir(), status="staged", update_id=res.update_id,
                            version=res.version, deps_changed=res.deps_changed)
         return {
