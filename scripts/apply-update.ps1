@@ -659,6 +659,7 @@ try {
     $appliedUpdatePath = Join-Path $DataDir "applied_update.json"
     Write-JsonNoBom -Path $appliedUpdatePath -Data @{
         version = $manifest.version; git_commit = $manifest.git_commit; applied_at = $appliedAt
+        deps_sha256 = $manifest.deps_sha256
     }
 
     Write-Phase -Status "succeeded" -Phase "healthcheck" -Extra @{
