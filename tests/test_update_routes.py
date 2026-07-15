@@ -69,6 +69,42 @@ def test_apply_update_id_errado_404(setup):
     assert r.status_code == 404  # sem staged → sempre 404
 
 
+@pytest.mark.parametrize("running_status", ["apply_requested", "in_progress"])
+def test_upload_rejeita_409_quando_update_em_andamento(setup, running_status):
+    """A janela entre /apply disparar `schtasks /run` e o updater criar
+    update.lock (~1-3s) não tem lock no disco ainda. Sem uma guarda de
+    ESTADO (além do is_locked), um 2º /upload nessa janela apagaria o
+    staging do pacote que está sendo aplicado."""
+    from app.updates import state
+    from app.web import routes_update
+
+    state.write_status(routes_update.updates_dir(), status=running_status, update_id="x")
+    r = _client().post("/api/admin/update/upload",
+                       files={"file": ("p.zip", b"conteudo qualquer", "application/zip")})
+    assert r.status_code == 409
+    assert "andamento" in r.json()["detail"].lower()
+
+
+@pytest.mark.parametrize("running_status", ["apply_requested", "in_progress"])
+def test_apply_rejeita_409_quando_ja_em_andamento(setup, running_status):
+    """Um 2º /apply enquanto o primeiro já está apply_requested/in_progress
+    deve ser 409 (conflito), não 404 (que é reservado a update_id que não
+    corresponde a nenhum staged legítimo)."""
+    from app.updates import state
+    from app.web import routes_update
+
+    state.write_status(routes_update.updates_dir(), status=running_status, update_id="x")
+    r = _client().post("/api/admin/update/apply", json={"update_id": "x"})
+    assert r.status_code == 409
+
+
+def test_apply_idle_com_id_errado_continua_404(setup):
+    """Não regride: sem update em andamento, update_id que não bate com
+    nenhum staged continua 404 (não vira 409)."""
+    r = _client().post("/api/admin/update/apply", json={"update_id": "nao-existe"})
+    assert r.status_code == 404
+
+
 def test_apply_dispara_updater(setup, monkeypatch):
     from app.updates import package
     from app.web import routes_update
@@ -136,3 +172,59 @@ def test_apply_sem_auth_401(setup, real_auth):
 def test_pagina_atualizacao_serve(setup):
     r = _client().get("/admin/atualizacao")
     assert r.status_code == 200 and b"atualiza" in r.content.lower()
+
+
+def test_status_inclui_applied_at_quando_presente(setup):
+    """Spec §5: `/status` deve expor `applied_at?` — o front
+    (admin-atualizacao.html) já lê `data.applied_at` para mostrar
+    'aplicado em <data>' no card de versão atual."""
+    (setup / "applied_update.json").write_text(json.dumps({
+        "version": "20260701-1200",
+        "git_commit": "abc1234",
+        "applied_at": "2026-07-01T12:05:00Z",
+    }))
+    body = _client().get("/api/admin/update/status").json()
+    assert body["current_version"] == "20260701-1200"
+    assert body["applied_at"] == "2026-07-01T12:05:00Z"
+
+
+def test_status_sem_applied_update_nao_expoe_applied_at(setup):
+    body = _client().get("/api/admin/update/status").json()
+    assert body["current_version"] == "desconhecida"
+    assert "applied_at" not in body
+
+
+def _bootstrap_operator_session(c: TestClient) -> None:
+    """Cria o 1º admin, cria um operador, faz logout do admin e loga como
+    o operador — deixa a sessão do client autenticada como não-admin."""
+    r = c.post("/api/auth/bootstrap", json={"email": "admin@x.com", "password": "supersecret1"})
+    assert r.status_code == 200, r.text
+    r = c.post("/api/admin/users", json={
+        "email": "op@x.com", "password": "operpass1", "role": "operator",
+    })
+    assert r.status_code == 201, r.text
+    c.post("/api/auth/logout")
+    r = c.post("/api/auth/login", json={"email": "op@x.com", "password": "operpass1"})
+    assert r.status_code == 200, r.text
+
+
+def test_status_operador_nao_admin_403(setup, real_auth):
+    c = _client()
+    _bootstrap_operator_session(c)
+    r = c.get("/api/admin/update/status")
+    assert r.status_code == 403
+
+
+def test_upload_operador_nao_admin_403(setup, real_auth):
+    c = _client()
+    _bootstrap_operator_session(c)
+    r = c.post("/api/admin/update/upload",
+               files={"file": ("p.zip", b"x", "application/zip")})
+    assert r.status_code == 403
+
+
+def test_apply_operador_nao_admin_403(setup, real_auth):
+    c = _client()
+    _bootstrap_operator_session(c)
+    r = c.post("/api/admin/update/apply", json={"update_id": "x"})
+    assert r.status_code == 403

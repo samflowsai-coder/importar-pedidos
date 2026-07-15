@@ -81,14 +81,19 @@ def validate_and_stage(
     if not zipfile.is_zipfile(zip_path):
         raise PackageError("arquivo não é um zip válido")
     with zipfile.ZipFile(zip_path) as z:
-        if z.testzip() is not None:
-            raise PackageError("zip corrompido")
+        # Caps ANTES de testzip(): infolist() lê só o diretório central (sem
+        # descomprimir nada), então MAX_MEMBERS/MAX_UNCOMPRESSED pegam um
+        # zip-bomb pelo tamanho DECLARADO. testzip() descomprime todos os
+        # membros para checar CRC — rodar isso primeiro travaria um core no
+        # request síncrono antes de qualquer cap existir.
         infos = z.infolist()
         if len(infos) > MAX_MEMBERS:
             raise PackageError("pacote com membros demais")
         total = sum(i.file_size for i in infos)
         if total > MAX_UNCOMPRESSED:
             raise PackageError("pacote descomprimido excede o limite")
+        if z.testzip() is not None:
+            raise PackageError("zip corrompido")
         for i in infos:
             if (i.external_attr >> 16) & 0o170000 == 0o120000:  # symlink
                 raise PackageError(f"symlink não permitido: {i.filename}")

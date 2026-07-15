@@ -169,3 +169,56 @@ def test_deps_changed_true_quando_hash_difere(tmp_path):
         update_id="u1",
     )
     assert res.deps_changed is True
+
+
+# ── D4: cap anti-zip-bomb tem que ser checado ANTES de testzip() ───────────
+#
+# `testzip()` descomprime TODOS os membros do zip para verificar o CRC. Um
+# zip-bomb (tamanho declarado enorme) travaria um core no request síncrono se
+# essa descompressão total rodasse antes de qualquer cap. `MAX_MEMBERS` e
+# `MAX_UNCOMPRESSED` usam só o diretório central (`infolist()`, sem
+# descomprimir) e por isso têm que ser checados primeiro.
+
+
+def test_max_members_excedido_rejeita(tmp_path, monkeypatch):
+    monkeypatch.setattr(pkg, "MAX_MEMBERS", 2)
+    m = {"a.txt": b"1", "b.txt": b"2", "c.txt": b"3"}
+    with pytest.raises(pkg.PackageError, match="membros demais"):
+        pkg.validate_and_stage(
+            _make_zip(tmp_path, m),
+            tmp_path / "st",
+            _pyproject(tmp_path / "pp", ["fastapi"]),
+            update_id="u1",
+        )
+
+
+def test_max_uncompressed_excedido_rejeita(tmp_path, monkeypatch):
+    monkeypatch.setattr(pkg, "MAX_UNCOMPRESSED", 10)
+    m = {"portal-pedidos/x.txt": b"x" * 20}
+    with pytest.raises(pkg.PackageError, match="excede o limite"):
+        pkg.validate_and_stage(
+            _make_zip(tmp_path, m),
+            tmp_path / "st",
+            _pyproject(tmp_path / "pp", ["fastapi"]),
+            update_id="u1",
+        )
+
+
+def test_cap_de_membros_dispara_sem_chamar_testzip(tmp_path, monkeypatch):
+    """Prova a ORDEM: se testzip() rodasse antes do cap, ele executaria e
+    (aqui) estouraria o AssertionError abaixo em vez do PackageError
+    esperado — o teste travaria a regressão da reordenação do D4."""
+    monkeypatch.setattr(pkg, "MAX_MEMBERS", 1)
+
+    def _boom(self):
+        raise AssertionError("testzip() não deveria rodar antes do cap de membros")
+
+    monkeypatch.setattr(zf.ZipFile, "testzip", _boom)
+    m = {"a.txt": b"1", "b.txt": b"2"}
+    with pytest.raises(pkg.PackageError, match="membros demais"):
+        pkg.validate_and_stage(
+            _make_zip(tmp_path, m),
+            tmp_path / "st",
+            _pyproject(tmp_path / "pp", ["fastapi"]),
+            update_id="u1",
+        )

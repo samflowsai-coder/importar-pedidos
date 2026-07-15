@@ -36,15 +36,39 @@ def staging_dir() -> Path:
     return updates_dir() / "staging"
 
 
-def _current_version() -> str:
+_RUNNING_STATUSES = {"apply_requested", "in_progress"}
+
+
+def _applied_info() -> dict:
     p = _data_dir() / "applied_update.json"
     if p.exists():
         try:
             import json
-            return json.loads(p.read_text())["version"]
+            data = json.loads(p.read_text())
+            if isinstance(data, dict):
+                return data
         except Exception:
             pass
-    return "desconhecida"
+    return {}
+
+
+def _current_version() -> str:
+    return _applied_info().get("version", "desconhecida")
+
+
+def _reject_if_update_running(s: dict | None = None) -> None:
+    """Guarda de ESTADO (além do `is_locked`).
+
+    `update.lock` só existe depois que o processo updater arranca — o que
+    acontece de forma ASSÍNCRONA, ~1-3s após `/apply` disparar
+    `schtasks /run`. Nessa janela, `status.json` já está `apply_requested`
+    mas ainda não há lock no disco. Sem esta checagem, um 2º `/upload` (ou
+    `/apply`) nessa janela passaria pelo `is_locked` e corromperia o staging
+    do pacote que está sendo aplicado."""
+    if s is None:
+        s = state.read_status(updates_dir())
+    if s.get("status") in _RUNNING_STATUSES:
+        raise HTTPException(409, "há um update em andamento")
 
 
 def _start_updater_task() -> bool:
@@ -60,7 +84,11 @@ def _start_updater_task() -> bool:
 @router.get("/status")
 def status(_=Depends(require_admin)):
     s = state.read_status(updates_dir())
-    s.setdefault("current_version", _current_version())
+    info = _applied_info()
+    s.setdefault("current_version", info.get("version", "desconhecida"))
+    applied_at = info.get("applied_at")
+    if applied_at is not None:
+        s.setdefault("applied_at", applied_at)
     return s
 
 
@@ -70,6 +98,7 @@ async def upload(file: UploadFile = File(...), _=Depends(require_admin)):
         raise HTTPException(400, "envie um arquivo .zip")
     if state.is_locked(updates_dir()):
         raise HTTPException(409, "há um update em andamento")
+    _reject_if_update_running()
     fd, tmp_name = tempfile.mkstemp(suffix=".zip")
     os.close(fd)
     tmp = Path(tmp_name)
@@ -117,6 +146,7 @@ def apply(body: ApplyBody, _=Depends(require_admin)):
     if state.is_locked(updates_dir()):
         raise HTTPException(409, "há um update em andamento")
     s = state.read_status(updates_dir())
+    _reject_if_update_running(s)
     if s.get("status") != "staged" or s.get("update_id") != body.update_id:
         raise HTTPException(404, "update_id não corresponde ao pacote staged")
     state.write_status(updates_dir(), status="apply_requested", started_at=time.time())
