@@ -18,6 +18,8 @@ class FlowPCPConfig:
     request_timeout_s: float = 30.0
     # Gate do envio de catálogo ao Flow: OFF = sync só atualiza a cópia local.
     catalogo_push: bool = False
+    # Filtro da extração: OFF = todo PRODUTOS (hoje); ON = só subgrupo MEIAS.
+    catalogo_apenas_meias: bool = False
 
 
 def flowpcp_config_from_env(env: dict[str, Any], *, service_token: str | None) -> FlowPCPConfig:
@@ -33,6 +35,7 @@ def flowpcp_config_from_env(env: dict[str, Any], *, service_token: str | None) -
         poll_interval_s=int(env.get("flowpcp_poll_interval_s") or 30),
         request_timeout_s=float(env.get("flowpcp_request_timeout_s") or 30.0),
         catalogo_push=bool(env.get("flowpcp_catalogo_push")),
+        catalogo_apenas_meias=bool(env.get("flowpcp_catalogo_apenas_meias")),
     )
 
 
@@ -42,9 +45,7 @@ def flowpcp_config_for_slug(slug: str) -> FlowPCPConfig | None:
     env = environments_repo.get_by_slug(slug)
     if env is None:
         return None
-    cfg = flowpcp_config_from_env(
-        env, service_token=environments_repo.get_flowpcp_token(env["id"])
-    )
+    cfg = flowpcp_config_from_env(env, service_token=environments_repo.get_flowpcp_token(env["id"]))
     return cfg if cfg.enabled else None
 
 

@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS environments (
     -- Gate do envio de catálogo Fire→Flow: OFF = sync só atualiza a cópia
     -- local (catalogo_fire no db do ambiente); ON = também envia ao Flow.
     flowpcp_catalogo_push     INTEGER NOT NULL DEFAULT 0,
+    -- Filtro do catálogo extraído do Fire: OFF = tudo (PRODUTOS inteiro,
+    -- comportamento atual); ON = só o subgrupo MEIAS (GRUPO_PRODUTOS_SUB).
+    -- Depende da marcação no Fire (Parte 2); default OFF preserva o hoje.
+    flowpcp_catalogo_apenas_meias INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -126,4 +130,6 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
      "ALTER TABLE environments ADD COLUMN flowpcp_service_token_enc TEXT"),
     ("environments", "flowpcp_catalogo_push",
      "ALTER TABLE environments ADD COLUMN flowpcp_catalogo_push INTEGER NOT NULL DEFAULT 0"),
+    ("environments", "flowpcp_catalogo_apenas_meias",
+     "ALTER TABLE environments ADD COLUMN flowpcp_catalogo_apenas_meias INTEGER NOT NULL DEFAULT 0"),
 )

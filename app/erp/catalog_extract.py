@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.erp.queries import LIST_PRODUTOS_CATALOGO
+from app.erp.queries import LIST_PRODUTOS_CATALOGO, LIST_PRODUTOS_CATALOGO_MEIAS
 
 
 @dataclass(frozen=True)
@@ -23,13 +23,17 @@ def _clean(v) -> str | None:
     return s or None
 
 
-def extract_produtos(fire_conn) -> list[ProdutoFireDTO]:
+def extract_produtos(fire_conn, *, apenas_meias: bool = False) -> list[ProdutoFireDTO]:
     """Lê o subconjunto de identidade de PRODUTOS do Fire. Read-only.
     codigo = fire_produto_id = str(SEQ) (o cliente usa o sequencial).
-    tipo: 'kit' se o SEQ é pai em PRODUTOS_KIT (IS_KIT=1), senão 'simples'."""
+    tipo: 'kit' se o SEQ é pai em PRODUTOS_KIT (IS_KIT=1), senão 'simples'.
+
+    `apenas_meias=True` restringe ao subgrupo MEIAS (flowpcp_catalogo_apenas_meias);
+    default False preserva o comportamento atual (PRODUTOS inteiro)."""
+    query = LIST_PRODUTOS_CATALOGO_MEIAS if apenas_meias else LIST_PRODUTOS_CATALOGO
     cur = fire_conn.cursor()
     try:
-        cur.execute(LIST_PRODUTOS_CATALOGO)
+        cur.execute(query)
         rows = cur.fetchall()
     finally:
         cur.close()
