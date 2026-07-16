@@ -106,6 +106,11 @@ from app.web.routes_environments import router as environments_router  # noqa: E
 
 app.include_router(environments_router)
 
+# Auto-update: rotas admin de upload/apply/status do pacote de atualização.
+from app.web import routes_update  # noqa: E402
+
+app.include_router(routes_update.router)
+
 
 # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -363,6 +368,14 @@ def admin_env_edit_page(env_id: str, request: Request):  # noqa: ARG001 — env_
     if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
         return RedirectResponse(url="/login")
     return FileResponse(str(STATIC_DIR / "admin-ambiente-edit.html"))
+
+
+@app.get("/admin/atualizacao")
+def admin_atualizacao_page(request: Request):
+    """Tela de auto-update do portal (admin-only). API enforce o role."""
+    if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
+        return RedirectResponse(url="/login")
+    return FileResponse(str(STATIC_DIR / "admin-atualizacao.html"))
 
 
 @app.get("/admin/usuarios")

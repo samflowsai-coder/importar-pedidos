@@ -29,6 +29,7 @@
     users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
     chevron: '<svg class="app-nav-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>',
     logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
+    update: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>',
   };
 
   const NAV_DEF = {
@@ -38,6 +39,7 @@
         { label: 'Ambientes',      href: '/admin/ambientes',         icon: ICONS.db, route: 'admin-ambientes' },
         { label: 'Diretórios',     href: '/configuracoes/diretorios', icon: ICONS.folder, route: 'config-diretorios' },
         { label: 'Usuários',       href: '/configuracoes/usuarios',   icon: ICONS.users, route: 'config-usuarios' },
+        { label: 'Atualização',    href: '/admin/atualizacao',       icon: ICONS.update, route: 'admin-atualizacao' },
       ],
     },
   };
@@ -48,6 +50,7 @@
     '/admin/ambientes/novo':      'admin-ambientes',
     '/configuracoes/diretorios':  'config-diretorios',
     '/configuracoes/usuarios':    'config-usuarios',
+    '/admin/atualizacao':         'admin-atualizacao',
   };
 
   function el(html) {
@@ -102,7 +105,7 @@
       </a>`);
 
     if (showConfig) {
-      const expanded = ['admin-ambientes', 'config-diretorios', 'config-usuarios'].includes(active);
+      const expanded = ['admin-ambientes', 'config-diretorios', 'config-usuarios', 'admin-atualizacao'].includes(active);
       const childLinks = NAV_DEF.config.children.map((c) => `
         <a class="app-nav-link ${active === c.route ? 'active' : ''}"
            href="${c.href}" data-route="${c.route}">

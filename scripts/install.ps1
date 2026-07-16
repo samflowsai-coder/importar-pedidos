@@ -15,7 +15,7 @@ $AppDir = Split-Path -Parent $PSScriptRoot
 
 . (Join-Path $PSScriptRoot "network.ps1")
 
-# ── Helpers de output ─────────────────────────────────────────────────────────
+# -- Helpers de output ---------------------------------------------------------
 
 function Write-Step([string]$N, [string]$Msg) {
     Write-Host ""
@@ -23,7 +23,7 @@ function Write-Step([string]$N, [string]$Msg) {
 }
 
 function Write-OK([string]$Msg) {
-    Write-Host "        OK — $Msg" -ForegroundColor Green
+    Write-Host "        OK - $Msg" -ForegroundColor Green
 }
 
 function Write-Warn([string]$Msg) {
@@ -36,7 +36,7 @@ function Write-Fail([string]$Msg) {
     Write-Host ""
 }
 
-# ── [1/6] Python 3.11+ ────────────────────────────────────────────────────────
+# -- [1/6] Python 3.11+ --------------------------------------------------------
 
 Write-Step "1/6" "Verificando Python 3.11+..."
 
@@ -90,15 +90,22 @@ if (-not $PythonCmd) {
         exit 1
     }
 } else {
-    $verDisplay = if ($PythonCmd -eq "py311") {
-        (& py @("-3.11", "--version") 2>&1)
-    } else {
-        (& $PythonCmd --version 2>&1)
+    # try/catch: os "--version 2>&1" sob EAP=Stop poderiam ser promovidos a
+    # erro terminante se o python emitir algo no stderr. E so um texto de
+    # exibicao -- fallback fixo se algo der errado.
+    try {
+        $verDisplay = if ($PythonCmd -eq "py311") {
+            (& py @("-3.11", "--version") 2>&1)
+        } else {
+            (& $PythonCmd --version 2>&1)
+        }
+    } catch {
+        $verDisplay = "Python 3.11"
     }
     Write-OK "$verDisplay detectado."
 }
 
-# ── [2/6] Ambiente virtual ────────────────────────────────────────────────────
+# -- [2/6] Ambiente virtual ----------------------------------------------------
 
 Write-Step "2/6" "Verificando ambiente virtual (.venv)..."
 
@@ -112,7 +119,7 @@ if (Test-Path $VenvPython) {
         $v = & $VenvPython --version 2>&1
         if ($v -match "Python (\d+)\.(\d+)" -and [int]$Matches[1] -eq 3 -and [int]$Matches[2] -ge 11) {
             $venvOk = $true
-            Write-OK ".venv existente com $v — mantido."
+            Write-OK ".venv existente com $v - mantido."
         }
     } catch {}
 }
@@ -120,7 +127,7 @@ if (Test-Path $VenvPython) {
 if (-not $venvOk) {
     $venvPath = Join-Path $AppDir ".venv"
     if (Test-Path $venvPath) {
-        Write-Warn ".venv com versao incompativel — recriando..."
+        Write-Warn ".venv com versao incompativel - recriando..."
         Remove-Item $venvPath -Recurse -Force
     }
     Write-Host "        Criando .venv..." -ForegroundColor Gray
@@ -138,33 +145,55 @@ if (-not $venvOk) {
     Write-OK ".venv criado."
 }
 
-# ── [3/6] Dependencias ────────────────────────────────────────────────────────
+# -- [3/6] Dependencias --------------------------------------------------------
 
 Write-Step "3/6" "Instalando/atualizando dependencias (pode levar alguns minutos)..."
 Write-Host "        Aguarde..." -ForegroundColor Gray
 
-& $VenvPip install -e $AppDir --quiet --no-warn-script-location 2>&1 | Out-Null
+# pip escreve avisos no stderr (ex.: "[notice] A new release of pip is
+# available") MESMO num install bem-sucedido. Sob $ErrorActionPreference="Stop"
+# (topo do script) + "2>&1", o PowerShell 5.1 promove esse stderr a erro
+# terminante e o install "falha" com pip exit 0. Rebaixa o EAP para "Continue"
+# so ao redor da chamada nativa (restaurado no finally) e decide sucesso/falha
+# SO por $LASTEXITCODE. Mesmo tratamento de update.ps1 / apply-update.ps1.
+# OFFLINE se houver wheelhouse, senao ONLINE. Instalacao virgem por admin
+# interativo costuma ter internet (fallback online ok); com wheelhouse presente,
+# nao depende do PyPI.
+$wheelhouse = Join-Path $AppDir "wheelhouse"
+$useWheelhouse = (Test-Path $wheelhouse) -and `
+    (@(Get-ChildItem -Path $wheelhouse -Filter *.whl -ErrorAction SilentlyContinue).Count -gt 0)
+$pipArgs = @("install", "-e", $AppDir, "--no-warn-script-location")
+if ($useWheelhouse) {
+    $pipArgs += @("--no-index", "--find-links", $wheelhouse)
+    Write-Host "        (offline: usando wheelhouse\)" -ForegroundColor Gray
+}
+
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    # python -m pip (nao pip.exe): o launcher pip.exe quebra se o .venv foi
+    # criado/copiado de outro caminho (sai 1 sem imprimir nada).
+    $pipOut = & $VenvPython -m pip @pipArgs 2>&1
+} finally {
+    $ErrorActionPreference = $prevEAP
+}
 
 if ($LASTEXITCODE -ne 0) {
-    # Tentar novamente com output para diagnostico
+    Write-Host ($pipOut | Out-String) -ForegroundColor DarkGray
     Write-Fail "Falha ao instalar dependencias."
-    Write-Host "  Tentando novamente com detalhes:" -ForegroundColor Yellow
-    & $VenvPip install -e $AppDir --no-warn-script-location
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  Verifique a conexao com a internet e tente novamente." -ForegroundColor White
-        exit 1
-    }
+    Write-Host "  Verifique a conexao com a internet e tente novamente." -ForegroundColor White
+    exit 1
 }
 Write-OK "Dependencias instaladas."
 
-# ── [4/6] Configurar .env ─────────────────────────────────────────────────────
+# -- [4/6] Configurar .env -----------------------------------------------------
 
 Write-Step "4/6" "Configurando .env..."
 
 $EnvFile = Join-Path $AppDir ".env"
 
 if (Test-Path $EnvFile) {
-    Write-OK ".env ja existe — mantido. (Para reconfigurar: delete .env e rode instalar.bat novamente.)"
+    Write-OK ".env ja existe - mantido. (Para reconfigurar: delete .env e rode instalar.bat novamente.)"
 } else {
     Write-Host ""
     Write-Host "  Vamos configurar o sistema. Responda as perguntas abaixo." -ForegroundColor White
@@ -172,7 +201,7 @@ if (Test-Path $EnvFile) {
     Write-Host ""
 
     # OPENROUTER_API_KEY
-    Write-Host "  OpenRouter API Key — necessaria para processar PDFs complexos." -ForegroundColor White
+    Write-Host "  OpenRouter API Key - necessaria para processar PDFs complexos." -ForegroundColor White
     Write-Host "  Obtencao gratuita em: https://openrouter.ai/keys" -ForegroundColor Gray
     $ApiKey = ""
     while ([string]::IsNullOrWhiteSpace($ApiKey)) {
@@ -185,9 +214,9 @@ if (Test-Path $EnvFile) {
     # EXPORT_MODE
     Write-Host ""
     Write-Host "  Modo de exportacao (vale para todas as empresas):" -ForegroundColor White
-    Write-Host "    [1] xlsx  — gera arquivo .xlsx para importar no ERP (recomendado)" -ForegroundColor Gray
-    Write-Host "    [2] db    — escreve direto no Firebird (avancado)" -ForegroundColor Gray
-    Write-Host "    [3] both  — gera .xlsx E escreve no Firebird" -ForegroundColor Gray
+    Write-Host "    [1] xlsx  - gera arquivo .xlsx para importar no ERP (recomendado)" -ForegroundColor Gray
+    Write-Host "    [2] db    - escreve direto no Firebird (avancado)" -ForegroundColor Gray
+    Write-Host "    [3] both  - gera .xlsx E escreve no Firebird" -ForegroundColor Gray
     $modeInput = (Read-Host "  Escolha [1/2/3] (Enter = 1)").Trim()
     $ExportMode = switch ($modeInput) { "2" { "db" } "3" { "both" } default { "xlsx" } }
 
@@ -199,7 +228,7 @@ if (Test-Path $EnvFile) {
     # Acesso pela rede
     Write-Host ""
     Write-Host "  Acesso pela rede:" -ForegroundColor White
-    Write-Host "    [1] Rede local — outros PCs e celulares na mesma rede acessam pelo IP (recomendado)" -ForegroundColor Gray
+    Write-Host "    [1] Rede local - outros PCs e celulares na mesma rede acessam pelo IP (recomendado)" -ForegroundColor Gray
     Write-Host "    [2] Somente este computador (localhost)" -ForegroundColor Gray
     Write-Host "  Em ambos os casos o Portal NAO fica exposto na internet." -ForegroundColor Gray
     $netInput = (Read-Host "  Escolha [1/2] (Enter = 1)").Trim()
@@ -236,7 +265,7 @@ if (Test-Path $EnvFile) {
     Write-OK ".env criado com modo '$ExportMode' na porta $Port."
 }
 
-# ── [5/6] Diretorios ──────────────────────────────────────────────────────────
+# -- [5/6] Diretorios ----------------------------------------------------------
 
 Write-Step "5/6" "Verificando diretorios..."
 
@@ -250,7 +279,7 @@ foreach ($d in @("input", "output", "logs", "data")) {
 }
 Write-OK "data\  logs\  presentes (input\ e output\ servem so como exemplo)."
 
-# ── [6/6] Primeiro usuario admin ──────────────────────────────────────────────
+# -- [6/6] Primeiro usuario admin ----------------------------------------------
 
 Write-Step "6/6" "Configurando usuario administrador..."
 
@@ -274,11 +303,22 @@ db.init()
 sys.exit(0 if users_repo.count_active_users() > 0 else 1)
 "@
 
-& $VenvPython -c $checkScript 2>$null
+# EAP=Continue ao redor do nativo: no WinPS 5.1, QUALQUER redirecionamento de
+# stderr (inclusive 2>$null) sob EAP=Stop promove a 1a linha do stderr a erro
+# terminante antes do descarte -- e este check importa app.persistence (a app
+# toda), onde um unico warning (pydantic/loguru/pkg_resources) abortaria a
+# instalacao. Decide por $LASTEXITCODE.
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    & $VenvPython -c $checkScript 2>$null
+} finally {
+    $ErrorActionPreference = $prevEAP
+}
 $usersExist = ($LASTEXITCODE -eq 0)
 
 if ($usersExist) {
-    Write-OK "Usuarios ja configurados — pulando."
+    Write-OK "Usuarios ja configurados - pulando."
 } else {
     Write-Host ""
     Write-Host "  Criando o primeiro usuario administrador do sistema." -ForegroundColor White
@@ -303,13 +343,31 @@ if ($usersExist) {
         elseif ($p1.Length -lt 8) { Write-Host "  Senha muito curta (minimo 8 caracteres)." -ForegroundColor Yellow; $p1 = "" }
     } while ($p1 -ne $p2 -or $p1.Length -lt 8)
 
-    # Pipar senha via stdin para create_user.py (modo nao-interativo)
-    $result = $p1 | & $VenvPython (Join-Path $AppDir "tools\create_user.py") $AdminEmail --role admin 2>&1
+    # Pipar senha via stdin para create_user.py (modo nao-interativo).
+    # (1) $OutputEncoding default do WinPS 5.1 e ASCII: senha com caractere
+    #     nao-ASCII chegaria corrompida no python (login falharia depois).
+    #     Forcamos UTF-8 no pipe e no lado do python (PYTHONIOENCODING).
+    # (2) EAP=Continue ao redor do nativo: create_user.py pode escrever
+    #     warnings no stderr num sucesso; sob EAP=Stop + 2>&1 isso abortaria
+    #     a instalacao mesmo com exit 0. Decide por $LASTEXITCODE.
+    $prevOutEnc = $OutputEncoding
+    $prevPyEnc  = $env:PYTHONIOENCODING
+    $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $env:PYTHONIOENCODING = "utf-8"
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $result = $p1 | & $VenvPython (Join-Path $AppDir "tools\create_user.py") $AdminEmail --role admin 2>&1
+    } finally {
+        $ErrorActionPreference = $prevEAP
+        $OutputEncoding = $prevOutEnc
+        $env:PYTHONIOENCODING = $prevPyEnc
+    }
 
     if ($LASTEXITCODE -eq 0) {
         Write-OK "Admin '$AdminEmail' criado."
     } elseif ($result -match "ja existe") {
-        Write-OK "Usuario '$AdminEmail' ja existe — mantido."
+        Write-OK "Usuario '$AdminEmail' ja existe - mantido."
     } else {
         Write-Warn "Falha ao criar admin: $result"
         Write-Host ""
@@ -318,7 +376,7 @@ if ($usersExist) {
     }
 }
 
-# ── Rede / Firewall ─────────────────────────────────────────────────────────
+# -- Rede / Firewall ---------------------------------------------------------
 
 $port       = "3636"
 $portalHost = "127.0.0.1"
@@ -340,7 +398,7 @@ if ($portalHost -eq "0.0.0.0") {
     }
 }
 
-# ── Finalizacao ───────────────────────────────────────────────────────────────
+# -- Finalizacao ---------------------------------------------------------------
 
 Write-Host ""
 Write-Host "  ============================================================" -ForegroundColor Green

@@ -12,6 +12,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# --with-wheelhouse: embarca ./wheelhouse/ (wheels das deps p/ pip OFFLINE).
+# Default OFF — pacote de codigo puro fica com poucos MB; so embarca quando as
+# deps mudaram (rode tools/build_wheelhouse.sh antes).
+WITH_WHEELHOUSE=0
+for arg in "$@"; do
+    case "$arg" in
+        --with-wheelhouse) WITH_WHEELHOUSE=1 ;;
+        *) echo "arg desconhecido: $arg (use --with-wheelhouse)" >&2; exit 2 ;;
+    esac
+done
+
 NAME="portal-pedidos"
 STAMP="$(date +%Y%m%d)"
 TMP="$(mktemp -d)"
@@ -29,8 +40,19 @@ cp configurar-integracao.bat sincronizar-catalogo.bat "$STAGE/"
 [ -f enviar-catalogo-flow.bat ] && cp enviar-catalogo-flow.bat "$STAGE/"
 cp README.md INSTALACAO-SERVIDOR.md "$STAGE/"
 
-# Nao empacotar o proprio script de build
-rm -f "$STAGE/tools/build_package.sh"
+# Wheelhouse (wheels das deps p/ pip OFFLINE) — so com --with-wheelhouse.
+if [ "$WITH_WHEELHOUSE" = "1" ]; then
+    if [ ! -d "$ROOT/wheelhouse" ] || [ -z "$(ls -A "$ROOT/wheelhouse"/*.whl 2>/dev/null)" ]; then
+        echo "ERRO: --with-wheelhouse mas ./wheelhouse/ ausente ou sem .whl." >&2
+        echo "      Rode tools/build_wheelhouse.sh primeiro." >&2
+        exit 1
+    fi
+    cp -R "$ROOT/wheelhouse" "$STAGE/"
+    echo "wheelhouse embarcado: $(ls "$STAGE/wheelhouse"/*.whl | wc -l | tr -d ' ') wheels"
+fi
+
+# Nao empacotar os proprios scripts de build
+rm -f "$STAGE/tools/build_package.sh" "$STAGE/tools/build_wheelhouse.sh"
 
 # ── Limpeza: artefatos de dev e qualquer segredo/dado que tenha vazado ───────
 find "$STAGE" -type d -name '__pycache__' -prune -exec rm -rf {} +
@@ -42,6 +64,32 @@ find "$STAGE" -type f \( \
     -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \
     \) ! -name '.env.example' -delete
 
+# ── manifest.json (fonte de versão + hash de deps p/ o auto-update) ──────────
+STAMP_HHMM="$(date +%Y%m%d-%H%M)"
+BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+GIT_COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# deps_sha256: bloco [project].dependencies normalizado (linhas trimadas, ordenadas)
+DEPS_SHA="$(python3 - "$ROOT/pyproject.toml" <<'PY'
+import sys, hashlib, tomllib
+data = tomllib.load(open(sys.argv[1], "rb"))
+deps = data.get("project", {}).get("dependencies", [])
+opt = data.get("project", {}).get("optional-dependencies", {})
+for v in opt.values():
+    deps = deps + list(v)
+norm = "\n".join(sorted(d.strip() for d in deps if d.strip()))
+print(hashlib.sha256(norm.encode()).hexdigest())
+PY
+)"
+cat > "$STAGE/manifest.json" <<JSON
+{
+  "name": "portal-pedidos",
+  "version": "$STAMP_HHMM",
+  "built_at": "$BUILT_AT",
+  "git_commit": "$GIT_COMMIT",
+  "deps_sha256": "$DEPS_SHA"
+}
+JSON
+
 # ── Quebras de linha CRLF para os arquivos executados no Windows ─────────────
 # .bat exige CRLF (LF puro pode quebrar goto/labels); .ps1 e o template .env
 # tambem ficam CRLF por seguranca.
@@ -49,6 +97,21 @@ while IFS= read -r -d '' f; do
     perl -i -pe 's/\r?\n/\r\n/' "$f"
 done < <(find "$STAGE" -type f \( -name '*.bat' -o -name '*.ps1' \) -print0)
 perl -i -pe 's/\r?\n/\r\n/' "$STAGE/.env.example"
+
+# Guarda ASCII para .ps1: o PowerShell 5.1 do cliente le arquivos .ps1 SEM BOM
+# como ANSI (Windows-1252), nao UTF-8 -- qualquer caractere nao-ASCII (traco
+# longo, box-drawing, acento) vira bytes que quebram o PARSE do script (string
+# sem terminador). Nao ha pwsh no CI para pegar isso, entao falhamos o build
+# aqui: .ps1 tem que ser 100% ASCII. Usa perl (ja dependencia deste script,
+# ver CRLF acima) -- portavel e sem engolir erro (grep -P nao existe no BSD
+# grep do macOS). Se disparar, sanitize com:
+#   python3 -c "import glob,io; [io.open(f,'w').write(io.open(f,encoding='utf-8').read().replace(chr(0x2014),'-').replace(chr(0x2500),'-')) for f in glob.glob('scripts/*.ps1')]"
+ascii_report="$(perl -ne 'print "    $ARGV:$.: $_" if /[^\x00-\x7F]/' "$STAGE"/scripts/*.ps1)"
+if [ -n "$ascii_report" ]; then
+    echo "ERRO: caractere nao-ASCII em .ps1 (quebra o parse no PowerShell 5.1 do cliente):" >&2
+    echo "$ascii_report" >&2
+    exit 1
+fi
 
 # ── Empacotar ────────────────────────────────────────────────────────────────
 mkdir -p "$ROOT/dist"

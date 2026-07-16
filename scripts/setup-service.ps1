@@ -11,8 +11,10 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$AppDir   = Split-Path -Parent $PSScriptRoot
-$TaskName = "PortalPedidos"
+$AppDir           = Split-Path -Parent $PSScriptRoot
+$TaskName         = "PortalPedidos"
+$UpdaterTaskName  = "PortalPedidosUpdater"
+$WatchdogTaskName = "PortalPedidosWatchdog"
 
 . (Join-Path $PSScriptRoot "network.ps1")
 
@@ -21,16 +23,18 @@ function Write-Step([string]$N, [string]$Msg) {
     Write-Host "  [$N] $Msg" -ForegroundColor Cyan
 }
 
-function Write-OK([string]$Msg)   { Write-Host "        OK — $Msg" -ForegroundColor Green }
+function Write-OK([string]$Msg)   { Write-Host "        OK - $Msg" -ForegroundColor Green }
 function Write-Fail([string]$Msg) { Write-Host ""; Write-Host "  [ERRO] $Msg" -ForegroundColor Red; Write-Host "" }
 
-# ── [1/3] Verificar pre-requisitos ───────────────────────────────────────────
+# -- [1/4] Verificar pre-requisitos -------------------------------------------
 
-Write-Step "1/3" "Verificando pre-requisitos..."
+Write-Step "1/4" "Verificando pre-requisitos..."
 
-$VenvPythonW = Join-Path $AppDir ".venv\Scripts\pythonw.exe"
-$UiScript    = Join-Path $AppDir "ui.py"
-$EnvFile     = Join-Path $AppDir ".env"
+$VenvPythonW       = Join-Path $AppDir ".venv\Scripts\pythonw.exe"
+$UiScript          = Join-Path $AppDir "ui.py"
+$EnvFile           = Join-Path $AppDir ".env"
+$ApplyUpdateScript = Join-Path $PSScriptRoot "apply-update.ps1"
+$WatchdogScript    = Join-Path $PSScriptRoot "watchdog.ps1"
 
 if (-not (Test-Path $VenvPythonW)) {
     Write-Fail "pythonw.exe nao encontrado em .venv\Scripts\."
@@ -44,16 +48,33 @@ if (-not (Test-Path $EnvFile)) {
     exit 1
 }
 
+if (-not (Test-Path $ApplyUpdateScript)) {
+    Write-Fail "scripts\apply-update.ps1 nao encontrado."
+    exit 1
+}
+
+if (-not (Test-Path $WatchdogScript)) {
+    Write-Fail "scripts\watchdog.ps1 nao encontrado."
+    exit 1
+}
+
 Write-OK "Pre-requisitos OK."
 
-# ── [2/3] Registrar tarefa agendada ──────────────────────────────────────────
+# -- [2/4] Registrar tarefa agendada ------------------------------------------
 
-Write-Step "2/3" "Registrando tarefa '$TaskName' no Agendador de Tarefas..."
+Write-Step "2/4" "Registrando tarefa '$TaskName' no Agendador de Tarefas..."
 
 # Remover tarefa anterior se existir (idempotente)
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($existing) {
     Write-Host "        Removendo tarefa anterior..." -ForegroundColor Gray
+    # Unregister nao mata o processo em execucao: se o app estiver no ar, o
+    # pythonw antigo continua segurando a porta e o Start-ScheduledTask do
+    # passo 4 sobe uma 2a instancia que morre no bind. Parar antes evita isso.
+    if ($existing.State -eq "Running") {
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
 
@@ -68,7 +89,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit      ([TimeSpan]::Zero) `
     -RestartCount            5 `
     -RestartInterval         (New-TimeSpan -Minutes 2) `
-    -StartWhenAvailable      $true `
+    -StartWhenAvailable:$true `
     -MultipleInstances       IgnoreNew
 
 # Rodar como SYSTEM para iniciar sem usuario logado
@@ -87,9 +108,84 @@ $task = Register-ScheduledTask `
 
 Write-OK "Tarefa '$TaskName' registrada."
 
-# ── [3/3] Iniciar agora ───────────────────────────────────────────────────────
+# -- [3/4] Registrar tarefas auxiliares (updater on-demand + watchdog) -------
 
-Write-Step "3/3" "Iniciando o servidor..."
+Write-Step "3/4" "Registrando tarefas auxiliares '$UpdaterTaskName' e '$WatchdogTaskName'..."
+
+# --- PortalPedidosUpdater: on-demand, disparada via 'schtasks /run' pelo
+#     endpoint POST /api/admin/update/apply (app/web/routes_update.py). SEM
+#     trigger -- so roda quando chamada explicitamente. MultipleInstances
+#     IgnoreNew e o guard de SO que faz um segundo /apply (ex.: duplo-clique)
+#     virar no-op em vez de rodar dois updaters em paralelo (nao-negociavel).
+$existingUpdater = Get-ScheduledTask -TaskName $UpdaterTaskName -ErrorAction SilentlyContinue
+if ($existingUpdater) {
+    Write-Host "        Removendo tarefa anterior '$UpdaterTaskName'..." -ForegroundColor Gray
+    Unregister-ScheduledTask -TaskName $UpdaterTaskName -Confirm:$false -ErrorAction SilentlyContinue
+}
+
+$updaterAction = New-ScheduledTaskAction `
+    -Execute          "powershell.exe" `
+    -Argument         "-NoProfile -ExecutionPolicy Bypass -File `"$ApplyUpdateScript`"" `
+    -WorkingDirectory $AppDir
+
+$updaterSettings = New-ScheduledTaskSettingsSet `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
+    -MultipleInstances  IgnoreNew
+
+Register-ScheduledTask `
+    -TaskName  $UpdaterTaskName `
+    -Action    $updaterAction `
+    -Settings  $updaterSettings `
+    -Principal $principal `
+    -Force | Out-Null
+
+Write-OK "Tarefa '$UpdaterTaskName' registrada (on-demand, sem trigger)."
+
+# --- PortalPedidosWatchdog: religa o app se ele parar de responder (health-
+#     check a cada 1 min, scripts\watchdog.ps1). MultipleInstances IgnoreNew
+#     evita que um ciclo lento (ex.: religando o app) se sobreponha ao
+#     proximo disparo do trigger de 1 min (Tarefa 7 depende disso).
+$existingWatchdog = Get-ScheduledTask -TaskName $WatchdogTaskName -ErrorAction SilentlyContinue
+if ($existingWatchdog) {
+    Write-Host "        Removendo tarefa anterior '$WatchdogTaskName'..." -ForegroundColor Gray
+    Unregister-ScheduledTask -TaskName $WatchdogTaskName -Confirm:$false -ErrorAction SilentlyContinue
+}
+
+$watchdogAction = New-ScheduledTaskAction `
+    -Execute          "powershell.exe" `
+    -Argument         "-NoProfile -ExecutionPolicy Bypass -File `"$WatchdogScript`"" `
+    -WorkingDirectory $AppDir
+
+# Trigger "Once" disparado agora + repeticao a cada 1 min "para sempre".
+# NAO usar -RepetitionDuration ([TimeSpan]::MaxValue): no Windows 10 /
+# Server 2016+ o Register-ScheduledTask REJEITA (MaxValue serializa como
+# P10675199DT2H48M5.4775807S e o Task Scheduler recusa os segundos
+# fracionarios -- "value incorrectly formatted or out of range"), abortando
+# o setup sob EAP=Stop e deixando o app sem subir. Omitir a duracao com
+# -RepetitionInterval ja significa "repetir indefinidamente" nessas builds.
+$watchdogTrigger = New-ScheduledTaskTrigger `
+    -Once `
+    -At                 (Get-Date) `
+    -RepetitionInterval (New-TimeSpan -Minutes 1)
+
+$watchdogSettings = New-ScheduledTaskSettingsSet `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
+    -StartWhenAvailable:$true `
+    -MultipleInstances  IgnoreNew
+
+Register-ScheduledTask `
+    -TaskName  $WatchdogTaskName `
+    -Action    $watchdogAction `
+    -Trigger   $watchdogTrigger `
+    -Settings  $watchdogSettings `
+    -Principal $principal `
+    -Force | Out-Null
+
+Write-OK "Tarefa '$WatchdogTaskName' registrada (repete a cada 1 minuto)."
+
+# -- [4/4] Iniciar agora -------------------------------------------------------
+
+Write-Step "4/4" "Iniciando o servidor..."
 
 Start-ScheduledTask -TaskName $TaskName
 Start-Sleep -Seconds 3
@@ -134,8 +230,8 @@ if ($portalHost -eq "0.0.0.0") {
 }
 Write-Host ""
 Write-Host "  Para verificar o status:" -ForegroundColor Gray
-Write-Host "    Get-ScheduledTask -TaskName '$TaskName' | Select-Object State" -ForegroundColor Gray
+Write-Host "    Get-ScheduledTask -TaskName '$TaskName','$UpdaterTaskName','$WatchdogTaskName' | Select-Object TaskName, State" -ForegroundColor Gray
 Write-Host ""
-Write-Host "  Para remover o autostart:" -ForegroundColor Gray
+Write-Host "  Para remover o autostart (e as tarefas de update/watchdog):" -ForegroundColor Gray
 Write-Host "    Execute  desinstalar.bat  como Administrador." -ForegroundColor Gray
 Write-Host ""
