@@ -219,3 +219,19 @@ LIST_PRODUTOS_CATALOGO = """
     FROM PRODUTOS P
     ORDER BY P.SEQ
 """
+
+# Variante filtrada: só o subgrupo MEIAS (marcação feita no Fire — Parte 2 do
+# rollout, ver flowpcp_catalogo_apenas_meias). Fail-safe: se o subgrupo MEIAS
+# ainda não existir em GRUPO_PRODUTOS_SUB, a subquery não acha nada e a query
+# retorna 0 linhas (nunca "vaza" o catálogo inteiro por engano).
+LIST_PRODUTOS_CATALOGO_MEIAS = """
+    SELECT P.SEQ, P.DESCRICAO, P.UNIDADE, P.CODIGO_EAN13, P.BLOQUEADO,
+           CASE WHEN EXISTS (
+               SELECT 1 FROM PRODUTOS_KIT K WHERE K.CODPRODUTO_PAI = P.SEQ
+           ) THEN 1 ELSE 0 END AS IS_KIT
+    FROM PRODUTOS P
+    WHERE P.CODSUBGRUPO IN (
+        SELECT CODIGO FROM GRUPO_PRODUTOS_SUB WHERE UPPER(TRIM(DESCRICAO)) = 'MEIAS'
+    )
+    ORDER BY P.SEQ
+"""

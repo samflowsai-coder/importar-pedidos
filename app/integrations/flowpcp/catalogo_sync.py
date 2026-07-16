@@ -67,7 +67,9 @@ def run_catalogo_sync(
         fire_ctx = FirebirdConnection().connect_with_config(environments_repo.to_fb_config(env))
 
     with fire_ctx as fire_conn:
-        dtos = extract_produtos(fire_conn)
+        dtos = extract_produtos(
+            fire_conn, apenas_meias=getattr(cfg, "catalogo_apenas_meias", False)
+        )
 
     # Cópia local SEMPRE — "manter no importador" independe do envio ao Flow.
     env_ctx = nullcontext(_env_conn) if _env_conn is not None else router.env_connect(slug)

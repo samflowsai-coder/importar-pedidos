@@ -51,7 +51,7 @@ def test_run_sync_extrai_empurra_e_devolve_relatorio(monkeypatch):
         ProdutoFireDTO("1", "1", "X", "PC", None, True, "simples"),
         ProdutoFireDTO("2", "2", "Y", "PC", "789", False, "kit"),
     ]
-    monkeypatch.setattr(catalogo_sync, "extract_produtos", lambda conn: dtos)
+    monkeypatch.setattr(catalogo_sync, "extract_produtos", lambda conn, **kw: dtos)
 
     class _Cfg:
         enabled = True
@@ -83,7 +83,7 @@ def test_run_sync_none_quando_flowpcp_desabilitado(monkeypatch):
 def test_run_sync_local_only_quando_gate_off(monkeypatch):
     """catalogo_push OFF → extrai + grava local, NÃO envia ao Flow."""
     dtos = [ProdutoFireDTO("1", "1", "X", "PC", None, True, "simples")]
-    monkeypatch.setattr(catalogo_sync, "extract_produtos", lambda conn: dtos)
+    monkeypatch.setattr(catalogo_sync, "extract_produtos", lambda conn, **kw: dtos)
 
     class _Cfg:
         enabled = True
@@ -94,8 +94,13 @@ def test_run_sync_local_only_quando_gate_off(monkeypatch):
     fake_client = _FakeClient()
     env_conn = _FakeEnvConn()
     rep = catalogo_sync.run_catalogo_sync(
-        "mm", dry_run=True, full_sync=True, now_iso="2026-07-11T00:00:00Z",
-        _client=fake_client, _fire_conn=object(), _env_conn=env_conn,
+        "mm",
+        dry_run=True,
+        full_sync=True,
+        now_iso="2026-07-11T00:00:00Z",
+        _client=fake_client,
+        _fire_conn=object(),
+        _env_conn=env_conn,
     )
     assert isinstance(rep, catalogo_sync.CatalogoLocalResult)
     assert rep.itens == 1
@@ -106,7 +111,7 @@ def test_run_sync_local_only_quando_gate_off(monkeypatch):
 
 def test_run_sync_com_gate_on_grava_local_e_envia(monkeypatch):
     dtos = [ProdutoFireDTO("1", "1", "X", "PC", None, True, "simples")]
-    monkeypatch.setattr(catalogo_sync, "extract_produtos", lambda conn: dtos)
+    monkeypatch.setattr(catalogo_sync, "extract_produtos", lambda conn, **kw: dtos)
 
     class _Cfg:
         enabled = True
@@ -117,9 +122,63 @@ def test_run_sync_com_gate_on_grava_local_e_envia(monkeypatch):
     fake_client = _FakeClient()
     env_conn = _FakeEnvConn()
     rep = catalogo_sync.run_catalogo_sync(
-        "mm", dry_run=True, full_sync=True, now_iso="t",
-        _client=fake_client, _fire_conn=object(), _env_conn=env_conn,
+        "mm",
+        dry_run=True,
+        full_sync=True,
+        now_iso="t",
+        _client=fake_client,
+        _fire_conn=object(),
+        _env_conn=env_conn,
     )
     assert rep.fire_pk_presente == "todos"  # relatório do Flow
     assert fake_client.sent is not None
     assert any("catalogo_fire" in sql for sql in env_conn.executed)
+
+
+def _spy_extract(monkeypatch, dtos):
+    """Monkeypatcha extract_produtos por um spy que CAPTURA o kwarg apenas_meias.
+    Retorna o dict de captura — o teste garante que o flag chega no extract
+    (um rename/typo do campo viraria no-op → vazaria o catálogo inteiro)."""
+    captura: dict = {}
+
+    def fake(conn, *, apenas_meias=False):
+        captura["apenas_meias"] = apenas_meias
+        return dtos
+
+    monkeypatch.setattr(catalogo_sync, "extract_produtos", fake)
+    return captura
+
+
+def _run_sync_capturando_flag(monkeypatch, *, catalogo_apenas_meias):
+    dtos = [ProdutoFireDTO("1", "1", "X", "PC", None, True, "simples")]
+    captura = _spy_extract(monkeypatch, dtos)
+
+    class _Cfg:
+        enabled = True
+        catalogo_push = False  # local-only: isola o teste no wiring do extract
+
+    _Cfg.catalogo_apenas_meias = catalogo_apenas_meias
+    monkeypatch.setattr(catalogo_sync, "flowpcp_config_for_slug", lambda slug: _Cfg())
+
+    catalogo_sync.run_catalogo_sync(
+        "mm",
+        dry_run=True,
+        full_sync=True,
+        now_iso="t",
+        _client=_FakeClient(),
+        _fire_conn=object(),
+        _env_conn=_FakeEnvConn(),
+    )
+    return captura
+
+
+def test_flag_apenas_meias_true_chega_no_extract(monkeypatch):
+    """catalogo_apenas_meias=True na config → extract_produtos(apenas_meias=True)."""
+    captura = _run_sync_capturando_flag(monkeypatch, catalogo_apenas_meias=True)
+    assert captura["apenas_meias"] is True
+
+
+def test_flag_apenas_meias_false_chega_no_extract(monkeypatch):
+    """catalogo_apenas_meias=False → extract_produtos(apenas_meias=False) (default: tudo)."""
+    captura = _run_sync_capturando_flag(monkeypatch, catalogo_apenas_meias=False)
+    assert captura["apenas_meias"] is False

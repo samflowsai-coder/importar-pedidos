@@ -11,6 +11,7 @@ Senha do Firebird:
 
 Endpoint `POST /{id}/test` valida pastas + tenta conexão Firebird.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -39,6 +40,7 @@ class CreateEnvRequest(BaseModel):
 
 class UpdateEnvRequest(BaseModel):
     """slug propositalmente ausente — imutável após criação."""
+
     name: str | None = None
     watch_dir: str | None = None
     output_dir: str | None = None
@@ -53,6 +55,7 @@ class UpdateEnvRequest(BaseModel):
 
 class FlowPCPConfigRequest(BaseModel):
     """Config da ponte FlowPCP por ambiente. Token cifrado via secret_store."""
+
     enabled: bool = False
     base_url: str | None = None
     tenant_id: str | None = None
@@ -62,6 +65,9 @@ class FlowPCPConfigRequest(BaseModel):
     request_timeout_s: float = Field(default=30.0, gt=0)
     # Gate do envio de catálogo ao Flow (OFF = sync só atualiza a cópia local)
     catalogo_push: bool = False
+    # Filtro da extração: OFF = todo PRODUTOS (hoje); ON = só subgrupo MEIAS
+    # (depende da marcação no Fire — Parte 2 do rollout)
+    catalogo_apenas_meias: bool = False
     # None = mantém token atual; "" = limpa; valor = substitui
     service_token: str | None = None
 
@@ -90,18 +96,14 @@ def get_environment(env_id: str, _=Depends(require_admin)):
 
 
 @router.patch("/{env_id}")
-def update_environment(
-    env_id: str, payload: UpdateEnvRequest, _=Depends(require_admin)
-):
+def update_environment(env_id: str, payload: UpdateEnvRequest, _=Depends(require_admin)):
     if not environments_repo.get(env_id):
         raise HTTPException(404, "Ambiente não encontrado")
     return environments_repo.update(env_id, **payload.model_dump())
 
 
 @router.put("/{env_id}/flowpcp")
-def set_environment_flowpcp(
-    env_id: str, payload: FlowPCPConfigRequest, _=Depends(require_admin)
-):
+def set_environment_flowpcp(env_id: str, payload: FlowPCPConfigRequest, _=Depends(require_admin)):
     """Grava a config FlowPCP do ambiente (token cifrado). `service_token`:
     omitir/None mantém o atual, "" limpa, valor substitui."""
     if not environments_repo.get(env_id):
@@ -172,6 +174,7 @@ def test_environment(env_id: str, _=Depends(require_admin)):
 def _try_firebird(env: dict) -> tuple[bool, str | None]:
     try:
         from app.erp.connection import FirebirdConnection
+
         cfg = environments_repo.to_fb_config(env)
         with FirebirdConnection().connect_with_config(cfg) as conn:
             cur = conn.cursor()

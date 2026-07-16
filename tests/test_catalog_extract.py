@@ -1,4 +1,5 @@
 from app.erp.catalog_extract import ProdutoFireDTO, extract_produtos
+from app.erp.queries import LIST_PRODUTOS_CATALOGO, LIST_PRODUTOS_CATALOGO_MEIAS
 
 
 class _FakeCursor:
@@ -52,3 +53,24 @@ def test_extract_codigo_seq_e_tipo_kit():
 
 def test_extract_vazio():
     assert extract_produtos(_FakeConn([])) == []
+
+
+def test_extract_default_usa_query_padrao():
+    """Sem `apenas_meias`, roda LIST_PRODUTOS_CATALOGO (tudo) — comportamento atual."""
+    conn = _FakeConn([])
+    extract_produtos(conn)
+    assert conn._cur.executed == LIST_PRODUTOS_CATALOGO
+
+
+def test_extract_apenas_meias_false_usa_query_padrao():
+    conn = _FakeConn([])
+    extract_produtos(conn, apenas_meias=False)
+    assert conn._cur.executed == LIST_PRODUTOS_CATALOGO
+
+
+def test_extract_apenas_meias_true_usa_query_filtrada():
+    """`apenas_meias=True` roda a variante filtrada pelo subgrupo MEIAS."""
+    conn = _FakeConn([])
+    extract_produtos(conn, apenas_meias=True)
+    assert conn._cur.executed == LIST_PRODUTOS_CATALOGO_MEIAS
+    assert conn._cur.executed != LIST_PRODUTOS_CATALOGO

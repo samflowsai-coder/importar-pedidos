@@ -78,3 +78,22 @@ def test_catalogo_push_default_off_e_ligavel(fresh_shared):
     assert cfg2.catalogo_push is True
     # e aparece no public view (UI lê daqui)
     assert environments_repo.get_by_slug("mm")["flowpcp_catalogo_push"] == 1
+
+
+def test_catalogo_apenas_meias_default_off_e_ligavel(fresh_shared):
+    """Filtro do catálogo (só subgrupo MEIAS): default OFF; setável por ambiente."""
+    env = _mk_env("mm", enabled=True, base_url="https://x", tenant_id="t")
+    cfg = flowpcp_config_for_slug("mm")
+    assert cfg.catalogo_apenas_meias is False  # default: extrai PRODUTOS inteiro
+
+    environments_repo.set_flowpcp_config(
+        env["id"],
+        enabled=True,
+        base_url="https://x",
+        tenant_id="t",
+        catalogo_apenas_meias=True,
+    )
+    cfg2 = flowpcp_config_for_slug("mm")
+    assert cfg2.catalogo_apenas_meias is True
+    # e aparece no public view (UI lê daqui)
+    assert environments_repo.get_by_slug("mm")["flowpcp_catalogo_apenas_meias"] == 1

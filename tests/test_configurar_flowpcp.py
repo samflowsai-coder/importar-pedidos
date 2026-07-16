@@ -4,6 +4,7 @@ Cobre o que é crítico: grava a config no app_shared.db, cifra os segredos,
 respeita a semântica 'None mantém', e o gate do Firebird falha graciosamente
 (sem derrubar) — o que garante que um deploy sem Firebird não quebra nada.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -101,9 +102,11 @@ def test_gravar_flowpcp_timeout_300_default(mm_env):
 
 def test_promover_catalogo_simula_depois_promove(mm_env, monkeypatch):
     import app.integrations.flowpcp.catalogo_sync as cs
+
     ordem = []
     monkeypatch.setattr(
-        cs, "run_catalogo_sync",
+        cs,
+        "run_catalogo_sync",
         lambda slug, **kw: (ordem.append(kw["dry_run"]), object())[1],
     )
     cfgtool.promover_catalogo("mm")
@@ -123,6 +126,25 @@ def test_gravar_flowpcp_preserva_catalogo_push_existente(mm_env):
 def test_gravar_flowpcp_catalogo_push_explicito(mm_env):
     env = cfgtool.gravar_flowpcp("mm", service_token="t", catalogo_push=True)
     assert env["flowpcp_catalogo_push"] == 1
+
+
+def test_gravar_flowpcp_preserva_catalogo_apenas_meias_existente(mm_env):
+    """Rodar o configurador de novo NÃO pode desligar o filtro que o admin ligou."""
+    env = environments_repo.get_by_slug("mm")
+    environments_repo.set_flowpcp_config(
+        env["id"],
+        enabled=True,
+        base_url="https://x",
+        tenant_id="t",
+        catalogo_apenas_meias=True,
+    )
+    env2 = cfgtool.gravar_flowpcp("mm", service_token=None)  # re-run sem mexer no filtro
+    assert env2["flowpcp_catalogo_apenas_meias"] == 1
+
+
+def test_gravar_flowpcp_catalogo_apenas_meias_explicito(mm_env):
+    env = cfgtool.gravar_flowpcp("mm", service_token="t", catalogo_apenas_meias=True)
+    assert env["flowpcp_catalogo_apenas_meias"] == 1
 
 
 def test_main_nao_interativo_firebird_falho_nao_bloqueia_pedido(mm_env, monkeypatch, capsys):

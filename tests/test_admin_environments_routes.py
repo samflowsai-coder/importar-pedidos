@@ -1,4 +1,5 @@
 """Rotas /api/admin/environments (CRUD)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,6 +13,7 @@ from app.persistence import db, environments_repo
 @pytest.fixture
 def setup(tmp_path: Path):
     import os
+
     os.environ["APP_DATA_DIR"] = str(tmp_path)
     db.set_db_path(tmp_path / "app_state.db")
     db.reset_init_cache()
@@ -24,6 +26,7 @@ def setup(tmp_path: Path):
 
 def _client():
     from app.web.server import app
+
     return TestClient(app)
 
 
@@ -35,7 +38,8 @@ def test_list_empty(setup):
 
 def test_create_returns_public_view(setup):
     payload = {
-        "slug": "mm", "name": "MM",
+        "slug": "mm",
+        "name": "MM",
         "watch_dir": str(setup / "in"),
         "output_dir": str(setup / "out"),
         "fb_path": str(setup / "x.fdb"),
@@ -54,8 +58,10 @@ def test_create_returns_public_view(setup):
 
 def test_create_rejects_duplicate_slug(setup):
     payload = {
-        "slug": "mm", "name": "MM",
-        "watch_dir": str(setup), "output_dir": str(setup),
+        "slug": "mm",
+        "name": "MM",
+        "watch_dir": str(setup),
+        "output_dir": str(setup),
         "fb_path": "/x.fdb",
     }
     c = _client()
@@ -66,8 +72,10 @@ def test_create_rejects_duplicate_slug(setup):
 
 def test_create_rejects_bad_slug(setup):
     payload = {
-        "slug": "MM Calçados", "name": "MM",
-        "watch_dir": str(setup), "output_dir": str(setup),
+        "slug": "MM Calçados",
+        "name": "MM",
+        "watch_dir": str(setup),
+        "output_dir": str(setup),
         "fb_path": "/x.fdb",
     }
     r = _client().post("/api/admin/environments", json=payload)
@@ -82,8 +90,10 @@ def test_get_returns_404_for_missing(setup):
 def test_patch_keeps_slug_immutable(setup):
     c = _client()
     payload = {
-        "slug": "mm", "name": "MM",
-        "watch_dir": str(setup), "output_dir": str(setup),
+        "slug": "mm",
+        "name": "MM",
+        "watch_dir": str(setup),
+        "output_dir": str(setup),
         "fb_path": "/x.fdb",
     }
     created = c.post("/api/admin/environments", json=payload).json()
@@ -99,8 +109,10 @@ def test_patch_keeps_slug_immutable(setup):
 def test_patch_password_modes(setup):
     c = _client()
     payload = {
-        "slug": "mm", "name": "MM",
-        "watch_dir": str(setup), "output_dir": str(setup),
+        "slug": "mm",
+        "name": "MM",
+        "watch_dir": str(setup),
+        "output_dir": str(setup),
         "fb_path": "/x.fdb",
         "fb_password": "orig",
     }
@@ -120,8 +132,10 @@ def test_patch_password_modes(setup):
 def test_delete_soft_removes_from_list(setup):
     c = _client()
     payload = {
-        "slug": "mm", "name": "MM",
-        "watch_dir": str(setup), "output_dir": str(setup),
+        "slug": "mm",
+        "name": "MM",
+        "watch_dir": str(setup),
+        "output_dir": str(setup),
         "fb_path": "/x.fdb",
     }
     env_id = c.post("/api/admin/environments", json=payload).json()["id"]
@@ -137,8 +151,10 @@ def _create_env(c, setup, slug="mm"):
     return c.post(
         "/api/admin/environments",
         json={
-            "slug": slug, "name": slug.upper(),
-            "watch_dir": str(setup), "output_dir": str(setup),
+            "slug": slug,
+            "name": slug.upper(),
+            "watch_dir": str(setup),
+            "output_dir": str(setup),
             "fb_path": "/x.fdb",
         },
     ).json()["id"]
@@ -207,7 +223,8 @@ def test_get_env_exposes_flowpcp_fields_not_token(setup):
 def test_test_endpoint_validates_paths(setup):
     c = _client()
     payload = {
-        "slug": "mm", "name": "MM",
+        "slug": "mm",
+        "name": "MM",
         "watch_dir": str(setup / "naoexiste"),
         "output_dir": str(setup / "naoexiste-tb"),
         "fb_path": "/inexistente.fdb",
@@ -229,8 +246,10 @@ def test_test_endpoint_validates_existing_paths(setup):
     out_dir.mkdir()
     c = _client()
     payload = {
-        "slug": "mm", "name": "MM",
-        "watch_dir": str(in_dir), "output_dir": str(out_dir),
+        "slug": "mm",
+        "name": "MM",
+        "watch_dir": str(in_dir),
+        "output_dir": str(out_dir),
         "fb_path": "/inexistente.fdb",  # FB falha mas pastas OK
     }
     env_id = c.post("/api/admin/environments", json=payload).json()["id"]
@@ -244,6 +263,7 @@ def test_test_endpoint_validates_existing_paths(setup):
 
 # ── Full-load de catálogo (produtos Fire → Flow) ─────────────────────────────
 
+
 class _FakeReport:
     """Stand-in de CatalogoReconciliacaoResponse — só precisa de model_dump()."""
 
@@ -253,8 +273,12 @@ class _FakeReport:
             "full_sync": True,
             "fire_pk_presente": "todos",
             "contagens": {
-                "fire_total": 3421, "flow_total": 827, "match_limpo": 261,
-                "ambiguo": 0, "fire_only": 3160, "flow_only": 566,
+                "fire_total": 3421,
+                "flow_total": 827,
+                "match_limpo": 261,
+                "ambiguo": 0,
+                "fire_only": 3160,
+                "flow_only": 566,
             },
             "amostras": {"ambiguo": [], "fire_only": [], "flow_only": []},
         }
@@ -262,18 +286,25 @@ class _FakeReport:
 
 def _enable_flowpcp(env_id):
     environments_repo.set_flowpcp_config(
-        env_id, enabled=True, base_url="https://gestor.samflowsai.com.br",
-        tenant_id="1798c3c5-0fb6-4edb-a523-e13fb5bf52a0", service_token="tok",
+        env_id,
+        enabled=True,
+        base_url="https://gestor.samflowsai.com.br",
+        tenant_id="1798c3c5-0fb6-4edb-a523-e13fb5bf52a0",
+        service_token="tok",
     )
 
 
 def test_sync_catalogo_retorna_relatorio(setup, monkeypatch):
     env = environments_repo.create(
-        slug="mm", name="MM", watch_dir=str(setup), output_dir=str(setup),
+        slug="mm",
+        name="MM",
+        watch_dir=str(setup),
+        output_dir=str(setup),
         fb_path=str(setup / "x.fdb"),
     )
     _enable_flowpcp(env["id"])
     import app.integrations.flowpcp.catalogo_sync as cs
+
     monkeypatch.setattr(cs, "run_catalogo_sync", lambda *a, **k: _FakeReport())
 
     r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo")
@@ -285,7 +316,10 @@ def test_sync_catalogo_retorna_relatorio(setup, monkeypatch):
 
 def test_sync_catalogo_409_se_flowpcp_desligado(setup):
     env = environments_repo.create(
-        slug="mm", name="MM", watch_dir=str(setup), output_dir=str(setup),
+        slug="mm",
+        name="MM",
+        watch_dir=str(setup),
+        output_dir=str(setup),
         fb_path=str(setup / "x.fdb"),
     )
     r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo")
@@ -299,11 +333,15 @@ def test_sync_catalogo_404_ambiente_inexistente(setup):
 
 def test_sync_catalogo_apply_promove_passa_dry_run_false(setup, monkeypatch):
     env = environments_repo.create(
-        slug="mm", name="MM", watch_dir=str(setup), output_dir=str(setup),
+        slug="mm",
+        name="MM",
+        watch_dir=str(setup),
+        output_dir=str(setup),
         fb_path=str(setup / "x.fdb"),
     )
     _enable_flowpcp(env["id"])
     import app.integrations.flowpcp.catalogo_sync as cs
+
     capturado = {}
 
     def fake(slug, **kw):
@@ -320,13 +358,19 @@ def test_sync_catalogo_apply_promove_passa_dry_run_false(setup, monkeypatch):
 
 def test_sync_catalogo_default_e_dry_run(setup, monkeypatch):
     env = environments_repo.create(
-        slug="mm", name="MM", watch_dir=str(setup), output_dir=str(setup),
+        slug="mm",
+        name="MM",
+        watch_dir=str(setup),
+        output_dir=str(setup),
         fb_path=str(setup / "x.fdb"),
     )
     _enable_flowpcp(env["id"])
     import app.integrations.flowpcp.catalogo_sync as cs
+
     capturado = {}
-    monkeypatch.setattr(cs, "run_catalogo_sync", lambda slug, **kw: capturado.update(kw) or _FakeReport())
+    monkeypatch.setattr(
+        cs, "run_catalogo_sync", lambda slug, **kw: capturado.update(kw) or _FakeReport()
+    )
     r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo")
     assert r.status_code == 200
     assert capturado["dry_run"] is True
@@ -335,13 +379,18 @@ def test_sync_catalogo_default_e_dry_run(setup, monkeypatch):
 def test_sync_catalogo_local_only_quando_gate_off(setup, monkeypatch):
     """Gate OFF → 200 com local_only=True (catálogo só atualizado no importador)."""
     env = environments_repo.create(
-        slug="mm", name="MM", watch_dir=str(setup), output_dir=str(setup),
+        slug="mm",
+        name="MM",
+        watch_dir=str(setup),
+        output_dir=str(setup),
         fb_path=str(setup / "x.fdb"),
     )
     _enable_flowpcp(env["id"])
     import app.integrations.flowpcp.catalogo_sync as cs
+
     monkeypatch.setattr(
-        cs, "run_catalogo_sync",
+        cs,
+        "run_catalogo_sync",
         lambda *a, **k: cs.CatalogoLocalResult(itens=3421, extraido_em="2026-07-11T10:00:00Z"),
     )
     r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo")
@@ -353,13 +402,36 @@ def test_sync_catalogo_local_only_quando_gate_off(setup, monkeypatch):
 
 def test_put_flowpcp_aceita_catalogo_push(setup):
     env = environments_repo.create(
-        slug="mm", name="MM", watch_dir=str(setup), output_dir=str(setup),
+        slug="mm",
+        name="MM",
+        watch_dir=str(setup),
+        output_dir=str(setup),
         fb_path=str(setup / "x.fdb"),
     )
     r = _client().put(
         f"/api/admin/environments/{env['id']}/flowpcp",
-        json={"enabled": True, "base_url": "https://x", "tenant_id": "t",
-              "catalogo_push": True},
+        json={"enabled": True, "base_url": "https://x", "tenant_id": "t", "catalogo_push": True},
     )
     assert r.status_code == 200
     assert r.json()["flowpcp_catalogo_push"] == 1
+
+
+def test_put_flowpcp_aceita_catalogo_apenas_meias(setup):
+    env = environments_repo.create(
+        slug="mm",
+        name="MM",
+        watch_dir=str(setup),
+        output_dir=str(setup),
+        fb_path=str(setup / "x.fdb"),
+    )
+    r = _client().put(
+        f"/api/admin/environments/{env['id']}/flowpcp",
+        json={
+            "enabled": True,
+            "base_url": "https://x",
+            "tenant_id": "t",
+            "catalogo_apenas_meias": True,
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["flowpcp_catalogo_apenas_meias"] == 1

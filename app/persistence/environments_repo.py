@@ -33,6 +33,7 @@ _PUBLIC_FIELDS = (
     "flowpcp_enabled", "flowpcp_base_url", "flowpcp_tenant_id",
     "flowpcp_timezone", "flowpcp_dry_run", "flowpcp_poll_interval_s",
     "flowpcp_request_timeout_s", "flowpcp_catalogo_push",
+    "flowpcp_catalogo_apenas_meias",
 )
 
 
@@ -214,6 +215,7 @@ def set_flowpcp_config(
     poll_interval_s: int = 30,
     request_timeout_s: float = 30.0,
     catalogo_push: bool = False,
+    catalogo_apenas_meias: bool = False,
     service_token: str | None = None,
 ) -> dict[str, Any] | None:
     """Grava a config FlowPCP do ambiente. Token cifrado via secret_store.
@@ -234,6 +236,7 @@ def set_flowpcp_config(
         "flowpcp_poll_interval_s": int(poll_interval_s),
         "flowpcp_request_timeout_s": float(request_timeout_s),
         "flowpcp_catalogo_push": 1 if catalogo_push else 0,
+        "flowpcp_catalogo_apenas_meias": 1 if catalogo_apenas_meias else 0,
         "updated_at": _now(),
     }
     if service_token is not None:

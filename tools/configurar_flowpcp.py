@@ -67,11 +67,14 @@ def gravar_flowpcp(
     tenant_id: str = TENANT_MM_PROD,
     request_timeout_s: float = 300.0,
     catalogo_push: bool | None = None,
+    catalogo_apenas_meias: bool | None = None,
 ) -> dict:
     """Liga o FlowPCP no ambiente `slug` (enabled=1, url, tenant, token, timeout).
     `service_token=None` mantém o token atual; string vazia limpa; valor substitui.
     `catalogo_push=None` PRESERVA o gate atual (re-rodar o configurador não pode
     desligar o que o admin ligou); True/False seta explicitamente.
+    `catalogo_apenas_meias=None` PRESERVA o filtro atual (mesma semântica);
+    liga na tela do ambiente depois que a marcação MEIAS existir no Fire.
     `request_timeout_s=300` por padrão — o promote de milhares de itens é lento.
     dry_run=1 por segurança (só afeta a VOLTA, que não usamos hoje)."""
     from app.persistence import environments_repo
@@ -84,6 +87,8 @@ def gravar_flowpcp(
         )
     if catalogo_push is None:
         catalogo_push = bool(env.get("flowpcp_catalogo_push"))
+    if catalogo_apenas_meias is None:
+        catalogo_apenas_meias = bool(env.get("flowpcp_catalogo_apenas_meias"))
     environments_repo.set_flowpcp_config(
         env["id"],
         enabled=True,
@@ -92,6 +97,7 @@ def gravar_flowpcp(
         dry_run=True,
         request_timeout_s=request_timeout_s,
         catalogo_push=catalogo_push,
+        catalogo_apenas_meias=catalogo_apenas_meias,
         service_token=service_token,
     )
     return environments_repo.get_by_slug(slug)
@@ -193,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"      base_url       = {env['flowpcp_base_url']}")
     print(f"      tenant_id      = {env['flowpcp_tenant_id']}")
     print(f"      envia catálogo = {bool(env['flowpcp_catalogo_push'])}")
+    print(f"      só meias       = {bool(env['flowpcp_catalogo_apenas_meias'])}")
 
     # 3) Firebird: grava senha (se dada) e testa a conexão
     env = gravar_senha_firebird(args.slug, fb_pw)
