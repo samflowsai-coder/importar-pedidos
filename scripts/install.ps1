@@ -171,7 +171,9 @@ if ($useWheelhouse) {
 $prevEAP = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 try {
-    $pipOut = & $VenvPip @pipArgs 2>&1
+    # python -m pip (nao pip.exe): o launcher pip.exe quebra se o .venv foi
+    # criado/copiado de outro caminho (sai 1 sem imprimir nada).
+    $pipOut = & $VenvPython -m pip @pipArgs 2>&1
 } finally {
     $ErrorActionPreference = $prevEAP
 }

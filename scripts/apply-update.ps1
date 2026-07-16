@@ -494,8 +494,12 @@ function Wait-Healthy {
 # Usada tanto pela fase "pip" do apply quanto pelo re-pip do rollback --
 # uma unica funcao, sem duplicar a logica/o gate em dois lugares.
 function Install-Dependencies {
-    $pip = Join-Path $AppDir ".venv\Scripts\pip.exe"
-    if (-not (Test-Path $pip)) { throw "pip.exe nao encontrado em $pip" }
+    # `python.exe -m pip` em vez de `pip.exe`: o launcher pip.exe do venv embute
+    # o caminho ABSOLUTO do python na criacao -- se o .venv foi criado/copiado de
+    # outro caminho (comum no deploy do cliente), o pip.exe aponta pro python
+    # errado e SAI 1 SEM IMPRIMIR NADA. `python -m pip` ignora o launcher.
+    $python = Join-Path $AppDir ".venv\Scripts\python.exe"
+    if (-not (Test-Path $python)) { throw "python.exe nao encontrado em $python" }
 
     # Instalacao OFFLINE: o updater roda como SYSTEM, que NAO alcanca o PyPI. As
     # deps viajam empacotadas em <AppDir>\wheelhouse (wheels win_amd64/py3.11).
@@ -514,7 +518,7 @@ function Install-Dependencies {
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $out = & $pip install -e $AppDir --no-index --find-links $wheelhouse --no-warn-script-location 2>&1
+        $out = & $python -m pip install -e $AppDir --no-index --find-links $wheelhouse --no-warn-script-location 2>&1
     } finally {
         $ErrorActionPreference = $prevEAP
     }
