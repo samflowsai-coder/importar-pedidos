@@ -37,6 +37,12 @@ def staging_dir() -> Path:
 
 
 _RUNNING_STATUSES = {"apply_requested", "in_progress"}
+_TERMINAL_STATUSES = {"succeeded", "rolled_back", "rollback_failed"}
+# Um updater VIVO segura o update.lock durante toda a aplicação. Logo, status
+# "rodando" SEM lock e com started_at antigo = o updater morreu sem escrever
+# status terminal (ex.: o watchdog já removeu o lock órfão). Bem acima da janela
+# de criação do lock (~1-3s) e de qualquer apply real (~1-5min holds the lock).
+_STALE_RUNNING_SECONDS = 180
 
 
 def _applied_info() -> dict:
@@ -154,3 +160,38 @@ def apply(body: ApplyBody, _=Depends(require_admin)):
         state.write_status(updates_dir(), status="staged")  # reverte
         raise HTTPException(409, "serviço de update não configurado — rode setup-service.bat no servidor")
     return {"update_id": body.update_id, "status": "apply_requested"}
+
+
+def _running_but_dead(s: dict) -> bool:
+    """status diz 'rodando' mas — chamado DEPOIS do guard de is_locked, então sem
+    lock — o started_at é antigo → o updater morreu sem escrever status terminal.
+    Só nesse caso /dismiss pode destravar um status 'rodando' (senão respeita o
+    update em andamento)."""
+    if s.get("status") not in _RUNNING_STATUSES:
+        return False
+    started = s.get("started_at")
+    if not isinstance(started, (int, float)):
+        return False
+    return (time.time() - started) > _STALE_RUNNING_SECONDS
+
+
+@router.post("/dismiss")
+def dismiss(_=Depends(require_admin)):
+    """Dispensa um status TERMINAL (succeeded/rolled_back/rollback_failed) — ou um
+    'rodando' comprovadamente MORTO (sem lock + started_at antigo) — de volta pra
+    idle, liberando a tela de upload sem apagar o status.json na mão. Recusa (409)
+    se há um update de fato em andamento; em idle/staged é no-op (não mexe no
+    pacote staged)."""
+    if state.is_locked(updates_dir()):
+        raise HTTPException(409, "há um update em andamento")
+    s = state.read_status(updates_dir())
+    dead = _running_but_dead(s)
+    if s.get("status") in _RUNNING_STATUSES and not dead:
+        raise HTTPException(409, "há um update em andamento")
+    if s.get("status") in _TERMINAL_STATUSES or dead:
+        state.clear_status(updates_dir())
+    # devolve o estado REAL resultante (idle se limpou; senão o atual inalterado,
+    # ex.: staged não é mexido) — a resposta nunca mente sobre o disco.
+    out = state.read_status(updates_dir())
+    out.setdefault("current_version", _current_version())
+    return out

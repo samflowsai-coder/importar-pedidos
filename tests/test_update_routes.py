@@ -153,6 +153,117 @@ def test_upload_invalido_preserva_staging_valido_anterior(setup, monkeypatch):
     assert status["update_id"] == update_id_v1
 
 
+@pytest.mark.parametrize("terminal_status", ["succeeded", "rolled_back", "rollback_failed"])
+def test_dismiss_reseta_status_terminal(setup, terminal_status):
+    """Bug: um status terminal travava a tela de upload e só saía apagando o
+    status.json na mão. /dismiss reseta pra idle (persistente no disco)."""
+    from app.updates import state
+    from app.web import routes_update
+
+    state.write_status(routes_update.updates_dir(), status=terminal_status, version="v1")
+    r = _client().post("/api/admin/update/dismiss")
+    assert r.status_code == 200 and r.json()["status"] == "idle"
+    assert state.read_status(routes_update.updates_dir())["status"] == "idle"
+
+
+@pytest.mark.parametrize("running_status", ["apply_requested", "in_progress"])
+def test_dismiss_recusa_409_quando_em_andamento(setup, running_status):
+    """Não pode dispensar durante um update em andamento — e o estado em
+    andamento NÃO é mexido."""
+    from app.updates import state
+    from app.web import routes_update
+
+    state.write_status(routes_update.updates_dir(), status=running_status, update_id="x")
+    r = _client().post("/api/admin/update/dismiss")
+    assert r.status_code == 409
+    assert state.read_status(routes_update.updates_dir())["status"] == running_status
+
+
+def test_dismiss_idle_e_noop_200(setup):
+    r = _client().post("/api/admin/update/dismiss")
+    assert r.status_code == 200 and r.json()["status"] == "idle"
+
+
+def test_dismiss_preserva_staged(setup):
+    """/dismiss é só pra status terminal — em staged é no-op e NÃO descarta o
+    pacote pronto pra aplicar."""
+    from app.updates import state
+    from app.web import routes_update
+
+    state.write_status(routes_update.updates_dir(), status="staged", update_id="abc", version="v1")
+    r = _client().post("/api/admin/update/dismiss")
+    assert r.status_code == 200 and r.json()["status"] == "staged"
+    assert state.read_status(routes_update.updates_dir())["status"] == "staged"
+
+
+def test_dismiss_destrava_running_morto(setup):
+    """Updater morreu sem escrever status terminal (sem lock + started_at antigo,
+    ex.: watchdog já removeu o lock órfão): /dismiss destrava — senão o operador
+    voltaria a editar o status.json na mão (o exato bug que o fix ataca)."""
+    import time
+
+    from app.updates import state
+    from app.web import routes_update
+
+    state.write_status(routes_update.updates_dir(), status="in_progress",
+                       started_at=time.time() - 3600)
+    r = _client().post("/api/admin/update/dismiss")
+    assert r.status_code == 200 and r.json()["status"] == "idle"
+    assert state.read_status(routes_update.updates_dir())["status"] == "idle"
+
+
+def test_dismiss_running_recente_ainda_409(setup):
+    """Um 'in_progress' RECENTE (apply de verdade, ainda na janela de criação do
+    lock) NÃO pode ser dispensado."""
+    import time
+
+    from app.updates import state
+    from app.web import routes_update
+
+    state.write_status(routes_update.updates_dir(), status="in_progress",
+                       started_at=time.time())
+    r = _client().post("/api/admin/update/dismiss")
+    assert r.status_code == 409
+    assert state.read_status(routes_update.updates_dir())["status"] == "in_progress"
+
+
+def test_dismiss_lock_presente_409(setup):
+    """Com update.lock no disco (updater vivo segurando), /dismiss recusa mesmo
+    que o started_at fosse antigo."""
+    import time
+
+    from app.updates import state
+    from app.web import routes_update
+
+    state.write_status(routes_update.updates_dir(), status="in_progress",
+                       started_at=time.time() - 3600)
+    state.lock_path(routes_update.updates_dir()).touch()
+    r = _client().post("/api/admin/update/dismiss")
+    assert r.status_code == 409
+
+
+def test_dismiss_status_desconhecido_e_noop(setup):
+    """Status inesperado (nem terminal, nem rodando) é no-op — não apaga nada."""
+    from app.updates import state
+    from app.web import routes_update
+
+    state.write_status(routes_update.updates_dir(), status="weird")
+    r = _client().post("/api/admin/update/dismiss")
+    assert r.status_code == 200 and r.json()["status"] == "weird"
+
+
+def test_dismiss_sem_auth_401(setup, real_auth):
+    r = _client().post("/api/admin/update/dismiss")
+    assert r.status_code == 401
+
+
+def test_dismiss_operador_nao_admin_403(setup, real_auth):
+    c = _client()
+    _bootstrap_operator_session(c)
+    r = c.post("/api/admin/update/dismiss")
+    assert r.status_code == 403
+
+
 def test_status_sem_auth_401(setup, real_auth):
     r = _client().get("/api/admin/update/status")
     assert r.status_code == 401

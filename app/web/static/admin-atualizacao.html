@@ -263,6 +263,9 @@
         <span id="progress-elapsed">0s</span>
         <span id="progress-note"></span>
       </div>
+      <div class="actions" id="progress-recovery" hidden style="margin-top:16px">
+        <button class="btn" id="btn-force-dismiss">Dispensar e enviar outro pacote</button>
+      </div>
     </div>
 
     <!-- Resultado -->
@@ -272,6 +275,7 @@
       <div class="result-body" id="result-body"></div>
       <div class="actions">
         <button class="btn btn-primary" id="btn-reload">Recarregar página</button>
+        <button class="btn" id="btn-new-update">Enviar outro pacote</button>
       </div>
     </div>
   </div>
@@ -561,7 +565,8 @@
 
   function renderProgressTimeout() {
     $('progress-note').textContent = '';
-    showError('A verificação está demorando mais que o esperado. O servidor pode ainda estar reiniciando — recarregue a página em alguns minutos.');
+    showError('A verificação está demorando mais que o esperado. O servidor pode ainda estar reiniciando — recarregue a página em alguns minutos. Se a atualização travou, use "Dispensar" abaixo para liberar a tela.');
+    $('progress-recovery').hidden = false;
   }
 
   // ── Resultado ────────────────────────────────────────────────────
@@ -596,8 +601,26 @@
     }
   }
 
+  async function dismissTerminal() {
+    // Dispensa o status terminal (ou 'rodando' morto) NO SERVIDOR — sem apagar
+    // arquivo — e volta pra tela de upload. Se o servidor recusar (409: update de
+    // fato em andamento), mostra o motivo e NÃO finge que liberou.
+    clearError();
+    try {
+      const { ok, status, data } = await api('POST', `${API}/dismiss`);
+      if (status === 401) { location.href = '/login'; return; }
+      if (!ok) { showError(data.detail || `Não foi possível dispensar (${status}).`); return; }
+      staged = null;
+      renderIdle();
+    } catch (e) {
+      showError('Falha de rede ao dispensar.');
+    }
+  }
+
   function bindResultActions() {
     $('btn-reload').addEventListener('click', () => location.reload());
+    $('btn-new-update').addEventListener('click', dismissTerminal);
+    $('btn-force-dismiss').addEventListener('click', dismissTerminal);
   }
 
   // ── Boot ─────────────────────────────────────────────────────────
@@ -631,7 +654,13 @@
       renderStaged(staged);
     } else if (data.status === 'apply_requested' || data.status === 'in_progress') {
       startProgress();
+    } else if (data.status === 'succeeded') {
+      // Sucesso de uma atualização JÁ concluída (reload da página): a "Versão
+      // atual" no topo já mostra o resultado — vai direto pro upload, sem card
+      // terminal bloqueando a tela (status ≠ área de upload).
+      renderIdle();
     } else if (TERMINAL.has(data.status)) {
+      // Falhas (rolled_back / rollback_failed) precisam de visibilidade.
       renderResult(data);
     } else {
       renderIdle();

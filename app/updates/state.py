@@ -42,6 +42,13 @@ def write_status(updates_dir: Path, **fields) -> None:
         raise
 
 
+def clear_status(updates_dir: Path) -> None:
+    """Remove o status.json → read_status volta a 'idle'. Usado pra DISPENSAR um
+    status terminal pela UI (libera a tela de upload) sem precisar apagar o
+    arquivo na mão. O histórico (history.jsonl) preserva o registro."""
+    (updates_dir / _STATUS).unlink(missing_ok=True)
+
+
 def append_history(updates_dir: Path, entry: dict) -> None:
     _ensure(updates_dir)
     with open(updates_dir / _HIST, "a", encoding="utf-8") as f:
