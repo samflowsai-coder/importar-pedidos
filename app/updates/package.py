@@ -20,6 +20,7 @@ ALLOWED_TOP = {
     "README.md",
     "INSTALACAO-SERVIDOR.md",
     "manifest.json",
+    "wheelhouse",  # wheels das deps p/ pip install OFFLINE (SYSTEM sem PyPI)
 }
 DENY_SUFFIX = (".db", ".sqlite", ".sqlite3", ".fdb", ".fbk", ".gbk")
 DENY_NAME = {".env", ".secret.key", "config.json", "firebird.json"}

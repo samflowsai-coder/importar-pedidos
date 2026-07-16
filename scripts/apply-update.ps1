@@ -109,7 +109,10 @@ $AppTaskName  = "PortalPedidos"
 # proprio). Mesma lista usada no backup e na aplicacao/rollback -- uma unica
 # fonte de verdade para nao divergir entre "o que eu guardo" e "o que eu
 # aplico". *.bat e descoberto dinamicamente (nomes variam por cliente).
-$AllowlistDirs  = @("scripts", "tools")
+# wheelhouse/ entra na allowlist: assim os wheels sao guardados no backup,
+# restaurados no rollback, e MERGEADOS por cima em updates com deps novas (a
+# fase "apply" roda ANTES da fase "pip", entao os wheels novos ja estao la).
+$AllowlistDirs  = @("scripts", "tools", "wheelhouse")
 $AllowlistFiles = @("ui.py", "main.py", "pyproject.toml")
 
 # Flags de controle (setados durante a execucao; ver Hard Constraints no PR).
@@ -494,19 +497,33 @@ function Install-Dependencies {
     $pip = Join-Path $AppDir ".venv\Scripts\pip.exe"
     if (-not (Test-Path $pip)) { throw "pip.exe nao encontrado em $pip" }
 
+    # Instalacao OFFLINE: o updater roda como SYSTEM, que NAO alcanca o PyPI. As
+    # deps viajam empacotadas em <AppDir>\wheelhouse (wheels win_amd64/py3.11).
+    # --no-index bloqueia o PyPI; --find-links resolve tudo local. setuptools e
+    # wheel estao no wheelhouse porque o pyproject nao tem [build-system]: o pip
+    # usa build isolation com o backend legado, que precisa acha-los offline.
+    $wheelhouse = Join-Path $AppDir "wheelhouse"
+    $haveWheels = (Test-Path $wheelhouse) -and `
+        (@(Get-ChildItem -Path $wheelhouse -Filter *.whl -ErrorAction SilentlyContinue).Count -gt 0)
+    if (-not $haveWheels) {
+        throw ("wheelhouse ausente/vazio em $wheelhouse -- copie a pasta " +
+               "wheelhouse\ para a raiz da instalacao (via share) antes de um " +
+               "update que muda dependencias.")
+    }
+
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $out = & $pip install -e $AppDir --no-warn-script-location 2>&1
+        $out = & $pip install -e $AppDir --no-index --find-links $wheelhouse --no-warn-script-location 2>&1
     } finally {
         $ErrorActionPreference = $prevEAP
     }
 
-    Write-Log "pip install -e (exit $LASTEXITCODE): $($out -join ' | ')"
+    Write-Log "pip install -e --no-index (exit $LASTEXITCODE): $($out -join ' | ')"
 
     if ($LASTEXITCODE -ne 0) {
         $tail = (($out | Select-Object -Last 20) -join " | ")
-        throw "pip install -e falhou (exit $LASTEXITCODE): $tail"
+        throw "pip install -e (offline) falhou (exit $LASTEXITCODE): $tail"
     }
 }
 

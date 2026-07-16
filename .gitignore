@@ -52,3 +52,4 @@ app/.secret.key
 promover-prod.bat
 ligar-flowpcp.bat
 enviar-catalogo-flow.bat
+wheelhouse/

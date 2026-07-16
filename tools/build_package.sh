@@ -12,6 +12,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# --with-wheelhouse: embarca ./wheelhouse/ (wheels das deps p/ pip OFFLINE).
+# Default OFF — pacote de codigo puro fica com poucos MB; so embarca quando as
+# deps mudaram (rode tools/build_wheelhouse.sh antes).
+WITH_WHEELHOUSE=0
+for arg in "$@"; do
+    case "$arg" in
+        --with-wheelhouse) WITH_WHEELHOUSE=1 ;;
+        *) echo "arg desconhecido: $arg (use --with-wheelhouse)" >&2; exit 2 ;;
+    esac
+done
+
 NAME="portal-pedidos"
 STAMP="$(date +%Y%m%d)"
 TMP="$(mktemp -d)"
@@ -29,8 +40,19 @@ cp configurar-integracao.bat sincronizar-catalogo.bat "$STAGE/"
 [ -f enviar-catalogo-flow.bat ] && cp enviar-catalogo-flow.bat "$STAGE/"
 cp README.md INSTALACAO-SERVIDOR.md "$STAGE/"
 
-# Nao empacotar o proprio script de build
-rm -f "$STAGE/tools/build_package.sh"
+# Wheelhouse (wheels das deps p/ pip OFFLINE) — so com --with-wheelhouse.
+if [ "$WITH_WHEELHOUSE" = "1" ]; then
+    if [ ! -d "$ROOT/wheelhouse" ] || [ -z "$(ls -A "$ROOT/wheelhouse"/*.whl 2>/dev/null)" ]; then
+        echo "ERRO: --with-wheelhouse mas ./wheelhouse/ ausente ou sem .whl." >&2
+        echo "      Rode tools/build_wheelhouse.sh primeiro." >&2
+        exit 1
+    fi
+    cp -R "$ROOT/wheelhouse" "$STAGE/"
+    echo "wheelhouse embarcado: $(ls "$STAGE/wheelhouse"/*.whl | wc -l | tr -d ' ') wheels"
+fi
+
+# Nao empacotar os proprios scripts de build
+rm -f "$STAGE/tools/build_package.sh" "$STAGE/tools/build_wheelhouse.sh"
 
 # ── Limpeza: artefatos de dev e qualquer segredo/dado que tenha vazado ───────
 find "$STAGE" -type d -name '__pycache__' -prune -exec rm -rf {} +

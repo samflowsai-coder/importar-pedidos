@@ -156,10 +156,22 @@ Write-Host "        Aguarde..." -ForegroundColor Gray
 # terminante e o install "falha" com pip exit 0. Rebaixa o EAP para "Continue"
 # so ao redor da chamada nativa (restaurado no finally) e decide sucesso/falha
 # SO por $LASTEXITCODE. Mesmo tratamento de update.ps1 / apply-update.ps1.
+# OFFLINE se houver wheelhouse, senao ONLINE. Instalacao virgem por admin
+# interativo costuma ter internet (fallback online ok); com wheelhouse presente,
+# nao depende do PyPI.
+$wheelhouse = Join-Path $AppDir "wheelhouse"
+$useWheelhouse = (Test-Path $wheelhouse) -and `
+    (@(Get-ChildItem -Path $wheelhouse -Filter *.whl -ErrorAction SilentlyContinue).Count -gt 0)
+$pipArgs = @("install", "-e", $AppDir, "--no-warn-script-location")
+if ($useWheelhouse) {
+    $pipArgs += @("--no-index", "--find-links", $wheelhouse)
+    Write-Host "        (offline: usando wheelhouse\)" -ForegroundColor Gray
+}
+
 $prevEAP = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 try {
-    $pipOut = & $VenvPip install -e $AppDir --no-warn-script-location 2>&1
+    $pipOut = & $VenvPip @pipArgs 2>&1
 } finally {
     $ErrorActionPreference = $prevEAP
 }

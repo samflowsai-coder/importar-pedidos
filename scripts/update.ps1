@@ -222,10 +222,23 @@ if ($runPip) {
     # finally) e decide sucesso/falha SO por $LASTEXITCODE. Mesmo tratamento de
     # scripts/apply-update.ps1 (fase pip). Sem --quiet: se falhar de verdade,
     # a saida completa do pip aparece para diagnostico.
+    # OFFLINE se houver wheelhouse (mesma pasta que o auto-updater usa), senao
+    # ONLINE. Este script roda como usuario admin (interativo), que costuma ter
+    # internet -- entao o fallback online e seguro; mas se o wheelhouse estiver
+    # presente, usamos ele e nao dependemos do PyPI.
+    $wheelhouse = Join-Path $AppDir "wheelhouse"
+    $useWheelhouse = (Test-Path $wheelhouse) -and `
+        (@(Get-ChildItem -Path $wheelhouse -Filter *.whl -ErrorAction SilentlyContinue).Count -gt 0)
+    $pipArgs = @("install", "-e", $AppDir, "--no-warn-script-location")
+    if ($useWheelhouse) {
+        $pipArgs += @("--no-index", "--find-links", $wheelhouse)
+        Write-Host "        (offline: usando wheelhouse\)" -ForegroundColor Gray
+    }
+
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $pipOut = & $VenvPip install -e $AppDir --no-warn-script-location 2>&1
+        $pipOut = & $VenvPip @pipArgs 2>&1
     } finally {
         $ErrorActionPreference = $prevEAP
     }

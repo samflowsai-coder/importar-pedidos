@@ -160,6 +160,20 @@ def test_pacote_valido_extrai_e_reporta(tmp_path):
     assert (st / "u1" / "portal-pedidos" / "ui.py").read_bytes() == b"# ui\n"
 
 
+def test_wheelhouse_e_membro_permitido(tmp_path):
+    # wheels das deps p/ pip offline: pasta wheelhouse/ na raiz do pacote tem
+    # que ser aceita e extraída (não pode cair no allowlist como "membro fora").
+    sha = pkg.compute_deps_sha256(_pyproject(tmp_path / "pp", ["fastapi"]))
+    m = _base_members(deps_sha=sha)
+    m["portal-pedidos/wheelhouse/fdb-2.0.4-py3-none-any.whl"] = b"PK\x03\x04 fake wheel"
+    st = tmp_path / "st"
+    res = pkg.validate_and_stage(
+        _make_zip(tmp_path, m), st, _pyproject(tmp_path / "pp2", ["fastapi"]), update_id="u1"
+    )
+    assert (st / "u1" / "portal-pedidos" / "wheelhouse" / "fdb-2.0.4-py3-none-any.whl").exists()
+    assert res.version == "20260714-1030"
+
+
 def test_deps_changed_true_quando_hash_difere(tmp_path):
     m = _base_members(deps_sha="hash-antigo-diferente")
     res = pkg.validate_and_stage(
