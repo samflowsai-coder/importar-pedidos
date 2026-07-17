@@ -2,7 +2,14 @@
 
 **Data:** 2026-07-17
 **Domínio:** integrations/flowpcp + erp + persistence + web
-**Status:** aprovado (brainstorming) — pronto para plano de implementação
+**Status:** aprovado (brainstorming) + revisão adversarial incorporada (2026-07-17) — pronto para plano de implementação
+
+> **Changelog 2026-07-17 (pós-review):** incorporados 1 BLOCKER + 6 achados IMPORTANTES da
+> revisão adversarial. Principais: (B1) normalização canônica de CNPJ compartilhada entre a
+> carga e o envio de pedido em runtime — `mapper.py:45` hoje manda CNPJ **não** normalizado,
+> então a carga fragmentaria em vez de deduplicar; (I2) regra explícita CPF×CNPJ; (I4) trava
+> de extração vazia; (I5) idempotency key com hash de conteúdo; (I6) contadores de
+> descarte/dedup na resposta; (I7) semântica de órfãos/`fullSync`. Detalhes inline abaixo.
 
 ---
 
@@ -57,6 +64,11 @@ O design é deliberadamente o gêmeo do sync de catálogo. Não introduz padrão
 | gate `flowpcp_catalogo_push` (config.py + coluna env) | gate `flowpcp_clientes_push` (config.py + coluna env) |
 | botão em `routes_environments.py` | botão "Sincronizar clientes" em `routes_environments.py` |
 
+**Fora do espelho — trabalho adicional trazido pelo review (B1):** um normalizador canônico de
+CNPJ compartilhado (`_cnpj_digits`) e a correção de `app/integrations/flowpcp/mapper.py:45` para
+normalizar o `customer_cnpj` no envio de pedido em runtime. Sem isso, carga e runtime alimentam o
+Flow com CNPJ em formatos diferentes e o mesmo cliente fragmenta (ver seção de normalização).
+
 **Assinatura do orquestrador** (paralela a `run_catalogo_sync`):
 
 ```python
@@ -70,9 +82,30 @@ def run_clientes_sync(
 Fluxo idêntico ao catálogo:
 1. `flowpcp_config_for_slug(slug)` — `None` se ambiente sem FlowPCP → skip.
 2. Conecta no Fire do ambiente; `extract_clientes_ativos(fire_conn, desde_data=...)`.
-3. **Sempre** grava cópia local: `clientes_fire_repo.replace_all(env_conn, dtos, extraido_em=...)`.
-4. Se `clientes_push` OFF → retorna `ClientesLocalResult(itens, extraido_em)` (só cópia local).
-5. Se ON → `build_clientes_request(...)` + `client.send_clientes(request)` → devolve relatório.
+3. **Trava de extração vazia (I4):** se `extract_clientes_ativos` retornar 0 clientes, **não**
+   sobrescreve o snapshot local nem empurra ao Flow — retorna `ClientesLocalResult(itens=0, ...)`
+   com `skipped_empty=True` e loga em nível `warning`. 0 numa query com janela + `EXISTS` +
+   coluna nova é plausível por engano (coluna errada, `DATA_PEDIDO` NULL em massa); apagar o
+   snapshot e mandar `fullSync` de 0 itens poderia ser lido pelo Flow como "inative todos".
+   Zerar de verdade exige flag explícito (`permitir_vazio=True`).
+4. **Sempre** grava cópia local: `clientes_fire_repo.replace_all(env_conn, dtos, extraido_em=...)`.
+5. Se `clientes_push` OFF → retorna `ClientesLocalResult(itens, extraido_em, descartados, colisoes)`
+   (só cópia local — ver I6 sobre os contadores).
+6. Se ON → `build_clientes_request(...)` + `client.send_clientes(request)` → devolve relatório
+   (com os contadores de descarte/dedup anexados, ver I6).
+
+`ClientesLocalResult` (espelha `CatalogoLocalResult`, mas mais rico por causa de I4/I6):
+
+```python
+@dataclass(frozen=True)
+class ClientesLocalResult:
+    itens: int
+    extraido_em: str
+    descartados_cpf: int          # I2/I6
+    descartados_invalidos: int    # I2/I6
+    colisoes_dedup: int           # I6
+    skipped_empty: bool = False   # I4 — extração vazia, nada foi gravado/enviado
+```
 
 ---
 
@@ -95,8 +128,17 @@ ORDER BY C.CODIGO
 ```
 
 - **Data de corte calculada no Python** e passada como bind param (testável; evita depender
-  de aritmética de data do Firebird). `datetime.now(UTC).date()` menos ~365 dias.
+  de aritmética de data do Firebird). Base = "hoje" no fuso `America/Sao_Paulo` (a config já
+  tem `timezone`) menos ~365 dias — não `UTC` cru (N1: desvio de ±1 dia na fronteira, imaterial
+  numa janela anual, mas usar o fuso da config é de graça e mais correto).
 - `RELAC_CLIENTE = 'Sim'` — mesmo filtro que `FIND_CLIENT_BY_CNPJ`/`SEARCH_CLIENTS` já usam.
+  **Atenção (I3):** isso diz "é um cliente", não "é vendável hoje". O extractor de catálogo
+  filtra `BLOQUEADO` do produto; o de clientes precisa do análogo — **confirmar na Fire viva
+  se `CADASTRO` tem flag de bloqueio/inativação de cliente** e, se tiver, adicioná-lo ao `WHERE`.
+  Sem isso, um cliente bloqueado com pedido recente entra como `ativo=true`.
+- **Índice (M3):** o `EXISTS` correlacionado roda por linha de `CADASTRO`. Confirmar índice em
+  `CAB_VENDAS(CLIENTE)` (idealmente `(CLIENTE, DATA_PEDIDO)`) via `tools/explore_firebird.py`;
+  provável que exista por FK, mas não assumir.
 
 ### DTO — `ClienteFireDTO` (espelha `ProdutoFireDTO`)
 
@@ -106,23 +148,61 @@ class ClienteFireDTO:
     fire_cliente_id: str   # str(CADASTRO.CODIGO) — PK durável imutável
     cnpj: str              # CPF_CNPJ normalizado (só dígitos) — chave de match no Flow
     nome: str              # RAZAO_SOCIAL
-    grupo_codigo: str | None  # str(CODGRUPO) — a marca, para rollup em relatório
-    ativo: bool            # True (todos vêm da janela ativa); reservado p/ inativação futura
+    grupo_codigo: str | None  # str(CODGRUPO) se a coluna existir (I1); senão None → payload sem grupo
+    ativo: bool            # True (todos vêm da janela ativa). Campo hoje é constante — só
+                           # ganha significado quando a inativação existir (ver I7).
 ```
 
-### Duas regras de higiene (decorrem de "Flow casa só por CNPJ")
+> **I1 — `CODGRUPO` não é verificável no repo.** Nenhuma query real usa `CODGRUPO` (só
+> `RAZAO_SOCIAL`/`CPF_CNPJ`/`CODIGO`/`RELAC_CLIENTE` estão confirmados). **Confirmar a coluna
+> na Fire viva antes de codar.** Se não existir com esse nome, `grupo_codigo=None` e o payload
+> vai sem `grupoCodigo` — a carga não quebra, só perde o enriquecimento de marca.
 
-1. **Descartar cliente sem CNPJ utilizável.** Se `CPF_CNPJ` normalizado for vazio/curto
-   demais para ser CNPJ, o Flow não conseguiria casar (`resolver-cliente.ts` retorna null).
-   **`logger.info` com a contagem de descartados** — nunca cortar em silêncio.
-2. **Dedup por CNPJ normalizado** antes de enviar (invariante 1 CNPJ = 1 cliente). Se duas
-   linhas de `CADASTRO` colidem no mesmo CNPJ, mantém a de **maior `CODIGO`** (cadastro mais
-   recente) — critério determinístico e computável direto do resultado da query.
-   **`logger.info` com a contagem de colisões resolvidas.** (Se no futuro quisermos desempatar
-   por recência de pedido, a query passa a expor `MAX(V.DATA_PEDIDO)` por cliente.)
+### Normalização de CNPJ — invariante crítica (B1 + M2)
 
-Normalização de CNPJ: mesma limpeza do `FIND_CLIENT_BY_CNPJ`
-(`REPLACE` de `.`, `/`, `-`, espaço). Reusar helper — não duplicar.
+**O problema:** o Flow casa cliente por igualdade de CNPJ. Existem **dois** alimentadores neste
+repo e eles não normalizam igual:
+
+- **Envio de pedido em runtime** — `app/integrations/flowpcp/mapper.py:45` manda
+  `cnpj=h.customer_cnpj or None` **sem normalizar**. Os parsers produzem CNPJ **formatado**
+  (`kallan_xls_parser.py:56` monta `XX.XXX.XXX/XXXX-XX`; Beira-Rio/Kolosh capturam `[\d./-]+`).
+- **Carga (novo)** — normalizaria para só dígitos.
+
+Resultado se nada mudar: a carga manda `06347409029651`, o pedido manda `06.347.409/0296-51` →
+**o mesmo cliente fragmenta em dois no Flow** — o oposto do objetivo (d).
+
+**Decisão:**
+1. **Eleger UM normalizador canônico** — `re.sub(r"\D", "", cnpj)` — hoje há cópias espalhadas
+   (`erp/product_check.py:_cnpj_digits`, `erp/mapper.py:_digits_only`, `fire_update.py:27`,
+   `server.py:2217`, `firebird_exporter.py:208`). Centralizar num único helper compartilhado.
+2. **Usá-lo na carga E no runtime** — corrigir `flowpcp/mapper.py:45` para normalizar o
+   `customer_cnpj` antes de enviar. **Isso expande o escopo para tocar o caminho de runtime**,
+   mas é a correção certa: dígitos-only é a forma canônica inequívoca, e os dois alimentadores
+   precisam concordar.
+3. **Gate de verificação:** confirmar no pcp-app que `resolver-cliente.ts` normaliza para
+   dígitos antes de casar. Se já normaliza, documentar como dependência de contrato; se não/
+   incerto, o passo 2 acima garante a consistência do nosso lado de qualquer forma.
+
+### Regras de higiene da extração
+
+1. **Regra explícita CPF × CNPJ (I2).** `CADASTRO.CPF_CNPJ` guarda CPF (11 díg.) e CNPJ (14).
+   Após normalizar para dígitos:
+   - `len == 14` → **CNPJ válido**, mantém.
+   - `len == 11` → **CPF** (pessoa física). O Flow só casa por CNPJ, então um CPF no campo
+     `cnpj` casaria por chave inválida → **descartar da carga** (v1) e contar à parte.
+   - qualquer outro (vazio, curto, lixo) → **descartar**, contar à parte.
+2. **Dedup por CNPJ normalizado** (invariante 1 CNPJ = 1 cliente). Colisão → mantém a de
+   **maior `CODIGO`** (determinístico, computável da query). Ver caveat M1 abaixo.
+3. **Contadores visíveis, não só em log (I6).** Descarte e dedup acontecem **dentro** do
+   importador, antes do envio — então **não** aparecem no relatório do Flow. Carregar
+   `{descartados_cpf, descartados_invalidos, colisoes_dedup}` no `ClientesLocalResult` **e** no
+   dict de resposta da rota, para o operador ver no dry-run (não caçar em log). Log **quebrado
+   por motivo**, não um agregado.
+
+> **M1 — caveat do dedup:** "maior CODIGO = mais recente" é determinístico, mas recência ≠
+> qualidade do nome (o recadastro mais novo pode ter typo, o antigo ter o nome curado). Como o
+> Flow casa por CNPJ (não por CODIGO), `fireClienteId`/`nome` são metadado — aceitável em v1,
+> documentado.
 
 ---
 
@@ -141,7 +221,7 @@ class ClienteItem(BaseModel):
 
 class ClientesRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    schema_: str = Field(default="clientes.v1", alias="schema")
+    schema_: str = Field(default="cadastro.clientes.v1", alias="schema")  # M4: {domínio}.{entidade}.{versão}, simétrico a catalogo.produtos.v1
     dryRun: bool
     fullSync: bool
     itens: list[ClienteItem]
@@ -154,9 +234,17 @@ class ClientesReconciliacaoResponse(BaseModel):
 
 ### Método no client — `client.send_clientes()`
 
-Espelha `send_catalogo`: `POST _CLIENTES_PATH` (`/api/portal-pedidos/clientes`),
-`idempotency_key = f"clientes-{int(dryRun)}-{len(itens)}"`, mesma política de retry
-(`idempotent_post_policy`), devolve `ClientesReconciliacaoResponse`.
+Espelha `send_catalogo`: `POST _CLIENTES_PATH` (`/api/portal-pedidos/clientes`), mesma política
+de retry (`idempotent_post_policy`), devolve `ClientesReconciliacaoResponse`.
+
+> **I5 — idempotency key com hash de conteúdo, NÃO `{dryRun}-{len}`.** O catálogo usa
+> `catalogo-{int(dryRun)}-{len(itens)}` porque seu conteúdo é estável. O cadastro **muda** (nome
+> canônico, grupo) com a **contagem constante** (617 seguem 617) → dois applies no mesmo dia com
+> nomes corrigidos colidiriam na key e o Flow trataria o segundo como replay (correção **não**
+> aplicada). Usar:
+> `f"clientes-{int(dryRun)}-{sha256(sorted(f'{cnpj}|{nome}|{grupo}' for item))[:16]}"`.
+> Estável em retry (mesmo conteúdo → mesma key), único quando o conteúdo muda. **Não** usar
+> `extraido_em` (quebraria a idempotência de retry).
 
 ---
 
@@ -178,6 +266,12 @@ CREATE TABLE IF NOT EXISTS clientes_fire (
 
 "Manter no importador" independe do envio ao Flow — a cópia local é sempre atualizada,
 igual ao catálogo.
+
+**Atomicidade (verificado no review, OK):** `env_connect` abre transação `DEFERRED` com
+`commit`/`rollback`, e a extração é totalmente materializada em memória **antes** do
+`DELETE` — falha na extração nunca deixa a tabela pela metade. O único risco é extração
+**vazia bem-sucedida**, coberto pela trava I4 no orquestrador (o `replace_all` só é chamado
+com `dtos` não-vazio, salvo flag `permitir_vazio`).
 
 ---
 
@@ -213,17 +307,40 @@ Precisa de `POST /api/portal-pedidos/clientes`: bulk **upsert por CNPJ**, idempo
 outro time (histórico: PRs do pcp-app atrasam).** Enquanto o endpoint não existe, o sync roda
 com `clientes_push=OFF` (só cópia local) sem quebrar nada.
 
+**Contrato a fechar ANTES de codar o lado Flow (N3):** o wire abaixo é uma **proposta** — o
+Flow é dono do formato. Alinhar com o time do pcp-app antes que eles implementem, senão
+retrabalho. Dois pontos do contrato exigem decisão explícita:
+
+- **B1 — normalização:** confirmar que o `resolver` casa por CNPJ **dígitos-only** (nós
+  garantimos dígitos dos dois lados; ver seção de normalização).
+- **I7 — órfãos / semântica de `fullSync`:** numa carga posterior, quem sai da janela de 12m
+  some do `itens`. O snapshot local (substitutivo) **dropa** o cliente; se o Flow **não** poda
+  os `flow_only`, a "carteira ativa" no Flow vira **aditiva** — nunca encolhe — e o campo
+  `ativo` fica morto (sempre `true`) até a inativação existir. **Decidir agora:** ou (a) o Flow
+  poda `flow_only` em `fullSync=true`, ou (b) **não** mandar `fullSync=true` (que sugere uma
+  completude que o Flow não vai honrar) e assumir explicitamente que a carteira é aditiva no
+  meio-tempo. Recomendação: (b) até a inativação existir — menos surpresa, sem exclusão
+  acidental de cliente do lado Flow.
+
 ---
 
 ## Testes
 
-Espelham a suíte do catálogo:
-- `extract_clientes_ativos` — com Fire fake: janela filtra certo, descarte sem-CNPJ conta,
-  dedup por CNPJ resolve colisão pela regra (maior CODIGO).
-- `clientes_mapper.build_clientes_request` — DTO → schema, alias camelCase.
+Espelham a suíte do catálogo, mais os casos dos achados do review:
+- `_cnpj_digits` canônico (B1/M2) — formatado e dígitos colapsam no mesmo valor; usado na carga
+  **e** em `flowpcp/mapper.py` (teste de regressão do runtime).
+- `extract_clientes_ativos` — com Fire fake: janela filtra certo; **CPF (11 díg.) descartado e
+  contado à parte** (I2); CNPJ inválido descartado e contado; dedup por CNPJ mantém maior CODIGO;
+  contadores retornados corretos (I6).
+- **Trava de vazio (I4)** — extração 0 itens → `skipped_empty=True`, `replace_all` **não** é
+  chamado, `send_clientes` **não** é chamado.
+- **Idempotency key (I5)** — mesmo conteúdo → mesma key; conteúdo diferente com mesma contagem →
+  key diferente.
+- `clientes_mapper.build_clientes_request` — DTO → schema, alias camelCase, `schema=cadastro.clientes.v1`.
 - `clientes_fire_repo` — replace_all/list_all/count (snapshot substitutivo).
 - `run_clientes_sync` — com `_client`/`_fire_conn`/`_env_conn` injetados: gate OFF devolve
-  `ClientesLocalResult`; gate ON chama `send_clientes`; ambiente sem FlowPCP devolve `None`.
+  `ClientesLocalResult` (com contadores); gate ON chama `send_clientes`; ambiente sem FlowPCP
+  devolve `None`.
 - `client.send_clientes` — status ok, erro HTTP → `FlowPCPClientError`.
 
 Rodar direcionado: `.venv/bin/pytest tests/<arquivos novos> -v`, depois suíte completa.
@@ -234,7 +351,8 @@ Rodar direcionado: `.venv/bin/pytest tests/<arquivos novos> -v`, depois suíte c
 
 - **Agendamento noturno** — pendura no mesmo worker do catálogo depois.
 - **Inativação** de quem sai da janela de 12 meses (downgrade `ativo=false`). Requer decisão
-  do lado Flow sobre o que fazer com cliente que parou de comprar.
+  do lado Flow — ver I7 abaixo, que exige **fechar a semântica de `fullSync` agora** ainda que
+  a inativação em si fique para depois.
 - **Rollup por marca como identidade** (`CODGRUPO` como cliente). Hoje só como campo `grupoCodigo`.
 - **Janela configurável** por ambiente.
 - **Campos extras** (fantasia/cidade/uf/contato) — ver "a confirmar" abaixo.
@@ -243,37 +361,48 @@ Rodar direcionado: `.venv/bin/pytest tests/<arquivos novos> -v`, depois suíte c
 
 ## A confirmar na Fire viva (VPN) no momento de implementar
 
-Não bloqueiam o design; registrados por honestidade:
+Os dois primeiros são **gates de verificação** (bloqueiam a implementação da parte afetada até
+serem confirmados na Fire viva); o resto é ajuste fino.
 
-1. **`CODGRUPO` → nome da marca:** existe tabela de lookup para mandar o rótulo do grupo
-   junto do código? Se sim, adicionar `grupoNome` ao payload. Se não, mandar só `grupoCodigo`.
-2. **Colunas `FANTASIA` / `CIDADE` / `UF` em `CADASTRO`:** há um TODO em
-   `queries.SEARCH_CLIENTS` dizendo que nunca foram reconfirmadas. Se existirem e o dono quiser,
-   entram no payload curado (e no DTO/schema/tabela local).
-3. **`CAB_VENDAS.DATA_PEDIDO`** é a coluna de data correta para a janela (vs. `DTHORA_PEDIDO`).
-   Confirmar qual reflete melhor "quando o cliente comprou".
+1. **`CODGRUPO` existe em `CADASTRO`? (I1 — gate)** Não é usado por nenhuma query atual do repo.
+   Confirmar a coluna **antes** de codar a query. Se não existir: `grupo_codigo=None`, payload
+   sem `grupoCodigo`, a carga não quebra. E, existindo, há tabela de lookup do **nome** da marca
+   para mandar `grupoNome` junto? Se sim, adicionar; se não, só o código.
+2. **Flag de bloqueio/inativação de cliente em `CADASTRO`? (I3 — gate)** Análogo ao `BLOQUEADO`
+   dos produtos. Se existir, entra no `WHERE` da query (não mandar cliente bloqueado como ativo).
+3. **Índice em `CAB_VENDAS(CLIENTE)` (M3):** confirmar via `tools/explore_firebird.py` para o
+   `EXISTS` não virar full scan por cliente.
+4. **`CAB_VENDAS.DATA_PEDIDO` vs `DTHORA_PEDIDO`:** qual reflete melhor "quando o cliente
+   comprou" para a janela. (`DATA_PEDIDO` existe — verificado em `INSERT_CAB_VENDAS`; a dúvida é
+   só semântica.)
+5. **Colunas `FANTASIA` / `CIDADE` / `UF` em `CADASTRO`:** TODO em `queries.SEARCH_CLIENTS` diz
+   que nunca foram reconfirmadas. Se existirem e o dono quiser, entram no payload curado.
 
 ---
 
-## Contrato de wire (resumo para o time do Flow)
+## Contrato de wire (PROPOSTA — fechar com o time do Flow antes de eles codarem, N3)
 
 ```
 POST /api/portal-pedidos/clientes
 Headers: X-Service-Token, X-Tenant-Id, Content-Type: application/json
-Idempotency-Key: clientes-<0|1>-<n_itens>
+Idempotency-Key: clientes-<0|1>-<sha256(conteúdo)[:16]>     # I5, não {len}
 
 {
-  "schema": "clientes.v1",
+  "schema": "cadastro.clientes.v1",
   "dryRun": true,
-  "fullSync": true,
+  "fullSync": false,                # I7: aditivo até a inativação existir (recomendação)
   "itens": [
-    { "fireClienteId": "498", "cnpj": "06347409029651",
+    { "fireClienteId": "498", "cnpj": "06347409029651",   # dígitos-only sempre (B1)
       "nome": "SBF COMERCIO DE PRODUTOS ESPORTIVOS S.A",
       "grupoCodigo": "12", "ativo": true }
   ],
   "origem": { "importadorVersao": "1.0.0", "extraidoEm": "2026-07-17T12:00:00Z" }
 }
 
-→ upsert idempotente por cnpj; resposta = relatório de reconciliação
+→ upsert idempotente por cnpj (dígitos); resposta = relatório de reconciliação
   (contagens/amostras), formato do Flow.
 ```
+
+**Pontos de contrato a confirmar com o pcp-app:** (1) `resolver` casa por CNPJ dígitos-only
+(B1); (2) semântica de `fullSync` / poda de `flow_only` (I7); (3) formato do relatório de
+resposta (nós toleramos com `extra="allow"`, mas alinhar os `contagens`).
