@@ -33,7 +33,7 @@ def extract_clientes_ativos(fire_conn, *, desde_data: date) -> ExtracaoClientesR
 
     Regras (spec I2/I6): normaliza CPF_CNPJ para dígitos; 14 = CNPJ (mantém),
     11 = CPF (descarta), resto = inválido (descarta). Dedup por CNPJ mantendo o
-    maior CODIGO (a query vem ORDER BY CODIGO asc → o último visto é o maior).
+    maior CODIGO via comparação explícita (não depende de ORDER BY da query).
     """
     cur = fire_conn.cursor()
     try:

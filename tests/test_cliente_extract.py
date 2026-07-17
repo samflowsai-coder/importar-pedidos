@@ -58,6 +58,20 @@ def test_extract_dedups_by_cnpj_keeping_max_codigo():
     assert res.colisoes_dedup == 1
 
 
+def test_extract_dedup_keeps_max_codigo_regardless_of_row_order():
+    # Feed rows in DESCENDING CODIGO order (opposite of SQL ORDER BY).
+    # Dedup must still select the larger CODIGO via explicit comparison.
+    rows = [
+        (200, "CADASTRO NOVO", "06.347.409/0296-51", 12),  # CODIGO maior, vem primeiro
+        (100, "CADASTRO ANTIGO", "06347409029651", 12),  # mesmo CNPJ, CODIGO menor
+    ]
+    res = extract_clientes_ativos(_FakeConn(rows), desde_data=date(2025, 7, 17))
+    assert len(res.clientes) == 1
+    assert res.clientes[0].fire_cliente_id == "200"
+    assert res.clientes[0].nome == "CADASTRO NOVO"
+    assert res.colisoes_dedup == 1
+
+
 def test_extract_passes_desde_data_as_bind():
     conn = _FakeConn([])
     extract_clientes_ativos(conn, desde_data=date(2025, 7, 17))
