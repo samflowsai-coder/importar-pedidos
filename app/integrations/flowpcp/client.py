@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from app.http.client import HttpError, OutboundClient
@@ -7,6 +8,10 @@ from app.http.policies import idempotent_post_policy
 from app.integrations.flowpcp.catalogo_schema import (
     CatalogoReconciliacaoResponse,
     CatalogoRequest,
+)
+from app.integrations.flowpcp.clientes_schema import (
+    ClientesReconciliacaoResponse,
+    ClientesRequest,
 )
 from app.integrations.flowpcp.schema import (
     ConfirmarReconciliacaoRequest,
@@ -20,6 +25,7 @@ RECEBIMENTO_PATH = "/api/portal-pedidos/recebimento"
 _RECEBIMENTO_PATH = RECEBIMENTO_PATH
 _DECISOES_PATH = "/api/portal-pedidos/decisoes"
 _CATALOGO_PATH = "/api/portal-pedidos/catalogo"
+_CLIENTES_PATH = "/api/portal-pedidos/clientes"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 
@@ -60,9 +66,7 @@ class FlowPCPClient:
     def close(self) -> None:
         self._client.close()
 
-    def send_order(
-        self, request: RecebimentoRequest, *, idempotency_key: str
-    ) -> dict[str, Any]:
+    def send_order(self, request: RecebimentoRequest, *, idempotency_key: str) -> dict[str, Any]:
         body = request.model_dump(by_alias=True, exclude_none=False)
         resp = self._post(_RECEBIMENTO_PATH, body, idempotency_key=idempotency_key)
         return resp.json()
@@ -109,9 +113,7 @@ class FlowPCPClient:
             )
         return resp.json()
 
-    def send_catalogo(
-        self, request: CatalogoRequest
-    ) -> CatalogoReconciliacaoResponse:
+    def send_catalogo(self, request: CatalogoRequest) -> CatalogoReconciliacaoResponse:
         body = request.model_dump(by_alias=True)
         idem = f"catalogo-{int(request.dryRun)}-{len(request.itens)}"
         try:
@@ -127,6 +129,29 @@ class FlowPCPClient:
                 body=(resp.text or "")[:500],
             )
         return CatalogoReconciliacaoResponse.model_validate(resp.json())
+
+    def send_clientes(self, request: ClientesRequest) -> ClientesReconciliacaoResponse:
+        body = request.model_dump(by_alias=True)
+        # I5: key inclui hash do conteúdo — estável em retry, único quando muda
+        # (a contagem sozinha colidiria: 617 clientes seguem 617 com nomes corrigidos).
+        payload_sig = "|".join(
+            sorted(f"{i.cnpj}:{i.nome}:{i.grupoCodigo or ''}" for i in request.itens)
+        )
+        digest = hashlib.sha256(payload_sig.encode("utf-8")).hexdigest()[:16]
+        idem = f"clientes-{int(request.dryRun)}-{digest}"
+        try:
+            resp = self._client.post_json(_CLIENTES_PATH, json=body, idempotency_key=idem)
+        except HttpError as exc:
+            raise FlowPCPClientError(
+                f"send_clientes falhou: {exc}", status_code=exc.status_code, body=exc.body
+            ) from exc
+        if not resp.is_success:
+            raise FlowPCPClientError(
+                f"clientes status {resp.status_code}",
+                status_code=resp.status_code,
+                body=(resp.text or "")[:500],
+            )
+        return ClientesReconciliacaoResponse.model_validate(resp.json())
 
     def _post(self, path: str, body: dict[str, Any], *, idempotency_key: str):
         try:
