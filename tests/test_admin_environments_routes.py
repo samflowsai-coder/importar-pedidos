@@ -186,6 +186,21 @@ def test_set_flowpcp_config_round_trip(setup):
     assert environments_repo.get_flowpcp_token(env_id) == "svc-tok"
 
 
+def test_set_flowpcp_clientes_push_round_trip(setup):
+    """O gate flowpcp_clientes_push persiste pelo PUT (o que a UI agora sempre
+    envia). Trava a ponta backend do fix do gate-reset: enviar True grava 1,
+    enviar False grava 0."""
+    c = _client()
+    env_id = _create_env(c, setup)
+    base = {"enabled": True, "base_url": "x", "tenant_id": "t"}
+    r1 = c.put(f"/api/admin/environments/{env_id}/flowpcp", json={**base, "clientes_push": True})
+    assert r1.status_code == 200
+    assert r1.json()["flowpcp_clientes_push"] == 1
+    r2 = c.put(f"/api/admin/environments/{env_id}/flowpcp", json={**base, "clientes_push": False})
+    assert r2.status_code == 200
+    assert r2.json()["flowpcp_clientes_push"] == 0
+
+
 def test_set_flowpcp_keeps_token_when_omitted(setup):
     c = _client()
     env_id = _create_env(c, setup)

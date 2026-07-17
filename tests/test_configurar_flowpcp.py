@@ -147,6 +147,22 @@ def test_gravar_flowpcp_catalogo_apenas_meias_explicito(mm_env):
     assert env["flowpcp_catalogo_apenas_meias"] == 1
 
 
+def test_gravar_flowpcp_preserva_clientes_push_existente(mm_env):
+    """Re-rodar o configurador NÃO pode desligar o gate de clientes que o admin ligou
+    na tela do ambiente (o trap do gate-reset apontado no review final)."""
+    env = environments_repo.get_by_slug("mm")
+    environments_repo.set_flowpcp_config(
+        env["id"], enabled=True, base_url="https://x", tenant_id="t", clientes_push=True
+    )
+    env2 = cfgtool.gravar_flowpcp("mm", service_token=None)  # re-run sem mexer no gate
+    assert env2["flowpcp_clientes_push"] == 1
+
+
+def test_gravar_flowpcp_clientes_push_explicito(mm_env):
+    env = cfgtool.gravar_flowpcp("mm", service_token="t", clientes_push=True)
+    assert env["flowpcp_clientes_push"] == 1
+
+
 def test_main_nao_interativo_firebird_falho_nao_bloqueia_pedido(mm_env, monkeypatch, capsys):
     """Pedido→Flow NÃO precisa de Firebird — se o FB falhar, o FlowPCP fica
     LIGADO (config gravada) e o rc é 0. Só o catálogo depende do Firebird."""

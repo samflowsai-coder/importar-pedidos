@@ -319,6 +319,10 @@
         <input type="checkbox" name="flowpcp_catalogo_apenas_meias">
         <span>Catálogo: enviar só produtos do subgrupo MEIAS (requer marcação prévia no Fire — deixe desligado até confirmar)</span>
       </label>
+      <label class="check">
+        <input type="checkbox" name="flowpcp_clientes_push">
+        <span>Enviar clientes ao Flow (desligado = a carga só atualiza a cópia local; requer o endpoint /clientes no Flow)</span>
+      </label>
       <div class="actions" style="margin-top:1rem">
         <button type="button" id="btn-save-flowpcp" class="btn btn-primary">Salvar FlowPCP</button>
         <span id="flowpcp-status" class="flowpcp-status"></span>
@@ -335,6 +339,20 @@
         <button type="button" id="btn-promover-catalogo" class="btn btn-primary">Promover no Flow</button>
         <span id="sync-catalogo-status" class="flowpcp-status"></span>
         <div id="sync-catalogo-result" hidden style="margin-top:.75rem;font-size:.85em;line-height:1.6"></div>
+      </div>
+
+      <!-- Carga de clientes ativos (Fire → Flow), direção IDA. -->
+      <div style="margin-top:1.25rem;border-top:1px solid var(--border,#2a2a2a);padding-top:1rem">
+        <div style="font-size:.85em;color:var(--text-muted,#9aa);margin-bottom:.6rem;line-height:1.5">
+          Carga dos clientes com pedido nos últimos 12 meses do Fire → FlowPCP. <strong>Simular</strong>
+          reconcilia e mostra o relatório <em>sem escrever</em>. <strong>Promover</strong> faz o upsert
+          por CNPJ no Flow. A cópia local é sempre atualizada; o envio ao Flow exige o gate acima ligado
+          <em>e</em> o endpoint /clientes no Flow.
+        </div>
+        <button type="button" id="btn-sync-clientes" class="btn btn-secondary">Simular (dry-run)</button>
+        <button type="button" id="btn-promover-clientes" class="btn btn-primary">Promover no Flow</button>
+        <span id="sync-clientes-status" class="flowpcp-status"></span>
+        <div id="sync-clientes-result" hidden style="margin-top:.75rem;font-size:.85em;line-height:1.6"></div>
       </div>
     </fieldset>
   </main>
@@ -411,6 +429,7 @@
         fv('flowpcp_dry_run').checked = !!env.flowpcp_dry_run;
         fv('flowpcp_catalogo_push').checked = !!env.flowpcp_catalogo_push;
         fv('flowpcp_catalogo_apenas_meias').checked = !!env.flowpcp_catalogo_apenas_meias;
+        fv('flowpcp_clientes_push').checked = !!env.flowpcp_clientes_push;
         flowFs.hidden = false;
       }).catch(e => showError(e.message));
     }
@@ -483,6 +502,7 @@
         request_timeout_s: parseFloat(fv('flowpcp_request_timeout_s').value) || 30,
         catalogo_push: fv('flowpcp_catalogo_push').checked,
         catalogo_apenas_meias: fv('flowpcp_catalogo_apenas_meias').checked,
+        clientes_push: fv('flowpcp_clientes_push').checked,
       };
       const tok = fv('flowpcp_service_token').value;
       if (tok !== '') payload.service_token = tok;  // vazio = mantém atual
@@ -567,6 +587,62 @@
     }
     document.getElementById('btn-sync-catalogo').addEventListener('click', () => rodarSyncCatalogo(false));
     document.getElementById('btn-promover-catalogo').addEventListener('click', () => rodarSyncCatalogo(true));
+
+    // Carga de clientes: apply=false simula (dry-run), apply=true promove (upsert
+    // por CNPJ no Flow). Sempre mostra os contadores de higiene (descarte/dedup),
+    // que vêm do importador; a reconciliação só aparece quando empurra ao Flow.
+    async function rodarSyncClientes(apply) {
+      const st = document.getElementById('sync-clientes-status');
+      const out = document.getElementById('sync-clientes-result');
+      const btns = [document.getElementById('btn-sync-clientes'), document.getElementById('btn-promover-clientes')];
+      if (apply && !confirm('PROMOVER: isto envia os clientes ativos do Fire pro Flow (upsert por CNPJ). Confirmar?')) return;
+      st.textContent = apply ? 'Promovendo… pode levar alguns segundos.' : 'Simulando… pode levar alguns segundos.';
+      st.className = 'flowpcp-status';
+      out.hidden = true;
+      btns.forEach(b => b.disabled = true);
+      try {
+        const url = '/api/admin/environments/' + envId + '/flowpcp/sync-clientes' + (apply ? '?apply=true' : '');
+        const r = await fetch(url, { method: 'POST' });
+        const t = await r.text();
+        if (!r.ok) {
+          let msg; try { msg = JSON.parse(t).detail || t; } catch { msg = t || ('Erro ' + r.status); }
+          st.textContent = '✗ ' + msg; st.classList.add('err'); return;
+        }
+        const rep = JSON.parse(t);
+        if (rep.skipped_empty) {
+          st.textContent = '⚠ Extração vazia — nada gravado nem enviado (snapshot local preservado).';
+          st.classList.add('err');
+        } else if (rep.local_only) {
+          st.textContent = '✓ Clientes atualizados localmente (' + rep.itens + '). Envio ao Flow DESLIGADO — ligue "Enviar clientes ao Flow" acima e salve.';
+          st.classList.add('ok');
+        } else {
+          st.textContent = apply ? '✓ Promovido no Flow' : '✓ Simulação concluída (dry-run)';
+          st.classList.add('ok');
+        }
+        out.hidden = false;
+        const linhas = [
+          ['Clientes ativos', rep.itens],
+          ['Descartados (CPF)', rep.descartados_cpf],
+          ['Descartados (inválido)', rep.descartados_invalidos],
+          ['Colisões de CNPJ (dedup)', rep.colisoes_dedup],
+        ];
+        if (rep.reconciliacao) {
+          const c = rep.reconciliacao.contagens || {};
+          linhas.push(['— Reconciliação no Flow —', '']);
+          linhas.push(['Clientes no Flow', c.flowTotal]);
+          linhas.push(['Casaram', c.matchLimpo]);
+          linhas.push(['Só no Fire', c.fireOnly]);
+          linhas.push(['Só no Flow', c.flowOnly]);
+        }
+        out.innerHTML = linhas.map(([k, v]) => '<div>' + k + ': <strong>' + (v ?? '—') + '</strong></div>').join('');
+      } catch (err) {
+        st.textContent = '✗ ' + err.message; st.classList.add('err');
+      } finally {
+        btns.forEach(b => b.disabled = false);
+      }
+    }
+    document.getElementById('btn-sync-clientes').addEventListener('click', () => rodarSyncClientes(false));
+    document.getElementById('btn-promover-clientes').addEventListener('click', () => rodarSyncClientes(true));
 
     // ── Filesystem browser (pastas e arquivos) ─────────────────────
     // Modo "dir": clica em "Selecionar aqui" pra escolher o diretório atual
