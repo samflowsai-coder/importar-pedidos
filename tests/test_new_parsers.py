@@ -1,4 +1,5 @@
 """Integration tests for the 5 new parsers and 2 EAN fixes."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,6 +11,7 @@ SAMPLES = Path(__file__).parent.parent / "samples"
 
 def _load(filename: str):
     from app.ingestion.file_loader import LoadedFile
+
     p = SAMPLES / filename
     if not p.exists():
         pytest.skip(f"Sample not found: {filename}")
@@ -18,10 +20,12 @@ def _load(filename: str):
 
 def _process(filename: str):
     from app.pipeline import process
+
     return process(_load(filename))
 
 
 # ── FIX: Centauro EAN ────────────────────────────────────────────────────────
+
 
 def test_centauro_ean_extracted():
     order = _process("PEDIDO CENTAURO.pdf")
@@ -48,7 +52,26 @@ def test_centauro_uses_invoicing_cnpj_not_billing():
     assert order.header.customer_cnpj != "06.347.409/0001-65"
 
 
+def test_centauro_all_bold_font_pdf():
+    """Pedido da SBF a partir de 07/2026: declara Helvetica-Bold mas posiciona o
+    texto com as métricas da regular, então as larguras declaradas fazem os
+    trechos se sobreporem e a ordenação por caractere os intercala — o parser
+    deixava de reconhecer a assinatura e o pedido caía no genérico."""
+    order = _process("Pedido_0039894911.pdf")
+    assert order is not None
+    assert order.header.order_number == "39894911"
+    assert order.header.customer_cnpj == "06.347.409/0296-51"
+    assert order.header.customer_cnpj != "06.347.409/0001-65"
+    assert len(order.items) == 1
+    item = order.items[0]
+    assert item.description == "KIT 3 MEIA MP OXER CANO BAIXO ATOALHADA"
+    assert item.quantity == 5000.0
+    assert item.unit_price == 11.37
+    assert item.ean == "7909607641964"
+
+
 # ── FIX: Studio Z EAN ────────────────────────────────────────────────────────
+
 
 def test_studio_z_ean_extracted():
     order = _process("PEDIDO STUDIO Z.pdf")
@@ -64,6 +87,7 @@ def test_studio_z_correct_fields():
 
 
 # ── BeiranRioParser ──────────────────────────────────────────────────────────
+
 
 def test_beira_rio_item_count():
     """5 item codes × 2 size ranges + 2 extra color variants = 14 rows."""
@@ -104,6 +128,7 @@ def test_beira_rio_multi_variant_item():
 
 # ── KoloshParser ─────────────────────────────────────────────────────────────
 
+
 def test_kolosh_item_count():
     order = _process("PEDIDO KOLOSH.pdf")
     assert order is not None
@@ -133,6 +158,7 @@ def test_kolosh_delivery_date():
 
 
 # ── SamsClubParser ───────────────────────────────────────────────────────────
+
 
 def test_sams_club_item_count():
     order = _process("PEDIDO SAMS CLUB.pdf")
@@ -255,6 +281,7 @@ def test_sams_grade_per_store_split():
 
 # ── KallanXlsParser ──────────────────────────────────────────────────────────
 
+
 def test_kallan_item_count():
     order = _process("PEDIDO KALLAN K01.xlsx")
     assert order is not None
@@ -283,6 +310,7 @@ def test_kallan_all_quantities_positive():
 
 # ── DesmembramentoXlsParser ──────────────────────────────────────────────────
 
+
 def test_magic_feet_splits_by_store():
     order = _process("Desmembramento Magic Feet.xlsx")
     assert order is not None
@@ -295,6 +323,7 @@ def test_magic_feet_splits_by_store():
     import tempfile
 
     from app.exporters.erp_exporter import ERPExporter
+
     with tempfile.TemporaryDirectory() as tmp:
         paths = ERPExporter().export(order, tmp)
         assert len(paths) == 8  # 8 lojas reais (a coluna-total "MF" não gera arquivo)
@@ -310,6 +339,7 @@ def test_authentic_feet_items():
 
 
 # ── AuthenticFeetParser (single-customer "Pedido") ──────────────────────────
+
 
 def test_authentic_fit_basic():
     order = _process("Pedido Authentic Fit.xlsx")
@@ -391,6 +421,7 @@ def test_authentic_fit_single_output_file():
     import tempfile
 
     from app.exporters.erp_exporter import ERPExporter
+
     with tempfile.TemporaryDirectory() as tmp:
         paths = ERPExporter().export(order, tmp)
         assert len(paths) == 1
@@ -415,9 +446,12 @@ def test_nba_splits_by_store():
     import tempfile
 
     from app.exporters.erp_exporter import ERPExporter
+
     with tempfile.TemporaryDirectory() as tmp:
         paths = ERPExporter().export(order, tmp)
-        assert len(paths) == 21, f"Expected 21 store files, got {len(paths)}: {[p.name for p in paths]}"
+        assert len(paths) == 21, (
+            f"Expected 21 store files, got {len(paths)}: {[p.name for p in paths]}"
+        )
 
 
 def test_nba_store_name_in_filename():
@@ -426,6 +460,7 @@ def test_nba_store_name_in_filename():
     import tempfile
 
     from app.exporters.erp_exporter import ERPExporter
+
     with tempfile.TemporaryDirectory() as tmp:
         paths = ERPExporter().export(order, tmp)
         names = [p.name for p in paths]
@@ -441,6 +476,7 @@ def test_nba_store_as_customer_name():
 
 
 # ── FIX: Riachuelo ME — page-footer URL not imported as item ─────────────────
+
 
 def test_riachuelo_me_no_url_items():
     """URL footer artifact from PDF page break must not appear as a product item."""
