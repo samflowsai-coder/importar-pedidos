@@ -56,6 +56,25 @@ Confirmar com o time do Flow que `resolver-cliente.ts` casa por CNPJ **dígitos-
 
 Sem commit — este task só produz decisões registradas que alimentam a Task 3.
 
+**RESULTADO (executado 2026-07-17, read-only via firebirdsql contra a Fire viva MM
+`192.168.15.4:3050` / `C:\FireAdmMM\MM_CONFECCAO.FDB`):**
+- **I1 — CODGRUPO existe:** SIM. SELECT de 4 colunas válido, sem fallback. **Porém a coluna
+  está NULL em 100% do CADASTRO (0/29509)** → `grupo_codigo` vem None na prática; `grupoCodigo`
+  omitido do payload. Coluna mantida p/ quando a MM popular a marca no Fire. O rollup por marca
+  precisará de outra fonte (Studio Z/Centauro=SBF — ver memória).
+- **I3 — flag de bloqueio:** `CADASTRO.BLOQUEADO` ∈ {'Sim','Nao'} (null-free). Aplicado
+  `AND C.BLOQUEADO <> 'Sim'` na query (commit `c8ffeff`). `CAD_INATIVO` existe mas é
+  NULL/'Nao'/0×'Sim' (não filtrado — BLOQUEADO cobre). Hoje 0 ativos bloqueados.
+- **M3 — índice:** `CAB_VENDAS_COD_CLIENTE (CLIENTE)` existe → EXISTS indexado.
+- **G4 — data:** `DATA_PEDIDO` é a coluna certa (existe; `DTHORA_PEDIDO` também). Mantido.
+- **E2E:** extractor rodou contra dados reais → **68 clientes ativos, 0 CPF, 0 inválido,
+  0 colisão de dedup**. Higiene de CNPJ da MM impecável.
+- **PENDENTE (Flow-side, não verificável na Fire):** `resolver-cliente.ts` casar por CNPJ
+  dígitos-only + endpoint `POST /api/portal-pedidos/clientes` existir no pcp-app.
+
+Tooling: `firebirdsql` + `passlib` instalados no venv (Python puro — `fdb`+fbclient FB5 não
+conecta no Mac). Não declarados em pyproject (dev/ops; app usa `fdb` no Windows).
+
 ---
 
 ### Task 1: Normalizador canônico de CNPJ (B1)
