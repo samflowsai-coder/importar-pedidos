@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS environments (
     -- comportamento atual); ON = só o subgrupo MEIAS (GRUPO_PRODUTOS_SUB).
     -- Depende da marcação no Fire (Parte 2); default OFF preserva o hoje.
     flowpcp_catalogo_apenas_meias INTEGER NOT NULL DEFAULT 0,
+    flowpcp_clientes_push     INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -132,4 +133,6 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
      "ALTER TABLE environments ADD COLUMN flowpcp_catalogo_push INTEGER NOT NULL DEFAULT 0"),
     ("environments", "flowpcp_catalogo_apenas_meias",
      "ALTER TABLE environments ADD COLUMN flowpcp_catalogo_apenas_meias INTEGER NOT NULL DEFAULT 0"),
+    ("environments", "flowpcp_clientes_push",
+     "ALTER TABLE environments ADD COLUMN flowpcp_clientes_push INTEGER NOT NULL DEFAULT 0"),
 )

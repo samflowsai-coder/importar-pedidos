@@ -68,6 +68,8 @@ class FlowPCPConfigRequest(BaseModel):
     # Filtro da extração: OFF = todo PRODUTOS (hoje); ON = só subgrupo MEIAS
     # (depende da marcação no Fire — Parte 2 do rollout)
     catalogo_apenas_meias: bool = False
+    # Gate do envio de clientes ao Flow (OFF = sync só atualiza a cópia local)
+    clientes_push: bool = False
     # None = mantém token atual; "" = limpa; valor = substitui
     service_token: str | None = None
 

@@ -18,6 +18,8 @@ class FlowPCPConfig:
     request_timeout_s: float = 30.0
     # Gate do envio de catálogo ao Flow: OFF = sync só atualiza a cópia local.
     catalogo_push: bool = False
+    # Gate do envio de clientes ao Flow: OFF = sync só atualiza a cópia local.
+    clientes_push: bool = False
     # Filtro da extração: OFF = todo PRODUTOS (hoje); ON = só subgrupo MEIAS.
     catalogo_apenas_meias: bool = False
 
@@ -35,6 +37,7 @@ def flowpcp_config_from_env(env: dict[str, Any], *, service_token: str | None) -
         poll_interval_s=int(env.get("flowpcp_poll_interval_s") or 30),
         request_timeout_s=float(env.get("flowpcp_request_timeout_s") or 30.0),
         catalogo_push=bool(env.get("flowpcp_catalogo_push")),
+        clientes_push=bool(env.get("flowpcp_clientes_push")),
         catalogo_apenas_meias=bool(env.get("flowpcp_catalogo_apenas_meias")),
     )
 
