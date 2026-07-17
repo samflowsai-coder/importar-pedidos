@@ -144,6 +144,44 @@ def sync_catalogo_flowpcp(env_id: str, apply: bool = False, _=Depends(require_ad
     return rep.model_dump()
 
 
+@router.post("/{env_id}/flowpcp/sync-clientes")
+def sync_clientes_flowpcp(env_id: str, apply: bool = False, _=Depends(require_admin)):
+    """Carga de clientes ativos (Fire → FlowPCP), direção IDA.
+
+    Lê os clientes com pedido nos últimos 12 meses do Fire do ambiente.
+    - `apply=false` (default): dry-run — reconcilia/relatório, não grava no Flow.
+    - `apply=true`: promove (exige o `/clientes` do Flow no ar).
+    A cópia local (`clientes_fire`) é sempre atualizada. Blocking → threadpool.
+    """
+    env = environments_repo.get(env_id)
+    if not env:
+        raise HTTPException(404, "Ambiente não encontrado")
+    if not env.get("flowpcp_enabled"):
+        raise HTTPException(409, "FlowPCP não está habilitado neste ambiente")
+
+    from app.integrations.flowpcp.clientes_sync import run_clientes_sync
+
+    try:
+        res = run_clientes_sync(env["slug"], dry_run=not apply, full_sync=False)
+    except Exception as exc:  # noqa: BLE001 — vira erro HTTP legível pro operador
+        raise HTTPException(502, f"Falha na carga de clientes: {exc}") from exc
+    if res is None:
+        raise HTTPException(409, "FlowPCP não está habilitado neste ambiente")
+
+    body = {
+        "local_only": res.reconciliacao is None,
+        "skipped_empty": res.skipped_empty,
+        "itens": res.itens,
+        "extraido_em": res.extraido_em,
+        "descartados_cpf": res.descartados_cpf,
+        "descartados_invalidos": res.descartados_invalidos,
+        "colisoes_dedup": res.colisoes_dedup,
+    }
+    if res.reconciliacao is not None:
+        body["reconciliacao"] = res.reconciliacao.model_dump()
+    return body
+
+
 @router.delete("/{env_id}", status_code=204)
 def delete_environment(env_id: str, _=Depends(require_admin)):
     if not environments_repo.get(env_id):
