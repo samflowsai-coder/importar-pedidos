@@ -42,6 +42,18 @@ def test_centauro_correct_fields():
     assert order.items[0].unit_price == 11.37
 
 
+def test_centauro_uses_variant_code_not_model_code():
+    """CODIGO_PRODUTO tem que ser o código de 'Dados Variante' (986388012210), que
+    carrega cor/tamanho e é o que o Fire casa — não o de 'Dados Modelo' (986388),
+    que é só a casca: o mesmo modelo sai com variantes diferentes por pedido."""
+    order = _process("PEDIDO CENTAURO.pdf")
+    item = order.items[0]
+    assert item.product_code == "986388012210"
+    assert item.product_code != "986388"
+    # a variante resolvida tem que ser a DONA do EAN exportado
+    assert item.ean == "7909607654377"
+
+
 def test_centauro_uses_invoicing_cnpj_not_billing():
     """CNPJ deve vir da seção 'Dados para Entrega / Faturamento' (filial cadastrada
     no Fire), não de 'Informações de Cobrança' (matriz SBF /0001-65)."""
@@ -68,6 +80,7 @@ def test_centauro_all_bold_font_pdf():
     assert item.quantity == 5000.0
     assert item.unit_price == 11.37
     assert item.ean == "7909607641964"
+    assert item.product_code == "986388014917"
 
 
 # ── FIX: Studio Z EAN ────────────────────────────────────────────────────────

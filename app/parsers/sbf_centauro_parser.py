@@ -84,17 +84,15 @@ class SbfCentauroParser(BaseParser):
                 if str(row[0] or "").strip() in ("Item", ""):
                     continue
                 desc = str(row[2] or "").strip()
-                product_code = str(row[1] or "").strip()
+                model_code = str(row[1] or "").strip()
                 qty = self._parse_br_number(str(row[5] or ""))
                 unit_price = self._parse_br_number(str(row[7] or ""))
                 total_price = self._parse_br_number(str(row[8] or ""))
-                ean = ean_map.get(product_code) or next(
-                    (v for k, v in ean_map.items() if k.startswith(product_code)), None
-                )
+                variant_code, ean = self._resolve_variant(model_code, ean_map)
                 if desc and qty is not None:
                     items.append(OrderItem(
                         description=desc,
-                        product_code=product_code,
+                        product_code=variant_code or model_code,
                         ean=ean,
                         quantity=qty,
                         unit_price=unit_price,
@@ -104,6 +102,22 @@ class SbfCentauroParser(BaseParser):
                         delivery_cnpj=delivery_cnpj,
                     ))
         return items
+
+    def _resolve_variant(self, model_code: str, ean_map: dict) -> tuple[str | None, str | None]:
+        """Casa o item de 'Dados Modelo' com sua linha em 'Dados Variante'.
+
+        O código do modelo (986388) é só a casca — quem carrega cor e tamanho, e é o
+        que o Fire casa, é o da variante (986388014917), que começa com o do modelo.
+        O mesmo modelo sai com variantes diferentes em pedidos diferentes, então o
+        código exportado tem que ser o da variante. Devolve (código, EAN) juntos para
+        garantir que o EAN exportado é o da MESMA variante que o código.
+        """
+        if model_code in ean_map:
+            return model_code, ean_map[model_code]
+        for variant_code, ean in ean_map.items():
+            if variant_code.startswith(model_code):
+                return variant_code, ean
+        return None, None
 
     def _is_item_table(self, table: list) -> bool:
         if not table or not table[0] or len(table[0]) < len(_ITEM_HEADER_COLS):
