@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from app.erp.cnpj import cnpj_digits
 from app.integrations.flowpcp.schema import (
     ClienteRecebimento,
     ItemRecebimento,
@@ -22,7 +23,9 @@ def _to_iso(br_date: str | None) -> str | None:
         return None
 
 
-def build_recebimento_payload(*, import_id: str, order: Order, tenant_id: str) -> RecebimentoRequest:
+def build_recebimento_payload(
+    *, import_id: str, order: Order, tenant_id: str
+) -> RecebimentoRequest:
     h = order.header
     itens = [
         ItemRecebimento(
@@ -39,10 +42,12 @@ def build_recebimento_payload(*, import_id: str, order: Order, tenant_id: str) -
         externalId=import_id,
         fornecedor=h.customer_name or "(sem fornecedor)",
         pedidoNumero=h.order_number or import_id,
-        emitidoEm=_to_iso(h.issue_date)
-        or datetime.now(UTC).strftime("%Y-%m-%dT00:00:00.000Z"),
+        emitidoEm=_to_iso(h.issue_date) or datetime.now(UTC).strftime("%Y-%m-%dT00:00:00.000Z"),
         prazoSolicitado=primeiro_prazo,
-        cliente=ClienteRecebimento(nome=h.customer_name or "(sem cliente)", cnpj=h.customer_cnpj or None),
+        cliente=ClienteRecebimento(
+            nome=h.customer_name or "(sem cliente)",
+            cnpj=(cnpj_digits(h.customer_cnpj) or None),
+        ),
         itens=itens,
         origem=OrigemRecebimento(
             importadorVersao=_IMPORTADOR_VERSAO,
