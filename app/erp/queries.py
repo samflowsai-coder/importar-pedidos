@@ -237,13 +237,18 @@ LIST_PRODUTOS_CATALOGO_MEIAS = """
 """
 
 # ── Clientes ativos (carga Fire→Flow) ─────────────────────────────────────────
-# Clientes (RELAC_CLIENTE='Sim') com pelo menos um pedido em CAB_VENDAS dentro da
-# janela (bind = data de corte, calculada no Python). CODGRUPO = a marca (Task 0
-# gate I1: se a coluna não existir, remover C.CODGRUPO e o extractor manda grupo=None).
+# Clientes (RELAC_CLIENTE='Sim', não BLOQUEADO) com pelo menos um pedido em
+# CAB_VENDAS dentro da janela (bind = data de corte, calculada no Python).
+# Verificado na Fire viva MM (192.168.15.4, MM_CONFECCAO.FDB) em 2026-07-17:
+#   - CODGRUPO existe (gate I1 OK) mas está NULL em 100% do CADASTRO → grupo_codigo
+#     vem None na prática; a coluna fica p/ quando a MM popular a marca no Fire.
+#   - BLOQUEADO ∈ {'Sim','Nao'} (null-free); filtramos <> 'Sim' (mesmo padrão do
+#     catálogo). Hoje 0 ativos bloqueados, mas é a definição correta de "vendável".
 LIST_CLIENTES_ATIVOS = """
     SELECT C.CODIGO, C.RAZAO_SOCIAL, C.CPF_CNPJ, C.CODGRUPO
     FROM CADASTRO C
     WHERE C.RELAC_CLIENTE = 'Sim'
+      AND C.BLOQUEADO <> 'Sim'
       AND EXISTS (
           SELECT 1 FROM CAB_VENDAS V
           WHERE V.CLIENTE = C.CODIGO
