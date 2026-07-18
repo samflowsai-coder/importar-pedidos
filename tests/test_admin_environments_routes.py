@@ -186,6 +186,21 @@ def test_set_flowpcp_config_round_trip(setup):
     assert environments_repo.get_flowpcp_token(env_id) == "svc-tok"
 
 
+def test_set_flowpcp_clientes_push_round_trip(setup):
+    """O gate flowpcp_clientes_push persiste pelo PUT (o que a UI agora sempre
+    envia). Trava a ponta backend do fix do gate-reset: enviar True grava 1,
+    enviar False grava 0."""
+    c = _client()
+    env_id = _create_env(c, setup)
+    base = {"enabled": True, "base_url": "x", "tenant_id": "t"}
+    r1 = c.put(f"/api/admin/environments/{env_id}/flowpcp", json={**base, "clientes_push": True})
+    assert r1.status_code == 200
+    assert r1.json()["flowpcp_clientes_push"] == 1
+    r2 = c.put(f"/api/admin/environments/{env_id}/flowpcp", json={**base, "clientes_push": False})
+    assert r2.status_code == 200
+    assert r2.json()["flowpcp_clientes_push"] == 0
+
+
 def test_set_flowpcp_keeps_token_when_omitted(setup):
     c = _client()
     env_id = _create_env(c, setup)
@@ -414,6 +429,192 @@ def test_put_flowpcp_aceita_catalogo_push(setup):
     )
     assert r.status_code == 200
     assert r.json()["flowpcp_catalogo_push"] == 1
+
+
+# ── Carga de clientes ativos (Fire → Flow) ───────────────────────────────────
+
+
+class _FakeClientesReconciliacao:
+    """Stand-in de ClientesReconciliacaoResponse — só precisa de model_dump()."""
+
+    def model_dump(self):
+        return {
+            "dry_run": True,
+            "fire_total": 120,
+            "flow_total": 80,
+            "match_limpo": 60,
+        }
+
+
+def _fake_clientes_result(**overrides):
+    from app.integrations.flowpcp.clientes_sync import ClientesSyncResult
+
+    kwargs = {
+        "itens": 5,
+        "extraido_em": "2026-07-17T12:00:00Z",
+        "descartados_cpf": 3,
+        "descartados_invalidos": 1,
+        "colisoes_dedup": 2,
+    }
+    kwargs.update(overrides)
+    return ClientesSyncResult(**kwargs)
+
+
+def test_sync_clientes_404_ambiente_inexistente(setup):
+    r = _client().post("/api/admin/environments/nao-existe/flowpcp/sync-clientes")
+    assert r.status_code == 404
+
+
+def test_sync_clientes_409_se_flowpcp_desligado(setup):
+    env = environments_repo.create(
+        slug="mm",
+        name="MM",
+        watch_dir=str(setup),
+        output_dir=str(setup),
+        fb_path=str(setup / "x.fdb"),
+    )
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-clientes")
+    assert r.status_code == 409
+
+
+def test_sync_clientes_apply_passa_dry_run_false_e_full_sync_false(setup, monkeypatch):
+    env = environments_repo.create(
+        slug="mm",
+        name="MM",
+        watch_dir=str(setup),
+        output_dir=str(setup),
+        fb_path=str(setup / "x.fdb"),
+    )
+    _enable_flowpcp(env["id"])
+    import app.integrations.flowpcp.clientes_sync as clientes_sync
+
+    capturado = {}
+
+    def fake(slug, **kw):
+        capturado.update(kw)
+        capturado["slug"] = slug
+        return _fake_clientes_result()
+
+    monkeypatch.setattr(clientes_sync, "run_clientes_sync", fake)
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-clientes?apply=true")
+    assert r.status_code == 200
+    assert capturado["dry_run"] is False
+    assert capturado["full_sync"] is False
+
+
+def test_sync_clientes_default_e_dry_run_full_sync_false(setup, monkeypatch):
+    env = environments_repo.create(
+        slug="mm",
+        name="MM",
+        watch_dir=str(setup),
+        output_dir=str(setup),
+        fb_path=str(setup / "x.fdb"),
+    )
+    _enable_flowpcp(env["id"])
+    import app.integrations.flowpcp.clientes_sync as clientes_sync
+
+    capturado = {}
+    monkeypatch.setattr(
+        clientes_sync,
+        "run_clientes_sync",
+        lambda slug, **kw: capturado.update(kw) or _fake_clientes_result(),
+    )
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-clientes")
+    assert r.status_code == 200
+    assert capturado["dry_run"] is True
+    assert capturado["full_sync"] is False
+
+
+def test_sync_clientes_502_quando_run_clientes_sync_lanca(setup, monkeypatch):
+    env = environments_repo.create(
+        slug="mm",
+        name="MM",
+        watch_dir=str(setup),
+        output_dir=str(setup),
+        fb_path=str(setup / "x.fdb"),
+    )
+    _enable_flowpcp(env["id"])
+    import app.integrations.flowpcp.clientes_sync as clientes_sync
+
+    def fake(*a, **k):
+        raise RuntimeError("Firebird indisponível")
+
+    monkeypatch.setattr(clientes_sync, "run_clientes_sync", fake)
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-clientes")
+    assert r.status_code == 502
+
+
+def test_sync_clientes_409_quando_run_clientes_sync_retorna_none(setup, monkeypatch):
+    env = environments_repo.create(
+        slug="mm",
+        name="MM",
+        watch_dir=str(setup),
+        output_dir=str(setup),
+        fb_path=str(setup / "x.fdb"),
+    )
+    _enable_flowpcp(env["id"])
+    import app.integrations.flowpcp.clientes_sync as clientes_sync
+
+    monkeypatch.setattr(clientes_sync, "run_clientes_sync", lambda *a, **k: None)
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-clientes")
+    assert r.status_code == 409
+
+
+def test_sync_clientes_local_only_quando_reconciliacao_none(setup, monkeypatch):
+    """Gate OFF (reconciliacao=None) → local_only=True e sem chave reconciliacao."""
+    env = environments_repo.create(
+        slug="mm",
+        name="MM",
+        watch_dir=str(setup),
+        output_dir=str(setup),
+        fb_path=str(setup / "x.fdb"),
+    )
+    _enable_flowpcp(env["id"])
+    import app.integrations.flowpcp.clientes_sync as clientes_sync
+
+    monkeypatch.setattr(
+        clientes_sync, "run_clientes_sync", lambda *a, **k: _fake_clientes_result()
+    )
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-clientes")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["local_only"] is True
+    assert body["itens"] == 5
+    assert body["descartados_cpf"] == 3
+    assert body["descartados_invalidos"] == 1
+    assert body["colisoes_dedup"] == 2
+    assert body["extraido_em"] == "2026-07-17T12:00:00Z"
+    assert body["skipped_empty"] is False
+    assert "reconciliacao" not in body
+
+
+def test_sync_clientes_retorna_reconciliacao_quando_gate_on(setup, monkeypatch):
+    """Gate ON (reconciliacao presente) → local_only=False e reconciliacao no body."""
+    env = environments_repo.create(
+        slug="mm",
+        name="MM",
+        watch_dir=str(setup),
+        output_dir=str(setup),
+        fb_path=str(setup / "x.fdb"),
+    )
+    _enable_flowpcp(env["id"])
+    import app.integrations.flowpcp.clientes_sync as clientes_sync
+
+    monkeypatch.setattr(
+        clientes_sync,
+        "run_clientes_sync",
+        lambda *a, **k: _fake_clientes_result(reconciliacao=_FakeClientesReconciliacao()),
+    )
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-clientes")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["local_only"] is False
+    assert body["reconciliacao"] == {
+        "dry_run": True,
+        "fire_total": 120,
+        "flow_total": 80,
+        "match_limpo": 60,
+    }
 
 
 def test_put_flowpcp_aceita_catalogo_apenas_meias(setup):

@@ -68,6 +68,7 @@ def gravar_flowpcp(
     request_timeout_s: float = 300.0,
     catalogo_push: bool | None = None,
     catalogo_apenas_meias: bool | None = None,
+    clientes_push: bool | None = None,
 ) -> dict:
     """Liga o FlowPCP no ambiente `slug` (enabled=1, url, tenant, token, timeout).
     `service_token=None` mantém o token atual; string vazia limpa; valor substitui.
@@ -75,6 +76,8 @@ def gravar_flowpcp(
     desligar o que o admin ligou); True/False seta explicitamente.
     `catalogo_apenas_meias=None` PRESERVA o filtro atual (mesma semântica);
     liga na tela do ambiente depois que a marcação MEIAS existir no Fire.
+    `clientes_push=None` PRESERVA o gate de envio de clientes (mesma semântica —
+    o configurador nunca liga esse gate; quem liga é a tela do ambiente).
     `request_timeout_s=300` por padrão — o promote de milhares de itens é lento.
     dry_run=1 por segurança (só afeta a VOLTA, que não usamos hoje)."""
     from app.persistence import environments_repo
@@ -89,6 +92,8 @@ def gravar_flowpcp(
         catalogo_push = bool(env.get("flowpcp_catalogo_push"))
     if catalogo_apenas_meias is None:
         catalogo_apenas_meias = bool(env.get("flowpcp_catalogo_apenas_meias"))
+    if clientes_push is None:
+        clientes_push = bool(env.get("flowpcp_clientes_push"))
     environments_repo.set_flowpcp_config(
         env["id"],
         enabled=True,
@@ -98,6 +103,7 @@ def gravar_flowpcp(
         request_timeout_s=request_timeout_s,
         catalogo_push=catalogo_push,
         catalogo_apenas_meias=catalogo_apenas_meias,
+        clientes_push=clientes_push,
         service_token=service_token,
     )
     return environments_repo.get_by_slug(slug)
@@ -200,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"      tenant_id      = {env['flowpcp_tenant_id']}")
     print(f"      envia catálogo = {bool(env['flowpcp_catalogo_push'])}")
     print(f"      só meias       = {bool(env['flowpcp_catalogo_apenas_meias'])}")
+    print(f"      envia clientes = {bool(env['flowpcp_clientes_push'])}")
 
     # 3) Firebird: grava senha (se dada) e testa a conexão
     env = gravar_senha_firebird(args.slug, fb_pw)

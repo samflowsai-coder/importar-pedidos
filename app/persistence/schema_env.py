@@ -117,6 +117,17 @@ CREATE TABLE IF NOT EXISTS catalogo_fire (
     tipo            TEXT NOT NULL DEFAULT 'simples',
     extraido_em     TEXT NOT NULL
 );
+
+-- Cópia local dos clientes ativos do Fire ("manter no importador"). Snapshot
+-- substitutivo a cada sync; envio ao Flow é gated por flowpcp_clientes_push.
+CREATE TABLE IF NOT EXISTS clientes_fire (
+    fire_cliente_id TEXT PRIMARY KEY,
+    cnpj            TEXT NOT NULL,
+    nome            TEXT NOT NULL,
+    grupo_codigo    TEXT,
+    ativo           INTEGER NOT NULL DEFAULT 1,
+    extraido_em     TEXT NOT NULL
+);
 """
 
 INDEXES_SQL = """
