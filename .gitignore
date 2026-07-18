@@ -52,4 +52,8 @@ app/.secret.key
 promover-prod.bat
 ligar-flowpcp.bat
 enviar-catalogo-flow.bat
+
+# Dados do cliente / produção — nunca commitar (PDFs, dbs, patches gerados)
+ambiente_cliente/
+reprocessar_prazos_patch.*
 wheelhouse/
