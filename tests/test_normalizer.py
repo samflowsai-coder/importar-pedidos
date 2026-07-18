@@ -31,3 +31,30 @@ def test_normalizes_customer_name_title_case():
     normalizer = OrderNormalizer()
     order = normalizer.normalize(_order(customer_name="EMPRESA TESTE LTDA"))
     assert order.header.customer_name == "Empresa Teste Ltda"
+
+
+def test_normalizes_item_delivery_date_dots_to_slashes():
+    # Centauro entrega o prazo em DD.MM.YYYY (pontos). O normalizer tem que
+    # canonicalizar como faz com o issue_date — senão os _parse_date/_to_iso
+    # dos consumidores (Flow, ERP, gestor), que só aceitam barras, devolvem None.
+    normalizer = OrderNormalizer()
+    order = normalizer.normalize(
+        _order(items=[OrderItem(description="X", quantity=1.0, delivery_date="01.03.2026")])
+    )
+    assert order.items[0].delivery_date == "01/03/2026"
+
+
+def test_normalizes_item_delivery_date_short_year():
+    normalizer = OrderNormalizer()
+    order = normalizer.normalize(
+        _order(items=[OrderItem(description="X", quantity=1.0, delivery_date="01/03/26")])
+    )
+    assert order.items[0].delivery_date == "01/03/2026"
+
+
+def test_item_without_delivery_date_stays_none():
+    normalizer = OrderNormalizer()
+    order = normalizer.normalize(
+        _order(items=[OrderItem(description="X", quantity=1.0, delivery_date=None)])
+    )
+    assert order.items[0].delivery_date is None

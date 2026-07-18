@@ -14,6 +14,8 @@ class OrderNormalizer:
         for item in order.items:
             if item.description:
                 item.description = item.description.strip()
+            if item.delivery_date:
+                item.delivery_date = self._normalize_date(item.delivery_date)
         return order
 
     def _normalize_date(self, date_str: str) -> str:
