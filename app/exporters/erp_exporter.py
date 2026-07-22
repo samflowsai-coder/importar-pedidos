@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 import openpyxl
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.workbook.protection import WorkbookProtection
 
@@ -135,19 +136,27 @@ class ERPExporter:
 
         self._write_header(ws)
         for row_idx, row in enumerate(rows, 2):
-            ws.cell(row=row_idx, column=1, value=row.pedido)
-            ws.cell(row=row_idx, column=2, value=row.nome_cliente)
-            ws.cell(row=row_idx, column=3, value=row.cnpj_cliente)
-            ws.cell(row=row_idx, column=4, value=row.codigo_produto)
-            ws.cell(row=row_idx, column=5, value=row.ean)
-            ws.cell(row=row_idx, column=6, value=row.descricao)
-            ws.cell(row=row_idx, column=7, value=row.quantidade)
-            ws.cell(row=row_idx, column=8, value=row.preco_unitario)
-            ws.cell(row=row_idx, column=9, value=row.valor_total)
-            ws.cell(row=row_idx, column=10, value=row.obs)
-            ws.cell(row=row_idx, column=11, value=row.data_entrega)
-            ws.cell(row=row_idx, column=12, value=row.cnpj_local_entrega)
-            ws.cell(row=row_idx, column=13, value=row.ean_local_entrega)
+            # Ordem das colunas = HEADERS. Cada valor passa por _clean_cell:
+            # texto parseado de PDF/XLS sujo pode trazer caractere de controle
+            # (0x00–0x1F) que o openpyxl recusa (IllegalCharacterError). Nunca
+            # deixar isso derrubar a geração do XLS.
+            values = [
+                row.pedido,
+                row.nome_cliente,
+                row.cnpj_cliente,
+                row.codigo_produto,
+                row.ean,
+                row.descricao,
+                row.quantidade,
+                row.preco_unitario,
+                row.valor_total,
+                row.obs,
+                row.data_entrega,
+                row.cnpj_local_entrega,
+                row.ean_local_entrega,
+            ]
+            for col_idx, value in enumerate(values, 1):
+                ws.cell(row=row_idx, column=col_idx, value=self._clean_cell(value))
 
         self._unlock_workbook(wb)
         wb.save(path)
@@ -157,6 +166,18 @@ class ERPExporter:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clean_cell(value):
+        """Remove caracteres de controle ilegais que o openpyxl recusa.
+
+        Usa o próprio `ILLEGAL_CHARACTERS_RE` do openpyxl (0x00–0x08, 0x0B,
+        0x0C, 0x0E–0x1F) — tab/newline/CR são válidos e preservados. No-op para
+        valores não-string (números, datas, None).
+        """
+        if isinstance(value, str):
+            return ILLEGAL_CHARACTERS_RE.sub("", value)
+        return value
 
     @staticmethod
     def _unlock_workbook(wb) -> None:
