@@ -95,6 +95,47 @@ def test_export_splits_by_delivery_name_when_no_cnpj(tmp_path: Path) -> None:
     assert any("LOJA" in s or s in {"SP", "RJ"} for s in suffixes)
 
 
+def test_export_strips_illegal_control_chars(tmp_path: Path) -> None:
+    """Um caractere de controle no texto do pedido (vindo de parse de XLS/PDF
+    sujo) NÃO pode derrubar a geração do XLS. openpyxl recusa 0x00–0x1F e
+    levantaria IllegalCharacterError → HTTP 500 na rota /export-xlsx.
+
+    Regressão: pedido AF185/H2S4 (2026-07-22) — 1 item com char invisível.
+    """
+    order = _order(
+        header_kwargs={"order_number": "AF185", "customer_name": "H2S4", "customer_cnpj": "111"},
+        items=[
+            OrderItem(
+                description="KIT 3 PARES - SAPATILHA - BRANCO \x1f- 33 - 38",
+                quantity=12,
+                unit_price=11.96,
+                obs="obs\x00suja",
+            ),
+        ],
+    )
+
+    # Não pode levantar exceção.
+    [path] = ERPExporter().export(order, output_dir=str(tmp_path))
+
+    wb = openpyxl.load_workbook(path)
+    ws = wb.active
+    # Char ilegal removido; o resto do texto permanece legível.
+    assert ws.cell(row=2, column=6).value == "KIT 3 PARES - SAPATILHA - BRANCO - 33 - 38"
+    assert ws.cell(row=2, column=10).value == "obssuja"
+
+
+def test_export_preserves_legit_whitespace(tmp_path: Path) -> None:
+    """Sanitização remove só controle ilegal — tab/newline/CR são válidos no XLSX
+    e devem sobreviver."""
+    order = _order(
+        header_kwargs={"order_number": "PED-006", "customer_name": "X", "customer_cnpj": "111"},
+        items=[OrderItem(description="LINHA1\nLINHA2\tFIM", quantity=1)],
+    )
+    [path] = ERPExporter().export(order, output_dir=str(tmp_path))
+    wb = openpyxl.load_workbook(path)
+    assert wb.active.cell(row=2, column=6).value == "LINHA1\nLINHA2\tFIM"
+
+
 def test_export_produces_readable_xlsx_with_headers(tmp_path: Path) -> None:
     order = _order(
         header_kwargs={"order_number": "PED-005", "customer_name": "X", "customer_cnpj": "111"},
