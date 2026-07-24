@@ -15,43 +15,77 @@ def _order(items_kwargs: list[dict], *, customer_cnpj: str = "00000000000100") -
     )
 
 
-def _make_fb_ctx(*, client_row=None, product_rows: dict | None = None):
-    """Cria um context manager fake que devolve cursor com fetchone() programado.
+def _make_fb_ctx_batched(*, client_row=None, ean_rows=None, code_rows=None, seq_rows=None):
+    """Cursor fake para o check batelado.
 
-    `product_rows` mapeia (query_str, bind_value) -> tuple|None.
+    ean_rows/code_rows/seq_rows: listas de tuplas já no formato SELECT
+    (key primeiro). client_row: tupla (CODIGO, RAZAO) ou None.
+    Conta execute() em cur.execute.call_count.
     """
     cur = MagicMock()
-    rows_seq: list = []
+    next_fetchall = []
 
-    def execute_side_effect(sql, params):
-        # Decide o próximo fetchone com base no SQL
+    def execute_side_effect(sql, params=None):
+        nonlocal next_fetchall
         if "FROM CADASTRO" in sql:
-            rows_seq.append(client_row)
-        elif "FROM PRODUTOS" in sql:
-            key = ("ean" if "CODIGO_EAN13" in sql else "code", params[0])
-            rows_seq.append((product_rows or {}).get(key))
+            next_fetchall = []  # cliente usa fetchone
+        elif "CODIGO_EAN13 IN" in sql:
+            next_fetchall = list(ean_rows or [])
+        elif "CODPROD_ALTERN" in sql and " IN " in sql:
+            next_fetchall = list(code_rows or [])
+        elif "SEQ IN" in sql:
+            next_fetchall = list(seq_rows or [])
         else:
-            rows_seq.append(None)
+            next_fetchall = []
 
     cur.execute.side_effect = execute_side_effect
-    cur.fetchone.side_effect = lambda: rows_seq.pop(0)
+    cur.fetchone.side_effect = lambda: client_row
+    cur.fetchall.side_effect = lambda: next_fetchall
 
     conn = MagicMock()
     conn.cursor.return_value = cur
-
     ctx = MagicMock()
     ctx.__enter__.return_value = conn
     ctx.__exit__.return_value = False
-    return ctx
+    return ctx, cur
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_check_order_batches_queries(mock_fb):
+    mock_fb.return_value.is_configured.return_value = True
+    ctx, cur = _make_fb_ctx_batched(
+        client_row=(1, "ACME"),
+        ean_rows=[("7891", 10, "TENIS A", 89.90), ("7892", 11, "TENIS B", 50.0)],
+        code_rows=[("ABC", 12, "TENIS C", 30.0)],
+    )
+    mock_fb.return_value.connect.return_value = ctx
+
+    order = _order(
+        [
+            {"ean": "7891", "unit_price": 89.90},
+            {"ean": "7892", "unit_price": 50.0},
+            {"product_code": "ABC", "unit_price": 30.0},
+            {"ean": "9999", "unit_price": 1.0},  # sem match
+        ]
+    )
+    report = product_check.check_order(order)
+
+    # 1 cliente + 1 eans + 1 codes = 3 execute (sem depara nesta fase)
+    assert cur.execute.call_count <= 4
+    assert report["summary"]["items_matched"] == 3
+    assert report["items"][0]["match_source"] == "ean"
+    assert report["items"][2]["match_source"] == "codprod_altern"
+    assert report["items"][3]["match"] is False
 
 
 @patch("app.erp.product_check.FirebirdConnection")
 def test_price_status_match_exact(mock_fb):
     mock_fb.return_value.is_configured.return_value = True
-    mock_fb.return_value.connect.return_value = _make_fb_ctx(
+    ctx, _cur = _make_fb_ctx_batched(
         client_row=(1, "ACME"),
-        product_rows={("ean", "7891"): (10, "TENIS", 89.90)},
+        ean_rows=[("7891", 10, "TENIS", 89.90)],
     )
+    mock_fb.return_value.connect.return_value = ctx
 
     order = _order([{"ean": "7891", "unit_price": 89.90}])
     report = product_check.check_order(order)
@@ -66,9 +100,10 @@ def test_price_status_match_exact(mock_fb):
 @patch("app.erp.product_check.FirebirdConnection")
 def test_price_status_mismatch_one_cent(mock_fb):
     mock_fb.return_value.is_configured.return_value = True
-    mock_fb.return_value.connect.return_value = _make_fb_ctx(
-        product_rows={("ean", "7891"): (10, "TENIS", 89.91)},
+    ctx, _cur = _make_fb_ctx_batched(
+        ean_rows=[("7891", 10, "TENIS", 89.91)],
     )
+    mock_fb.return_value.connect.return_value = ctx
     order = _order([{"ean": "7891", "unit_price": 89.90}])
     report = product_check.check_order(order)
     item = report["items"][0]
@@ -79,9 +114,10 @@ def test_price_status_mismatch_one_cent(mock_fb):
 @patch("app.erp.product_check.FirebirdConnection")
 def test_price_status_mismatch_round_value(mock_fb):
     mock_fb.return_value.is_configured.return_value = True
-    mock_fb.return_value.connect.return_value = _make_fb_ctx(
-        product_rows={("ean", "7891"): (10, "TENIS", 100.00)},
+    ctx, _cur = _make_fb_ctx_batched(
+        ean_rows=[("7891", 10, "TENIS", 100.00)],
     )
+    mock_fb.return_value.connect.return_value = ctx
     order = _order([{"ean": "7891", "unit_price": 99.00}])
     report = product_check.check_order(order)
     assert report["items"][0]["price_status"] == "mismatch"
@@ -91,9 +127,10 @@ def test_price_status_mismatch_round_value(mock_fb):
 @patch("app.erp.product_check.FirebirdConnection")
 def test_price_status_no_price_in_fire_null(mock_fb):
     mock_fb.return_value.is_configured.return_value = True
-    mock_fb.return_value.connect.return_value = _make_fb_ctx(
-        product_rows={("ean", "7891"): (10, "TENIS", None)},
+    ctx, _cur = _make_fb_ctx_batched(
+        ean_rows=[("7891", 10, "TENIS", None)],
     )
+    mock_fb.return_value.connect.return_value = ctx
     order = _order([{"ean": "7891", "unit_price": 89.90}])
     report = product_check.check_order(order)
     assert report["items"][0]["price_status"] == "no_price_in_fire"
@@ -103,9 +140,10 @@ def test_price_status_no_price_in_fire_null(mock_fb):
 @patch("app.erp.product_check.FirebirdConnection")
 def test_price_status_no_price_in_fire_zero(mock_fb):
     mock_fb.return_value.is_configured.return_value = True
-    mock_fb.return_value.connect.return_value = _make_fb_ctx(
-        product_rows={("ean", "7891"): (10, "TENIS", 0.0)},
+    ctx, _cur = _make_fb_ctx_batched(
+        ean_rows=[("7891", 10, "TENIS", 0.0)],
     )
+    mock_fb.return_value.connect.return_value = ctx
     order = _order([{"ean": "7891", "unit_price": 89.90}])
     report = product_check.check_order(order)
     assert report["items"][0]["price_status"] == "no_price_in_fire"
@@ -114,9 +152,10 @@ def test_price_status_no_price_in_fire_zero(mock_fb):
 @patch("app.erp.product_check.FirebirdConnection")
 def test_price_status_no_order_price(mock_fb):
     mock_fb.return_value.is_configured.return_value = True
-    mock_fb.return_value.connect.return_value = _make_fb_ctx(
-        product_rows={("ean", "7891"): (10, "TENIS", 50.0)},
+    ctx, _cur = _make_fb_ctx_batched(
+        ean_rows=[("7891", 10, "TENIS", 50.0)],
     )
+    mock_fb.return_value.connect.return_value = ctx
     order = _order([{"ean": "7891", "unit_price": None}])
     report = product_check.check_order(order)
     assert report["items"][0]["price_status"] == "no_order_price"
@@ -125,9 +164,10 @@ def test_price_status_no_order_price(mock_fb):
 @patch("app.erp.product_check.FirebirdConnection")
 def test_price_status_no_product_match(mock_fb):
     mock_fb.return_value.is_configured.return_value = True
-    mock_fb.return_value.connect.return_value = _make_fb_ctx(
-        product_rows={},  # nada no Fire
+    ctx, _cur = _make_fb_ctx_batched(
+        ean_rows=[],  # nada no Fire
     )
+    mock_fb.return_value.connect.return_value = ctx
     order = _order([{"ean": "7891", "unit_price": 89.90}])
     report = product_check.check_order(order)
     item = report["items"][0]
@@ -139,15 +179,16 @@ def test_price_status_no_product_match(mock_fb):
 @patch("app.erp.product_check.FirebirdConnection")
 def test_summary_aggregates_price_counts(mock_fb):
     mock_fb.return_value.is_configured.return_value = True
-    mock_fb.return_value.connect.return_value = _make_fb_ctx(
-        product_rows={
-            ("ean", "A"): (1, "X", 10.0),  # match
-            ("ean", "B"): (2, "Y", 12.0),  # mismatch
-            ("ean", "C"): (3, "Z", None),  # no_price_in_fire
-            ("ean", "D"): (4, "W", 50.0),  # no_order_price
+    ctx, _cur = _make_fb_ctx_batched(
+        ean_rows=[
+            ("A", 1, "X", 10.0),  # match
+            ("B", 2, "Y", 12.0),  # mismatch
+            ("C", 3, "Z", None),  # no_price_in_fire
+            ("D", 4, "W", 50.0),  # no_order_price
             # E não cadastrado → no_product_match
-        },
+        ],
     )
+    mock_fb.return_value.connect.return_value = ctx
     order = _order(
         [
             {"ean": "A", "unit_price": 10.0},

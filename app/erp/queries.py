@@ -151,6 +151,38 @@ FIND_PRODUCT_BY_CODE = """
     ROWS 1
 """
 
+# Product lookup by SEQ (usado na resolução de de-para).
+FIND_PRODUCT_BY_SEQ = """
+    SELECT SEQ, DESCRICAO, PRECO_VENDA FROM PRODUTOS
+    WHERE SEQ = ?
+    ROWS 1
+"""
+
+
+def find_products_by_eans_sql(n: int) -> str:
+    """SELECT batelado por EAN. Retorna (CODIGO_EAN13, SEQ, DESCRICAO, PRECO_VENDA)."""
+    placeholders = ", ".join(["?"] * n)
+    return (
+        "SELECT CODIGO_EAN13, SEQ, DESCRICAO, PRECO_VENDA "
+        f"FROM PRODUTOS WHERE CODIGO_EAN13 IN ({placeholders})"
+    )
+
+
+def find_products_by_codes_sql(n: int) -> str:
+    """SELECT batelado por CODPROD_ALTERN. Retorna (CODPROD_ALTERN_TRIM, SEQ, DESCRICAO, PRECO_VENDA)."""
+    placeholders = ", ".join(["?"] * n)
+    return (
+        "SELECT TRIM(CODPROD_ALTERN), SEQ, DESCRICAO, PRECO_VENDA "
+        f"FROM PRODUTOS WHERE TRIM(CODPROD_ALTERN) IN ({placeholders})"
+    )
+
+
+def find_products_by_seqs_sql(n: int) -> str:
+    """SELECT batelado por SEQ. Retorna (SEQ, DESCRICAO, PRECO_VENDA)."""
+    placeholders = ", ".join(["?"] * n)
+    return f"SELECT SEQ, DESCRICAO, PRECO_VENDA FROM PRODUTOS WHERE SEQ IN ({placeholders})"
+
+
 # Insert sales order header (CAB_VENDAS).
 #
 # Production data pattern (verified against Americanense 2026-04-21 backup):

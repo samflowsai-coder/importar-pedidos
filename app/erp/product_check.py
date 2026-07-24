@@ -24,6 +24,25 @@ def _cnpj_digits(cnpj: str | None) -> str:
     return re.sub(r"\D", "", cnpj)
 
 
+def _chunked(values: list, size: int = 200):
+    for i in range(0, len(values), size):
+        yield values[i : i + size]
+
+
+def _fetch_map_by_key(cur, sql_builder, values: list) -> dict:
+    """Roda o SELECT batelado (chunk de 200) e devolve {key: (seq, desc, preco)}.
+
+    O SELECT tem a chave como 1ª coluna. Valores deduplicados pelo chamador.
+    """
+    out: dict = {}
+    for chunk in _chunked(values):
+        cur.execute(sql_builder(len(chunk)), tuple(chunk))
+        for row in cur.fetchall():
+            key = row[0]
+            out[key] = (row[1], row[2], row[3])
+    return out
+
+
 def _to_cents(value: float | None) -> int | None:
     """Converte reais em centavos (int) para comparação sem drift de float."""
     if value is None:
@@ -113,7 +132,7 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
         with open_conn() as conn:
             cur = conn.cursor()
 
-            # Client lookup
+            # Client lookup (inalterado)
             digits = _cnpj_digits(order.header.customer_cnpj)
             client_id: int | None = None
             razao: str | None = None
@@ -124,43 +143,40 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
                     client_id = row[0]
                     razao = row[1]
 
+            # Coleta chaves (dedup) e resolve em lote
+            eans = list({it.ean for it in order.items if it.ean})
+            codes = list({it.product_code for it in order.items if it.product_code})
+            ean_map = (
+                _fetch_map_by_key(cur, queries.find_products_by_eans_sql, eans) if eans else {}
+            )
+            code_map = (
+                _fetch_map_by_key(cur, queries.find_products_by_codes_sql, codes) if codes else {}
+            )
+
             items_report: list[dict] = []
             matched = 0
-            price_match = 0
-            price_mismatch = 0
-            price_no_price_in_fire = 0
-            price_no_order_price = 0
+            price_match = price_mismatch = price_no_price_in_fire = price_no_order_price = 0
 
             for it in order.items:
                 entry = _empty_item_result(it.product_code, it.ean, it.unit_price)
-                if it.ean:
-                    cur.execute(queries.FIND_PRODUCT_BY_EAN, (it.ean,))
-                    row = cur.fetchone()
-                    if row:
-                        entry.update(
-                            {
-                                "match": True,
-                                "match_source": "ean",
-                                "fire_product_id": row[0],
-                                "fire_description": row[1],
-                                "fire_preco_venda": float(row[2]) if row[2] is not None else None,
-                            }
-                        )
-                if not entry["match"] and it.product_code:
-                    cur.execute(queries.FIND_PRODUCT_BY_CODE, (it.product_code,))
-                    row = cur.fetchone()
-                    if row:
-                        entry.update(
-                            {
-                                "match": True,
-                                "match_source": "codprod_altern",
-                                "fire_product_id": row[0],
-                                "fire_description": row[1],
-                                "fire_preco_venda": float(row[2]) if row[2] is not None else None,
-                            }
-                        )
+                hit = None
+                source = None
+                if it.ean and it.ean in ean_map:
+                    hit, source = ean_map[it.ean], "ean"
+                elif it.product_code and it.product_code in code_map:
+                    hit, source = code_map[it.product_code], "codprod_altern"
 
-                if entry["match"]:
+                if hit is not None:
+                    seq, desc, preco = hit
+                    entry.update(
+                        {
+                            "match": True,
+                            "match_source": source,
+                            "fire_product_id": seq,
+                            "fire_description": desc,
+                            "fire_preco_venda": float(preco) if preco is not None else None,
+                        }
+                    )
                     matched += 1
                     status = _classify_price(it.unit_price, entry["fire_preco_venda"])
                     entry["price_status"] = status
