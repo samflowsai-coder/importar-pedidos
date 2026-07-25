@@ -56,6 +56,18 @@ class OrigemRecebimento(BaseModel):
     confiancaParser: str  # noqa: N815 — "alta" | "media" | "baixa"
 
 
+class FaturadoPor(BaseModel):
+    """Quem FATURA quando o cliente do payload é o cliente real (intercompany).
+
+    O contrato do Flow ainda não persiste este campo (zod descarta chave
+    desconhecida em silêncio). Vai no wire desde já; quando o pcp-app aceitar,
+    não precisa mexer no Importador.
+    """
+
+    nome: str
+    cnpj: str | None = None
+
+
 class RecebimentoRequest(BaseModel):
     schema_: str = Field(default="pedido.recebimento.v1", alias="schema")
     externalId: str  # noqa: N815
@@ -64,6 +76,7 @@ class RecebimentoRequest(BaseModel):
     emitidoEm: str  # noqa: N815
     prazoSolicitado: str | None = None  # noqa: N815
     cliente: ClienteRecebimento
+    faturadoPor: FaturadoPor | None = None  # noqa: N815 — wire é camelCase
     itens: list[ItemRecebimento]
     origem: OrigemRecebimento
 
