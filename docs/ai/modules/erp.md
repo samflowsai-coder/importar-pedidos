@@ -120,6 +120,14 @@ PRECO_VENDA, então a validação de preço segue funcionando. Novo
 `match_source='depara'`. De-para órfão (SEQ sumiu do Fire) → `match=False`.
 Best-effort: sem ambiente ativo / SQLite off, pula o degrau sem quebrar o check.
 
+### Gap conhecido: de-para só no caminho XLS
+
+Enriquecimento de-para no XLS só ocorre no caminho `EXPORT_MODE=xlsx`
+(`_export_one_xlsx`, via `app.erp.depara_apply`); o caminho de inserção direta
+no Firebird (`_send_one_to_fire`, modo `db`/`both`) ainda NÃO aplica de-para —
+um item casado só por vínculo de-para entra no Fire sem FK de produto.
+Fast-follow se o cliente migrar de `xlsx`.
+
 ### Batelamento (perf)
 
 `check_order` batela os lookups de produto: de `2N+1` round-trips no Firebird

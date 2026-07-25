@@ -1663,6 +1663,9 @@ def _send_one_to_fire(
 
         override = entry.get("cliente_override_codigo")
         # Multi-ambiente: usa creds do env atual em vez de env vars FB_*.
+        # NOTA: de-para (depara_apply) NÃO é aplicado aqui — só no _export_one_xlsx.
+        # Em EXPORT_MODE=db/both um item casado por de-para entra no Fire sem FK.
+        # Fast-follow se o cliente migrar de xlsx.
         result = FirebirdExporter(env=request_env).export(order, override_client_id=override)
         db_result = result.to_dict()
 
@@ -2453,7 +2456,10 @@ def vincular_produto(
     snapshot = entry.get("snapshot")
     if not snapshot:
         raise HTTPException(status_code=422, detail="Snapshot do pedido indisponível")
-    order = Order.model_validate(snapshot)
+    try:
+        order = Order.model_validate(snapshot)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Snapshot inválido: {exc}") from exc
     if not (0 <= body.item_index < len(order.items)):
         raise HTTPException(status_code=422, detail="item_index fora do intervalo")
     item = order.items[body.item_index]

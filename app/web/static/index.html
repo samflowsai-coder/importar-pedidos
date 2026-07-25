@@ -1602,6 +1602,7 @@ function openProductPicker(itemIndex) {
   document.getElementById('ppSelInfo').textContent = '';
   document.getElementById('ppConfirmBtn').disabled = true;
   document.getElementById('productPickerOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('ppSearch')?.focus(), 80);
 
   loadProductSuggestions(it);
 }
@@ -1642,6 +1643,7 @@ function onProductSearchInput() {
   if (ppState.searchTimer) clearTimeout(ppState.searchTimer);
   if (q.length < 2) {
     document.getElementById('ppStatus').textContent = q.length === 0 ? '' : 'Digite ao menos 2 caracteres…';
+    if (q.length === 0) document.getElementById('ppResults').innerHTML = '';
     return;
   }
   ppState.searchTimer = setTimeout(() => searchProdutosFree(q), 250);
@@ -2039,15 +2041,20 @@ function renderPreview(data) {
         } else {
           const ps = m.price_status;
           const idTitle = `#${m.fire_product_id} · ${m.fire_description || ''} · via ${m.match_source}`;
-          // TODO(undo de-para): o payload do check não carrega o id da linha
-          // produto_depara (só chave_tipo/valor no vincular, sem id numérico
-          // em check.items). Sem esse id não dá pra chamar
-          // DELETE /api/produtos/depara/{id} — undo fica pra quando o
-          // check/vincular passarem a devolver depara_id. Ver task-9-report.md.
+          // NOTA(de-para): "revincular" (abaixo) cobre o caso de vínculo errado —
+          // reabre o picker e o upsert em produto_depara é last-write-wins em
+          // (client_key, chave_tipo, chave_valor), então religar sobrescreve o
+          // vínculo ruim pelo certo. Um unlink de verdade (remover o vínculo via
+          // DELETE /api/produtos/depara/{id}) continua um follow-up: o payload do
+          // check não carrega o id da linha produto_depara (só chave_tipo/valor
+          // no vincular, sem id numérico em check.items). Ver task-9-report.md.
           const isDepara = m.match_source === 'depara';
           const okTitle = isDepara ? `${idTitle} · casado por vínculo que você criou` : idTitle;
+          const reLink = (isDepara && isCommitted)
+            ? ` <a href="#" onclick="event.preventDefault(); openProductPicker(${idx})" style="font-size:11px;color:var(--text-muted);margin-left:6px">revincular</a>`
+            : '';
           const okBadge = isDepara
-            ? `<span style="color:var(--accent);font-weight:600" title="${esc(okTitle)}">✓ vínculo</span>`
+            ? `<span style="color:var(--accent);font-weight:600" title="${esc(okTitle)}">✓ vínculo</span>${reLink}`
             : `<span style="color:var(--success);font-weight:600" title="${esc(okTitle)}">✓</span>`;
           if (ps === 'match') {
             cell = okBadge;

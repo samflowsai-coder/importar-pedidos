@@ -1858,6 +1858,61 @@ def test_vincular_rejects_wrong_status():
     assert r.status_code == 409
 
 
+def test_vincular_produto_404_quando_pedido_nao_existe():
+    r = client.post(
+        "/api/imported/nao-existe/vincular-produto",
+        json={"item_index": 0, "fire_produto_id": "10"},
+    )
+    assert r.status_code == 404
+
+
+def test_vincular_produto_422_item_index_fora_do_intervalo():
+    import uuid
+
+    entry_id = str(uuid.uuid4())
+    _seed_parsed_import_with_item(
+        entry_id,
+        item={
+            "description": "TENIS SEM MATCH",
+            "quantity": 1.0,
+            "product_code": "ABC123",
+            "ean": "789",
+        },
+        customer_cnpj="11.222.333/0001-44",
+    )
+
+    r = client.post(
+        f"/api/imported/{entry_id}/vincular-produto",
+        json={"item_index": 5, "fire_produto_id": "10"},
+    )
+    assert r.status_code == 422
+
+
+def test_vincular_produto_422_fire_produto_id_desconhecido():
+    import uuid
+
+    entry_id = str(uuid.uuid4())
+    _seed_parsed_import_with_item(
+        entry_id,
+        item={
+            "description": "TENIS SEM MATCH",
+            "quantity": 1.0,
+            "product_code": "ABC123",
+            "ean": "789",
+        },
+        customer_cnpj="11.222.333/0001-44",
+    )
+    _seed_catalogo_fire(
+        [{"fire_produto_id": "10", "codigo": "10", "nome": "TENIS AZUL", "ean": "789"}]
+    )
+
+    r = client.post(
+        f"/api/imported/{entry_id}/vincular-produto",
+        json={"item_index": 0, "fire_produto_id": "999"},
+    )
+    assert r.status_code == 422
+
+
 def test_delete_depara_desfaz():
     from datetime import datetime
 
