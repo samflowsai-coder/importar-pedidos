@@ -2331,9 +2331,9 @@ def override_cliente(
 
 @app.get("/api/produtos/search")
 def search_produtos(
-    q: str,
     request: Request,
     limit: int = 20,
+    q: str = "",
     desc: str = "",
     code: str | None = None,
     ean_item: str | None = None,
@@ -2342,20 +2342,29 @@ def search_produtos(
     """Busca produtos na cópia local do catálogo do Fire (catalogo_fire).
 
     Instantâneo, sem Firebird — funciona com a Fire offline. `q`: ao menos
-    2 caracteres (após strip). `limit`: clamp em [1, 50].
+    2 caracteres (após strip) para popular `results`. `limit`: clamp em
+    [1, 50].
 
     `desc`/`code`/`ean_item` são dicas opcionais do item do pedido (não do
     texto de busca `q`): quando ao menos uma vier preenchida, a resposta
     inclui `suggestions` — top 5 candidatos ranqueados pelo
     `product_ranking` sobre o catálogo completo. É sugestão, nunca vínculo
     automático; o operador confirma clicando.
+
+    `q` é opcional: o picker de de-para abre em cima de um item sem match e
+    busca sugestões só com as dicas, sem texto de busca — nesse caso
+    `results` vem vazio e só `suggestions` é preenchido. 400 só quando não
+    há nada pra fazer: `q` curto (ou ausente) e nenhuma dica.
     """
     from app.erp import product_ranking
     from app.persistence import catalogo_fire_repo, db
 
     needle = (q or "").strip()
-    if len(needle) < 2:
-        raise HTTPException(status_code=400, detail="Informe ao menos 2 caracteres")
+    hints_present = bool(desc.strip() or (code or "").strip() or (ean_item or "").strip())
+    if len(needle) < 2 and not hints_present:
+        raise HTTPException(
+            status_code=400, detail="Informe ao menos 2 caracteres ou um item para sugestões"
+        )
     limit = max(1, min(int(limit), 50))
     up = needle.upper()
     digits = re.sub(r"\D", "", needle)
@@ -2370,19 +2379,21 @@ def search_produtos(
             return True
         return False
 
-    results = [
-        {
-            "fire_produto_id": r["fire_produto_id"],
-            "fire_codigo": r["codigo"],
-            "fire_ean": r.get("ean"),
-            "fire_nome": r["nome"],
-        }
-        for r in rows
-        if _hit(r)
-    ][:limit]
+    results: list[dict] = []
+    if len(needle) >= 2:
+        results = [
+            {
+                "fire_produto_id": r["fire_produto_id"],
+                "fire_codigo": r["codigo"],
+                "fire_ean": r.get("ean"),
+                "fire_nome": r["nome"],
+            }
+            for r in rows
+            if _hit(r)
+        ][:limit]
 
     suggestions: list[dict] = []
-    if desc.strip() or (code or "").strip() or (ean_item or "").strip():
+    if hints_present:
         ranked = product_ranking.rank_candidates(
             description=desc, product_code=code, ean=ean_item, catalog=rows, limit=5
         )

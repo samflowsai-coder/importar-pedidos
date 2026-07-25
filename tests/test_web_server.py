@@ -1769,6 +1769,24 @@ def test_produtos_search_requires_min_length():
     assert r.status_code == 400
 
 
+def test_produtos_search_hints_only_no_q():
+    """Picker de de-para abre sem q, só com dicas — deve popular suggestions."""
+    _seed_catalogo_fire(
+        [
+            {"fire_produto_id": "10", "codigo": "10", "nome": "TENIS AZUL CORRIDA", "ean": "789"},
+            {"fire_produto_id": "11", "codigo": "11", "nome": "SANDALIA PRETA", "ean": "456"},
+        ]
+    )
+    r = client.get("/api/produtos/search?desc=tenis%20azul%20corrida&code=10")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["results"] == []
+    assert body["suggestions"], "esperava suggestions não vazio mesmo sem q"
+    assert body["suggestions"][0]["fire_produto_id"] == "10"
+    scores = [s["score"] for s in body["suggestions"]]
+    assert scores == sorted(scores, reverse=True)
+
+
 def test_produtos_search_suggestions_ranked():
     _seed_catalogo_fire(
         [

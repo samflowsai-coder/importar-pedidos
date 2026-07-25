@@ -34,3 +34,36 @@ def test_limita_resultados():
 def test_sem_sinal_retorna_vazio_ou_score_zero():
     out = pr.rank_candidates(description="", product_code=None, ean=None, catalog=CATALOG, limit=3)
     assert out == [] or all(c["score"] == 0 for c in out)
+
+
+def test_riachuelo_sem_ean_ranqueia_por_descricao_e_codigo():
+    """Riachuelo: catálogo sem EAN (código de 11 dígitos é a chave real) —
+    a ranqueação precisa funcionar via tokens da descrição + código, já que
+    o componente de EAN nunca contribui pra esses candidatos."""
+    catalog = [
+        {
+            "fire_produto_id": "100",
+            "codigo": "15968243002",
+            "nome": "TENIS INFANTIL RIACHUELO AZUL",
+            "ean": None,
+        },
+        {
+            "fire_produto_id": "101",
+            "codigo": "99999999999",
+            "nome": "BOLSA FEMININA COURO",
+            "ean": None,
+        },
+    ]
+    out = pr.rank_candidates(
+        description="TENIS INFANTIL AZUL",
+        product_code="15968243002",
+        ean=None,
+        catalog=catalog,
+        limit=5,
+    )
+    assert out, "esperava ao menos um candidato ranqueado"
+    assert out[0]["fire_produto_id"] == "100"
+    assert out[0]["score"] > 0
+    assert all(c["fire_produto_id"] != "101" for c in out), (
+        "candidato sem overlap não devia aparecer (score <= 0)"
+    )
