@@ -262,8 +262,8 @@
         <button class="btn btn-danger" id="btn-discard">Descartar</button>
       </div>
       <div class="hint">
-        "Descartar" só limpa esta tela para você escolher outro arquivo — o pacote enviado
-        continua salvo no servidor até ser substituído por um novo envio ou aplicado.
+        "Descartar" remove o pacote enviado do servidor e libera a tela para um novo envio.
+        Nada é aplicado.
       </div>
     </div>
 
@@ -472,9 +472,21 @@
       }
     });
 
-    $('btn-discard').addEventListener('click', () => {
-      staged = null;
+    $('btn-discard').addEventListener('click', async () => {
+      const btn = $('btn-discard');
+      btn.disabled = true;
       clearError();
+      // Descartar de verdade: pede pro servidor remover o pacote staged.
+      // Antes era só client-side, então o pacote reaparecia no reload.
+      try {
+        const { ok, status, data } = await api('POST', `${API}/dismiss`, {});
+        if (status === 401) { location.href = '/login'; return; }
+        if (!ok) { showError(data.detail || `Falha ao descartar (${status}).`); btn.disabled = false; return; }
+      } catch (e) {
+        showError('Falha de rede ao descartar.'); btn.disabled = false; return;
+      }
+      staged = null;
+      btn.disabled = false;
       renderIdle();
     });
   }
@@ -663,10 +675,13 @@
     if (data.status === 'idle') {
       renderIdle();
     } else if (data.status === 'staged') {
-      // Reload sem o resumo rico do /upload em memória: mostra o que o
-      // /status tem (versão, deps_changed) — commit/build/arquivos ficam
-      // "—" até um novo upload nesta sessão.
-      staged = { update_id: data.update_id, version: data.version, deps_changed: data.deps_changed };
+      // /status agora persiste o resumo completo (commit/build/arquivos/notes),
+      // então o reload mostra o card íntegro em vez de "—".
+      staged = {
+        update_id: data.update_id, version: data.version, deps_changed: data.deps_changed,
+        git_commit: data.git_commit, built_at: data.built_at,
+        files_count: data.files_count, notes: data.notes,
+      };
       renderStaged(staged);
     } else if (data.status === 'apply_requested' || data.status === 'in_progress') {
       startProgress();
