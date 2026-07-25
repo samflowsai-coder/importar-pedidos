@@ -151,6 +151,48 @@ FIND_PRODUCT_BY_CODE = """
     ROWS 1
 """
 
+# Product lookup by SEQ (usado na resolução de de-para).
+FIND_PRODUCT_BY_SEQ = """
+    SELECT SEQ, DESCRICAO, PRECO_VENDA FROM PRODUTOS
+    WHERE SEQ = ?
+    ROWS 1
+"""
+
+
+def find_products_by_eans_sql(n: int) -> str:
+    """SELECT batelado por EAN. Retorna (CODIGO_EAN13_TRIM, SEQ, DESCRICAO, PRECO_VENDA).
+
+    TRIM em ambos os lados (SELECT e WHERE) — CODIGO_EAN13 é CHAR(n) no Firebird,
+    então sem TRIM a chave do map fica blank-padded e o compare em Python
+    (`it.ean in ean_map`) nunca bate (EAN do parser vem sem padding). ORDER BY SEQ
+    torna o primeiro resultado determinístico quando o catálogo tem EAN duplicado.
+    """
+    placeholders = ", ".join(["?"] * n)
+    return (
+        "SELECT TRIM(CODIGO_EAN13), SEQ, DESCRICAO, PRECO_VENDA "
+        f"FROM PRODUTOS WHERE TRIM(CODIGO_EAN13) IN ({placeholders}) ORDER BY SEQ"
+    )
+
+
+def find_products_by_codes_sql(n: int) -> str:
+    """SELECT batelado por CODPROD_ALTERN. Retorna (CODPROD_ALTERN_TRIM, SEQ, DESCRICAO, PRECO_VENDA).
+
+    ORDER BY SEQ torna o primeiro resultado determinístico quando o catálogo tem
+    CODPROD_ALTERN duplicado (mesmo motivo do find_products_by_eans_sql).
+    """
+    placeholders = ", ".join(["?"] * n)
+    return (
+        "SELECT TRIM(CODPROD_ALTERN), SEQ, DESCRICAO, PRECO_VENDA "
+        f"FROM PRODUTOS WHERE TRIM(CODPROD_ALTERN) IN ({placeholders}) ORDER BY SEQ"
+    )
+
+
+def find_products_by_seqs_sql(n: int) -> str:
+    """SELECT batelado por SEQ. Retorna (SEQ, DESCRICAO, PRECO_VENDA)."""
+    placeholders = ", ".join(["?"] * n)
+    return f"SELECT SEQ, DESCRICAO, PRECO_VENDA FROM PRODUTOS WHERE SEQ IN ({placeholders})"
+
+
 # Insert sales order header (CAB_VENDAS).
 #
 # Production data pattern (verified against Americanense 2026-04-21 backup):
