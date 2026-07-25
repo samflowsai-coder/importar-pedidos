@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from app.erp import product_check
+from app.erp import product_check, queries
 from app.models.order import Order, OrderHeader, OrderItem
 
 
@@ -29,7 +29,7 @@ def _make_fb_ctx_batched(*, client_row=None, ean_rows=None, code_rows=None, seq_
         nonlocal next_fetchall
         if "FROM CADASTRO" in sql:
             next_fetchall = []  # cliente usa fetchone
-        elif "CODIGO_EAN13 IN" in sql:
+        elif "CODIGO_EAN13" in sql and " IN " in sql:
             next_fetchall = list(ean_rows or [])
         elif "CODPROD_ALTERN" in sql and " IN " in sql:
             next_fetchall = list(code_rows or [])
@@ -205,6 +205,33 @@ def test_summary_aggregates_price_counts(mock_fb):
         "items_no_price_in_fire": 1,
         "items_no_order_price": 1,
     }
+
+
+# ---------------------------------------------------------------------------
+# Fix A — TRIM simétrico + first-wins determinístico no match EAN batelado
+# ---------------------------------------------------------------------------
+
+
+def test_find_products_by_eans_sql_trims_and_orders():
+    sql = queries.find_products_by_eans_sql(2)
+    assert "TRIM(CODIGO_EAN13)" in sql
+    assert "ORDER BY SEQ" in sql
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_ean_match_first_wins_on_duplicate_key(mock_fb):
+    mock_fb.return_value.is_configured.return_value = True
+    # Mesma chave EAN aparece 2x no catálogo (duplicata real de produção) — a
+    # query traz ORDER BY SEQ, então o primeiro resultado (SEQ 10) deve vencer.
+    ctx, _cur = _make_fb_ctx_batched(
+        ean_rows=[("789", 10, "A", 1.0), ("789", 20, "B", 2.0)],
+    )
+    mock_fb.return_value.connect.return_value = ctx
+    order = _order([{"ean": "789", "unit_price": 1.0}])
+    report = product_check.check_order(order)
+    item = report["items"][0]
+    assert item["fire_product_id"] == 10
+    assert item["fire_description"] == "A"
 
 
 # ---------------------------------------------------------------------------

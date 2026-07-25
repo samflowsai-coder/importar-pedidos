@@ -41,7 +41,8 @@ def _fetch_map_by_key(cur, sql_builder, values: list) -> dict:
         cur.execute(sql_builder(len(chunk)), tuple(chunk))
         for row in cur.fetchall():
             key = row[0]
-            out[key] = (row[1], row[2], row[3])
+            # first-wins + ORDER BY SEQ replica o ROWS 1 determinístico do lookup antigo
+            out.setdefault(key, (row[1], row[2], row[3]))
     return out
 
 
