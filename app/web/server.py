@@ -2416,7 +2416,9 @@ def vincular_produto(
         if prod is None:
             raise HTTPException(status_code=422, detail="Produto não encontrado no catálogo local")
 
-        cnpj = order.header.customer_cnpj or ""
+        ckey = produto_depara_repo.client_key(
+            order.header.customer_cnpj, order.header.customer_name
+        )
         now = datetime.now().isoformat(timespec="seconds")
         gravou = []
         for tipo, valor in (("ean", item.ean), ("codigo", item.product_code)):
@@ -2424,7 +2426,7 @@ def vincular_produto(
                 continue
             produto_depara_repo.upsert(
                 conn,
-                cliente_cnpj=cnpj,
+                client_key=ckey,
                 chave_tipo=tipo,
                 chave_valor=valor,
                 fire_produto_id=prod["fire_produto_id"],

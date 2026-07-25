@@ -169,9 +169,12 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
             if unmatched_codes or unmatched_eans:
                 try:
                     with db.connect() as sconn:
+                        ckey = produto_depara_repo.client_key(
+                            order.header.customer_cnpj, order.header.customer_name
+                        )
                         depara_map = produto_depara_repo.lookup(
                             sconn,
-                            order.header.customer_cnpj or "",
+                            ckey,
                             codigos=unmatched_codes,
                             eans=unmatched_eans,
                         )

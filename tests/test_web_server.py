@@ -1802,8 +1802,9 @@ def test_vincular_produto_persiste():
     assert ("codigo", "ABC123") in chaves
     assert ("ean", "789") in chaves
 
+    ckey = produto_depara_repo.client_key(cnpj, "ACME")
     with db.connect() as conn:
-        resolved = produto_depara_repo.lookup(conn, cnpj, codigos=["ABC123"], eans=["789"])
+        resolved = produto_depara_repo.lookup(conn, ckey, codigos=["ABC123"], eans=["789"])
     assert resolved[("codigo", "ABC123")]["fire_produto_id"] == "10"
     assert resolved[("codigo", "ABC123")]["fire_codigo"] == "10"
     assert resolved[("ean", "789")]["fire_produto_id"] == "10"
@@ -1828,10 +1829,11 @@ def test_delete_depara_desfaz():
     from app.persistence import db, produto_depara_repo
 
     cnpj = "11.222.333/0001-44"
+    ckey = produto_depara_repo.client_key(cnpj, None)
     with db.connect() as conn:
         produto_depara_repo.upsert(
             conn,
-            cliente_cnpj=cnpj,
+            client_key=ckey,
             chave_tipo="codigo",
             chave_valor="ABC123",
             fire_produto_id="10",
@@ -1841,11 +1843,11 @@ def test_delete_depara_desfaz():
             criado_em=datetime.now().isoformat(timespec="seconds"),
             criado_por="test@portal.local",
         )
-        dep_id = produto_depara_repo.list_for_client(conn, cnpj)[0]["id"]
+        dep_id = produto_depara_repo.list_for_client(conn, ckey)[0]["id"]
 
     r = client.delete(f"/api/produtos/depara/{dep_id}")
     assert r.status_code == 200, r.text
     assert r.json()["deleted"] == dep_id
 
     with db.connect() as conn:
-        assert produto_depara_repo.list_for_client(conn, cnpj) == []
+        assert produto_depara_repo.list_for_client(conn, ckey) == []

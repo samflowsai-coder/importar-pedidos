@@ -20,7 +20,7 @@ def env_conn(tmp_path, monkeypatch):
 
 def _upsert(conn, **over):
     base = dict(
-        cliente_cnpj="12.345.678/0001-99",
+        client_key=repo.client_key("12.345.678/0001-99", None),
         chave_tipo="codigo",
         chave_valor=" abc ",
         fire_produto_id="10",
@@ -40,6 +40,37 @@ def test_norm_key_codigo_e_ean():
     assert repo._norm_cnpj("12.345.678/0001-99") == "12345678000199"
 
 
+# ── client_key() ────────────────────────────────────────────────────────
+
+
+def test_client_key_cnpj_presente_ignora_nome():
+    assert repo.client_key("12.345.678/0001-99", "Nome Qualquer") == "12345678000199"
+    assert repo.client_key("12345678000199", None) == "12345678000199"
+
+
+def test_client_key_sem_cnpj_usa_nome_normalizado():
+    assert repo.client_key(None, "Lojas Riachuelo Sa") == "LOJAS RIACHUELO SA"
+    assert repo.client_key("", "Lojas Riachuelo Sa") == "LOJAS RIACHUELO SA"
+
+
+def test_client_key_nomes_diferentes_nao_colidem():
+    assert repo.client_key(None, "Riachuelo") != repo.client_key(None, "Centauro")
+
+
+def test_client_key_mesmo_nome_case_e_espaco_colide():
+    a = repo.client_key(None, "lojas   riachuelo sa")
+    b = repo.client_key(None, "  Lojas Riachuelo SA  ")
+    assert a == b == "LOJAS RIACHUELO SA"
+
+
+def test_client_key_sem_cnpj_e_sem_nome_retorna_string_vazia():
+    assert repo.client_key(None, None) == ""
+    assert repo.client_key("", "") == ""
+
+
+# ── upsert / lookup ─────────────────────────────────────────────────────
+
+
 def test_upsert_e_lookup_por_codigo(env_conn):
     _upsert(env_conn)
     got = repo.lookup(env_conn, "12345678000199", codigos=["ABC"], eans=[])
@@ -57,7 +88,7 @@ def test_lookup_normaliza_a_chave_de_busca(env_conn):
 def test_colisao_entre_varejistas_resolve_diferente(env_conn):
     _upsert(
         env_conn,
-        cliente_cnpj="11111111000100",
+        client_key="11111111000100",
         chave_valor="1234",
         fire_produto_id="50",
         fire_codigo="50",
@@ -65,7 +96,7 @@ def test_colisao_entre_varejistas_resolve_diferente(env_conn):
     )
     _upsert(
         env_conn,
-        cliente_cnpj="22222222000200",
+        client_key="22222222000200",
         chave_valor="1234",
         fire_produto_id="60",
         fire_codigo="60",
@@ -90,3 +121,27 @@ def test_delete_desfaz(env_conn):
     rows = repo.list_for_client(env_conn, "12345678000199")
     repo.delete(env_conn, rows[0]["id"])
     assert repo.list_for_client(env_conn, "12345678000199") == []
+
+
+def test_upsert_lookup_roundtrip_por_nome_riachuelo(env_conn):
+    """Cenário real: header do pedido sem CNPJ (Riachuelo — CNPJ é por
+    loja), o vínculo precisa ser recuperável pelo nome do cliente."""
+    ckey = repo.client_key(None, "Lojas Riachuelo Sa")
+    _upsert(
+        env_conn,
+        client_key=ckey,
+        chave_valor="REF-123",
+        fire_produto_id="70",
+        fire_codigo="70",
+        fire_nome="TENIS RIACHUELO",
+    )
+    got = repo.lookup(env_conn, ckey, codigos=["REF-123"], eans=[])
+    assert ("codigo", "REF-123") in got
+    assert got[("codigo", "REF-123")]["fire_produto_id"] == "70"
+
+    # a mesma chave, computada de novo a partir de um nome "sujo" (case/espaço
+    # diferentes), tem que casar — é o que garante que duas lojas do mesmo
+    # varejista (headers com grafias levemente diferentes) caiam no mesmo lugar.
+    ckey_variant = repo.client_key(None, "  LOJAS   RIACHUELO SA")
+    got_variant = repo.lookup(env_conn, ckey_variant, codigos=["REF-123"], eans=[])
+    assert ("codigo", "REF-123") in got_variant
