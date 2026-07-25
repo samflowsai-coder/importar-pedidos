@@ -53,8 +53,17 @@ def build_recebimento_payload(
     faturado_por = None
     if resolucao is not None and resolucao.resolvido:
         faturado_por = FaturadoPor(nome=nome_cliente, cnpj=cnpj_cliente)
-        nome_cliente = resolucao.nome or nome_cliente
-        cnpj_cliente = resolucao.cnpj or cnpj_cliente
+        # O Firebird da revenda pode ter NOME e RAZAO_SOCIAL em branco — um
+        # cliente real sem nome cadastrado. Nesse caso o CNPJ resolvido NUNCA
+        # pode viajar pareado com o nome da revenda (quem faturou): isso seria
+        # uma identidade mista (CNPJ certo, nome de quem faturou) e o Flow
+        # poderia cadastrar o cliente novo com o nome errado. Cai num rótulo
+        # neutro derivado do próprio CNPJ resolvido.
+        if resolucao.cnpj:
+            cnpj_cliente = resolucao.cnpj
+            nome_cliente = resolucao.nome or f"Cliente {resolucao.cnpj}"
+        elif resolucao.nome:
+            nome_cliente = resolucao.nome
 
     return RecebimentoRequest(
         externalId=import_id,

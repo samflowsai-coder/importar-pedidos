@@ -1,0 +1,144 @@
+# tests/test_flowpcp_intercompany.py
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
+import app.integrations.flowpcp.intercompany as ic
+from app.erp.depara_cliente import ResolucaoCliente
+from app.models.order import Order, OrderHeader, OrderItem
+
+_NASMAR = "34513679000134"
+
+
+def _order(cnpj: str | None = "34.513.679/0001-34", numero: str | None = "AF066") -> Order:
+    return Order(
+        header=OrderHeader(order_number=numero, customer_name="Nasmar", customer_cnpj=cnpj),
+        items=[OrderItem(description="MEIA", quantity=1)],
+    )
+
+
+def _env(**over):
+    base = {
+        "id": "e1",
+        "slug": "mm",
+        "intercompany_cnpj": _NASMAR,
+        "intercompany_env_slug": "nasmar",
+    }
+    base.update(over)
+    return base
+
+
+def test_nao_se_aplica_quando_config_vazia(monkeypatch):
+    monkeypatch.setattr(ic.environments_repo, "get_by_slug", lambda s: _env(intercompany_cnpj=None))
+    chamou = MagicMock()
+    monkeypatch.setattr(ic, "resolver_cliente_real", chamou)
+    assert ic.resolucao_para(_order(), slug="mm") is None
+    chamou.assert_not_called()
+
+
+def test_nao_se_aplica_quando_cliente_nao_e_a_revenda(monkeypatch):
+    monkeypatch.setattr(ic.environments_repo, "get_by_slug", lambda s: _env())
+    chamou = MagicMock()
+    monkeypatch.setattr(ic, "resolver_cliente_real", chamou)
+    assert ic.resolucao_para(_order(cnpj="06.347.409/0296-51"), slug="mm") is None
+    chamou.assert_not_called()
+
+
+def test_cnpj_casa_mesmo_formatado_diferente(monkeypatch):
+    monkeypatch.setattr(ic.environments_repo, "get_by_slug", lambda s: _env())
+    esperado = ResolucaoCliente(True, cnpj="10772208000182", nome="AF", motivo="ok")
+    monkeypatch.setattr(ic, "resolver_cliente_real", lambda chave, *, revenda_slug: esperado)
+    assert ic.resolucao_para(_order(cnpj="34.513.679/0001-34"), slug="mm") is esperado
+
+
+def test_usa_order_number_como_chave(monkeypatch):
+    monkeypatch.setattr(ic.environments_repo, "get_by_slug", lambda s: _env())
+    visto = {}
+
+    def _fake(chave, *, revenda_slug):
+        visto["chave"] = chave
+        visto["slug"] = revenda_slug
+        return ResolucaoCliente(False, motivo="nao_encontrado")
+
+    monkeypatch.setattr(ic, "resolver_cliente_real", _fake)
+    ic.resolucao_para(_order(numero="AF066"), slug="mm")
+    assert visto == {"chave": "AF066", "slug": "nasmar"}
+
+
+def test_ambiente_inexistente_nao_levanta(monkeypatch):
+    monkeypatch.setattr(ic.environments_repo, "get_by_slug", lambda s: None)
+    assert ic.resolucao_para(_order(), slug="fantasma") is None
+
+
+def test_erro_no_resolver_nao_levanta(monkeypatch):
+    monkeypatch.setattr(ic.environments_repo, "get_by_slug", lambda s: _env())
+
+    def _boom(chave, *, revenda_slug):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(ic, "resolver_cliente_real", _boom)
+    r = ic.resolucao_para(_order(), slug="mm")
+    assert r is not None and r.resolvido is False and r.motivo == "erro_conexao"
+
+
+import app.integrations.flowpcp.hook as hook  # noqa: E402
+from app.integrations.flowpcp.config import FlowPCPConfig  # noqa: E402
+
+_CFG = FlowPCPConfig(
+    enabled=True, base_url="https://flow.test", service_token="t", tenant_id="uuid"
+)
+
+
+def test_hook_repassa_resolucao_e_audita(monkeypatch):
+    monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: _CFG)
+    res = ResolucaoCliente(
+        True,
+        cnpj="10772208000182",
+        nome="AF",
+        motivo="ok",
+        pedidos_no_4=[{"codigo": 1, "status": "FATURADO", "codnf": 9}],
+    )
+    monkeypatch.setattr(hook, "resolucao_para", lambda order, *, slug: res)
+    auditado = []
+    monkeypatch.setattr(hook.repo, "append_audit", lambda i, e, d=None: auditado.append((i, e, d)))
+
+    fake_exporter = MagicMock()
+    monkeypatch.setattr(hook, "FlowPCPExporter", lambda *a, **k: fake_exporter)
+    monkeypatch.setattr(hook, "FlowPCPClient", lambda **_kw: MagicMock(), raising=False)
+
+    hook.push_new_order(_order(), import_id="imp-1", slug="mm")
+
+    envio = fake_exporter.export if fake_exporter.export.called else fake_exporter.enqueue
+    assert envio.call_args.kwargs["resolucao"] is res
+    assert auditado[0][1] == "depara_cliente"
+    assert auditado[0][2]["motivo"] == "ok"
+    assert auditado[0][2]["cnpj_real"] == "10772208000182"
+    assert auditado[0][2]["pedidos_no_4"] == [{"codigo": 1, "status": "FATURADO", "codnf": 9}]
+
+
+def test_hook_nao_audita_quando_nao_se_aplica(monkeypatch):
+    monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: _CFG)
+    monkeypatch.setattr(hook, "resolucao_para", lambda order, *, slug: None)
+    auditado = []
+    monkeypatch.setattr(hook.repo, "append_audit", lambda i, e, d=None: auditado.append(e))
+    monkeypatch.setattr(hook, "FlowPCPExporter", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(hook, "FlowPCPClient", lambda **_kw: MagicMock(), raising=False)
+
+    hook.push_new_order(_order(), import_id="imp-1", slug="mm")
+    assert auditado == []
+
+
+def test_hook_nao_derruba_o_push_se_o_audit_falhar(monkeypatch):
+    monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: _CFG)
+    monkeypatch.setattr(
+        hook, "resolucao_para", lambda order, *, slug: ResolucaoCliente(False, motivo="ambiguo")
+    )
+
+    def _boom(*a, **k):
+        raise RuntimeError("audit fora")
+
+    monkeypatch.setattr(hook.repo, "append_audit", _boom)
+    monkeypatch.setattr(hook, "FlowPCPExporter", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(hook, "FlowPCPClient", lambda **_kw: MagicMock(), raising=False)
+
+    hook.push_new_order(_order(), import_id="imp-1", slug="mm")  # não pode levantar

@@ -37,6 +37,20 @@ def test_resolucao_troca_o_cliente_e_guarda_o_faturador():
     assert req.faturadoPor.nome == "Nasmar Comercio De Roupas Ltda"
 
 
+def test_resolucao_sem_nome_nao_usa_nome_da_revenda():
+    # Firebird da revenda com NOME e RAZAO_SOCIAL em branco: `nome=None` mas
+    # CNPJ resolvido. O nome da revenda (Nasmar) NUNCA pode ser reaproveitado
+    # pareado com o CNPJ do cliente real — isso seria uma identidade mista.
+    res = ResolucaoCliente(True, cnpj="10772208000182", nome=None, motivo="ok")
+    req = build_recebimento_payload(import_id="imp1", order=_order(), tenant_id="t1", resolucao=res)
+    assert req.cliente.cnpj == "10772208000182"
+    assert req.cliente.nome != "Nasmar Comercio De Roupas Ltda"
+    assert "10772208000182" in req.cliente.nome
+    # faturadoPor continua correto: quem faturou É a revenda.
+    assert req.faturadoPor.nome == "Nasmar Comercio De Roupas Ltda"
+    assert req.faturadoPor.cnpj == "34513679000134"
+
+
 def test_resolucao_nao_resolvida_nao_troca_nada():
     res = ResolucaoCliente(False, motivo="nao_encontrado")
     req = build_recebimento_payload(import_id="imp1", order=_order(), tenant_id="t1", resolucao=res)

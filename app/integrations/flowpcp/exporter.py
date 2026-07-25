@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.erp.depara_cliente import ResolucaoCliente
 from app.integrations.flowpcp.client import (
     FLOWPCP_TARGET_NAME,
     RECEBIMENTO_PATH,
@@ -16,9 +17,11 @@ class FlowPCPExporter:
         self._client = client
         self._tenant_id = tenant_id
 
-    def export(self, order: Order, *, import_id: str) -> bool:
+    def export(
+        self, order: Order, *, import_id: str, resolucao: ResolucaoCliente | None = None
+    ) -> bool:
         req = build_recebimento_payload(
-            import_id=import_id, order=order, tenant_id=self._tenant_id
+            import_id=import_id, order=order, tenant_id=self._tenant_id, resolucao=resolucao
         )
         try:
             self._client.send_order(req, idempotency_key=f"send-{import_id}")
