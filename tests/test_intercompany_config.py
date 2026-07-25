@@ -57,6 +57,22 @@ def test_persiste_no_get(env):
     assert lido["intercompany_env_slug"] == "nasmar"
 
 
+def test_set_intercompany_config_limpa_cache_do_resolver(env, monkeypatch):
+    """Achado 5c: sem isso, trocar o Firebird da revenda (path/host) deixa o
+    cache POSITIVO de `resolver_cliente_real` com o vínculo antigo pela vida
+    do processo — ninguém chama `limpar_cache()` em produção."""
+    import app.erp.depara_cliente as dc
+
+    chamou = []
+    monkeypatch.setattr(dc, "limpar_cache", lambda: chamou.append(1))
+
+    environments_repo.set_intercompany_config(
+        env["id"], cnpj="34.513.679/0001-34", revenda_slug="nasmar"
+    )
+
+    assert chamou == [1]
+
+
 # ── Rota PUT /api/admin/environments/{id}/intercompany ──────────────────────
 
 
@@ -208,3 +224,20 @@ _HTML = (
 )
 def test_intercompany_select_preserva_slug_quando_lista_falha(trecho):
     assert trecho in _HTML, f"trecho ausente na tela de edição: {trecho!r}"
+
+
+# ── Achado 5b da revisão: fetch do "Salvar de-para de cliente" sem catch ──
+#
+# Sem catch, um fetch que rejeita (offline, DNS, CORS) propaga pro handler do
+# click sem tratamento: o botão reabilita (finally) mas o status nunca ganha
+# texto de erro — parece que nada aconteceu. Os handlers `rodarSync*` no
+# mesmo arquivo já tratam isso; o de intercompany precisa do mesmo padrão.
+
+
+def test_save_intercompany_trata_fetch_rejeitado():
+    # Âncora no addEventListener do botão (não na primeira ocorrência do id,
+    # que é a <button> no HTML) — pega só o corpo do handler de click.
+    inicio = _HTML.index("document.getElementById('btn-save-intercompany').addEventListener")
+    bloco = _HTML[inicio : inicio + 1200]
+    assert "} catch (err) {" in bloco
+    assert "err.message" in bloco

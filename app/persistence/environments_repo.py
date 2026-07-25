@@ -262,8 +262,13 @@ def set_intercompany_config(
     `cnpj` é o CNPJ que DISPARA o de-para (a revenda que aparece como cliente,
     ex: Nasmar) e é gravado só com dígitos. `revenda_slug` é o ambiente cujo
     Firebird tem o vínculo. Qualquer um vazio desliga a feature.
+
+    Limpa o cache de processo do resolver: sem isso, trocar o Firebird da
+    revenda (path/host) deixaria vínculos POSITIVOS antigos presos pela vida
+    do processo — o servidor web fica de pé por dias.
     """
     from app.erp.cnpj import cnpj_digits
+    from app.erp.depara_cliente import limpar_cache
 
     fields = {
         "intercompany_cnpj": cnpj_digits(cnpj) or None,
@@ -275,6 +280,7 @@ def set_intercompany_config(
         conn.execute(
             f"UPDATE environments SET {sets} WHERE id = ?", [*fields.values(), env_id]
         )
+    limpar_cache()
     return get(env_id)
 
 

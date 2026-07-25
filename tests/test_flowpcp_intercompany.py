@@ -167,7 +167,25 @@ def test_hook_audita_revenda_slug_mesmo_em_config_invalida(monkeypatch):
     assert auditado[0][2]["revenda_slug"] == "fantasma"
 
 
+def test_hook_cap_pedidos_no_4_em_50_mas_grava_total(monkeypatch):
+    """Achado 5a: uma chave genérica (PULMÃO, AF, GFNASMAR) pode casar
+    centenas de linhas na revenda — a lista auditada fica limitada, mas a
+    contagem real sempre é gravada. Não mexe na query SQL (isso esconderia um
+    segundo CNPJ e quebraria a detecção de ambiguidade)."""
+    monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: _CFG)
+    muitos = [{"codigo": i, "status": "PEDIDO", "codnf": None} for i in range(120)]
+    res = ResolucaoCliente(False, motivo="ambiguo", pedidos_no_4=muitos, revenda_slug="nasmar")
+    monkeypatch.setattr(hook, "resolucao_para", lambda order, *, slug: res)
+    auditado = []
+    monkeypatch.setattr(hook.repo, "append_audit", lambda i, e, d=None: auditado.append((i, e, d)))
+    monkeypatch.setattr(hook, "FlowPCPExporter", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(hook, "FlowPCPClient", lambda **_kw: MagicMock(), raising=False)
 
+    hook.push_new_order(_order(), import_id="imp-1", slug="mm")
+
+    detail = auditado[0][2]
+    assert len(detail["pedidos_no_4"]) == 50
+    assert detail["pedidos_no_4_total"] == 120
 
 def test_hook_nao_audita_quando_nao_se_aplica(monkeypatch):
     monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: _CFG)

@@ -17,6 +17,14 @@ from app.models.order import Order
 from app.persistence import repo
 from app.utils.logger import logger
 
+# Cap defensivo da lista auditada de `pedidos_no_4`. Uma chave genérica
+# hand-digitada na revenda (PULMÃO, AF, AW, GFNASMAR) pode casar centenas de
+# linhas — sem cap, cada push grava um blob JSON grande no audit. A contagem
+# real (`pedidos_no_4_total`) sempre é gravada; só a lista fica limitada.
+# Não mexe na query SQL: um LIMIT ali esconderia um segundo CNPJ e quebraria
+# a detecção de ambiguidade.
+_MAX_PEDIDOS_NO_4_AUDITADOS = 50
+
 
 def _resolucao_segura(order: Order, *, import_id: str, slug: str) -> ResolucaoCliente | None:
     """Chama `resolucao_para` sob guard próprio — cinto e suspensório.
@@ -38,6 +46,7 @@ def _resolucao_segura(order: Order, *, import_id: str, slug: str) -> ResolucaoCl
 
 def _auditar_resolucao(order: Order, *, import_id: str, resolucao: ResolucaoCliente) -> None:
     try:
+        pedidos = resolucao.pedidos_no_4
         repo.append_audit(
             import_id,
             "depara_cliente",
@@ -53,8 +62,10 @@ def _auditar_resolucao(order: Order, *, import_id: str, resolucao: ResolucaoClie
                 "revenda_slug": resolucao.revenda_slug,
                 "cnpj_gatilho": cnpj_digits(order.header.customer_cnpj),
                 # Radar da demanda fantasma — o pedido casado na revenda pode
-                # já estar FATURADO. Só observa; não bloqueia.
-                "pedidos_no_4": resolucao.pedidos_no_4,
+                # já estar FATURADO. Só observa; não bloqueia. Lista limitada
+                # (cap), contagem real sempre gravada.
+                "pedidos_no_4": pedidos[:_MAX_PEDIDOS_NO_4_AUDITADOS],
+                "pedidos_no_4_total": len(pedidos),
             },
         )
     except Exception as exc:  # noqa: BLE001 — auditar não pode derrubar o push

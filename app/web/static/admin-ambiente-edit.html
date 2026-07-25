@@ -620,6 +620,8 @@
           status.textContent = '✗ ' + msg;
           status.classList.add('err');
         }
+      } catch (err) {
+        status.textContent = '✗ ' + err.message; status.classList.add('err');
       } finally {
         btn.disabled = false;
       }
