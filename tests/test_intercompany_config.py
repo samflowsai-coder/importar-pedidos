@@ -113,9 +113,11 @@ def test_rota_404_em_ambiente_inexistente(setup_rotas):
 
 
 def test_rota_grava_slug_de_ambiente_existente(setup_rotas):
-    """Fecha o achado da revisão da Task 2: o form é um <select> alimentado pelos
-    ambientes reais — este teste prova que a rota persiste o slug exatamente como
-    o de um ambiente que de fato existe (não um valor digitado à mão)."""
+    """Trava só a metade da rota do achado da Task 2: prova que o round-trip da
+    rota preserva o slug exatamente como veio (aqui, o de um ambiente real).
+    NÃO cobre o <select> nem a degradação da lista — isso passaria igual com
+    qualquer string, inclusive digitada à mão; quem fecha o achado de verdade é
+    o guard de HTML/JS abaixo (`test_intercompany_select_preserva_slug_...`)."""
     c = _client()
     mm = c.post(
         "/api/admin/environments",
@@ -169,3 +171,40 @@ def test_rota_normaliza_case_do_slug(setup_rotas):
     )
     assert r.status_code == 200
     assert r.json()["intercompany_env_slug"] == "nasmar"
+
+
+# ── Guarda do <select> na tela de edição (app/web/static/admin-ambiente-edit.html) ──
+#
+# Precedente: tests/test_admin_ambiente_edit_clientes.py, criado depois de um
+# bug real onde o payload do "Salvar FlowPCP" zerava um gate em silêncio por
+# faltar um campo. Achado da revisão desta task: o mesmo tipo de bug existe
+# aqui — se o fetch da lista de ambientes falhar (ou o ambiente salvo tiver
+# sumido da lista), o <select> caía pra "— desligado —" sem aviso, e o próximo
+# "Salvar de-para de cliente" gravava revenda_slug=null por cima de um vínculo
+# funcionando. Os trechos abaixo travam a correção: falha vira `null` (nunca
+# `[]`, que se confunde com "lista vazia de verdade"), o slug salvo sempre
+# ganha uma <option> própria quando não está na lista, e a falha aparece no
+# status — nunca em silêncio.
+
+_HTML = (
+    Path(__file__).resolve().parent.parent / "app" / "web" / "static" / "admin-ambiente-edit.html"
+).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "trecho",
+    [
+        # falha do fetch vira null, não [] — "não carregou" != "carregou vazia"
+        "fetch('/api/admin/environments').then(r => r.ok ? r.json() : null).catch(() => null),",
+        "const listaCarregou = Array.isArray(allEnvs);",
+        # CRÍTICO: o slug salvo sempre vira <option> selecionável, mesmo que a
+        # lista tenha falhado ou não contenha mais aquele ambiente — sem isso
+        # sel.value cai em "" (selectedIndex=-1) e o próximo save zera o vínculo
+        "if (slugSalvo && !lista.some(e => e.slug === slugSalvo)) {",
+        "sel.value = slugSalvo;",
+        # aviso visível — nunca falha em silêncio
+        "Lista de ambientes indisponível",
+    ],
+)
+def test_intercompany_select_preserva_slug_quando_lista_falha(trecho):
+    assert trecho in _HTML, f"trecho ausente na tela de edição: {trecho!r}"

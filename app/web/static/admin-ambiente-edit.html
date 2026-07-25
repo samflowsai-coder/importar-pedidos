@@ -444,7 +444,9 @@
         }),
         // Lista de ambientes pra alimentar o <select> do de-para intercompany
         // (nunca free-text — slug errado desliga a feature em silêncio).
-        fetch('/api/admin/environments').then(r => r.ok ? r.json() : []).catch(() => []),
+        // `null` sinaliza falha (rede/HTTP) — distinto de "[]" (lista vazia de
+        // verdade) pra nunca confundir "não carregou" com "não tem ambientes".
+        fetch('/api/admin/environments').then(r => r.ok ? r.json() : null).catch(() => null),
       ]).then(([env, allEnvs]) => {
         if (!env) return;
         for (const k of Object.keys(env)) {
@@ -465,13 +467,32 @@
         fv('flowpcp_clientes_push').checked = !!env.flowpcp_clientes_push;
         // Intercompany: popula o select com os ambientes reais antes de marcar
         // o valor salvo (senão sel.value não acha a <option> e fica vazio).
+        // Achado da revisão: se a lista falhar ao carregar (ou se o slug salvo
+        // não estiver mais nela — ambiente removido), NUNCA deixar o <select>
+        // cair silenciosamente pra "desligado" — isso reescreveria um vínculo
+        // funcionando com null no próximo save. Sempre injeta uma <option> pro
+        // slug salvo quando ele não aparece na lista, e avisa no status.
         const sel = fv('intercompany_env_slug');
-        sel.innerHTML = '<option value="">— desligado —</option>' + (allEnvs || [])
+        const listaCarregou = Array.isArray(allEnvs);
+        const lista = listaCarregou ? allEnvs : [];
+        const slugSalvo = env.intercompany_env_slug || '';
+        let opts = '<option value="">— desligado —</option>' + lista
           .map(e => '<option value="' + escAttr(e.slug) + '">' + escAttr(e.name) +
             ' (' + escAttr(e.slug) + ')' + (e.is_active ? '' : ' — inativo') + '</option>')
           .join('');
+        if (slugSalvo && !lista.some(e => e.slug === slugSalvo)) {
+          opts += '<option value="' + escAttr(slugSalvo) + '">' + escAttr(slugSalvo) +
+            (listaCarregou ? ' — ambiente não encontrado' : ' — lista indisponível, valor preservado') +
+            '</option>';
+        }
+        sel.innerHTML = opts;
         fv('intercompany_cnpj').value = env.intercompany_cnpj || '';
-        sel.value = env.intercompany_env_slug || '';
+        sel.value = slugSalvo;
+        if (!listaCarregou) {
+          const icStatus = document.getElementById('intercompany-status');
+          icStatus.textContent = '⚠ Lista de ambientes indisponível — o vínculo salvo foi preservado, mas recarregue a página antes de trocar o ambiente da revenda.';
+          icStatus.classList.add('err');
+        }
         flowFs.hidden = false;
       }).catch(e => showError(e.message));
     }
