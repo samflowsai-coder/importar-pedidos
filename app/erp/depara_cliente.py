@@ -71,7 +71,12 @@ def resolver_cliente_real(chave: str | None, *, revenda_slug: str) -> ResolucaoC
     try:
         cfg = environments_repo.to_fb_config(env)
         with FirebirdConnection().connect_with_config(cfg) as conn:
-            rows = conn.execute(FIND_CLIENTE_REAL_BY_PEDIDO_CLIENTE, (chave_limpa,)).fetchall()
+            cur = conn.cursor()
+            try:
+                cur.execute(FIND_CLIENTE_REAL_BY_PEDIDO_CLIENTE, (chave_limpa,))
+                rows = cur.fetchall()
+            finally:
+                cur.close()
     except Exception as exc:  # noqa: BLE001 — best-effort: fallback pra revenda
         logger.warning(f"depara_cliente: leitura da revenda falhou (chave={chave_limpa!r}): {exc}")
         return ResolucaoCliente(False, motivo="erro_conexao")

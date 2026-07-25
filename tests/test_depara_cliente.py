@@ -44,9 +44,13 @@ _LINHA_OUTRO = (
 
 
 class _FakeCursor:
+    """Modela `fdb.Cursor` — é ELA que tem `.execute()`/`.fetchall()`, não a
+    conexão (`fdb.Connection` só tem `.cursor()`/`.execute_immediate()`)."""
+
     def __init__(self, rows, capturado):
         self._rows = rows
         self._capturado = capturado
+        self.closed = False
 
     def execute(self, sql, params):
         self._capturado.append((sql, params))
@@ -55,14 +59,19 @@ class _FakeCursor:
     def fetchall(self):
         return self._rows
 
+    def close(self):
+        self.closed = True
+
 
 class _FakeConn:
+    """Modela `fdb.Connection`: só abre cursor, não executa direto."""
+
     def __init__(self, rows, capturado):
         self._rows = rows
         self._capturado = capturado
 
-    def execute(self, sql, params):
-        return _FakeCursor(self._rows, self._capturado).execute(sql, params)
+    def cursor(self):
+        return _FakeCursor(self._rows, self._capturado)
 
 
 @pytest.fixture
