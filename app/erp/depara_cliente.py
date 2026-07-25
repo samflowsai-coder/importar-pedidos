@@ -13,6 +13,7 @@ Este módulo só LÊ o Firebird da revenda e devolve o cliente. Não conhece
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 from app.erp.cnpj import cnpj_digits
@@ -20,6 +21,16 @@ from app.erp.connection import FirebirdConnection
 from app.erp.queries import FIND_CLIENTE_REAL_BY_PEDIDO_CLIENTE
 from app.persistence import environments_repo
 from app.utils.logger import logger
+
+# Janela de cool-down após `erro_conexao`, em segundos. `fdb` não expõe
+# timeout — um host inalcançável trava a conexão por até ~180s. Sem isso,
+# CADA preview/refresh/export durante uma queda do Firebird da revenda paga o
+# stall inteiro, por clique, pra sempre (handlers síncronos num threadpool
+# limitado). Não mexe no cache positivo nem passa a cachear `nao_encontrado`.
+_ERRO_CONEXAO_COOLDOWN_S = 45.0
+
+# Clock injetável — testes controlam o tempo sem sleep de parede real.
+_clock = time.monotonic
 
 
 @dataclass(frozen=True)
@@ -47,10 +58,15 @@ class ResolucaoCliente:
 # depois, e o servidor web fica de pé por dias.
 _CACHE: dict[tuple[str, str], ResolucaoCliente] = {}
 
+# Cool-down por revenda_slug: timestamp (`_clock()`) da última `erro_conexao`.
+# Só isso — nunca guarda motivo positivo nem `nao_encontrado`.
+_FALHA_RECENTE: dict[str, float] = {}
+
 
 def limpar_cache() -> None:
-    """Zera o cache de processo (usado nos testes e em reconfiguração)."""
+    """Zera o cache de processo e o cool-down de falha (testes/reconfiguração)."""
     _CACHE.clear()
+    _FALHA_RECENTE.clear()
 
 
 def resolver_cliente_real(chave: str | None, *, revenda_slug: str) -> ResolucaoCliente:
@@ -66,10 +82,17 @@ def resolver_cliente_real(chave: str | None, *, revenda_slug: str) -> ResolucaoC
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
+    falha_em = _FALHA_RECENTE.get(revenda_slug)
+    if falha_em is not None and (_clock() - falha_em) < _ERRO_CONEXAO_COOLDOWN_S:
+        # Cool-down ativo: nem tenta a rede. Uma queda do Firebird da revenda
+        # não pode custar um stall de dezenas de segundos por clique.
+        return ResolucaoCliente(False, motivo="erro_conexao", revenda_slug=revenda_slug)
+
     try:
         env = environments_repo.get_by_slug(revenda_slug)
     except Exception as exc:  # noqa: BLE001 — best-effort: fallback pra revenda
         logger.warning(f"depara_cliente: lookup do ambiente '{revenda_slug}' falhou: {exc}")
+        _FALHA_RECENTE[revenda_slug] = _clock()
         return ResolucaoCliente(False, motivo="erro_conexao", revenda_slug=revenda_slug)
 
     if env is None:
@@ -87,7 +110,12 @@ def resolver_cliente_real(chave: str | None, *, revenda_slug: str) -> ResolucaoC
                 cur.close()
     except Exception as exc:  # noqa: BLE001 — best-effort: fallback pra revenda
         logger.warning(f"depara_cliente: leitura da revenda falhou (chave={chave_limpa!r}): {exc}")
+        _FALHA_RECENTE[revenda_slug] = _clock()
         return ResolucaoCliente(False, motivo="erro_conexao", revenda_slug=revenda_slug)
+
+    # Conexão respondeu — o Firebird da revenda está de pé. Limpa qualquer
+    # cool-down anterior pra esse slug (independente do que `_decidir` decidir).
+    _FALHA_RECENTE.pop(revenda_slug, None)
 
     resultado = _decidir(rows, revenda_slug=revenda_slug)
     if resultado.resolvido:

@@ -267,3 +267,133 @@ def test_nao_encontrado_nao_e_cacheado(fake_fire):
     dc.resolver_cliente_real("AF999", revenda_slug="nasmar")
     dc.resolver_cliente_real("AF999", revenda_slug="nasmar")
     assert len(capturado) == 2
+
+
+# ── Cool-down por revenda_slug depois de erro_conexao (achado 4) ────────────
+#
+# `fdb` não expõe timeout — host inalcançável trava até ~180s. Sem cool-down,
+# CADA preview aberto/refresh/export durante uma queda do Firebird da revenda
+# paga o stall inteiro, por clique, pra sempre (handlers síncronos num
+# threadpool limitado). O cache positivo (acima) já existe; isto é um cache
+# NEGATIVO de curta duração — só para `erro_conexao`, nunca para
+# `nao_encontrado` (o pedido pode ser criado depois).
+
+
+def _fake_firebird_boom(monkeypatch, tentativas):
+    import contextlib
+
+    class _FakeFirebird:
+        @contextlib.contextmanager
+        def connect_with_config(self, cfg):
+            tentativas.append(1)
+            raise RuntimeError("firebird fora do ar")
+            yield  # pragma: no cover — inalcançável; só mantém a função geradora
+
+    monkeypatch.setattr(dc, "FirebirdConnection", _FakeFirebird)
+    monkeypatch.setattr(dc.environments_repo, "get_by_slug", lambda slug: {"id": "e", "slug": slug})
+    monkeypatch.setattr(dc.environments_repo, "to_fb_config", lambda env: {"path": "x"})
+
+
+def test_apos_erro_conexao_curto_circuita_sem_tocar_rede(monkeypatch):
+    tentativas: list = []
+    _fake_firebird_boom(monkeypatch, tentativas)
+    relogio = {"t": 1000.0}
+    monkeypatch.setattr(dc, "_clock", lambda: relogio["t"])
+
+    r1 = dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    assert r1.motivo == "erro_conexao"
+    assert len(tentativas) == 1
+
+    relogio["t"] += 5  # bem dentro da janela de cool-down
+    r2 = dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    assert r2.motivo == "erro_conexao"
+    assert len(tentativas) == 1  # curto-circuitou: não tocou a rede de novo
+
+
+def test_cooldown_expira_e_tenta_de_novo(monkeypatch):
+    tentativas: list = []
+    _fake_firebird_boom(monkeypatch, tentativas)
+    relogio = {"t": 1000.0}
+    monkeypatch.setattr(dc, "_clock", lambda: relogio["t"])
+
+    dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    relogio["t"] += dc._ERRO_CONEXAO_COOLDOWN_S + 1  # janela expirou
+    dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    assert len(tentativas) == 2
+
+
+def test_cooldown_e_isolado_por_revenda_slug(monkeypatch):
+    tentativas: list = []
+    _fake_firebird_boom(monkeypatch, tentativas)
+    monkeypatch.setattr(dc, "_clock", lambda: 1000.0)
+
+    dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    dc.resolver_cliente_real("AF066", revenda_slug="outra-revenda")
+    assert len(tentativas) == 2  # cool-down de "nasmar" não vaza pra outro slug
+
+
+def test_limpar_cache_reseta_cooldown(monkeypatch):
+    tentativas: list = []
+    _fake_firebird_boom(monkeypatch, tentativas)
+    monkeypatch.setattr(dc, "_clock", lambda: 1000.0)
+
+    dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    dc.limpar_cache()
+    dc.resolver_cliente_real("AF066", revenda_slug="nasmar")  # ainda na janela, mas...
+    assert len(tentativas) == 2  # ...limpar_cache() também zera o cool-down
+
+
+def test_erro_no_lookup_do_ambiente_tambem_ativa_cooldown(monkeypatch):
+    """erro_conexao no lookup do ambiente (get_by_slug explode) conta tanto
+    quanto falha de conexão Firebird — mesmo motivo, mesma proteção."""
+    tentativas: list = []
+
+    def _boom(slug):
+        tentativas.append(1)
+        raise RuntimeError("sqlite lock")
+
+    monkeypatch.setattr(dc.environments_repo, "get_by_slug", _boom)
+    relogio = {"t": 1000.0}
+    monkeypatch.setattr(dc, "_clock", lambda: relogio["t"])
+
+    dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    relogio["t"] += 5
+    dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    assert len(tentativas) == 1  # segunda chamada nem tentou get_by_slug de novo
+
+
+def test_sucesso_depois_de_erro_limpa_o_cooldown(monkeypatch):
+    """Uma conexão que funciona depois de uma falha anterior prova que o
+    Firebird voltou — não faz sentido manter o slug em cool-down."""
+    import contextlib
+
+    tentativas: list = []
+    modo = {"boom": True}
+
+    class _FakeFirebird:
+        @contextlib.contextmanager
+        def connect_with_config(self, cfg):
+            tentativas.append(1)
+            if modo["boom"]:
+                raise RuntimeError("firebird fora do ar")
+            yield _FakeConn([_LINHA_AF066], [])
+
+    monkeypatch.setattr(dc, "FirebirdConnection", _FakeFirebird)
+    monkeypatch.setattr(dc.environments_repo, "get_by_slug", lambda slug: {"id": "e", "slug": slug})
+    monkeypatch.setattr(dc.environments_repo, "to_fb_config", lambda env: {"path": "x"})
+    relogio = {"t": 1000.0}
+    monkeypatch.setattr(dc, "_clock", lambda: relogio["t"])
+
+    dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    assert len(tentativas) == 1
+
+    relogio["t"] += dc._ERRO_CONEXAO_COOLDOWN_S + 1  # janela expira
+    modo["boom"] = False
+    r = dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    assert r.resolvido is True
+    assert len(tentativas) == 2
+
+    # falha de novo, imediatamente: não deve estar em cool-down residual
+    modo["boom"] = True
+    dc.resolver_cliente_real("BF999", revenda_slug="nasmar")
+    assert len(tentativas) == 3
