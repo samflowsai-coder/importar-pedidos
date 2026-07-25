@@ -256,3 +256,16 @@ LIST_CLIENTES_ATIVOS = """
       )
     ORDER BY C.CODIGO
 """
+
+# ── De-para de cliente intercompany (Nasmar → cliente real) ───────────────────
+# Lido no Firebird da REVENDA (.4). A chave é o PEDIDO_CLIENTE (número do pedido
+# de compra do cliente final), o mesmo valor que o .7 guarda no pedido faturado
+# contra a Nasmar. TRIM simétrico: o bind chega .strip()ado do chamador.
+# Verificado na Fire viva 2026-07-25: 939 pedidos Nasmar no .7, 0 ambiguidade.
+FIND_CLIENTE_REAL_BY_PEDIDO_CLIENTE = """
+    SELECT V.CODIGO, V.STATUS, V.CODNF,
+           C.CODIGO, TRIM(C.NOME), TRIM(C.RAZAO_SOCIAL), TRIM(C.CPF_CNPJ)
+    FROM CAB_VENDAS V
+    JOIN CADASTRO C ON C.CODIGO = V.CLIENTE
+    WHERE TRIM(V.PEDIDO_CLIENTE) = ?
+"""
