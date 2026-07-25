@@ -2334,13 +2334,23 @@ def search_produtos(
     q: str,
     request: Request,
     limit: int = 20,
+    desc: str = "",
+    code: str | None = None,
+    ean_item: str | None = None,
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     """Busca produtos na cópia local do catálogo do Fire (catalogo_fire).
 
     Instantâneo, sem Firebird — funciona com a Fire offline. `q`: ao menos
     2 caracteres (após strip). `limit`: clamp em [1, 50].
+
+    `desc`/`code`/`ean_item` são dicas opcionais do item do pedido (não do
+    texto de busca `q`): quando ao menos uma vier preenchida, a resposta
+    inclui `suggestions` — top 5 candidatos ranqueados pelo
+    `product_ranking` sobre o catálogo completo. É sugestão, nunca vínculo
+    automático; o operador confirma clicando.
     """
+    from app.erp import product_ranking
     from app.persistence import catalogo_fire_repo, db
 
     needle = (q or "").strip()
@@ -2370,7 +2380,26 @@ def search_produtos(
         for r in rows
         if _hit(r)
     ][:limit]
-    return JSONResponse({"results": results, "total_returned": len(results)})
+
+    suggestions: list[dict] = []
+    if desc.strip() or (code or "").strip() or (ean_item or "").strip():
+        ranked = product_ranking.rank_candidates(
+            description=desc, product_code=code, ean=ean_item, catalog=rows, limit=5
+        )
+        suggestions = [
+            {
+                "fire_produto_id": r["fire_produto_id"],
+                "fire_codigo": r["codigo"],
+                "fire_ean": r.get("ean"),
+                "fire_nome": r["nome"],
+                "score": r["score"],
+            }
+            for r in ranked
+        ]
+
+    return JSONResponse(
+        {"results": results, "suggestions": suggestions, "total_returned": len(results)}
+    )
 
 
 class VincularProdutoRequest(BaseModel):
