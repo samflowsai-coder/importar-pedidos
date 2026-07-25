@@ -161,6 +161,18 @@ def test_ambiente_inexistente_e_config_invalida(monkeypatch):
     assert r.motivo == "config_invalida"
 
 
+def test_lookup_do_ambiente_explode_nao_levanta(monkeypatch):
+    # get_by_slug (SQLite) pode falhar por motivo próprio (lock, disco, etc.) —
+    # isso não é "ambiente não existe", mas o contrato ainda é nunca levantar.
+    def _boom(slug):
+        raise RuntimeError("sqlite indisponível")
+
+    monkeypatch.setattr(dc.environments_repo, "get_by_slug", _boom)
+    r = dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    assert r.resolvido is False
+    assert r.motivo == "erro_conexao"
+
+
 def test_resolucao_ok_e_cacheada(fake_fire):
     capturado = fake_fire([_LINHA_AF066])
     dc.resolver_cliente_real("AF066", revenda_slug="nasmar")

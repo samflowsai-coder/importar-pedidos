@@ -58,7 +58,12 @@ def resolver_cliente_real(chave: str | None, *, revenda_slug: str) -> ResolucaoC
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
-    env = environments_repo.get_by_slug(revenda_slug)
+    try:
+        env = environments_repo.get_by_slug(revenda_slug)
+    except Exception as exc:  # noqa: BLE001 — best-effort: fallback pra revenda
+        logger.warning(f"depara_cliente: lookup do ambiente '{revenda_slug}' falhou: {exc}")
+        return ResolucaoCliente(False, motivo="erro_conexao")
+
     if env is None:
         logger.warning(f"depara_cliente: ambiente de revenda '{revenda_slug}' não existe")
         return ResolucaoCliente(False, motivo="config_invalida")
