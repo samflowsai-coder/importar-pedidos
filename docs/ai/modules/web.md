@@ -60,10 +60,16 @@ API pública para páginas-filho:
 - `POST /api/imported/{id}/ack-sem-preco` → operador confirma itens sem preço cadastrado no Fire (`require_user`).
   Body vazio. Pre: `portal_status='parsed'`. Re-roda check, persiste lista
   em `imports.sem_preco_ack_*`, audit `sem_preco_acknowledged`. 503 se Fire offline.
-- `GET /api/produtos/search?q=&limit=` → busca na cópia local do catálogo
-  (`catalogo_fire`, zero Firebird — funciona offline). Min 2 chars; clamp
-  `limit` em [1, 50]. Requer auth. Base para o picker de de-para (ranking em
-  Task 7).
+- `GET /api/produtos/search?q=&desc=&code=&ean_item=&limit=` → busca na cópia
+  local do catálogo (`catalogo_fire`, zero Firebird — funciona offline). Requer
+  auth; clamp `limit` em [1, 50]. `q` é **opcional**: com `q` ≥ 2 chars popula
+  `results` (busca por nome/código/EAN). As dicas do item do pedido (`desc`,
+  `code`, `ean_item`) — quando ao menos uma vier — populam `suggestions` (top 5
+  ranqueados por `app/erp/product_ranking.rank_candidates`: EAN parcial > Jaccard
+  descrição×nome > código contido). O picker de de-para abre chamando só com as
+  dicas (sem `q`) pra já mostrar candidatos. 400 só quando `q` < 2 **e** sem
+  dicas. Itens de `results`/`suggestions`: `{fire_produto_id, fire_codigo,
+  fire_ean, fire_nome, score?}`.
 - `POST /api/imported/{id}/vincular-produto` body `{item_index, fire_produto_id}`
   → grava o vínculo de-para (código e/ou EAN do item → produto do Fire) em
   `produto_depara`, audita (`produto_vinculo_criado`) e re-roda `check_order`.
@@ -84,6 +90,16 @@ API pública para páginas-filho:
   Best-effort: erro nunca derruba o send-to-fire (falha vira outbox `target=flowpcp`
   + retry no worker). Vale para single e batch (ambos passam por `_send_one_to_fire`).
   CLI `main.py` fica fora (batch legado, sem contexto multi-ambiente).
+  - **Push é enqueue-only (sem HTTP no request path):** `push_new_order` →
+    `FlowPCPExporter.enqueue` **enfileira** direto no outbox (`target=flowpcp`) e
+    retorna; o `drain_outbox` entrega e faz retry. Não há mais tentativa HTTP
+    inline (antes esperava até 30s no timeout do Flow, segurando a UI). Idempotente
+    por `send-{import_id}` (`OutboxDuplicateError` = no-op).
+  - **Identidade de-para no XLS (e no push):** antes de `ERPExporter().export`,
+    `_export_one_xlsx` chama `app/erp/depara_apply.apply(order, conn)` que reescreve
+    o item vinculado com a identidade do Fire. Como o `push_new_order` compartilha o
+    mesmo `order`, o FlowPCP também recebe a identidade Fire dos itens vinculados
+    (desejável: o catálogo do Flow é Fire-synced). Só afeta itens com vínculo.
 
 ## Segurança (não relaxar)
 - Whitelist de extensão: `.pdf`, `.xls`, `.xlsx`.

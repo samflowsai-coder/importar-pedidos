@@ -90,3 +90,40 @@ coberto por `ack_items`. `available=False` → não bloqueia (best-effort).
 Os guards vivem em `_send_one_to_fire` e `_export_one_xlsx` (web). Audit
 events: `send_to_fire_blocked`, `xlsx_export_blocked`, `sem_preco_acknowledged`.
 Métricas: `portal_price_check_blocks_total{reason}`, `portal_price_check_acks_total`.
+
+## De-para de produto (memória de match por cliente)
+
+A referência do varejista que não casa no Fire vira um vínculo persistente:
+consertado uma vez, lembrado pra sempre. Motivado por dado real de produção —
+111 itens sem match eram só 31 referências distintas, dominadas pela Riachuelo
+(mesma ref repetindo em dezenas de pedidos).
+
+- **Tabela `produto_depara`** (db do ambiente, `schema_env.py`): `client_key`,
+  `chave_tipo` (`'codigo'|'ean'`), `chave_valor` (normalizado), `fire_produto_id`,
+  `fire_codigo`, `fire_ean`, `fire_nome`, `criado_em/por`. `UNIQUE (client_key,
+  chave_tipo, chave_valor)`. Repo: `app/persistence/produto_depara_repo.py`.
+- **`client_key(cnpj, name)`** — CNPJ (só dígitos) quando existe; **senão o nome
+  normalizado** (UPPER, whitespace-collapsed). Varejistas como a Riachuelo vêm sem
+  CNPJ no header (o CNPJ real é por loja no `delivery_cnpj`) → chavear pelo nome é
+  a granularidade certa: uma ref → um produto Fire, através de todas as lojas.
+  Escrita (rota `vincular-produto`) e leitura (`check_order`) derivam a chave com
+  a MESMA chamada — se divergirem, o vínculo criado na UI não é achado.
+- **`_norm_key(tipo, valor)`** normaliza a chave da referência (código: strip+upper;
+  ean: só dígitos), idêntico na gravação e na leitura.
+
+### 3º degrau de match no `check_order`
+
+Ordem: **EAN → CODPROD_ALTERN → de-para**. Quando EAN e código falham, olha o
+de-para do `client_key` do pedido (SQLite local, rápido) e resolve o
+`fire_produto_id` no Firebird via `FIND_PRODUCT_BY_SEQ` — trazendo DESCRICAO +
+PRECO_VENDA, então a validação de preço segue funcionando. Novo
+`match_source='depara'`. De-para órfão (SEQ sumiu do Fire) → `match=False`.
+Best-effort: sem ambiente ativo / SQLite off, pula o degrau sem quebrar o check.
+
+### Batelamento (perf)
+
+`check_order` batela os lookups de produto: de `2N+1` round-trips no Firebird
+(1 cliente + até 2 por item) para **~4** — uma query `IN (...)` por tipo de chave
+(`find_products_by_eans_sql` / `_codes_sql` / `_seqs_sql`), chunk de 200, dedup
+antes. Contrato de saída inalterado. Caveat: `TRIM(CODPROD_ALTERN) IN (...)` não
+usa índice — se pesar no volume real, medir antes de otimizar.
