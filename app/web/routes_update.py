@@ -131,8 +131,15 @@ async def upload(file: UploadFile = File(...), _=Depends(require_admin)):
         for child in sd.iterdir():
             if child.name != res.update_id:
                 shutil.rmtree(child, ignore_errors=True)
-        state.write_status(updates_dir(), status="staged", update_id=res.update_id,
-                           version=res.version, deps_changed=res.deps_changed)
+        # Persiste o resumo COMPLETO no status.json — assim um reload da página
+        # (que lê /status, não a resposta do /upload) mostra commit/build/
+        # arquivos/notes em vez de "—".
+        state.write_status(
+            updates_dir(), status="staged", update_id=res.update_id,
+            version=res.version, deps_changed=res.deps_changed,
+            git_commit=res.git_commit, built_at=res.built_at,
+            files_count=res.files_count, notes=res.notes,
+        )
         return {
             "update_id": res.update_id, "version": res.version,
             "git_commit": res.git_commit, "built_at": res.built_at,
@@ -178,18 +185,29 @@ def _running_but_dead(s: dict) -> bool:
 
 @router.post("/dismiss")
 def dismiss(_=Depends(require_admin)):
-    """Dispensa um status TERMINAL (succeeded/rolled_back/rollback_failed) — ou um
-    'rodando' comprovadamente MORTO (sem lock + started_at antigo) — de volta pra
-    idle, liberando a tela de upload sem apagar o status.json na mão. Recusa (409)
-    se há um update de fato em andamento; em idle/staged é no-op (não mexe no
-    pacote staged)."""
+    """Volta a tela pra idle. Um pacote STAGED é removido de verdade (apaga do
+    disco + limpa o status). Um status TERMINAL (succeeded/rolled_back/
+    rollback_failed) — ou um 'rodando' comprovadamente MORTO (sem lock +
+    started_at antigo) — também é limpo. Recusa (409) se há um update de fato
+    em andamento; em idle é no-op."""
     if state.is_locked(updates_dir()):
         raise HTTPException(409, "há um update em andamento")
     s = state.read_status(updates_dir())
     dead = _running_but_dead(s)
     if s.get("status") in _RUNNING_STATUSES and not dead:
         raise HTTPException(409, "há um update em andamento")
-    if s.get("status") in _TERMINAL_STATUSES or dead:
+    if s.get("status") == "staged":
+        # Descartar um pacote STAGED = remover de verdade: apaga o pacote do
+        # disco e limpa o status. Antes o /dismiss era no-op pra 'staged', então
+        # a UI limpava só localmente e o pacote reaparecia no reload — não havia
+        # como remover um staged a não ser aplicando.
+        import shutil
+
+        uid = s.get("update_id")
+        if uid:
+            shutil.rmtree(staging_dir() / uid, ignore_errors=True)
+        state.clear_status(updates_dir())
+    elif s.get("status") in _TERMINAL_STATUSES or dead:
         state.clear_status(updates_dir())
     # devolve o estado REAL resultante (idle se limpou; senão o atual inalterado,
     # ex.: staged não é mexido) — a resposta nunca mente sobre o disco.

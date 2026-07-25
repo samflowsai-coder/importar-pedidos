@@ -184,16 +184,39 @@ def test_dismiss_idle_e_noop_200(setup):
     assert r.status_code == 200 and r.json()["status"] == "idle"
 
 
-def test_dismiss_preserva_staged(setup):
-    """/dismiss é só pra status terminal — em staged é no-op e NÃO descarta o
-    pacote pronto pra aplicar."""
+def test_dismiss_remove_pacote_staged(setup):
+    """Bug: /dismiss era no-op pra 'staged' → não havia como remover um pacote
+    staged a não ser aplicando, e ele reaparecia no reload. Agora remove de
+    verdade (apaga o dir do disco + volta pra idle)."""
     from app.updates import state
     from app.web import routes_update
 
-    state.write_status(routes_update.updates_dir(), status="staged", update_id="abc", version="v1")
+    uid = "abc123"
+    staged = routes_update.staging_dir() / uid
+    staged.mkdir(parents=True)
+    (staged / "ui.py").write_text("# x")
+    state.write_status(routes_update.updates_dir(), status="staged", update_id=uid, version="v1")
+
     r = _client().post("/api/admin/update/dismiss")
-    assert r.status_code == 200 and r.json()["status"] == "staged"
-    assert state.read_status(routes_update.updates_dir())["status"] == "staged"
+    assert r.status_code == 200 and r.json()["status"] == "idle"
+    assert state.read_status(routes_update.updates_dir())["status"] == "idle"
+    assert not staged.exists()
+
+
+def test_status_apos_upload_carrega_resumo_completo(setup, monkeypatch):
+    """Reload da tela (via /status) deve mostrar commit/build/arquivos, não '—'."""
+    from app.updates import package
+
+    monkeypatch.setattr(package, "compute_deps_sha256", lambda p: "SHA")
+    c = _client()
+    up = c.post("/api/admin/update/upload",
+                files={"file": ("p.zip", _good_zip("SHA"), "application/zip")})
+    assert up.status_code == 200
+    st = c.get("/api/admin/update/status").json()
+    assert st["status"] == "staged"
+    assert st["git_commit"] == "deadbee"
+    assert st["built_at"] == "2026-07-14T10:30:00Z"
+    assert st.get("files_count", 0) >= 1
 
 
 def test_dismiss_destrava_running_morto(setup):
