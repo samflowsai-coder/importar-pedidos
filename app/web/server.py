@@ -870,16 +870,30 @@ def invite_accept_page(token: str) -> FileResponse:  # noqa: ARG001 — token us
 
 
 @app.get("/api/config")
-def get_config() -> JSONResponse:
-    cfg = _get_cfg()
+def get_config(request: Request) -> JSONResponse:
+    cfg = _get_cfg_for_request(request)
+    env = _request_environment(request)
+    if env is not None:
+        # Multi-ambiente: o status do banco é o do ambiente ATIVO, não do
+        # singleton legado. Sem isso o pill mostrava "SEM BANCO" mesmo com a
+        # Fire do ambiente funcionando (lia só o firebird.json/FB_DATABASE).
+        from app.persistence import environments_repo
+
+        fb_cfg = environments_repo.to_fb_config(env)
+        firebird_configured = bool(fb_cfg.get("path"))
+        environment = {"name": env.get("name"), "slug": env.get("slug")}
+    else:
+        firebird_configured = firebird_config.is_configured() or bool(
+            os.environ.get("FB_DATABASE")
+        )
+        environment = None
     return JSONResponse(
         {
             "watchDir": cfg["watch_dir"],
             "outputDir": cfg["output_dir"],
             "exportMode": cfg.get("export_mode", "xlsx"),
-            "firebirdConfigured": (
-                firebird_config.is_configured() or bool(os.environ.get("FB_DATABASE"))
-            ),
+            "firebirdConfigured": firebird_configured,
+            "environment": environment,
         }
     )
 
@@ -2520,6 +2534,13 @@ def vincular_produto(
         )
 
     check = check_order(order, env=_request_environment(request))
+    # Persiste o check fresco para o re-open do pedido e o badge da lista
+    # refletirem o vínculo (senão rehydrate_preview leria o check antigo e o
+    # item apareceria como ✗ de novo). Só grava quando o check é confiável —
+    # se a Fire estava fora, mantém o check anterior em vez de sobrescrever
+    # com um "indisponível".
+    if check.get("available"):
+        repo.update_fire_metadata(import_id, check=check)
     return JSONResponse({"entry_id": import_id, "vinculos": gravou, "check": check})
 
 

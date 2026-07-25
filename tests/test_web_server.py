@@ -334,6 +334,46 @@ def test_preview_pending_uses_selected_environment_watch_dir(tmp_path, monkeypat
     assert r.json()["header"]["order_number"] == "2600009562"
 
 
+def test_config_reflete_firebird_do_ambiente_ativo(tmp_path):
+    from app.persistence import environments_repo
+
+    env = environments_repo.create(
+        slug="mmfire", name="MM Americanense",
+        watch_dir=str(tmp_path / "w"), output_dir=str(tmp_path / "o"),
+        fb_path="/srv/mm.fdb",
+    )
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.get("/api/config")
+    finally:
+        client.cookies.clear()
+    assert r.status_code == 200
+    body = r.json()
+    assert body["firebirdConfigured"] is True
+    assert body["environment"]["name"] == "MM Americanense"
+    assert body["environment"]["slug"] == "mmfire"
+    assert body["watchDir"] == str(tmp_path / "w")
+
+
+def test_config_ambiente_sem_fire_reporta_sem_banco(tmp_path):
+    from app.persistence import environments_repo
+
+    env = environments_repo.create(
+        slug="nofire", name="Sem Fire",
+        watch_dir=str(tmp_path / "w"), output_dir=str(tmp_path / "o"),
+        fb_path="",
+    )
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.get("/api/config")
+    finally:
+        client.cookies.clear()
+    assert r.status_code == 200
+    body = r.json()
+    assert body["firebirdConfigured"] is False
+    assert body["environment"]["name"] == "Sem Fire"
+
+
 def test_preview_pending_rejects_missing_file(tmp_path, monkeypatch):
     from app import config as app_config
 

@@ -53,6 +53,7 @@ class StagedPackage:
     built_at: str
     files_count: int
     deps_changed: bool
+    notes: str = ""
 
 
 def _member_ok(name: str) -> None:
@@ -123,6 +124,13 @@ def validate_and_stage(
             z.extract(i, dest)
         files = sum(1 for i in infos if not i.filename.endswith("/"))
     local_sha = compute_deps_sha256(local_pyproject)
+    # `notes`: resumo em linguagem natural do que a versão corrige (opcional —
+    # pacotes antigos sem o campo continuam válidos). Mostrado na tela de
+    # atualização antes de aplicar. Limita o tamanho por segurança.
+    notes = manifest.get("notes") or ""
+    if not isinstance(notes, str):
+        notes = ""
+    notes = notes.strip()[:4000]
     return StagedPackage(
         update_id=update_id,
         version=manifest["version"],
@@ -130,4 +138,5 @@ def validate_and_stage(
         built_at=manifest["built_at"],
         files_count=files,
         deps_changed=(manifest["deps_sha256"] != local_sha),
+        notes=notes,
     )

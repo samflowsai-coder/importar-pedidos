@@ -149,7 +149,8 @@
       <div class="app-shell-top">
         <div class="app-shell-top-left" data-shell-title></div>
         <div class="app-shell-top-right">
-          <div class="app-shell-fb" data-fb-status title="Status do Firebird">
+          <div class="app-shell-env" data-env-name hidden title="Empresa ativa nesta sessão"></div>
+          <div class="app-shell-fb" data-fb-status title="Status do Firebird do ambiente ativo">
             <span class="app-shell-fb-dot"></span>
             <span data-fb-label>Firebird</span>
           </div>
@@ -189,6 +190,19 @@
     node.classList.toggle('connected', ok);
     const label = node.querySelector('[data-fb-label]');
     if (label) label.textContent = ok ? 'Conectado' : 'Sem banco';
+    // Mostra a empresa (ambiente) ativa ao lado do status, pra deixar claro
+    // em qual empresa você está operando e de qual banco é o status acima.
+    const envNode = host.querySelector('[data-env-name]');
+    if (envNode) {
+      const name = cfg && cfg.environment && cfg.environment.name;
+      if (name) {
+        envNode.textContent = name;
+        envNode.hidden = false;
+      } else {
+        envNode.textContent = '';
+        envNode.hidden = true;
+      }
+    }
   }
 
   function ensureToastHost() {

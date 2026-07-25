@@ -8,8 +8,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/tokens.css?v=1">
-  <link rel="stylesheet" href="/static/css/shell.css?v=1">
-  <script src="/static/js/shell.js?v=1" defer></script>
+  <link rel="stylesheet" href="/static/css/shell.css?v=2">
+  <script src="/static/js/shell.js?v=2" defer></script>
   <style>
     .main { padding: 32px 32px 96px; display: flex; justify-content: center; }
     .container { width: 100%; max-width: 720px; }
@@ -75,6 +75,15 @@
       margin-bottom: 4px;
     }
     .summary-value { font-size: 13.5px; color: var(--text); }
+
+    .release-notes { margin: 2px 0 16px; }
+    .release-notes-body {
+      margin-top: 6px; padding: 12px 14px;
+      background: var(--surface-2, rgba(127,127,127,.06));
+      border: 1px solid var(--border); border-radius: 10px;
+      font-size: 13px; line-height: 1.55; color: var(--text-secondary);
+      white-space: pre-wrap; word-break: break-word;
+    }
 
     .badge {
       display: inline-flex; align-items: center; gap: 5px;
@@ -239,6 +248,10 @@
           <span class="summary-label">Arquivos</span>
           <span class="summary-value" id="st-files">—</span>
         </div>
+      </div>
+      <div class="release-notes" id="st-notes-wrap" hidden>
+        <span class="summary-label">O que esta versão corrige</span>
+        <div class="release-notes-body" id="st-notes"></div>
       </div>
       <div class="badge" id="st-deps-badge" hidden>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/></svg>
@@ -430,6 +443,9 @@
     $('st-commit').textContent = (data.git_commit || '—').toString().slice(0, 12);
     $('st-built').textContent = data.built_at ? fmtDate(data.built_at) : '—';
     $('st-files').textContent = (data.files_count ?? '—').toString();
+    const notes = (data.notes || '').toString().trim();
+    $('st-notes').textContent = notes;
+    $('st-notes-wrap').hidden = !notes;
     $('st-deps-badge').hidden = !data.deps_changed;
     $('btn-apply').disabled = false;
   }

@@ -284,10 +284,15 @@ def update_fire_metadata(
     db_result: dict | None = None,
     output_files: list[dict] | None = None,
     sent_to_fire_at: str | None = None,
+    check: dict | None = None,
 ) -> None:
     """Update Fire-related auxiliary columns. Does NOT touch portal_status /
     production_status — those mutations belong to `app.state.transition`.
     Pass only the fields you want to update; others stay as they are.
+
+    `check`: quando passado, regrava `check_json` com o resultado fresco do
+    `check_order` (ex.: após um vínculo de-para, para o re-open e o badge da
+    lista refletirem o novo match em vez do check antigo armazenado).
     """
     sets: list[str] = []
     params: list[Any] = []
@@ -303,6 +308,9 @@ def update_fire_metadata(
     if sent_to_fire_at is not None:
         sets.append("sent_to_fire_at = ?")
         params.append(sent_to_fire_at)
+    if check is not None:
+        sets.append("check_json = ?")
+        params.append(json.dumps(check, ensure_ascii=False))
     if not sets:
         return
     params.append(import_id)
