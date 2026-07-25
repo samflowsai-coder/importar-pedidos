@@ -57,3 +57,14 @@ enviar-catalogo-flow.bat
 ambiente_cliente/
 reprocessar_prazos_patch.*
 wheelhouse/
+
+# SQLite WAL/SHM (o *.db já é ignorado; estes sufixos escapavam)
+*.db-shm
+*.db-wal
+*.db-journal
+# Logs e artefatos transitórios de dev
+pip-log.txt
+# Planilhas de análise pontual na raiz (não são fixtures)
+/comparacao_catalogo_confeccao_x_americanense.xlsx
+# Amostras de debug ad-hoc (não são fixtures do repo)
+samples/Erro Magic Feet/
