@@ -7,6 +7,7 @@ aqui vira outbox/retry e nunca pode derrubar o fluxo de send-to-fire.
 
 from __future__ import annotations
 
+from app.erp.cnpj import cnpj_digits
 from app.erp.depara_cliente import ResolucaoCliente
 from app.integrations.flowpcp.client import FlowPCPClient
 from app.integrations.flowpcp.config import flowpcp_config_for_slug
@@ -46,6 +47,11 @@ def _auditar_resolucao(order: Order, *, import_id: str, resolucao: ResolucaoClie
                 "resolvido": resolucao.resolvido,
                 "cnpj_real": resolucao.cnpj,
                 "nome_real": resolucao.nome,
+                # "Qual banco respondeu" e "qual CNPJ disparou o de-para" — a
+                # única forma de auditar depois quais pedidos foram resolvidos
+                # sob um intercompany_env_slug/intercompany_cnpj mal configurado.
+                "revenda_slug": resolucao.revenda_slug,
+                "cnpj_gatilho": cnpj_digits(order.header.customer_cnpj),
                 # Radar da demanda fantasma — o pedido casado na revenda pode
                 # já estar FATURADO. Só observa; não bloqueia.
                 "pedidos_no_4": resolucao.pedidos_no_4,

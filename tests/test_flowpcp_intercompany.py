@@ -111,6 +111,7 @@ def test_hook_repassa_resolucao_e_audita(monkeypatch):
         nome="AF",
         motivo="ok",
         pedidos_no_4=[{"codigo": 1, "status": "FATURADO", "codnf": 9}],
+        revenda_slug="nasmar",
     )
     monkeypatch.setattr(hook, "resolucao_para", lambda order, *, slug: res)
     auditado = []
@@ -128,6 +129,44 @@ def test_hook_repassa_resolucao_e_audita(monkeypatch):
     assert auditado[0][2]["motivo"] == "ok"
     assert auditado[0][2]["cnpj_real"] == "10772208000182"
     assert auditado[0][2]["pedidos_no_4"] == [{"codigo": 1, "status": "FATURADO", "codnf": 9}]
+
+
+def test_hook_audita_revenda_slug_e_cnpj_gatilho(monkeypatch):
+    """Achado 3 da revisão: se `intercompany_env_slug`/`intercompany_cnpj`
+    estiver mal configurado, a única forma de auditar depois quais pedidos
+    passaram por ele é o próprio audit registrar QUAL slug respondeu e QUAL
+    CNPJ disparou o de-para."""
+    monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: _CFG)
+    res = ResolucaoCliente(True, cnpj="10772208000182", nome="AF", motivo="ok", revenda_slug="nasmar")
+    monkeypatch.setattr(hook, "resolucao_para", lambda order, *, slug: res)
+    auditado = []
+    monkeypatch.setattr(hook.repo, "append_audit", lambda i, e, d=None: auditado.append((i, e, d)))
+    monkeypatch.setattr(hook, "FlowPCPExporter", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(hook, "FlowPCPClient", lambda **_kw: MagicMock(), raising=False)
+
+    hook.push_new_order(_order(cnpj="34.513.679/0001-34"), import_id="imp-1", slug="mm")
+
+    detail = auditado[0][2]
+    assert detail["revenda_slug"] == "nasmar"
+    assert detail["cnpj_gatilho"] == "34513679000134"
+
+
+def test_hook_audita_revenda_slug_mesmo_em_config_invalida(monkeypatch):
+    """config_invalida hoje não diz QUAL slug era inválido — revenda_slug no
+    resultado fecha isso mesmo em falha."""
+    monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: _CFG)
+    res = ResolucaoCliente(False, motivo="config_invalida", revenda_slug="fantasma")
+    monkeypatch.setattr(hook, "resolucao_para", lambda order, *, slug: res)
+    auditado = []
+    monkeypatch.setattr(hook.repo, "append_audit", lambda i, e, d=None: auditado.append((i, e, d)))
+    monkeypatch.setattr(hook, "FlowPCPExporter", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(hook, "FlowPCPClient", lambda **_kw: MagicMock(), raising=False)
+
+    hook.push_new_order(_order(), import_id="imp-1", slug="mm")
+
+    assert auditado[0][2]["revenda_slug"] == "fantasma"
+
+
 
 
 def test_hook_nao_audita_quando_nao_se_aplica(monkeypatch):

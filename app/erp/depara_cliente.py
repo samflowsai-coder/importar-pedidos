@@ -36,6 +36,10 @@ class ResolucaoCliente:
     motivo: str = "sem_chave"
     # Radar da demanda fantasma: STATUS/CODNF dos pedidos casados no .4.
     pedidos_no_4: list[dict] = field(default_factory=list)
+    # Qual ambiente (Firebird) respondeu — presente em TODO caminho, inclusive
+    # falha. É a única forma de auditar depois "quais pedidos foram resolvidos
+    # sob uma config errada" se intercompany_env_slug for corrigido mais tarde.
+    revenda_slug: str = ""
 
 
 # Cache de processo. Só guarda resolução POSITIVA: o vínculo chave→cliente é
@@ -56,7 +60,7 @@ def resolver_cliente_real(chave: str | None, *, revenda_slug: str) -> ResolucaoC
     """
     chave_limpa = (chave or "").strip()
     if not chave_limpa:
-        return ResolucaoCliente(False, motivo="sem_chave")
+        return ResolucaoCliente(False, motivo="sem_chave", revenda_slug=revenda_slug)
 
     cache_key = (revenda_slug, chave_limpa)
     if cache_key in _CACHE:
@@ -66,11 +70,11 @@ def resolver_cliente_real(chave: str | None, *, revenda_slug: str) -> ResolucaoC
         env = environments_repo.get_by_slug(revenda_slug)
     except Exception as exc:  # noqa: BLE001 — best-effort: fallback pra revenda
         logger.warning(f"depara_cliente: lookup do ambiente '{revenda_slug}' falhou: {exc}")
-        return ResolucaoCliente(False, motivo="erro_conexao")
+        return ResolucaoCliente(False, motivo="erro_conexao", revenda_slug=revenda_slug)
 
     if env is None:
         logger.warning(f"depara_cliente: ambiente de revenda '{revenda_slug}' não existe")
-        return ResolucaoCliente(False, motivo="config_invalida")
+        return ResolucaoCliente(False, motivo="config_invalida", revenda_slug=revenda_slug)
 
     try:
         cfg = environments_repo.to_fb_config(env)
@@ -83,28 +87,30 @@ def resolver_cliente_real(chave: str | None, *, revenda_slug: str) -> ResolucaoC
                 cur.close()
     except Exception as exc:  # noqa: BLE001 — best-effort: fallback pra revenda
         logger.warning(f"depara_cliente: leitura da revenda falhou (chave={chave_limpa!r}): {exc}")
-        return ResolucaoCliente(False, motivo="erro_conexao")
+        return ResolucaoCliente(False, motivo="erro_conexao", revenda_slug=revenda_slug)
 
-    resultado = _decidir(rows)
+    resultado = _decidir(rows, revenda_slug=revenda_slug)
     if resultado.resolvido:
         _CACHE[cache_key] = resultado
     return resultado
 
 
-def _decidir(rows: list) -> ResolucaoCliente:
+def _decidir(rows: list, *, revenda_slug: str) -> ResolucaoCliente:
     """Regra pura: só resolve com UM CNPJ distinto, válido, entre os hits.
 
     Vários pedidos podem dividir o mesmo PEDIDO_CLIENTE na revenda (2 a 4 é
     comum) — isso não é ambiguidade enquanto apontarem pro mesmo CNPJ.
     """
     if not rows:
-        return ResolucaoCliente(False, motivo="nao_encontrado")
+        return ResolucaoCliente(False, motivo="nao_encontrado", revenda_slug=revenda_slug)
 
     pedidos = [{"codigo": r[0], "status": r[1], "codnf": r[2]} for r in rows]
     cnpjs = {cnpj_digits(r[6]) for r in rows}
     if len(cnpjs) > 1:
         logger.warning(f"depara_cliente: ambíguo, {len(cnpjs)} CNPJs distintos — mantendo revenda")
-        return ResolucaoCliente(False, motivo="ambiguo", pedidos_no_4=pedidos)
+        return ResolucaoCliente(
+            False, motivo="ambiguo", pedidos_no_4=pedidos, revenda_slug=revenda_slug
+        )
 
     cnpj = next(iter(cnpjs))
     # CADASTRO.CPF_CNPJ é campo legado: linhas com "ISENTO", "0" ou cadastro
@@ -114,8 +120,12 @@ def _decidir(rows: list) -> ResolucaoCliente:
     # reportado como "ambiguo", o que não fazia sentido para 1 hit só).
     if len(cnpj) not in (11, 14):
         logger.warning(f"depara_cliente: CPF_CNPJ inválido ({cnpj!r}) na revenda — sem_cnpj")
-        return ResolucaoCliente(False, motivo="sem_cnpj", pedidos_no_4=pedidos)
+        return ResolucaoCliente(
+            False, motivo="sem_cnpj", pedidos_no_4=pedidos, revenda_slug=revenda_slug
+        )
 
     primeira = rows[0]
     nome = (primeira[5] or "").strip() or (primeira[4] or "").strip() or None
-    return ResolucaoCliente(True, cnpj=cnpj, nome=nome, motivo="ok", pedidos_no_4=pedidos)
+    return ResolucaoCliente(
+        True, cnpj=cnpj, nome=nome, motivo="ok", pedidos_no_4=pedidos, revenda_slug=revenda_slug
+    )

@@ -205,6 +205,54 @@ def test_lookup_do_ambiente_explode_nao_levanta(monkeypatch):
     assert r.motivo == "erro_conexao"
 
 
+# ── revenda_slug no resultado (achado 3 da revisão): "qual banco respondeu" ──
+#
+# Se `intercompany_env_slug` apontar pro ambiente errado, a única forma de
+# auditar depois quais pedidos foram resolvidos sob a config ruim é o próprio
+# resultado carregar o slug usado — em TODO caminho, inclusive falha.
+
+
+@pytest.mark.parametrize("chave", [None, "", "   "])
+def test_revenda_slug_presente_mesmo_em_sem_chave(fake_fire, chave):
+    fake_fire([_LINHA_AF066])
+    r = dc.resolver_cliente_real(chave, revenda_slug="nasmar")
+    assert r.revenda_slug == "nasmar"
+
+
+def test_revenda_slug_presente_em_config_invalida(monkeypatch):
+    monkeypatch.setattr(dc.environments_repo, "get_by_slug", lambda slug: None)
+    r = dc.resolver_cliente_real("AF066", revenda_slug="fantasma")
+    assert r.revenda_slug == "fantasma"
+
+
+def test_revenda_slug_presente_em_erro_conexao(fake_fire):
+    fake_fire([], boom=RuntimeError("firebird fora do ar"))
+    r = dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    assert r.revenda_slug == "nasmar"
+
+
+def test_revenda_slug_presente_em_erro_no_lookup_do_ambiente(monkeypatch):
+    monkeypatch.setattr(
+        dc.environments_repo, "get_by_slug", lambda s: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    r = dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    assert r.revenda_slug == "nasmar"
+
+
+def test_revenda_slug_presente_quando_resolvido(fake_fire):
+    fake_fire([_LINHA_AF066])
+    r = dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    assert r.resolvido is True
+    assert r.revenda_slug == "nasmar"
+
+
+def test_revenda_slug_presente_em_ambiguo_e_sem_cnpj(fake_fire):
+    fake_fire([_LINHA_AF066, _LINHA_OUTRO])
+    r = dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    assert r.motivo == "ambiguo"
+    assert r.revenda_slug == "nasmar"
+
+
 def test_resolucao_ok_e_cacheada(fake_fire):
     capturado = fake_fire([_LINHA_AF066])
     dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
