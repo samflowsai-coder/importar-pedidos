@@ -44,7 +44,28 @@ o strip, `openpyxl` levanta `IllegalCharacterError` no `wb.save()` → HTTP 500 
 rota `/api/imported/{id}/export-xlsx` (regressão real: pedido AF185/H2S4,
 2026-07-22, um único item afetado).
 
+## Identidade do Fire via de-para (`depara_apply`)
+
+Antes de gerar o XLS, `_export_one_xlsx` (web) chama
+`app/erp/depara_apply.apply(order, *, conn)`: para cada item com vínculo de-para
+(ver `docs/ai/modules/erp.md`), **muta o item** com a identidade do Fire —
+`product_code = fire_codigo`, `ean = fire_ean` (quando houver), e anexa
+`"ref cliente: <ref original>"` ao `obs` pra rastreabilidade. Assim, seja qual
+for o campo que a rotina de import do Fire lê (código ou EAN), o item casa.
+
+- A mutação é **transiente**: o `order` vem de `Order.model_validate(snapshot)` e
+  é descartado após o export — nunca toca o `snapshot_json` persistido.
+- A chave de lookup é `produto_depara_repo.client_key(header.customer_cnpj,
+  header.customer_name)` (fallback pro nome quando não há CNPJ — caso Riachuelo).
+- Prioridade por item **código primeiro, EAN fallback** — espelha o degrau
+  de-para do `check_order`, pra o XLS enriquecer o MESMO produto que o preview
+  mostrou casado.
+- Best-effort: falha no enriquecimento nunca derruba a geração do XLS. Audita
+  `depara_aplicado_no_xls` quando houve mudança. Itens sem vínculo saem intactos.
+
 ## Testes
 - `tests/test_exporter_split.py` — split por loja, schema, qty bate por arquivo, regressão consolidado.
+- `tests/test_depara_apply.py` — enriquecimento por vínculo (código/EAN), caso
+  Riachuelo (sem CNPJ, chave por nome), item sem vínculo intacto.
 - `tests/test_smoke_exporter.py` — contrato público + sanitização de char de controle (`test_export_strips_illegal_control_chars`, `test_export_preserves_legit_whitespace`).
 - Validações implícitas em `tests/test_new_parsers.py` (NBA: 21 arquivos; Magic Feet: 9 arquivos; Sam's GRADE: 3 arquivos).

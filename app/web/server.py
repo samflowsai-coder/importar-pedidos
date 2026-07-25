@@ -1667,6 +1667,9 @@ def _send_one_to_fire(
 
         override = entry.get("cliente_override_codigo")
         # Multi-ambiente: usa creds do env atual em vez de env vars FB_*.
+        # NOTA: de-para (depara_apply) NÃO é aplicado aqui — só no _export_one_xlsx.
+        # Em EXPORT_MODE=db/both um item casado por de-para entra no Fire sem FK.
+        # Fast-follow se o cliente migrar de xlsx.
         result = FirebirdExporter(env=request_env).export(order, override_client_id=override)
         db_result = result.to_dict()
 
@@ -1859,6 +1862,20 @@ def _export_one_xlsx(
         )
 
     with with_trace_id(entry.get("trace_id")):
+        # Enriquecer com a identidade do Fire onde há vínculo de-para (SQLite local).
+        from app.erp import depara_apply
+        from app.persistence import db
+
+        try:
+            with db.connect() as sconn:
+                dep_changed = depara_apply.apply(order, conn=sconn)
+            if dep_changed:
+                repo.append_audit(import_id, "depara_aplicado_no_xls", {"itens": dep_changed})
+        except Exception as exc:  # noqa: BLE001 — enriquecimento é best-effort; XLS não pode falhar por isso
+            from app.utils.logger import logger
+
+            logger.warning(f"de-para apply pulado no export: {type(exc).__name__}: {exc}")
+
         output_path = Path(cfg["output_dir"]).expanduser().resolve()
         output_path.mkdir(parents=True, exist_ok=True)
         paths = ERPExporter().export(order, str(output_path))
@@ -2331,6 +2348,196 @@ def override_cliente(
             "cliente_override_razao": razao,
         }
     )
+
+
+@app.get("/api/produtos/search")
+def search_produtos(
+    request: Request,
+    limit: int = 20,
+    q: str = "",
+    desc: str = "",
+    code: str | None = None,
+    ean_item: str | None = None,
+    _user: User = Depends(require_user),
+) -> JSONResponse:
+    """Busca produtos na cópia local do catálogo do Fire (catalogo_fire).
+
+    Instantâneo, sem Firebird — funciona com a Fire offline. `q`: ao menos
+    2 caracteres (após strip) para popular `results`. `limit`: clamp em
+    [1, 50].
+
+    `desc`/`code`/`ean_item` são dicas opcionais do item do pedido (não do
+    texto de busca `q`): quando ao menos uma vier preenchida, a resposta
+    inclui `suggestions` — top 5 candidatos ranqueados pelo
+    `product_ranking` sobre o catálogo completo. É sugestão, nunca vínculo
+    automático; o operador confirma clicando.
+
+    `q` é opcional: o picker de de-para abre em cima de um item sem match e
+    busca sugestões só com as dicas, sem texto de busca — nesse caso
+    `results` vem vazio e só `suggestions` é preenchido. 400 só quando não
+    há nada pra fazer: `q` curto (ou ausente) e nenhuma dica.
+    """
+    from app.erp import product_ranking
+    from app.persistence import catalogo_fire_repo, db
+
+    needle = (q or "").strip()
+    hints_present = bool(desc.strip() or (code or "").strip() or (ean_item or "").strip())
+    if len(needle) < 2 and not hints_present:
+        raise HTTPException(
+            status_code=400, detail="Informe ao menos 2 caracteres ou um item para sugestões"
+        )
+    limit = max(1, min(int(limit), 50))
+    up = needle.upper()
+    digits = re.sub(r"\D", "", needle)
+
+    with db.connect() as conn:
+        rows = catalogo_fire_repo.list_all(conn)
+
+    def _hit(r: dict) -> bool:
+        if up in (r.get("nome") or "").upper():
+            return True
+        if digits and (digits in (r.get("codigo") or "") or digits in (r.get("ean") or "")):
+            return True
+        return False
+
+    results: list[dict] = []
+    if len(needle) >= 2:
+        results = [
+            {
+                "fire_produto_id": r["fire_produto_id"],
+                "fire_codigo": r["codigo"],
+                "fire_ean": r.get("ean"),
+                "fire_nome": r["nome"],
+            }
+            for r in rows
+            if _hit(r)
+        ][:limit]
+
+    suggestions: list[dict] = []
+    if hints_present:
+        ranked = product_ranking.rank_candidates(
+            description=desc, product_code=code, ean=ean_item, catalog=rows, limit=5
+        )
+        suggestions = [
+            {
+                "fire_produto_id": r["fire_produto_id"],
+                "fire_codigo": r["codigo"],
+                "fire_ean": r.get("ean"),
+                "fire_nome": r["nome"],
+                "score": r["score"],
+            }
+            for r in ranked
+        ]
+
+    return JSONResponse(
+        {"results": results, "suggestions": suggestions, "total_returned": len(results)}
+    )
+
+
+class VincularProdutoRequest(BaseModel):
+    item_index: int
+    fire_produto_id: str
+
+
+@app.post("/api/imported/{import_id}/vincular-produto")
+def vincular_produto(
+    import_id: str,
+    body: VincularProdutoRequest,
+    request: Request,
+    user: User = Depends(require_user),
+) -> JSONResponse:
+    """Cria o vínculo de-para do item (code e/ou ean → produto do Fire),
+    audita e re-roda o check. Só em pedidos em revisão."""
+    from app.erp.product_check import check_order
+    from app.models.order import Order
+    from app.persistence import catalogo_fire_repo, db, produto_depara_repo, repo
+
+    entry = repo.get_import(import_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    if entry.get("portal_status") != "parsed":
+        raise HTTPException(status_code=409, detail="Vínculo só é permitido em pedidos em revisão")
+    snapshot = entry.get("snapshot")
+    if not snapshot:
+        raise HTTPException(status_code=422, detail="Snapshot do pedido indisponível")
+    try:
+        order = Order.model_validate(snapshot)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Snapshot inválido: {exc}") from exc
+    if not (0 <= body.item_index < len(order.items)):
+        raise HTTPException(status_code=422, detail="item_index fora do intervalo")
+    item = order.items[body.item_index]
+
+    with db.connect() as conn:
+        prod = next(
+            (
+                p
+                for p in catalogo_fire_repo.list_all(conn)
+                if p["fire_produto_id"] == body.fire_produto_id
+            ),
+            None,
+        )
+        if prod is None:
+            raise HTTPException(status_code=422, detail="Produto não encontrado no catálogo local")
+
+        ckey = produto_depara_repo.client_key(
+            order.header.customer_cnpj, order.header.customer_name
+        )
+        now = datetime.now().isoformat(timespec="seconds")
+        gravou = []
+        for tipo, valor in (("ean", item.ean), ("codigo", item.product_code)):
+            if not valor:
+                continue
+            produto_depara_repo.upsert(
+                conn,
+                client_key=ckey,
+                chave_tipo=tipo,
+                chave_valor=valor,
+                fire_produto_id=prod["fire_produto_id"],
+                fire_codigo=prod["codigo"],
+                fire_ean=prod.get("ean"),
+                fire_nome=prod["nome"],
+                criado_em=now,
+                criado_por=user.email,
+            )
+            gravou.append({"chave_tipo": tipo, "chave_valor": valor})
+
+    if not gravou:
+        raise HTTPException(status_code=422, detail="Item sem código nem EAN para vincular")
+
+    with with_trace_id(entry.get("trace_id")):
+        repo.append_audit(
+            import_id,
+            "produto_vinculo_criado",
+            {
+                "item_index": body.item_index,
+                "fire_produto_id": prod["fire_produto_id"],
+                "fire_nome": prod["nome"],
+                "chaves": gravou,
+                "user_id": user.id,
+                "user_email": user.email,
+            },
+        )
+
+    check = check_order(order, env=_request_environment(request))
+    return JSONResponse({"entry_id": import_id, "vinculos": gravou, "check": check})
+
+
+@app.delete("/api/produtos/depara/{depara_id}")
+def delete_depara(
+    depara_id: int,
+    request: Request,
+    user: User = Depends(require_user),
+) -> JSONResponse:
+    """Desfaz um vínculo de-para. Log direto (não audit_log — sem import_id
+    associado, e `audit_log.import_id` é NOT NULL com FK pra `imports`)."""
+    from app.persistence import db, produto_depara_repo
+    from app.utils.logger import logger
+
+    with db.connect() as conn:
+        produto_depara_repo.delete(conn, depara_id)
+    logger.info(f"produto_vinculo_removido: depara_id={depara_id} user={user.email}")
+    return JSONResponse({"deleted": depara_id})
 
 
 @app.post("/api/imported/{import_id}/ack-sem-preco")

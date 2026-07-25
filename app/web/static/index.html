@@ -883,6 +883,36 @@
   </div>
 </div>
 
+<!-- ── Manual produto picker (item sem match no Fire → vínculo de-para) ── -->
+<div class="overlay" id="productPickerOverlay">
+  <div class="modal" style="width: 640px; max-height: 75vh">
+    <div class="modal-header">
+      <span class="modal-title">Vincular produto do Fire</span>
+      <button class="icon-btn" onclick="closeProductPicker()">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <div style="padding: 14px 18px; border-bottom: 1px solid var(--border-subtle); flex-shrink: 0">
+      <div id="ppItemLabel" style="font-size:12px;color:var(--text-muted);margin-bottom:10px"></div>
+      <input type="text" class="input" id="ppSearch"
+             placeholder="Nome, código ou EAN do produto (mín. 2 caracteres)"
+             autocomplete="off"
+             oninput="onProductSearchInput()"
+             style="width:100%">
+      <div id="ppStatus" style="margin-top:8px; font-size:11px; color: var(--text-muted); min-height:14px"></div>
+    </div>
+    <div class="modal-body" id="ppResults" style="padding: 4px 6px"></div>
+    <div class="modal-footer">
+      <span class="modal-sel-path" id="ppSelInfo"></span>
+      <button class="btn btn-sm" onclick="closeProductPicker()">Cancelar</button>
+      <button class="btn btn-primary btn-sm" id="ppConfirmBtn"
+              onclick="confirmProductLink()" disabled>Confirmar</button>
+    </div>
+  </div>
+</div>
+
 <script>
 /* ── State ── */
 let cfg = { watchDir: '', outputDir: '', exportMode: 'xlsx', firebirdConfigured: false };
@@ -1548,6 +1578,185 @@ async function confirmClientOverride() {
   }
 }
 
+/* ── Manual produto picker (item sem match no Fire → vínculo de-para) ──
+ * Vínculo grava em produto_depara (chaveado por cliente + código/EAN do
+ * item) e a partir daí o item casa sozinho em qualquer reimportação futura
+ * do mesmo cliente — sem passar de novo pelo picker. */
+let ppState = {
+  itemIndex: null,
+  selected: null,      // { fire_produto_id, fire_codigo, fire_nome, fire_ean }
+  searchTimer: null,
+  searchAbort: null,
+};
+
+function openProductPicker(itemIndex) {
+  if (!currentPreview) return;
+  const it = (currentPreview.items || [])[itemIndex];
+  if (!it) return;
+
+  ppState = { itemIndex, selected: null, searchTimer: null, searchAbort: null };
+  document.getElementById('ppItemLabel').textContent =
+    (it.description || 'Item sem descrição')
+    + (it.product_code ? ' · cód. ' + it.product_code : '')
+    + (it.ean ? ' · EAN ' + it.ean : '');
+  document.getElementById('ppSearch').value = '';
+  document.getElementById('ppStatus').textContent = '';
+  document.getElementById('ppResults').innerHTML = '';
+  document.getElementById('ppSelInfo').textContent = '';
+  document.getElementById('ppConfirmBtn').disabled = true;
+  document.getElementById('productPickerOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('ppSearch')?.focus(), 80);
+
+  loadProductSuggestions(it);
+}
+
+function closeProductPicker() {
+  document.getElementById('productPickerOverlay').classList.remove('open');
+  if (ppState.searchAbort) { ppState.searchAbort.abort(); ppState.searchAbort = null; }
+  if (ppState.searchTimer) { clearTimeout(ppState.searchTimer); ppState.searchTimer = null; }
+  ppState = { itemIndex: null, selected: null, searchTimer: null, searchAbort: null };
+}
+
+async function loadProductSuggestions(it) {
+  const statusEl = document.getElementById('ppStatus');
+  const resultsEl = document.getElementById('ppResults');
+  const params = new URLSearchParams();
+  if (it.description) params.set('desc', it.description);
+  if (it.product_code) params.set('code', it.product_code);
+  if (it.ean) params.set('ean_item', it.ean);
+  if (![...params.keys()].length) {
+    statusEl.textContent = 'Item sem dados suficientes pra sugerir — use a busca abaixo.';
+    return;
+  }
+  statusEl.textContent = 'Buscando sugestões…';
+  try {
+    const data = await api('/api/produtos/search?' + params.toString());
+    const suggestions = data.suggestions || [];
+    renderProductCandidates(resultsEl, suggestions, { section: 'Sugestões', preselectFirst: true });
+    statusEl.textContent = suggestions.length
+      ? 'Selecione um candidato ou busque manualmente abaixo.'
+      : 'Nenhuma sugestão — use a busca abaixo.';
+  } catch (err) {
+    statusEl.innerHTML = `<span style="color:var(--error)">${esc(err.message || 'Falha ao buscar sugestões')}</span>`;
+  }
+}
+
+function onProductSearchInput() {
+  const q = (document.getElementById('ppSearch').value || '').trim();
+  if (ppState.searchTimer) clearTimeout(ppState.searchTimer);
+  if (q.length < 2) {
+    document.getElementById('ppStatus').textContent = q.length === 0 ? '' : 'Digite ao menos 2 caracteres…';
+    if (q.length === 0) document.getElementById('ppResults').innerHTML = '';
+    return;
+  }
+  ppState.searchTimer = setTimeout(() => searchProdutosFree(q), 250);
+}
+
+async function searchProdutosFree(q) {
+  const statusEl = document.getElementById('ppStatus');
+  const resultsEl = document.getElementById('ppResults');
+  statusEl.textContent = 'Buscando…';
+
+  if (ppState.searchAbort) ppState.searchAbort.abort();
+  const ctrl = new AbortController();
+  ppState.searchAbort = ctrl;
+
+  try {
+    const res = await fetch('/api/produtos/search?q=' + encodeURIComponent(q) + '&limit=20', {
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      statusEl.innerHTML = `<span style="color:var(--error)">${esc(body.detail || 'Erro HTTP ' + res.status)}</span>`;
+      return;
+    }
+    const data = await res.json();
+    const results = data.results || [];
+    if (!results.length) {
+      statusEl.textContent = 'Nenhum produto encontrado.';
+      resultsEl.innerHTML = '';
+      return;
+    }
+    statusEl.textContent = `${results.length} produto(s) encontrado(s).`;
+    renderProductCandidates(resultsEl, results, { section: null, preselectFirst: false });
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    statusEl.innerHTML = `<span style="color:var(--error)">${esc(err.message || 'Falha na busca')}</span>`;
+  }
+}
+
+function renderProductCandidates(resultsEl, list, opts) {
+  const { section, preselectFirst } = opts;
+  if (!list.length) { resultsEl.innerHTML = ''; return; }
+  const header = section
+    ? `<div style="padding:6px 12px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)">${esc(section)}</div>`
+    : '';
+  resultsEl.innerHTML = header + list.map(p => `
+    <div class="dir-row" onclick="selectProdutoRow('${escJs(p.fire_produto_id)}', '${escJs(p.fire_codigo || '')}', '${escJs(p.fire_nome || '')}', '${escJs(p.fire_ean || '')}')"
+         data-fire-produto-id="${esc(p.fire_produto_id)}">
+      <div style="flex:1; min-width:0">
+        <div style="font-size:13px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">
+          ${esc(p.fire_nome || '(sem nome)')}
+        </div>
+        <div style="font-size:11px; color:var(--text-muted); font-family: ui-monospace, 'SF Mono', monospace">
+          ${esc(p.fire_codigo || '—')} &middot; EAN ${esc(p.fire_ean || '—')}
+        </div>
+      </div>
+    </div>
+  `).join('');
+  if (preselectFirst && list[0]) {
+    selectProdutoRow(list[0].fire_produto_id, list[0].fire_codigo || '', list[0].fire_nome || '', list[0].fire_ean || '');
+  }
+}
+
+function selectProdutoRow(fireProdutoId, codigo, nome, ean) {
+  ppState.selected = { fire_produto_id: fireProdutoId, fire_codigo: codigo, fire_nome: nome, fire_ean: ean };
+  document.querySelectorAll('#ppResults .dir-row').forEach(el => {
+    if (el.dataset.fireProdutoId === String(fireProdutoId)) {
+      el.style.background = 'var(--accent-bg)';
+      el.style.color = 'var(--accent-hover)';
+    } else {
+      el.style.background = '';
+      el.style.color = '';
+    }
+  });
+  document.getElementById('ppSelInfo').textContent = `Selecionado: ${codigo} · ${nome}`;
+  document.getElementById('ppConfirmBtn').disabled = false;
+}
+
+async function confirmProductLink() {
+  if (!ppState.selected || ppState.itemIndex == null || !currentPreview) return;
+  const btn = document.getElementById('ppConfirmBtn');
+  const statusEl = document.getElementById('ppStatus');
+  const importId = currentPreview.preview_id;
+  const itemIndex = ppState.itemIndex;
+  const fireProdutoId = ppState.selected.fire_produto_id;
+  btn.disabled = true;
+  const prev = btn.innerHTML;
+  btn.innerHTML = '<span class="spin"></span> Vinculando…';
+  try {
+    const resp = await api('/api/imported/' + encodeURIComponent(importId) + '/vincular-produto', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_index: itemIndex, fire_produto_id: fireProdutoId }),
+    });
+    closeProductPicker();
+    if (currentPreview) {
+      currentPreview.check = resp.check;
+      renderPreview(currentPreview);
+    }
+    if (window.appShell?.showSuccess) {
+      window.appShell.showSuccess('Vínculo criado — vai casar sozinho da próxima vez');
+    }
+  } catch (err) {
+    btn.disabled = false;
+    btn.innerHTML = prev;
+    const msg = err.message || 'Falha ao criar vínculo';
+    statusEl.innerHTML = `<span style="color:var(--error)">${esc(msg)}</span>`;
+    if (window.appShell?.showError) window.appShell.showError(msg);
+  }
+}
+
 /* ── Utils ── */
 async function api(url, opts) {
   const res = await fetch(url, opts);
@@ -1808,8 +2017,14 @@ function renderPreview(data) {
   if (!items.length) {
     tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:28px 14px;color:var(--text-muted)">Sem itens reconhecidos.</td></tr>`;
   } else {
+    // isCommitted: vincular-produto (e o override de cliente) só existem em
+    // pedidos já persistidos via /api/imported/{id} — numa preview ainda não
+    // commitada (sem data.portal_status) o import_id não resolve no repo, e
+    // o botão "Vincular" ficaria quebrado (404). Mesmo gate do client picker.
+    const isCommitted = !!data.portal_status;
+
     const byGroup = new Map();
-    items.forEach(it => {
+    items.forEach((it, idx) => {
       let key = 'default', label = h.customer_name || 'Pedido';
       if (it.delivery_cnpj && it.delivery_cnpj !== h.customer_cnpj) {
         key = 'cnpj:' + it.delivery_cnpj;
@@ -1819,7 +2034,10 @@ function renderPreview(data) {
         label = it.delivery_name;
       }
       if (!byGroup.has(key)) byGroup.set(key, { label, items: [] });
-      byGroup.get(key).items.push(it);
+      // idx aqui É o índice no array flat data.items — o mesmo que o backend
+      // usa como order.items[item_index] em /vincular-produto. Não é o índice
+      // de exibição (que é por grupo) — precisa viajar junto com o item.
+      byGroup.get(key).items.push({ it, idx });
     });
 
     const rows = [];
@@ -1828,7 +2046,7 @@ function renderPreview(data) {
       if (multi) {
         rows.push(`<tr class="group-row"><td colspan="8">${esc(label)}</td></tr>`);
       }
-      for (const it of gitems) {
+      for (const { it, idx } of gitems) {
         const deliv = [it.delivery_name, it.delivery_date].filter(Boolean).join(' · ');
         const m = _checkOf(it);
         let cell;
@@ -1837,12 +2055,30 @@ function renderPreview(data) {
         } else if (!check.available) {
           cell = '<span style="color:var(--text-muted)" title="check indisponível">—</span>';
         } else if (!m || !m.match) {
-          cell = '<span style="color:var(--error);font-weight:600" title="sem match no Fire">✗</span>';
+          const linkBtn = isCommitted
+            ? ` <button class="btn btn-sm" onclick="openProductPicker(${idx})" style="margin-left:6px;padding:1px 8px;font-size:10px;line-height:1.5">Vincular</button>`
+            : '';
+          cell = `<span style="color:var(--error);font-weight:600" title="sem match no Fire">✗</span>${linkBtn}`;
         } else {
           const ps = m.price_status;
           const idTitle = `#${m.fire_product_id} · ${m.fire_description || ''} · via ${m.match_source}`;
+          // NOTA(de-para): "revincular" (abaixo) cobre o caso de vínculo errado —
+          // reabre o picker e o upsert em produto_depara é last-write-wins em
+          // (client_key, chave_tipo, chave_valor), então religar sobrescreve o
+          // vínculo ruim pelo certo. Um unlink de verdade (remover o vínculo via
+          // DELETE /api/produtos/depara/{id}) continua um follow-up: o payload do
+          // check não carrega o id da linha produto_depara (só chave_tipo/valor
+          // no vincular, sem id numérico em check.items). Ver task-9-report.md.
+          const isDepara = m.match_source === 'depara';
+          const okTitle = isDepara ? `${idTitle} · casado por vínculo que você criou` : idTitle;
+          const reLink = (isDepara && isCommitted)
+            ? ` <a href="#" onclick="event.preventDefault(); openProductPicker(${idx})" style="font-size:11px;color:var(--text-muted);margin-left:6px">revincular</a>`
+            : '';
+          const okBadge = isDepara
+            ? `<span style="color:var(--accent);font-weight:600" title="${esc(okTitle)}">✓ vínculo</span>${reLink}`
+            : `<span style="color:var(--success);font-weight:600" title="${esc(okTitle)}">✓</span>`;
           if (ps === 'match') {
-            cell = `<span style="color:var(--success);font-weight:600" title="${esc(idTitle)}">✓</span>`;
+            cell = okBadge;
           } else if (ps === 'mismatch') {
             const fp = m.fire_preco_venda != null ? fmtBRL(m.fire_preco_venda) : '?';
             cell = `<span style="color:var(--error);font-weight:600"
@@ -1854,7 +2090,7 @@ function renderPreview(data) {
             cell = `<span style="color:var(--error);font-weight:600"
                      title="${esc(idTitle)} · pedido sem preço">✗ pedido sem preço</span>`;
           } else {
-            cell = `<span style="color:var(--success);font-weight:600" title="${esc(idTitle)}">✓</span>`;
+            cell = okBadge;
           }
         }
         rows.push(`

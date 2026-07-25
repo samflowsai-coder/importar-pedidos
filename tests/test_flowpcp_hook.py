@@ -33,37 +33,25 @@ def _sem_depara(monkeypatch) -> None:
 def test_push_skips_when_env_not_flowpcp(monkeypatch):
     # flowpcp_config_for_slug devolve None quando o env não tem FlowPCP / disabled.
     monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: None)
-
-    def _boom(**_kw):
-        raise AssertionError("não deveria construir o client para env sem flowpcp")
-
-    monkeypatch.setattr(hook, "FlowPCPClient", _boom)
     assert hook.push_new_order(_order(), import_id="imp-1", slug="nasmar") is False
 
 
-def test_push_exports_when_enabled(monkeypatch):
+def test_push_enqueues_when_enabled(monkeypatch):
     monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: _CFG)
     _sem_depara(monkeypatch)
-    fake_client = MagicMock()
-    monkeypatch.setattr(hook, "FlowPCPClient", lambda **_kw: fake_client)
     fake_exporter = MagicMock()
-    fake_exporter.export.return_value = True
-    monkeypatch.setattr(hook, "FlowPCPExporter", lambda client, *, tenant_id: fake_exporter)
+    fake_exporter.enqueue.return_value = True
+    monkeypatch.setattr(hook, "FlowPCPExporter", lambda *, tenant_id: fake_exporter)
 
     assert hook.push_new_order(_order(), import_id="imp-1", slug="mm") is True
-    fake_exporter.export.assert_called_once()
-    _, kwargs = fake_exporter.export.call_args
+    _, kwargs = fake_exporter.enqueue.call_args
     assert kwargs["import_id"] == "imp-1"
-    fake_client.close.assert_called_once()
 
 
 def test_push_swallows_errors_best_effort(monkeypatch):
     monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: _CFG)
     _sem_depara(monkeypatch)
-    monkeypatch.setattr(hook, "FlowPCPClient", lambda **_kw: MagicMock())
     boom = MagicMock()
-    boom.export.side_effect = RuntimeError("kaboom")
-    monkeypatch.setattr(hook, "FlowPCPExporter", lambda client, *, tenant_id: boom)
-
-    # Não pode propagar — o send-to-fire já teve sucesso.
+    boom.enqueue.side_effect = RuntimeError("kaboom")
+    monkeypatch.setattr(hook, "FlowPCPExporter", lambda *, tenant_id: boom)
     assert hook.push_new_order(_order(), import_id="imp-1", slug="mm") is False
