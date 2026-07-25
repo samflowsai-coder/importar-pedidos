@@ -60,6 +60,18 @@ API pública para páginas-filho:
 - `POST /api/imported/{id}/ack-sem-preco` → operador confirma itens sem preço cadastrado no Fire (`require_user`).
   Body vazio. Pre: `portal_status='parsed'`. Re-roda check, persiste lista
   em `imports.sem_preco_ack_*`, audit `sem_preco_acknowledged`. 503 se Fire offline.
+- `GET /api/produtos/search?q=&limit=` → busca na cópia local do catálogo
+  (`catalogo_fire`, zero Firebird — funciona offline). Min 2 chars; clamp
+  `limit` em [1, 50]. Requer auth. Base para o picker de de-para (ranking em
+  Task 7).
+- `POST /api/imported/{id}/vincular-produto` body `{item_index, fire_produto_id}`
+  → grava o vínculo de-para (código e/ou EAN do item → produto do Fire) em
+  `produto_depara`, audita (`produto_vinculo_criado`) e re-roda `check_order`.
+  Só permitido em `portal_status='parsed'`. 422 se produto não existir no
+  catálogo local ou item sem código nem EAN.
+- `DELETE /api/produtos/depara/{depara_id}` → desfaz um vínculo. Log direto
+  via `logger.info` (não `audit_log` — `import_id` é `NOT NULL` com FK pra
+  `imports`, e o undo não tem um import associado).
 - Guards de preço em `_send_one_to_fire` / `_export_one_xlsx`: re-roda
   `check_order` + `is_blocking`; bloqueia 409 com audit `send_to_fire_blocked` /
   `xlsx_export_blocked` quando há mismatch / no_order_price / no_price_unacked.
@@ -83,7 +95,10 @@ API pública para páginas-filho:
 
 ## Testes
 - `tests/test_web_server.py` — inclui o push FlowPCP no send-to-fire
-  (`test_send_to_fire_pushes_to_flowpcp_for_env_with_slug` / `_skips_flowpcp_without_env`).
+  (`test_send_to_fire_pushes_to_flowpcp_for_env_with_slug` / `_skips_flowpcp_without_env`)
+  e as rotas de de-para de produto (`test_produtos_search_local`,
+  `test_vincular_produto_persiste`, `test_vincular_rejects_wrong_status`,
+  `test_delete_depara_desfaz`).
 - `tests/test_flowpcp_hook.py` — `push_new_order` (gating MM + best-effort).
 - `tests/test_preview_cache.py`
 - `tests/test_firebird_config_api.py` — endpoints `/api/firebird/*`, redirect legacy, gating por role.

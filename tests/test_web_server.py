@@ -535,7 +535,9 @@ def _stub_fire_success(monkeypatch):
     )
     # Neutraliza price-check (sem Fire real) — deterministico.
     monkeypatch.setattr("app.erp.product_check.check_order", lambda order, env=None: {})
-    monkeypatch.setattr("app.erp.product_check.is_blocking", lambda check, ack_items=None: (False, {}))
+    monkeypatch.setattr(
+        "app.erp.product_check.is_blocking", lambda check, ack_items=None: (False, {})
+    )
 
 
 def test_send_to_fire_pushes_to_flowpcp_for_env_with_slug(monkeypatch, tmp_path):
@@ -553,9 +555,7 @@ def test_send_to_fire_pushes_to_flowpcp_for_env_with_slug(monkeypatch, tmp_path)
     monkeypatch.setattr(server, "push_new_order", spy)
 
     cfg = {"output_dir": str(tmp_path), "export_mode": "db"}
-    outcome = server._send_one_to_fire(
-        entry_id, cfg, request_env={"id": "e1", "slug": "mm"}
-    )
+    outcome = server._send_one_to_fire(entry_id, cfg, request_env={"id": "e1", "slug": "mm"})
 
     assert outcome.ok
     spy.assert_called_once()
@@ -1663,13 +1663,15 @@ def test_export_xlsx_dispara_push_flowpcp(monkeypatch, tmp_path):
 
     # Env fake não tem Firebird — stub do price-check (não é o que se testa aqui).
     monkeypatch.setattr(
-        pc_mod, "check_order",
+        pc_mod,
+        "check_order",
         lambda order, **kw: {"available": False, "items": [], "summary": {}},
     )
 
     pushes: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        server_mod, "push_new_order",
+        server_mod,
+        "push_new_order",
         lambda order, *, import_id, slug: pushes.append((import_id, slug)) or True,
     )
 
@@ -1689,10 +1691,161 @@ def test_export_xlsx_sem_ambiente_nao_chama_push(monkeypatch, tmp_path):
 
     pushes = []
     monkeypatch.setattr(
-        server_mod, "push_new_order",
+        server_mod,
+        "push_new_order",
         lambda order, *, import_id, slug: pushes.append(slug) or True,
     )
     cfg = {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx"}
     out = server_mod._export_one_xlsx(entry_id, cfg, request_env=None)
     assert out.ok
     assert pushes == []
+
+
+# ── De-para de produto: busca local, vínculo, undo ────────────────────────
+
+
+def _seed_catalogo_fire(rows: list[dict]) -> None:
+    """rows: [{"fire_produto_id", "codigo", "nome", "ean", "unidade"?, "ativo"?, "tipo"?}]."""
+    from app.erp.catalog_extract import ProdutoFireDTO
+    from app.persistence import catalogo_fire_repo, db
+
+    dtos = [
+        ProdutoFireDTO(
+            fire_produto_id=r["fire_produto_id"],
+            codigo=r["codigo"],
+            nome=r["nome"],
+            unidade=r.get("unidade", "PAR"),
+            ean=r.get("ean"),
+            ativo=r.get("ativo", True),
+            tipo=r.get("tipo", "simples"),
+        )
+        for r in rows
+    ]
+    with db.connect() as conn:
+        catalogo_fire_repo.replace_all(conn, dtos, extraido_em="2026-07-25T00:00:00")
+
+
+def _seed_parsed_import_with_item(entry_id: str, *, item: dict, customer_cnpj: str) -> None:
+    from datetime import datetime
+
+    from app.persistence import repo
+
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "pedido.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "DP-1",
+            "customer": "ACME",
+            "customer_cnpj": customer_cnpj,
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {
+                "header": {
+                    "order_number": "DP-1",
+                    "customer_name": "ACME",
+                    "customer_cnpj": customer_cnpj,
+                },
+                "items": [item],
+                "source_file": "",
+            },
+        }
+    )
+
+
+def test_produtos_search_local():
+    _seed_catalogo_fire(
+        [{"fire_produto_id": "10", "codigo": "10", "nome": "TENIS AZUL", "ean": "789"}]
+    )
+    r = client.get("/api/produtos/search?q=azul")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert any(p["fire_codigo"] == "10" for p in body["results"])
+    assert any(p["fire_nome"] == "TENIS AZUL" for p in body["results"])
+
+
+def test_produtos_search_requires_min_length():
+    r = client.get("/api/produtos/search?q=a")
+    assert r.status_code == 400
+
+
+def test_vincular_produto_persiste():
+    import uuid
+
+    from app.persistence import catalogo_fire_repo, db, produto_depara_repo
+
+    entry_id = str(uuid.uuid4())
+    cnpj = "11.222.333/0001-44"
+    _seed_parsed_import_with_item(
+        entry_id,
+        item={
+            "description": "TENIS SEM MATCH",
+            "quantity": 1.0,
+            "product_code": "ABC123",
+            "ean": "789",
+        },
+        customer_cnpj=cnpj,
+    )
+    _seed_catalogo_fire(
+        [{"fire_produto_id": "10", "codigo": "10", "nome": "TENIS AZUL", "ean": "789"}]
+    )
+
+    r = client.post(
+        f"/api/imported/{entry_id}/vincular-produto",
+        json={"item_index": 0, "fire_produto_id": "10"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["entry_id"] == entry_id
+    assert "check" in body
+    chaves = {(v["chave_tipo"], v["chave_valor"]) for v in body["vinculos"]}
+    assert ("codigo", "ABC123") in chaves
+    assert ("ean", "789") in chaves
+
+    with db.connect() as conn:
+        resolved = produto_depara_repo.lookup(conn, cnpj, codigos=["ABC123"], eans=["789"])
+    assert resolved[("codigo", "ABC123")]["fire_produto_id"] == "10"
+    assert resolved[("codigo", "ABC123")]["fire_codigo"] == "10"
+    assert resolved[("ean", "789")]["fire_produto_id"] == "10"
+
+    # sanity: catalogo_fire copy used to resolve the target product is present.
+    with db.connect() as conn:
+        assert any(p["fire_produto_id"] == "10" for p in catalogo_fire_repo.list_all(conn))
+
+
+def test_vincular_rejects_wrong_status():
+    entry_id = _seed_parsed_entry(portal_status="cancelled")
+    r = client.post(
+        f"/api/imported/{entry_id}/vincular-produto",
+        json={"item_index": 0, "fire_produto_id": "10"},
+    )
+    assert r.status_code == 409
+
+
+def test_delete_depara_desfaz():
+    from datetime import datetime
+
+    from app.persistence import db, produto_depara_repo
+
+    cnpj = "11.222.333/0001-44"
+    with db.connect() as conn:
+        produto_depara_repo.upsert(
+            conn,
+            cliente_cnpj=cnpj,
+            chave_tipo="codigo",
+            chave_valor="ABC123",
+            fire_produto_id="10",
+            fire_codigo="10",
+            fire_ean="789",
+            fire_nome="TENIS AZUL",
+            criado_em=datetime.now().isoformat(timespec="seconds"),
+            criado_por="test@portal.local",
+        )
+        dep_id = produto_depara_repo.list_for_client(conn, cnpj)[0]["id"]
+
+    r = client.delete(f"/api/produtos/depara/{dep_id}")
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == dep_id
+
+    with db.connect() as conn:
+        assert produto_depara_repo.list_for_client(conn, cnpj) == []
