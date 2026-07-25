@@ -128,6 +128,23 @@ CREATE TABLE IF NOT EXISTS clientes_fire (
     ativo           INTEGER NOT NULL DEFAULT 1,
     extraido_em     TEXT NOT NULL
 );
+
+-- De-para de produto por cliente: a referência do varejista que não casa no
+-- Fire vira um vínculo persistente (feito uma vez, lembrado para sempre).
+-- Chaveado por CNPJ do cliente para não colidir entre varejistas.
+CREATE TABLE IF NOT EXISTS produto_depara (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    cliente_cnpj    TEXT NOT NULL,
+    chave_tipo      TEXT NOT NULL,   -- 'codigo' | 'ean'
+    chave_valor     TEXT NOT NULL,   -- normalizado
+    fire_produto_id TEXT NOT NULL,
+    fire_codigo     TEXT NOT NULL,
+    fire_ean        TEXT,
+    fire_nome       TEXT NOT NULL,
+    criado_em       TEXT NOT NULL,
+    criado_por      TEXT,
+    UNIQUE (cliente_cnpj, chave_tipo, chave_valor)
+);
 """
 
 INDEXES_SQL = """
@@ -152,6 +169,8 @@ CREATE INDEX IF NOT EXISTS idx_outbox_import_id ON outbox(import_id, created_at 
 CREATE INDEX IF NOT EXISTS idx_imports_fire_poll
     ON imports(portal_status, production_status, fire_status_polled_at)
     WHERE fire_codigo IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_depara_cliente ON produto_depara(cliente_cnpj);
 """
 
 # Cada entrada: (table, column_name, ALTER TABLE DDL) — aplicada só se a coluna ainda não existir.
