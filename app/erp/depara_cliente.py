@@ -24,7 +24,11 @@ from app.utils.logger import logger
 
 @dataclass(frozen=True)
 class ResolucaoCliente:
-    """Resultado do de-para. `resolvido=False` ⇒ o chamador mantém a revenda."""
+    """Resultado do de-para. `resolvido=False` ⇒ o chamador mantém a revenda.
+
+    `motivo` ∈ `ok | sem_chave | nao_encontrado | ambiguo | sem_cnpj |
+    config_invalida | erro_conexao`.
+    """
 
     resolvido: bool
     cnpj: str | None = None
@@ -88,7 +92,7 @@ def resolver_cliente_real(chave: str | None, *, revenda_slug: str) -> ResolucaoC
 
 
 def _decidir(rows: list) -> ResolucaoCliente:
-    """Regra pura: só resolve com UM CNPJ distinto entre os hits.
+    """Regra pura: só resolve com UM CNPJ distinto, válido, entre os hits.
 
     Vários pedidos podem dividir o mesmo PEDIDO_CLIENTE na revenda (2 a 4 é
     comum) — isso não é ambiguidade enquanto apontarem pro mesmo CNPJ.
@@ -103,8 +107,14 @@ def _decidir(rows: list) -> ResolucaoCliente:
         return ResolucaoCliente(False, motivo="ambiguo", pedidos_no_4=pedidos)
 
     cnpj = next(iter(cnpjs))
-    if not cnpj:
-        return ResolucaoCliente(False, motivo="ambiguo", pedidos_no_4=pedidos)
+    # CADASTRO.CPF_CNPJ é campo legado: linhas com "ISENTO", "0" ou cadastro
+    # meio digitado passam batidas no dígitos-only e o Flow rejeita (400) —
+    # length 11 (CPF) ou 14 (CNPJ) é o único formato que o contrato aceita.
+    # Isso também cobre o caso de CNPJ em branco num match único (antes
+    # reportado como "ambiguo", o que não fazia sentido para 1 hit só).
+    if len(cnpj) not in (11, 14):
+        logger.warning(f"depara_cliente: CPF_CNPJ inválido ({cnpj!r}) na revenda — sem_cnpj")
+        return ResolucaoCliente(False, motivo="sem_cnpj", pedidos_no_4=pedidos)
 
     primeira = rows[0]
     nome = (primeira[5] or "").strip() or (primeira[4] or "").strip() or None

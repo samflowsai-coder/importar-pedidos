@@ -108,7 +108,11 @@ dá o CNPJ.
 
 - Resolve só com **um CNPJ distinto** entre os hits. Várias linhas com o mesmo
   CNPJ é normal e resolve; CNPJs diferentes = `ambiguo` → mantém a revenda.
-- `motivo` ∈ `ok | sem_chave | nao_encontrado | ambiguo | config_invalida | erro_conexao`.
+- `motivo` ∈ `ok | sem_chave | nao_encontrado | ambiguo | sem_cnpj | config_invalida | erro_conexao`.
+  `sem_cnpj`: CNPJ resolvido não tem 11 (CPF) ou 14 (CNPJ) dígitos — `CADASTRO.CPF_CNPJ`
+  legado às vezes guarda `"ISENTO"`, `"0"` ou cadastro incompleto. Aceitar qualquer
+  string não-vazia derrubaria o push (o Flow rejeita `cnpj` fora de 11–18 chars com
+  400) — pior que subir como revenda.
 - Cache de processo só para resolução positiva (`limpar_cache()` nos testes).
 - **Produto nunca vem da revenda** — só o cliente. O `.7` segue sendo a fonte
   de produto/preço.

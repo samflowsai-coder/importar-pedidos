@@ -128,6 +128,29 @@ def test_cnpjs_diferentes_e_ambiguo(fake_fire):
     assert r.cnpj is None
 
 
+@pytest.mark.parametrize("cpf_cnpj_bruto", ["ISENTO", "0", "", "   ", "12.345.678/0001"])
+def test_cnpj_malformado_vira_sem_cnpj_nao_derruba_push(fake_fire, cpf_cnpj_bruto):
+    """CADASTRO.CPF_CNPJ legado às vezes tem lixo ('ISENTO', '0', meio digitado).
+    Antes disso, QUALQUER string não-vazia resolvia — e um CNPJ curto demais
+    (ex: '0') é rejeitado pelo contrato do Flow (400), o que faz o push
+    inteiro cair pro outbox e morrer na dead letter. Uma falha estrita aqui é
+    pior que o fallback desenhado (subir como revenda)."""
+    linha = (301, "FATURADO", 9001, 55, "CLIENTE X", "CLIENTE X LTDA", cpf_cnpj_bruto)
+    fake_fire([linha])
+    r = dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    assert r.resolvido is False
+    assert r.motivo == "sem_cnpj"
+    assert r.cnpj is None
+
+
+def test_cpf_valido_11_digitos_resolve(fake_fire):
+    linha = (301, "FATURADO", 9001, 55, "PESSOA FISICA", "", "123.456.789-01")
+    fake_fire([linha])
+    r = dc.resolver_cliente_real("AF066", revenda_slug="nasmar")
+    assert r.resolvido is True
+    assert r.cnpj == "12345678901"
+
+
 def test_zero_hits_e_nao_encontrado(fake_fire):
     fake_fire([])
     r = dc.resolver_cliente_real("PULMÃO", revenda_slug="nasmar")
