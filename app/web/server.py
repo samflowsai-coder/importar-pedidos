@@ -1855,6 +1855,20 @@ def _export_one_xlsx(
         )
 
     with with_trace_id(entry.get("trace_id")):
+        # Enriquecer com a identidade do Fire onde há vínculo de-para (SQLite local).
+        from app.erp import depara_apply
+        from app.persistence import db
+
+        try:
+            with db.connect() as sconn:
+                dep_changed = depara_apply.apply(order, conn=sconn)
+            if dep_changed:
+                repo.append_audit(import_id, "depara_aplicado_no_xls", {"itens": dep_changed})
+        except Exception as exc:  # noqa: BLE001 — enriquecimento é best-effort; XLS não pode falhar por isso
+            from app.utils.logger import logger
+
+            logger.warning(f"de-para apply pulado no export: {type(exc).__name__}: {exc}")
+
         output_path = Path(cfg["output_dir"]).expanduser().resolve()
         output_path.mkdir(parents=True, exist_ok=True)
         paths = ERPExporter().export(order, str(output_path))
