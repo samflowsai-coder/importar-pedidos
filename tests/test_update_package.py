@@ -236,3 +236,32 @@ def test_cap_de_membros_dispara_sem_chamar_testzip(tmp_path, monkeypatch):
             _pyproject(tmp_path / "pp", ["fastapi"]),
             update_id="u1",
         )
+
+
+def _manifest_with(**extra) -> bytes:
+    base = json.loads(_valid_manifest())
+    base.update(extra)
+    return json.dumps(base).encode()
+
+
+def test_notes_extraido_do_manifest(tmp_path):
+    m = _base_members()
+    m["portal-pedidos/manifest.json"] = _manifest_with(notes="corrige o match de produto")
+    res = pkg.validate_and_stage(
+        _make_zip(tmp_path, m),
+        tmp_path / "st",
+        _pyproject(tmp_path / "pp", ["fastapi"]),
+        update_id="u1",
+    )
+    assert res.notes == "corrige o match de produto"
+
+
+def test_notes_ausente_vira_string_vazia(tmp_path):
+    # _valid_manifest() não tem o campo notes — pacotes antigos continuam válidos.
+    res = pkg.validate_and_stage(
+        _make_zip(tmp_path, _base_members()),
+        tmp_path / "st",
+        _pyproject(tmp_path / "pp", ["fastapi"]),
+        update_id="u2",
+    )
+    assert res.notes == ""

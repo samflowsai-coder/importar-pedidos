@@ -80,13 +80,27 @@ norm = "\n".join(sorted(d.strip() for d in deps if d.strip()))
 print(hashlib.sha256(norm.encode()).hexdigest())
 PY
 )"
+# notes: resumo em linguagem natural do que a versao corrige. Vem de
+# RELEASE_NOTES.txt na raiz (opcional) — o dev escreve antes de buildar. JSON
+# ja com aspas/escape (json.dumps), string vazia se o arquivo nao existir.
+NOTES_JSON="$(python3 - "$ROOT/RELEASE_NOTES.txt" <<'PY'
+import sys, json, os
+p = sys.argv[1]
+txt = ""
+if os.path.exists(p):
+    with open(p, encoding="utf-8") as f:
+        txt = f.read().strip()
+print(json.dumps(txt[:4000]))
+PY
+)"
 cat > "$STAGE/manifest.json" <<JSON
 {
   "name": "portal-pedidos",
   "version": "$STAMP_HHMM",
   "built_at": "$BUILT_AT",
   "git_commit": "$GIT_COMMIT",
-  "deps_sha256": "$DEPS_SHA"
+  "deps_sha256": "$DEPS_SHA",
+  "notes": $NOTES_JSON
 }
 JSON
 

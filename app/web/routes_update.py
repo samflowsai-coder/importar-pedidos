@@ -137,6 +137,7 @@ async def upload(file: UploadFile = File(...), _=Depends(require_admin)):
             "update_id": res.update_id, "version": res.version,
             "git_commit": res.git_commit, "built_at": res.built_at,
             "files_count": res.files_count, "deps_changed": res.deps_changed,
+            "notes": res.notes,
             "current_version": _current_version(),
         }
     finally:

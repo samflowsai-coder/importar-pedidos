@@ -334,6 +334,62 @@ def test_preview_pending_uses_selected_environment_watch_dir(tmp_path, monkeypat
     assert r.json()["header"]["order_number"] == "2600009562"
 
 
+def test_config_reflete_firebird_do_ambiente_ativo(tmp_path):
+    from app.persistence import environments_repo
+
+    env = environments_repo.create(
+        slug="mmfire", name="MM Americanense",
+        watch_dir=str(tmp_path / "w"), output_dir=str(tmp_path / "o"),
+        fb_path="/srv/mm.fdb",
+    )
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.get("/api/config")
+    finally:
+        client.cookies.clear()
+    assert r.status_code == 200
+    body = r.json()
+    assert body["firebirdConfigured"] is True
+    assert body["environment"]["name"] == "MM Americanense"
+    assert body["environment"]["slug"] == "mmfire"
+    assert body["watchDir"] == str(tmp_path / "w")
+
+
+def test_config_ambiente_sem_fire_reporta_sem_banco(tmp_path):
+    from app.persistence import environments_repo
+
+    env = environments_repo.create(
+        slug="nofire", name="Sem Fire",
+        watch_dir=str(tmp_path / "w"), output_dir=str(tmp_path / "o"),
+        fb_path="",
+    )
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.get("/api/config")
+    finally:
+        client.cookies.clear()
+    assert r.status_code == 200
+    body = r.json()
+    assert body["firebirdConfigured"] is False
+    assert body["environment"]["name"] == "Sem Fire"
+
+
+def test_html_pages_sao_no_cache():
+    # Sem isso o browser servia o HTML antigo pós-deploy (mudança de UI só com
+    # hard-reload). no-cache força revalidação → o HTML novo é pego sozinho.
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "text/html" in r.headers.get("content-type", "")
+    assert r.headers.get("cache-control") == "no-cache"
+
+
+def test_static_assets_nao_sao_no_cache():
+    # Os assets seguem cacheáveis — o cache-bust deles é o ?v=N no HTML.
+    r = client.get("/static/js/shell.js")
+    assert r.status_code == 200
+    assert r.headers.get("cache-control") != "no-cache"
+
+
 def test_preview_pending_rejects_missing_file(tmp_path, monkeypatch):
     from app import config as app_config
 

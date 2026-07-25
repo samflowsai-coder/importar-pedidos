@@ -50,6 +50,23 @@ def test_insert_and_get_roundtrip(sqlite_tmp):
     assert got["fire_codigo"] == 99
     assert got["output_files"][0]["name"] == "out.xlsx"
     assert got["db_result"]["items_inserted"] == 3
+
+
+def test_update_fire_metadata_persists_check(sqlite_tmp):
+    # Após um vínculo de-para, o check fresco é regravado no pedido para o
+    # re-open/badge refletirem o novo match (senão rehydrate lê o check antigo).
+    e = _entry()
+    repo.insert_import(e)
+    fresh = {
+        "available": True,
+        "items": [{"product_code": "REF-X", "match": True, "match_source": "depara"}],
+        "summary": {"items_total": 1, "items_matched": 1, "items_missing": 0},
+    }
+    repo.update_fire_metadata(e["id"], check=fresh)
+    got = repo.get_import(e["id"])
+    assert got["check"] == fresh
+    # não mexe nos outros campos
+    assert got["order_number"] == "12345"
     assert got["snapshot"]["header"]["order_number"] == "12345"
     assert got["production_status"] == "none"
 
