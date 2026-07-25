@@ -34,6 +34,8 @@ _PUBLIC_FIELDS = (
     "flowpcp_timezone", "flowpcp_dry_run", "flowpcp_poll_interval_s",
     "flowpcp_request_timeout_s", "flowpcp_catalogo_push",
     "flowpcp_catalogo_apenas_meias", "flowpcp_clientes_push",
+    # De-para de cliente intercompany (não-secreto).
+    "intercompany_cnpj", "intercompany_env_slug",
 )
 
 
@@ -249,6 +251,30 @@ def set_flowpcp_config(
     values = list(fields.values()) + [env_id]
     with router.shared_connect() as conn:
         conn.execute(f"UPDATE environments SET {sets} WHERE id = ?", values)
+    return get(env_id)
+
+
+def set_intercompany_config(
+    env_id: str, *, cnpj: str | None, revenda_slug: str | None
+) -> dict[str, Any] | None:
+    """Config do de-para de cliente intercompany.
+
+    `cnpj` é o CNPJ que DISPARA o de-para (a revenda que aparece como cliente,
+    ex: Nasmar) e é gravado só com dígitos. `revenda_slug` é o ambiente cujo
+    Firebird tem o vínculo. Qualquer um vazio desliga a feature.
+    """
+    from app.erp.cnpj import cnpj_digits
+
+    fields = {
+        "intercompany_cnpj": cnpj_digits(cnpj) or None,
+        "intercompany_env_slug": (revenda_slug or "").strip() or None,
+        "updated_at": _now(),
+    }
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with router.shared_connect() as conn:
+        conn.execute(
+            f"UPDATE environments SET {sets} WHERE id = ?", [*fields.values(), env_id]
+        )
     return get(env_id)
 
 
