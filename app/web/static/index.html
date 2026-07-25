@@ -1745,6 +1745,9 @@ async function confirmProductLink() {
       currentPreview.check = resp.check;
       renderPreview(currentPreview);
     }
+    // Backend regravou o check no pedido; recarrega a lista pra o badge
+    // "N sem match" refletir o vínculo sem precisar dar refresh manual.
+    loadImported();
     if (window.appShell?.showSuccess) {
       window.appShell.showSuccess('Vínculo criado — vai casar sozinho da próxima vez');
     }

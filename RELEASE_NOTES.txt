@@ -1,7 +1,5 @@
 O que muda nesta versão
 
-1) O vínculo de produto agora fica salvo ao reabrir o pedido. Antes, se você vinculasse um item sem correspondência e reabrisse o pedido, ele voltava a aparecer como sem match. Agora o vínculo continua valendo.
+1) Depois de aplicar uma atualização, as mudanças de tela aparecem sozinhas, sem precisar recarregar a página na mão.
 
-2) O indicador de banco no topo passou a mostrar a empresa ativa na sessão e o status do Firebird dela, em vez de um status genérico do sistema.
-
-3) Esta tela de atualização agora mostra um resumo do que cada versão corrige antes de aplicar (é o que você está lendo).
+2) Quando você vincula um produto, a contagem de "sem match" na lista de pedidos atualiza na hora, sem precisar dar refresh.

@@ -73,6 +73,21 @@ from app.web.middleware.environment import EnvironmentMiddleware  # noqa: E402
 
 app.add_middleware(EnvironmentMiddleware)
 
+
+@app.middleware("http")
+async def _no_cache_html(request: Request, call_next):
+    """Impede o browser de cachear as PÁGINAS HTML. Os assets em /static seguem
+    cacheáveis (o cache-bust deles é o ?v=N no <link>/<script>). Sem isso, após
+    um deploy o browser servia o HTML antigo — que ainda apontava pro ?v velho —
+    e as mudanças de UI só apareciam com hard-reload manual. `no-cache` faz o
+    browser revalidar com o servidor (304 quando não mudou), então o HTML novo
+    (com o ?v novo dos assets) é pego automaticamente."""
+    response = await call_next(request)
+    ctype = response.headers.get("content-type", "")
+    if ctype.startswith("text/html"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 # Ponte FlowPCP (Modelo B/OVERLAY): push best-effort do pedido novo após o
 # send-to-fire, só em ambientes com FlowPCP habilitado (MM).
 from app.integrations.flowpcp.hook import push_new_order  # noqa: E402

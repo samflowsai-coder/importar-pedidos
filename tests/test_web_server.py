@@ -374,6 +374,22 @@ def test_config_ambiente_sem_fire_reporta_sem_banco(tmp_path):
     assert body["environment"]["name"] == "Sem Fire"
 
 
+def test_html_pages_sao_no_cache():
+    # Sem isso o browser servia o HTML antigo pós-deploy (mudança de UI só com
+    # hard-reload). no-cache força revalidação → o HTML novo é pego sozinho.
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "text/html" in r.headers.get("content-type", "")
+    assert r.headers.get("cache-control") == "no-cache"
+
+
+def test_static_assets_nao_sao_no_cache():
+    # Os assets seguem cacheáveis — o cache-bust deles é o ?v=N no HTML.
+    r = client.get("/static/js/shell.js")
+    assert r.status_code == 200
+    assert r.headers.get("cache-control") != "no-cache"
+
+
 def test_preview_pending_rejects_missing_file(tmp_path, monkeypatch):
     from app import config as app_config
 
