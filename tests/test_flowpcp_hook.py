@@ -18,6 +18,18 @@ def _order() -> Order:
     )
 
 
+def _sem_depara(monkeypatch) -> None:
+    """Isola estes testes do de-para intercompany (Task 5).
+
+    Sem este mock, `push_new_order` chama `resolucao_para` de verdade, que
+    lê `environments_repo.get_by_slug` — ambiente real (`data/app_shared.db`)
+    fora do controle deste arquivo. Este módulo testa só o wiring do
+    FlowPCP em si; o comportamento do de-para tem cobertura própria em
+    `tests/test_flowpcp_intercompany.py`.
+    """
+    monkeypatch.setattr(hook, "resolucao_para", lambda order, *, slug: None)
+
+
 def test_push_skips_when_env_not_flowpcp(monkeypatch):
     # flowpcp_config_for_slug devolve None quando o env não tem FlowPCP / disabled.
     monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: None)
@@ -26,6 +38,7 @@ def test_push_skips_when_env_not_flowpcp(monkeypatch):
 
 def test_push_enqueues_when_enabled(monkeypatch):
     monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: _CFG)
+    _sem_depara(monkeypatch)
     fake_exporter = MagicMock()
     fake_exporter.enqueue.return_value = True
     monkeypatch.setattr(hook, "FlowPCPExporter", lambda *, tenant_id: fake_exporter)
@@ -37,6 +50,7 @@ def test_push_enqueues_when_enabled(monkeypatch):
 
 def test_push_swallows_errors_best_effort(monkeypatch):
     monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: _CFG)
+    _sem_depara(monkeypatch)
     boom = MagicMock()
     boom.enqueue.side_effect = RuntimeError("kaboom")
     monkeypatch.setattr(hook, "FlowPCPExporter", lambda *, tenant_id: boom)

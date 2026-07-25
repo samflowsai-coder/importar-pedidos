@@ -139,3 +139,121 @@ def test_nao_encontrado_incrementa_e_confirma_apos_5(tmp_env_db, monkeypatch):
         client.confirmar_reconciliacao.call_args.args[1].acao.value
         == "pedido_nao_encontrado_no_fire"
     )
+
+
+# ── Retry com a revenda (intercompany) no retorno Flow→Fire ──────────────────
+#
+# O outbound leva o cliente REAL pro Flow; o retorno (`decisao.cliente_cnpj`)
+# ecoa esse mesmo CNPJ. Mas o pedido em CAB_VENDAS na produção (.7) tem
+# CLIENTE = a revenda (ex: Nasmar) — é ela quem faturou. O primeiro UPDATE
+# (chave = cliente real) bate 0 rows sempre que o cliente real não existe
+# no .7 (comum) ou não tem esse PEDIDO_CLIENTE lá. Sem o retry, o pedido
+# nunca é achado e o Flow é informado (falsamente) que o pedido não existe.
+
+_CFG_INTERCOMPANY = FlowPCPConfig(
+    enabled=True,
+    base_url="x",
+    service_token="t",
+    tenant_id="mm",
+    intercompany_cnpj="34513679000134",
+)
+
+
+def test_retry_com_revenda_quando_primeira_chave_nao_bate(tmp_env_db, monkeypatch):
+    tmp_env_db.executescript(TABLES_SQL)
+    client = MagicMock()
+    chamadas = []
+
+    def fake_update(*a, **k):
+        chamadas.append(k["cliente_cnpj"])
+        return 1 if k["cliente_cnpj"] == "34513679000134" else 0
+
+    monkeypatch.setattr("app.integrations.flowpcp.poll_decisoes.update_dt_entrega", fake_update)
+
+    confirmou = processar_decisao(
+        _decisao(cliente_cnpj="10772208000182"),  # cliente real — não existe no .7
+        client=client,
+        fire_conn=MagicMock(),
+        conn=tmp_env_db,
+        config=_CFG_INTERCOMPANY,
+    )
+
+    assert confirmou is True
+    assert chamadas == ["10772208000182", "34513679000134"]  # real, depois revenda
+    assert (
+        client.confirmar_reconciliacao.call_args.args[1].acao.value == "data_atualizada"
+    )
+    # não pode ter contado como tentativa falha — o retry resolveu no mesmo poll
+    assert flowpcp_repo.get_attempts_count(tmp_env_db, "dec-1") == 0
+
+
+def test_primeira_chave_bate_nao_tenta_revenda(tmp_env_db, monkeypatch):
+    tmp_env_db.executescript(TABLES_SQL)
+    client = MagicMock()
+    chamadas = []
+
+    def fake_update(*a, **k):
+        chamadas.append(k["cliente_cnpj"])
+        return 1
+
+    monkeypatch.setattr("app.integrations.flowpcp.poll_decisoes.update_dt_entrega", fake_update)
+
+    processar_decisao(
+        _decisao(cliente_cnpj="10772208000182"),
+        client=client,
+        fire_conn=MagicMock(),
+        conn=tmp_env_db,
+        config=_CFG_INTERCOMPANY,
+    )
+
+    assert chamadas == ["10772208000182"]  # sem segunda tentativa
+
+
+def test_ambas_chaves_falham_conta_tentativa_normalmente(tmp_env_db, monkeypatch):
+    tmp_env_db.executescript(TABLES_SQL)
+    client = MagicMock()
+    chamadas = []
+
+    def fake_update(*a, **k):
+        chamadas.append(k["cliente_cnpj"])
+        return 0
+
+    monkeypatch.setattr("app.integrations.flowpcp.poll_decisoes.update_dt_entrega", fake_update)
+
+    confirmou = processar_decisao(
+        _decisao(cliente_cnpj="10772208000182"),
+        client=client,
+        fire_conn=MagicMock(),
+        conn=tmp_env_db,
+        config=_CFG_INTERCOMPANY,
+    )
+
+    assert confirmou is False
+    assert chamadas == ["10772208000182", "34513679000134"]
+    assert client.confirmar_reconciliacao.call_count == 0  # ainda tentando
+    assert flowpcp_repo.get_attempts_count(tmp_env_db, "dec-1") == 1
+
+
+def test_sem_intercompany_cnpj_nao_tenta_revenda(tmp_env_db, monkeypatch):
+    """Config sem intercompany_cnpj (feature desligada, ou ambiente MM sem
+    de-para configurado) — comportamento idêntico ao de antes desta task."""
+    tmp_env_db.executescript(TABLES_SQL)
+    client = MagicMock()
+    chamadas = []
+
+    def fake_update(*a, **k):
+        chamadas.append(k["cliente_cnpj"])
+        return 0
+
+    monkeypatch.setattr("app.integrations.flowpcp.poll_decisoes.update_dt_entrega", fake_update)
+
+    processar_decisao(
+        _decisao(cliente_cnpj="10772208000182"),
+        client=client,
+        fire_conn=MagicMock(),
+        conn=tmp_env_db,
+        config=CFG,  # sem intercompany_cnpj
+    )
+
+    assert chamadas == ["10772208000182"]  # nunca tenta a revenda
+    assert flowpcp_repo.get_attempts_count(tmp_env_db, "dec-1") == 1

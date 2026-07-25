@@ -7,10 +7,68 @@ aqui vira outbox/retry e nunca pode derrubar o fluxo de send-to-fire.
 
 from __future__ import annotations
 
+from app.erp.cnpj import cnpj_digits
+from app.erp.depara_cliente import ResolucaoCliente
 from app.integrations.flowpcp.config import flowpcp_config_for_slug
 from app.integrations.flowpcp.exporter import FlowPCPExporter
+from app.integrations.flowpcp.intercompany import resolucao_para
 from app.models.order import Order
+from app.persistence import repo
 from app.utils.logger import logger
+
+# Cap defensivo da lista auditada de `pedidos_no_4`. Uma chave genérica
+# hand-digitada na revenda (PULMÃO, AF, AW, GFNASMAR) pode casar centenas de
+# linhas — sem cap, cada push grava um blob JSON grande no audit. A contagem
+# real (`pedidos_no_4_total`) sempre é gravada; só a lista fica limitada.
+# Não mexe na query SQL: um LIMIT ali esconderia um segundo CNPJ e quebraria
+# a detecção de ambiguidade.
+_MAX_PEDIDOS_NO_4_AUDITADOS = 50
+
+
+def _resolucao_segura(order: Order, *, import_id: str, slug: str) -> ResolucaoCliente | None:
+    """Chama `resolucao_para` sob guard próprio — cinto e suspensório.
+
+    `resolucao_para` já nunca levanta (best-effort desde a leitura do
+    ambiente), mas `push_new_order` é o contrato que os call sites em
+    `app/web/server.py` dependem diretamente (chamado logo após o Fire/XLS já
+    ter tido sucesso). Este guard garante que o contrato se sustenta mesmo
+    que uma regressão futura reintroduza um caminho sem proteção lá dentro.
+    """
+    try:
+        return resolucao_para(order, slug=slug)
+    except Exception as exc:  # noqa: BLE001 — nunca pode derrubar o push
+        logger.warning(
+            f"intercompany: resolucao_para falhou (import={import_id} slug={slug}): {exc}"
+        )
+        return None
+
+
+def _auditar_resolucao(order: Order, *, import_id: str, resolucao: ResolucaoCliente) -> None:
+    try:
+        pedidos = resolucao.pedidos_no_4
+        repo.append_audit(
+            import_id,
+            "depara_cliente",
+            {
+                "chave": order.header.order_number,
+                "motivo": resolucao.motivo,
+                "resolvido": resolucao.resolvido,
+                "cnpj_real": resolucao.cnpj,
+                "nome_real": resolucao.nome,
+                # "Qual banco respondeu" e "qual CNPJ disparou o de-para" — a
+                # única forma de auditar depois quais pedidos foram resolvidos
+                # sob um intercompany_env_slug/intercompany_cnpj mal configurado.
+                "revenda_slug": resolucao.revenda_slug,
+                "cnpj_gatilho": cnpj_digits(order.header.customer_cnpj),
+                # Radar da demanda fantasma — o pedido casado na revenda pode
+                # já estar FATURADO. Só observa; não bloqueia. Lista limitada
+                # (cap), contagem real sempre gravada.
+                "pedidos_no_4": pedidos[:_MAX_PEDIDOS_NO_4_AUDITADOS],
+                "pedidos_no_4_total": len(pedidos),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 — auditar não pode derrubar o push
+        logger.warning(f"intercompany: audit falhou (import={import_id}): {exc}")
 
 
 def push_new_order(order: Order, *, import_id: str, slug: str) -> bool:
@@ -20,8 +78,15 @@ def push_new_order(order: Order, *, import_id: str, slug: str) -> bool:
     cfg = flowpcp_config_for_slug(slug)
     if cfg is None:
         return False
+
+    resolucao = _resolucao_segura(order, import_id=import_id, slug=slug)
+    if resolucao is not None:
+        _auditar_resolucao(order, import_id=import_id, resolucao=resolucao)
+
     try:
-        return FlowPCPExporter(tenant_id=cfg.tenant_id).enqueue(order, import_id=import_id)
+        return FlowPCPExporter(tenant_id=cfg.tenant_id).enqueue(
+            order, import_id=import_id, resolucao=resolucao
+        )
     except Exception as exc:  # noqa: BLE001 — best-effort; nunca derruba o send-to-fire
         logger.warning(f"flowpcp enqueue falhou (import={import_id} slug={slug}): {exc}")
         return False

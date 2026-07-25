@@ -31,7 +31,7 @@
       color: var(--text-muted);
       margin-bottom: .35rem;
     }
-    input {
+    input, select {
       width: 100%;
       padding: .65rem .8rem;
       background: var(--bg-elev);
@@ -41,7 +41,7 @@
       font: inherit;
       box-sizing: border-box;
     }
-    input:focus {
+    input:focus, select:focus {
       outline: none;
       border-color: var(--accent, #3b82f6);
     }
@@ -323,6 +323,34 @@
         <input type="checkbox" name="flowpcp_clientes_push">
         <span>Enviar clientes ao Flow (desligado = a carga só atualiza a cópia local; requer o endpoint /clientes no Flow)</span>
       </label>
+
+      <!-- De-para de cliente intercompany — dentro do fieldset do FlowPCP pra
+           reusar o helper fv() (escopado a este elemento). -->
+      <div style="margin-top:1.25rem;border-top:1px solid var(--border,#2a2a2a);padding-top:1rem">
+        <div style="font-size:.85em;color:var(--text-muted,#9aa);margin-bottom:.6rem;line-height:1.5">
+          <strong>Cliente intercompany.</strong> Quando o pedido chega no nome da revenda (ela
+          fatura, mas quem produz é esta empresa), o Portal busca o cliente real no Firebird da
+          revenda pelo número do pedido de compra e manda esse CNPJ pro Flow. O XLS e o Fire
+          continuam com a revenda. Deixe em branco para desligar.
+        </div>
+        <div class="row">
+          <label>
+            <span>CNPJ da revenda</span>
+            <input name="intercompany_cnpj" placeholder="34.513.679/0001-34">
+          </label>
+          <label>
+            <span>Ambiente da revenda</span>
+            <select name="intercompany_env_slug">
+              <option value="">— desligado —</option>
+            </select>
+          </label>
+        </div>
+        <div class="actions" style="margin-top:.75rem">
+          <button type="button" id="btn-save-intercompany" class="btn btn-secondary">Salvar de-para de cliente</button>
+          <span id="intercompany-status" class="flowpcp-status"></span>
+        </div>
+      </div>
+
       <div class="actions" style="margin-top:1rem">
         <button type="button" id="btn-save-flowpcp" class="btn btn-primary">Salvar FlowPCP</button>
         <span id="flowpcp-status" class="flowpcp-status"></span>
@@ -408,11 +436,18 @@
       document.getElementById('title').textContent = 'Editar ambiente';
       testBtn.hidden = false;
       deleteBtn.hidden = false;
-      fetch('/api/admin/environments/' + envId).then(r => {
-        if (r.status === 401) { location.href = '/login'; return; }
-        if (!r.ok) throw new Error('Falha ao carregar (' + r.status + ')');
-        return r.json();
-      }).then(env => {
+      Promise.all([
+        fetch('/api/admin/environments/' + envId).then(r => {
+          if (r.status === 401) { location.href = '/login'; return; }
+          if (!r.ok) throw new Error('Falha ao carregar (' + r.status + ')');
+          return r.json();
+        }),
+        // Lista de ambientes pra alimentar o <select> do de-para intercompany
+        // (nunca free-text — slug errado desliga a feature em silêncio).
+        // `null` sinaliza falha (rede/HTTP) — distinto de "[]" (lista vazia de
+        // verdade) pra nunca confundir "não carregou" com "não tem ambientes".
+        fetch('/api/admin/environments').then(r => r.ok ? r.json() : null).catch(() => null),
+      ]).then(([env, allEnvs]) => {
         if (!env) return;
         for (const k of Object.keys(env)) {
           const inp = f.elements[k];
@@ -430,6 +465,34 @@
         fv('flowpcp_catalogo_push').checked = !!env.flowpcp_catalogo_push;
         fv('flowpcp_catalogo_apenas_meias').checked = !!env.flowpcp_catalogo_apenas_meias;
         fv('flowpcp_clientes_push').checked = !!env.flowpcp_clientes_push;
+        // Intercompany: popula o select com os ambientes reais antes de marcar
+        // o valor salvo (senão sel.value não acha a <option> e fica vazio).
+        // Achado da revisão: se a lista falhar ao carregar (ou se o slug salvo
+        // não estiver mais nela — ambiente removido), NUNCA deixar o <select>
+        // cair silenciosamente pra "desligado" — isso reescreveria um vínculo
+        // funcionando com null no próximo save. Sempre injeta uma <option> pro
+        // slug salvo quando ele não aparece na lista, e avisa no status.
+        const sel = fv('intercompany_env_slug');
+        const listaCarregou = Array.isArray(allEnvs);
+        const lista = listaCarregou ? allEnvs : [];
+        const slugSalvo = env.intercompany_env_slug || '';
+        let opts = '<option value="">— desligado —</option>' + lista
+          .map(e => '<option value="' + escAttr(e.slug) + '">' + escAttr(e.name) +
+            ' (' + escAttr(e.slug) + ')' + (e.is_active ? '' : ' — inativo') + '</option>')
+          .join('');
+        if (slugSalvo && !lista.some(e => e.slug === slugSalvo)) {
+          opts += '<option value="' + escAttr(slugSalvo) + '">' + escAttr(slugSalvo) +
+            (listaCarregou ? ' — ambiente não encontrado' : ' — lista indisponível, valor preservado') +
+            '</option>';
+        }
+        sel.innerHTML = opts;
+        fv('intercompany_cnpj').value = env.intercompany_cnpj || '';
+        sel.value = slugSalvo;
+        if (!listaCarregou) {
+          const icStatus = document.getElementById('intercompany-status');
+          icStatus.textContent = '⚠ Lista de ambientes indisponível — o vínculo salvo foi preservado, mas recarregue a página antes de trocar o ambiente da revenda.';
+          icStatus.classList.add('err');
+        }
         flowFs.hidden = false;
       }).catch(e => showError(e.message));
     }
@@ -524,6 +587,41 @@
           flowStatus.textContent = '✗ ' + msg;
           flowStatus.classList.add('err');
         }
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    // De-para de cliente intercompany: mesmo tratamento de erro/status do FlowPCP.
+    // revenda_slug vem do <select> (sempre um slug real ou vazio = desligado).
+    document.getElementById('btn-save-intercompany').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const status = document.getElementById('intercompany-status');
+      status.textContent = '';
+      status.className = 'flowpcp-status';
+      const payload = {
+        cnpj: fv('intercompany_cnpj').value.trim() || null,
+        revenda_slug: fv('intercompany_env_slug').value.trim() || null,
+      };
+      btn.disabled = true;
+      try {
+        const r = await fetch('/api/admin/environments/' + envId + '/intercompany', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (r.ok) {
+          status.textContent = '✓ De-para de cliente salvo';
+          status.classList.add('ok');
+        } else {
+          const t = await r.text();
+          let msg;
+          try { msg = JSON.parse(t).detail || t; } catch { msg = t || ('Erro ' + r.status); }
+          status.textContent = '✗ ' + msg;
+          status.classList.add('err');
+        }
+      } catch (err) {
+        status.textContent = '✗ ' + err.message; status.classList.add('err');
       } finally {
         btn.disabled = false;
       }

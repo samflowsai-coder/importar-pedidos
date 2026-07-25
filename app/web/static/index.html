@@ -39,6 +39,8 @@
       background: var(--accent-bg); color: var(--accent-hover);
       text-transform: uppercase;
     }
+    .badge-ok   { background: var(--success-bg); color: var(--success); }
+    .badge-warn { background: var(--warn-bg);    color: var(--warn);    }
 
     /* Firebird indicator */
     .fb-indicator {
@@ -791,6 +793,7 @@
         <div>
           <div class="preview-field-label">Cliente</div>
           <div class="preview-field-value" id="pvCustomerName" title="">—</div>
+          <span id="pvDeparaCliente" class="badge hidden"></span>
         </div>
         <div>
           <div class="preview-field-label">CNPJ</div>
@@ -1885,6 +1888,24 @@ function renderPreview(data) {
   nameEl.textContent = name;
   nameEl.title = name;
   document.getElementById('pvCustomerCnpj').textContent = h.customer_cnpj || '—';
+
+  // Selo do de-para de cliente intercompany (o Flow recebe o cliente real).
+  const dp = data.depara_cliente;
+  const dpEl = document.getElementById('pvDeparaCliente');
+  if (!dp) {
+    dpEl.classList.add('hidden');
+    dpEl.textContent = '';
+  } else if (dp.resolvido) {
+    dpEl.classList.remove('hidden');
+    dpEl.className = 'badge badge-ok';
+    dpEl.textContent = `Flow recebe: ${dp.nome}`;
+    dpEl.title = `Cliente real resolvido no banco da revenda (CNPJ ${dp.cnpj}). O XLS e o Fire seguem com a revenda.`;
+  } else {
+    dpEl.classList.remove('hidden');
+    dpEl.className = 'badge badge-warn';
+    dpEl.textContent = 'Cliente real não resolvido — sobe como revenda';
+    dpEl.title = `Motivo: ${dp.motivo}`;
+  }
 
   const t = data.totals || {};
   document.getElementById('pvTotalItems').textContent = fmtQty(t.items_count);

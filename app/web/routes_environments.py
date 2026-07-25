@@ -74,6 +74,13 @@ class FlowPCPConfigRequest(BaseModel):
     service_token: str | None = None
 
 
+class IntercompanyConfigRequest(BaseModel):
+    """De-para de cliente intercompany. Vazio em qualquer campo = desligado."""
+
+    cnpj: str | None = None
+    revenda_slug: str | None = None
+
+
 @router.get("")
 def list_environments(_=Depends(require_admin)):
     return environments_repo.list_all()
@@ -111,6 +118,23 @@ def set_environment_flowpcp(env_id: str, payload: FlowPCPConfigRequest, _=Depend
     if not environments_repo.get(env_id):
         raise HTTPException(404, "Ambiente não encontrado")
     return environments_repo.set_flowpcp_config(env_id, **payload.model_dump())
+
+
+@router.put("/{env_id}/intercompany")
+def set_environment_intercompany(
+    env_id: str, payload: IntercompanyConfigRequest, _=Depends(require_admin)
+):
+    """Grava o de-para de cliente intercompany do ambiente.
+
+    `revenda_slug` vem do `<select>` na tela (populado com os ambientes reais),
+    mas normaliza minúsculas aqui como defesa mínima — slugs de ambiente são
+    sempre lowercase (`environments_repo.SLUG_RE`)."""
+    if environments_repo.get(env_id) is None:
+        raise HTTPException(status_code=404, detail="Ambiente não encontrado")
+    data = payload.model_dump()
+    if data["revenda_slug"]:
+        data["revenda_slug"] = data["revenda_slug"].strip().lower()
+    return environments_repo.set_intercompany_config(env_id, **data)
 
 
 @router.post("/{env_id}/flowpcp/sync-catalogo")

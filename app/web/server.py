@@ -77,6 +77,10 @@ app.add_middleware(EnvironmentMiddleware)
 # send-to-fire, só em ambientes com FlowPCP habilitado (MM).
 from app.integrations.flowpcp.hook import push_new_order  # noqa: E402
 
+# De-para de cliente intercompany: mostra no preview o cliente real que o
+# Flow vai receber quando o pedido chegou no nome da revenda.
+from app.integrations.flowpcp.intercompany import resolucao_para  # noqa: E402
+
 # Multi-ambiente: traduz NoActiveEnvironmentError em 412 estruturado para
 # que o cliente HTTP possa redirecionar para /selecionar-ambiente em vez
 # de quebrar com 500.
@@ -2607,7 +2611,7 @@ def ack_sem_preco(
 
 
 @app.get("/api/imported/{import_id}/preview")
-def rehydrate_preview(import_id: str) -> JSONResponse:
+def rehydrate_preview(import_id: str, request: Request) -> JSONResponse:
     """Rebuild the preview payload for a stored order (for the review modal)."""
     from app.models.order import Order
     from app.persistence import repo
@@ -2660,6 +2664,24 @@ def rehydrate_preview(import_id: str) -> JSONResponse:
         if entry.get("sem_preco_ack_by")
         else None
     )
+
+    # De-para de cliente intercompany: mostra no preview o cliente que o Flow
+    # vai receber. Leitura barata (só dispara quando o cliente é a revenda) e
+    # best-effort — preview nunca pode quebrar por causa do Firebird da revenda.
+    payload["depara_cliente"] = None
+    slug = (_request_environment(request) or {}).get("slug")
+    if slug:
+        try:
+            res = resolucao_para(order, slug=slug)
+        except Exception:  # noqa: BLE001
+            res = None
+        if res is not None:
+            payload["depara_cliente"] = {
+                "resolvido": res.resolvido,
+                "cnpj": res.cnpj,
+                "nome": res.nome,
+                "motivo": res.motivo,
+            }
     return JSONResponse(payload)
 
 

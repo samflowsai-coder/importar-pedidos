@@ -69,6 +69,14 @@ Slug é validado contra `^[a-z0-9][a-z0-9-]{0,30}$`. Define o nome do arquivo
 `app_state_<slug>.db`. Por isso: imutável após `create()`. UPDATE ignora
 qualquer tentativa de mudar slug.
 
+### De-para de cliente intercompany
+
+`intercompany_cnpj` (CNPJ que dispara) + `intercompany_env_slug` (ambiente cujo
+Firebird tem o vínculo). Qualquer um vazio = desligado. O ambiente da produção
+lê o Firebird do ambiente da revenda pela config **já cifrada** dela — não
+existe credencial nova nem host no código. Configurável em `/admin/ambientes`
+(`PUT /api/admin/environments/{env_id}/intercompany`).
+
 ### Watcher de pasta
 
 `scan_environments` (APScheduler, 30s). Para cada env ativo:

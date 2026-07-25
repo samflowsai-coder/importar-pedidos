@@ -9,6 +9,7 @@
 | Se a task envolve... | Domínio | Leia |
 |---|---|---|
 | Adicionar/editar ambiente (multi-empresa MM/Nasmar/...) | `environments` | `modules/environments.md` |
+| De-para de cliente intercompany (pedido no nome da revenda) | `erp` + `environments` | `modules/erp.md`, `modules/environments.md` |
 | Adicionar/ajustar parser de cliente novo (PDF ou XLS) | `parsers` | `modules/parsers.md` |
 | Bug em parser específico (Riachuelo, Centauro, Kolosh, etc.) | `parsers` | `modules/parsers.md` |
 | Importação no Firebird, queries SQL, mapper de colunas | `erp` | `modules/erp.md` |

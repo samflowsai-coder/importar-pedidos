@@ -135,4 +135,10 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
      "ALTER TABLE environments ADD COLUMN flowpcp_catalogo_apenas_meias INTEGER NOT NULL DEFAULT 0"),
     ("environments", "flowpcp_clientes_push",
      "ALTER TABLE environments ADD COLUMN flowpcp_clientes_push INTEGER NOT NULL DEFAULT 0"),
+    # De-para de cliente intercompany: CNPJ que dispara (a revenda) + slug do
+    # ambiente cujo Firebird tem o vínculo. Qualquer um vazio = desligado.
+    ("environments", "intercompany_cnpj",
+     "ALTER TABLE environments ADD COLUMN intercompany_cnpj TEXT"),
+    ("environments", "intercompany_env_slug",
+     "ALTER TABLE environments ADD COLUMN intercompany_env_slug TEXT"),
 )
