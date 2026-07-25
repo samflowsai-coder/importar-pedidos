@@ -1,6 +1,6 @@
 O que muda nesta versão
 
-1) O vínculo de produto agora fica salvo ao reabrir o pedido. Antes, se você vinculasse um item sem correspondência e reabrisse o pedido, ele voltava a aparecer como sem match — agora o vínculo continua valendo.
+1) O vínculo de produto agora fica salvo ao reabrir o pedido. Antes, se você vinculasse um item sem correspondência e reabrisse o pedido, ele voltava a aparecer como sem match. Agora o vínculo continua valendo.
 
 2) O indicador de banco no topo passou a mostrar a empresa ativa na sessão e o status do Firebird dela, em vez de um status genérico do sistema.
 
