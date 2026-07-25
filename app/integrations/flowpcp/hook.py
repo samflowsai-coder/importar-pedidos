@@ -17,6 +17,24 @@ from app.persistence import repo
 from app.utils.logger import logger
 
 
+def _resolucao_segura(order: Order, *, import_id: str, slug: str) -> ResolucaoCliente | None:
+    """Chama `resolucao_para` sob guard próprio — cinto e suspensório.
+
+    `resolucao_para` já nunca levanta (best-effort desde a leitura do
+    ambiente), mas `push_new_order` é o contrato que os call sites em
+    `app/web/server.py` dependem diretamente (chamado logo após o Fire/XLS já
+    ter tido sucesso). Este guard garante que o contrato se sustenta mesmo
+    que uma regressão futura reintroduza um caminho sem proteção lá dentro.
+    """
+    try:
+        return resolucao_para(order, slug=slug)
+    except Exception as exc:  # noqa: BLE001 — nunca pode derrubar o push
+        logger.warning(
+            f"intercompany: resolucao_para falhou (import={import_id} slug={slug}): {exc}"
+        )
+        return None
+
+
 def _auditar_resolucao(order: Order, *, import_id: str, resolucao: ResolucaoCliente) -> None:
     try:
         repo.append_audit(
@@ -45,7 +63,7 @@ def push_new_order(order: Order, *, import_id: str, slug: str) -> bool:
     if cfg is None:
         return False
 
-    resolucao = resolucao_para(order, slug=slug)
+    resolucao = _resolucao_segura(order, import_id=import_id, slug=slug)
     if resolucao is not None:
         _auditar_resolucao(order, import_id=import_id, resolucao=resolucao)
 
