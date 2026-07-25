@@ -208,6 +208,60 @@ def test_summary_aggregates_price_counts(mock_fb):
 
 
 # ---------------------------------------------------------------------------
+# Task 5 — 3º degrau de match: de-para por cliente → resolve SEQ no Fire
+# ---------------------------------------------------------------------------
+
+
+@patch("app.erp.product_check.produto_depara_repo")
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.db")
+def test_check_order_terceiro_degrau_depara(mock_db, mock_fb, mock_depara):
+    mock_fb.return_value.is_configured.return_value = True
+    ctx, cur = _make_fb_ctx_batched(
+        client_row=(1, "ACME"),
+        ean_rows=[],
+        code_rows=[],
+        seq_rows=[(77, "TENIS DEPARA", 120.0)],  # resolve SEQ do vínculo
+    )
+    mock_fb.return_value.connect.return_value = ctx
+    # db.connect() não é mockado pelo brief — o degrau de-para chama
+    # `with db.connect() as sconn:`, então patchamos `product_check.db`
+    # diretamente para devolver um context manager dummy (o conn nunca é
+    # usado de verdade porque produto_depara_repo.lookup também está
+    # mockado e ignora o argumento).
+    mock_db.connect.return_value.__enter__.return_value = MagicMock()
+    # de-para: código "REF-X" do cliente → SEQ 77
+    mock_depara.lookup.return_value = {
+        ("codigo", "REF-X"): {"fire_produto_id": "77", "fire_codigo": "77"},
+    }
+
+    order = _order([{"product_code": "REF-X", "unit_price": 120.0}])
+    report = product_check.check_order(order)
+
+    item = report["items"][0]
+    assert item["match"] is True
+    assert item["match_source"] == "depara"
+    assert item["fire_product_id"] == 77
+    assert item["price_status"] == "match"
+
+
+@patch("app.erp.product_check.produto_depara_repo")
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.db")
+def test_depara_orfao_vira_sem_match(mock_db, mock_fb, mock_depara):
+    mock_fb.return_value.is_configured.return_value = True
+    ctx, cur = _make_fb_ctx_batched(client_row=(1, "ACME"), seq_rows=[])  # SEQ sumiu
+    mock_fb.return_value.connect.return_value = ctx
+    mock_db.connect.return_value.__enter__.return_value = MagicMock()
+    mock_depara.lookup.return_value = {
+        ("codigo", "REF-X"): {"fire_produto_id": "999", "fire_codigo": "999"},
+    }
+    order = _order([{"product_code": "REF-X", "unit_price": 1.0}])
+    report = product_check.check_order(order)
+    assert report["items"][0]["match"] is False
+
+
+# ---------------------------------------------------------------------------
 # Task 4 — is_blocking() helper
 # ---------------------------------------------------------------------------
 

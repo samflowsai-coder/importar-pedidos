@@ -16,6 +16,8 @@ from typing import Any
 from app.erp import queries
 from app.erp.connection import FirebirdConnection
 from app.models.order import Order
+from app.persistence import db, produto_depara_repo
+from app.persistence.produto_depara_repo import _norm_key as _depara_norm_key
 
 
 def _cnpj_digits(cnpj: str | None) -> str:
@@ -153,6 +155,45 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
                 _fetch_map_by_key(cur, queries.find_products_by_codes_sql, codes) if codes else {}
             )
 
+            # 3º degrau: de-para por cliente (SQLite local) → resolve SEQ no Fire.
+            depara_map: dict[tuple[str, str], dict] = {}
+            seq_map: dict[Any, tuple] = {}
+            unmatched_codes = [
+                it.product_code
+                for it in order.items
+                if it.product_code
+                and it.product_code not in code_map
+                and not (it.ean and it.ean in ean_map)
+            ]
+            unmatched_eans = [it.ean for it in order.items if it.ean and it.ean not in ean_map]
+            if unmatched_codes or unmatched_eans:
+                try:
+                    with db.connect() as sconn:
+                        depara_map = produto_depara_repo.lookup(
+                            sconn,
+                            order.header.customer_cnpj or "",
+                            codigos=unmatched_codes,
+                            eans=unmatched_eans,
+                        )
+                except Exception as exc:  # noqa: BLE001 — sem ambiente ativo / db off: pula degrau
+                    from app.utils.logger import logger
+
+                    logger.debug(f"de-para lookup pulado: {type(exc).__name__}: {exc}")
+                seqs = list(
+                    {
+                        int(v["fire_produto_id"])
+                        for v in depara_map.values()
+                        if str(v["fire_produto_id"]).isdigit()
+                    }
+                )
+                # find_products_by_seqs_sql retorna (SEQ, DESCRICAO, PRECO_VENDA) — 3
+                # colunas, a chave É a 1ª coluna. Não dá pra reusar _fetch_map_by_key
+                # (que assume 4 colunas: chave + (seq, desc, preco) separados).
+                for chunk in _chunked(seqs):
+                    cur.execute(queries.find_products_by_seqs_sql(len(chunk)), tuple(chunk))
+                    for row in cur.fetchall():
+                        seq_map[row[0]] = (row[0], row[1], row[2])
+
             items_report: list[dict] = []
             matched = 0
             price_match = price_mismatch = price_no_price_in_fire = price_no_order_price = 0
@@ -165,6 +206,23 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
                     hit, source = ean_map[it.ean], "ean"
                 elif it.product_code and it.product_code in code_map:
                     hit, source = code_map[it.product_code], "codprod_altern"
+
+                if hit is None:
+                    dk = None
+                    if it.product_code:
+                        dk = ("codigo", _depara_norm_key("codigo", it.product_code))
+                    if (dk is None or dk not in depara_map) and it.ean:
+                        dk = ("ean", _depara_norm_key("ean", it.ean))
+                    dv = depara_map.get(dk) if dk else None
+                    if dv is not None:
+                        seq = (
+                            int(dv["fire_produto_id"])
+                            if str(dv["fire_produto_id"]).isdigit()
+                            else None
+                        )
+                        resolved = seq_map.get(seq) if seq is not None else None
+                        if resolved is not None:
+                            hit, source = resolved, "depara"
 
                 if hit is not None:
                     seq, desc, preco = hit
