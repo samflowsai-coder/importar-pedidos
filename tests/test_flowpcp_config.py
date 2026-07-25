@@ -80,6 +80,24 @@ def test_catalogo_push_default_off_e_ligavel(fresh_shared):
     assert environments_repo.get_by_slug("mm")["flowpcp_catalogo_push"] == 1
 
 
+def test_intercompany_cnpj_default_vazio(fresh_shared):
+    """Sem config de de-para, o retry no retorno Flow→Fire (poll_decisoes) fica
+    desligado — motivo do default vazio, não None (evita checagem `is not None`
+    incorreta no chamador)."""
+    _mk_env("mm", enabled=True, base_url="https://x", tenant_id="t")
+    cfg = flowpcp_config_for_slug("mm")
+    assert cfg.intercompany_cnpj == ""
+
+
+def test_intercompany_cnpj_propaga_do_ambiente(fresh_shared):
+    env = _mk_env("mm", enabled=True, base_url="https://x", tenant_id="t")
+    environments_repo.set_intercompany_config(
+        env["id"], cnpj="34.513.679/0001-34", revenda_slug="nasmar"
+    )
+    cfg = flowpcp_config_for_slug("mm")
+    assert cfg.intercompany_cnpj == "34513679000134"  # só dígitos, mesmo padrão do resto
+
+
 def test_catalogo_apenas_meias_default_off_e_ligavel(fresh_shared):
     """Filtro do catálogo (só subgrupo MEIAS): default OFF; setável por ambiente."""
     env = _mk_env("mm", enabled=True, base_url="https://x", tenant_id="t")

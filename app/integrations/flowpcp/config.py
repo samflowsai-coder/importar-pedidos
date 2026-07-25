@@ -22,6 +22,11 @@ class FlowPCPConfig:
     clientes_push: bool = False
     # Filtro da extração: OFF = todo PRODUTOS (hoje); ON = só subgrupo MEIAS.
     catalogo_apenas_meias: bool = False
+    # CNPJ (dígitos) da revenda intercompany (ex: Nasmar). Usado no retorno
+    # Flow→Fire: quando o UPDATE não acha o pedido pelo cliente REAL (o Fire
+    # de produção pode não conhecê-lo), o poll tenta de novo com a revenda —
+    # é ela quem está em CAB_VENDAS.CLIENTE nesses pedidos. "" = sem retry.
+    intercompany_cnpj: str = ""
 
 
 def flowpcp_config_from_env(env: dict[str, Any], *, service_token: str | None) -> FlowPCPConfig:
@@ -39,6 +44,7 @@ def flowpcp_config_from_env(env: dict[str, Any], *, service_token: str | None) -
         catalogo_push=bool(env.get("flowpcp_catalogo_push")),
         clientes_push=bool(env.get("flowpcp_clientes_push")),
         catalogo_apenas_meias=bool(env.get("flowpcp_catalogo_apenas_meias")),
+        intercompany_cnpj=str(env.get("intercompany_cnpj") or ""),
     )
 
 

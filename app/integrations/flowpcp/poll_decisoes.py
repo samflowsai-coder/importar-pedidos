@@ -93,6 +93,30 @@ def processar_decisao(
         logger.error(f"flowpcp UPDATE Fire falhou decisao={decisao.id}: {exc}")
         return False
 
+    # 3b. Retry com a revenda intercompany (ex: Nasmar). O outbound leva o
+    # cliente REAL pro Flow, e é esse CNPJ que volta em `decisao.cliente_cnpj`
+    # — mas no Fire de produção (.7) o pedido continua com CLIENTE = a
+    # revenda (ela faturou). Se a primeira chave não bate, `PEDIDO_CLIENTE` +
+    # revenda é exatamente a tupla que o Portal inseriu — tenta ANTES de
+    # contar tentativa/falha, não depois.
+    if rows == 0 and config.intercompany_cnpj:
+        try:
+            rows = update_dt_entrega(
+                fire_conn,
+                pedido_cliente=decisao.pedido_erp,
+                cliente_cnpj=config.intercompany_cnpj,
+                new_date_iso=decisao.prazo_pactuado,
+                timezone=config.timezone,
+            )
+        except Exception as exc:  # timeout/lock — não confirma; re-tenta no próximo poll
+            logger.error(f"flowpcp UPDATE Fire (retry revenda) falhou decisao={decisao.id}: {exc}")
+            return False
+        if rows:
+            logger.info(
+                f"flowpcp pedido {decisao.pedido_erp} não achado pelo cliente real "
+                f"(decisao={decisao.id}) — resolvido com a revenda intercompany"
+            )
+
     if rows == 0:
         attempts = flowpcp_repo.register_attempt(conn, decisao.id)
         if attempts >= _MAX_NAO_ENCONTRADO:
