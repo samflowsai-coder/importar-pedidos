@@ -9,7 +9,7 @@
 ## Pipeline (alto nível)
 ```
 arquivo → FileLoader → FormatClassifier → Extractor (PDF|XLS)
-       → cascata de 8 parsers específicos → GenericParser → LLM fallback
+       → cascata de 10 parsers específicos → GenericParser → LLM fallback
        → OrderNormalizer → OrderValidator → ERPExporter (xlsx | firebird | ambos)
 ```
 

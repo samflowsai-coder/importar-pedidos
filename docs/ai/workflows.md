@@ -18,11 +18,16 @@
 8. Atualizar `docs/ai/modules/parsers.md` (lista de parsers).
 
 ## Feature: nova rota web
-1. Adicionar handler em `app/web/server.py`.
-2. Validar input (whitelist, tamanho, path).
-3. Atualizar `app/web/static/index.html` se afeta UI.
-4. Teste em `tests/test_web_server.py`.
-5. Atualizar `docs/ai/modules/web.md` (seção Rotas).
+1. Escolher o arquivo certo: `app/web/server.py` (fluxo principal) ou o router do
+   assunto — `routes_environments.py` (`/api/admin/environments`), `routes_update.py`
+   (`/api/admin/update`), `routes_env_select.py`, `webhooks.py` (`/api/webhooks`).
+   Router novo precisa de `app.include_router(...)` em `server.py`.
+2. Proteger: `require_user` ou `require_admin`. Rota nova nasce autenticada — abrir
+   depois é decisão explícita, não default.
+3. Validar input (whitelist de extensão, tamanho — upload é **50MB**, path traversal).
+4. Atualizar o HTML em `app/web/static/` se afeta UI.
+5. Teste em `tests/test_web_server.py` (ou o de teste do router).
+6. Atualizar `docs/ai/modules/web.md` (seção Rotas).
 
 ## Feature: novo exporter (ex: Firebird novo cliente)
 1. Rodar `python tools/explore_firebird.py --database empresa_COPIA.fdb > schema_report.txt` (NUNCA em produção).
@@ -39,6 +44,10 @@
 4. Suite verde ao final.
 
 ## Investigação
-1. `LOG_LEVEL=DEBUG` + sample que reproduz.
-2. Mapear caminho no pipeline.
-3. Documentar achados no PR description, não em arquivo novo (a menos que vire decisão arquitetural).
+1. Reproduzir com o sample. **Não existe `LOG_LEVEL`**: o console sai em `INFO` e o
+   arquivo em `logs/` já grava `DEBUG` — o rastro completo está lá (`app/utils/logger.py`).
+2. Mapear o caminho no pipeline; `trace_id` costura o request inteiro
+   (ver `modules/observability.md`).
+3. Conferir se o achado já está catalogado em `docs/BACKLOG.md` antes de tratar como novo.
+4. Documentar no PR description, não em arquivo novo — a menos que vire decisão
+   arquitetural, que aí vai pra `01-project-overview.md`.

@@ -6,7 +6,7 @@ Transformar a saída do extractor (texto + tabelas) em um `Order` (pydantic). Ca
 ## Arquivos críticos
 - `app/parsers/base_parser.py` — `BaseParser` com `_find`, `_parse_br_number`. **Sempre herde dele.**
 - `app/parsers/generic_parser.py` — fallback determinístico antes do LLM.
-- `app/parsers/<cliente>_parser.py` — um por formato (Mercado Eletrônico, Pedido Compras Revenda, SBF/Centauro, Beira Rio, Kolosh, Sam's Club, Kallan XLS, Desmembramento XLS).
+- `app/parsers/<cliente>_parser.py` — **10 parsers específicos**: Mercado Eletrônico, Pedido Compras Revenda, SBF/Centauro, Beira Rio, Kolosh, Sam's Club, Kallan XLS, Authentic Feet, Desmembramento XLS, e o Generic.
 - `app/pipeline.py` — registro da cascata na lista `_parsers`.
 
 ## Como adicionar um parser novo
@@ -53,3 +53,15 @@ Transformar a saída do extractor (texto + tabelas) em um `Order` (pydantic). Ca
    - `_warn_if_grade_diverges()` soma qty da grade por SKU e compara com a tabela superior; emite `logger.warning` se divergir.
 
 Ambos layouts compartilham `_parse_header()` (regex `Número (?:do )?Pedido:` cobre as duas variações). Detecção case-insensitive em `can_parse`.
+
+## Authentic Feet / Magic Feet: a assinatura é o cabeçalho, não a marca
+
+`AuthenticFeetParser` cobre o template single-customer usado por Authentic Feet, Magic
+Feet e pedidos "Pulmão" do Grupo Afeet — mesmo fornecedor, mesmo template.
+
+- **`can_parse` casa o conjunto de 4 colunas** `REF.`, `DESCRIÇÃO PRODUTO`,
+  `TOTAL KITS`, `TOTAL R$` nas primeiras 30 linhas — **não** o nome da marca. Pedidos
+  Pulmão vêm com os campos de cliente em branco e sem nenhum texto
+  `AUTHENTICFEET`/`MAGICFEET` no conteúdo (a marca só aparece no nome do arquivo).
+- **A quantidade real é `TOTAL KITS`.** Sem este parser o arquivo cai no `GenericParser`,
+  que lê a coluna `REF COR` (cor) como quantidade — bug real de produção.

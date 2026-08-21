@@ -14,9 +14,10 @@ Dado um `LoadedFile`, executa: classify → extract → cascata de parsers → L
 5. KoloshParser
 6. SamsClubParser
 7. KallanXlsParser
-8. DesmembramentoXlsParser
-9. GenericParser
-10. LLMFallbackParser (só se 1–9 retornarem `None`)
+8. AuthenticFeetParser
+9. DesmembramentoXlsParser
+10. GenericParser
+11. LLMFallbackParser (só se 1–10 retornarem `None`)
 
 ## Quando alterar
 - Adicionar parser novo → inserir antes do `GenericParser`.

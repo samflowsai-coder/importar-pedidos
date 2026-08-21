@@ -103,5 +103,5 @@ Mantidas globais:
 - `APP_DATA_DIR` — onde ficam os SQLite (`app_shared.db` + `app_state_<slug>.db`)
 - `EXPORT_MODE` — `xlsx | db | both`
 - `RETENTION_DAYS`, `BACKUP_DIR`
-- `OPENROUTER_*`, `ANTHROPIC_API_KEY`
+- `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (o SDK da Anthropic foi descontinuado — não há `ANTHROPIC_API_KEY` no código)
 - `PORTAL_COOKIE_SECURE`, `SESSION_TTL_HOURS`

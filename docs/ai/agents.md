@@ -23,3 +23,27 @@
 
 ## pipeline-agent
 > Domínio `pipeline`. Leia `docs/ai/modules/pipeline.md`. Mudar ordem da cascata exige justificativa explícita.
+
+## environments-agent
+> Domínio `environments` (multi-empresa). Leia `docs/ai/modules/environments.md`. Toda query de dado de pedido roda no SQLite DO AMBIENTE (`app_state_<slug>.db`), nunca no `app_shared.db` — vazar dado de uma empresa na listagem de outra é o pior bug possível aqui. Senha de Firebird e token são cifrados via `app/security/secret_store.py`.
+
+## auth-agent
+> Domínio `auth`. Leia `docs/ai/modules/auth.md`. Rota nova nasce protegida (`require_user`/`require_admin`); abrir é decisão explícita. Senha com bcrypt, sessão em cookie. Testes: `tests/test_auth_routes.py`, `tests/test_sessions_repo.py`, `tests/test_users_repo.py`, `tests/test_passwords.py`.
+
+## security-agent
+> Domínio `security`. Leia `docs/ai/modules/security.md`. HMAC com comparação em tempo constante, replay protection, rate-limit por token bucket, segredo sempre via `secret_store` (nunca texto plano no banco). Testes: `tests/test_hmac_verify.py`, `tests/test_rate_limit.py`, `tests/test_secrets.py`.
+
+## worker-agent
+> Domínio `worker` (APScheduler). Leia `docs/ai/modules/worker.md`. Job novo tem que ser idempotente e não pode derrubar os outros: um ambiente com erro nunca aborta a varredura dos demais. Testes: `tests/test_worker_drain_outbox.py`, `tests/test_worker_poll_fire.py`, `tests/test_retention.py`.
+
+## gestor-agent
+> Domínio `gestor`. Leia `docs/ai/modules/gestor.md`. Saída sempre pelo outbox + `drain_outbox`, nunca HTTP no request path. Webhook inbound exige HMAC + idempotência. Testes: `tests/test_gestor_integration.py`, `tests/test_webhooks.py`, `tests/test_outbox_repo.py`.
+
+## flowpcp-agent
+> Domínio `flowpcp`. Leia `docs/ai/modules/flowpcp.md`. Tudo é best-effort e por ambiente: o pedido já entrou no Fire/XLS quando o push acontece, então falha vira outbox/retry e nunca derruba o fluxo. Gate desligado (`catalogo_push`/`clientes_push`) é caminho normal, não erro. Testes: `tests/test_flowpcp_*.py`.
+
+## updates-agent
+> Domínio `updates`. Leia `docs/ai/modules/updates.md`. Nunca afrouxe a allowlist do pacote nem a denylist de segredo/dado (`.env`, `.secret.key`, `*.db`, `*.fdb`). Concorrência exige os DOIS guards (`is_locked` + status em andamento). Testes: `tests/test_update_package.py`, `tests/test_update_routes.py`, `tests/test_update_state.py`.
+
+## state-agent
+> Domínio `state`. Leia `docs/ai/modules/state.md`. Transição nova entra na máquina, não em `if` espalhado pela rota; todo evento carrega `trace_id`. Teste: `tests/test_state_machine.py`.
