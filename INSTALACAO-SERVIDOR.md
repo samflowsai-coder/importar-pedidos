@@ -108,6 +108,24 @@ tocados**: não vêm no pacote. Nada de reconfigurar depois.
   (estático ou reserva de DHCP).
 - **Porta 3636 ocupada** — edite `PORTAL_PORT` no `.env` para outra porta e rode
   `atualizar.bat` (ou reinicie o serviço).
+
+### Ferramentas de diagnóstico (duplo-clique, na pasta da instalação)
+
+| Script | Quando usar | O que faz |
+|---|---|---|
+| `REINICIAR-APP.bat` | "o Portal não responde" | Para e sobe a tarefa `PortalPedidos`, espera o boot e testa o `/health`. Resolve a maioria dos casos |
+| `DIAGNOSTICO-APP.bat` | reiniciar não resolveu | Mostra quem está usando a porta, o estado das 3 tarefas, as últimas 30 linhas do log, e sobe o app em primeiro plano por 8s para o erro de boot aparecer na tela |
+| `DIAGNOSTICO-PIP.bat` | o update falhou na fase `pip` | Roda o `pip install` com saída completa e salva tudo em `pip-log.txt` |
+
+Os três só **leem** o estado (o `REINICIAR` também reinicia) — nenhum altera dados nem
+aplica atualização. Se precisar de suporte, rode o `DIAGNOSTICO-APP.bat` e mande a tela.
+
+> Os dois primeiros assumem a porta **3636**. Se você trocou a `PORTAL_PORT` no `.env`, o
+> relatório de porta vai dizer "livre" mesmo com o Portal no ar — olhe o estado da tarefa
+> e o log, que continuam corretos.
+
+### Outros problemas
+
 - **Esqueci a senha do admin** — no servidor, dentro da pasta:
   `\.venv\Scripts\python.exe tools\create_user.py email@exemplo.com --reset`
 - **Criar outro usuário** — o caminho normal é convidar pelo Portal

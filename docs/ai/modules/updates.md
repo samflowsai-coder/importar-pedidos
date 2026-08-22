@@ -33,9 +33,14 @@ recuperar uma instalação que não sobe.
 Rejeita com `PackageError` → **HTTP 422** e a razão vai pra tela:
 
 - Raiz obrigatória `portal-pedidos/`; qualquer membro fora dela é recusado.
-- **Allowlist de topo:** `app`, `scripts`, `tools`, `ui.py`, `main.py`, `pyproject.toml`,
-  `.env.example`, `README.md`, `INSTALACAO-SERVIDOR.md`, `manifest.json`, `wheelhouse`
-  (wheels para `pip install` **offline**, quando o servidor não alcança o PyPI).
+- **Allowlist de topo:** o conjunto `ALLOWED_TOP` — `app`, `scripts`, `tools`, `ui.py`,
+  `main.py`, `pyproject.toml`, `.env.example`, `README.md`, `INSTALACAO-SERVIDOR.md`,
+  `manifest.json`, `wheelhouse` (wheels para `pip install` **offline**, quando o servidor
+  não alcança o PyPI) — **mais qualquer `*.bat` na raiz**, liberado por sufixo em
+  `_member_ok`, não por nome. É de propósito: os nomes dos `.bat` variam por cliente
+  (`ligar-flowpcp.bat`, `enviar-catalogo-flow.bat` carregam token e ficam fora do git), e
+  `apply-update.ps1` descobre `*.bat` dinamicamente do mesmo jeito. Mexer numa ponta sem
+  a outra quebra o deploy.
 - **Denylist explícita:** `.env`, `.secret.key`, `config.json`, `firebird.json`, e
   qualquer `.db/.sqlite/.sqlite3/.fdb/.fbk/.gbk`. Segredo e dado do cliente nunca
   entram num pacote.
