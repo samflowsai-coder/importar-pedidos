@@ -1,7 +1,7 @@
 # Módulo: web (FastAPI)
 
 ## Responsabilidade
-Interface humana de upload → preview → commit. Uvicorn em `:8000`.
+Interface humana de upload → preview → commit. Uvicorn em `PORTAL_HOST:PORTAL_PORT`, default `127.0.0.1:3636` (`ui.py`).
 
 ## Arquivos críticos
 - `app/web/server.py` — rotas FastAPI.

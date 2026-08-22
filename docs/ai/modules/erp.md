@@ -113,7 +113,22 @@ dá o CNPJ.
   legado às vezes guarda `"ISENTO"`, `"0"` ou cadastro incompleto. Aceitar qualquer
   string não-vazia derrubaria o push (o Flow rejeita `cnpj` fora de 11–18 chars com
   400) — pior que subir como revenda.
-- Cache de processo só para resolução positiva (`limpar_cache()` nos testes).
+- **`ResolucaoCliente.revenda_slug`** vem preenchido em **todo** caminho, inclusive nos
+  de falha. É a única forma de auditar depois "quais pedidos foram resolvidos sob uma
+  config errada" se `intercompany_env_slug` for corrigido mais tarde. Campos completos:
+  `resolvido`, `cnpj`, `nome`, `motivo`, `revenda_slug` e `pedidos_no_4` (STATUS/CODNF
+  dos pedidos casados no `.4` — radar da demanda fantasma).
+- **Cool-down de 45s por `revenda_slug` depois de um `erro_conexao`.** O `fdb` não expõe
+  timeout: um host inalcançável trava a conexão por até ~180s. Sem o cool-down, CADA
+  preview/refresh/export durante uma queda do Firebird da revenda paga o stall inteiro,
+  por clique (handlers síncronos em threadpool limitado). Uma conexão bem-sucedida limpa
+  o cool-down do slug. Clock injetável (`_clock`) para o teste não dormir de verdade.
+  **Armadilha conhecida:** o cool-down arma em volta do bloco inteiro (`to_fb_config` +
+  `connect` + `execute` + `fetch`), então um erro que não é de conexão (linha ruim,
+  charset) suprime o de-para do ambiente por 45s — ver `docs/BACKLOG.md` §1.4.
+- Cache de processo só para resolução **positiva** (`limpar_cache()` nos testes). Negativo
+  nunca entra: o pedido pode ser criado na revenda depois, e o servidor web fica de pé
+  por dias.
 - **Produto nunca vem da revenda** — só o cliente. O `.7` segue sendo a fonte
   de produto/preço.
 - Nunca levanta. Config em `environments.intercompany_cnpj` + `intercompany_env_slug`.

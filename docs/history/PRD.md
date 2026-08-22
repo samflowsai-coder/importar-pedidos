@@ -1,4 +1,18 @@
 # PRD — Importar Pedidos
+
+> **DOCUMENTO CONGELADO — não é fonte de verdade.**
+> PRD da **v1**, escrito em 2026-04-09 e nunca revisado. Arquivado em
+> 2026-08-21. As Fases 3, 4 e 5 do roadmap (integração ERP, observabilidade,
+> autenticação e multi-tenant) **já foram entregues** — o documento descreve
+> como futuro o que hoje roda em produção.
+> Mantido pelo registro da intenção original do produto e do glossário.
+>
+> Estado atual: [`README.md`](../../README.md), escopo aberto em
+> [`docs/BACKLOG.md`](../BACKLOG.md), detalhe técnico em
+> [`docs/ai/00-index.md`](../ai/00-index.md).
+
+---
+
 **Versão:** 1.0  
 **Data:** 2026-04-09  
 **Autor:** SamFlowsAI  

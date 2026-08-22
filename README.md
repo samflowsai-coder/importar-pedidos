@@ -1,63 +1,90 @@
-# Importar Pedidos
+# Portal de Pedidos
 
-Pipeline de automação para importação de pedidos: converte PDFs e planilhas XLS/XLSX de fornecedores em arquivos `.xlsx` prontos para importação no ERP.
+Porta de entrada de pedidos de varejistas para um fornecedor de calçados. Recebe
+pedidos de compra em **PDF / XLS / XLSX**, parseia, apresenta um preview para
+validação humana e importa no ERP **Fire Sistemas** (Firebird) — ou gera `.xlsx`
+prontos para importação, conforme o modo de exportação.
 
-## Setup (local)
+Opera **várias empresas em paralelo** (multi-ambiente), com autenticação, worker
+de background e integrações com o Gestor de Produção e o FlowPCP.
+
+---
+
+## Setup local
 
 ```bash
-# 1. Clone e entre na pasta
 git clone <repo-url> importar-pedidos
 cd importar-pedidos
 
-# 2. Crie o ambiente virtual e instale dependências
 python -m venv .venv
 source .venv/bin/activate        # macOS/Linux
 # .venv\Scripts\activate         # Windows
 
 pip install -e ".[dev]"
 
-# 3. Configure as variáveis de ambiente
-cp .env.example .env
-# Edite .env e adicione sua OPENROUTER_API_KEY
-
-# 4. Rode a interface web
-python ui.py
-# Acesse: http://localhost:3636
+cp .env.example .env             # edite: OPENROUTER_API_KEY é o mínimo
+python ui.py                     # → http://127.0.0.1:3636
 ```
 
-## Setup via Docker
+Primeiro acesso: o portal pede o bootstrap do usuário admin. Para criar ou
+resetar usuário pela linha de comando:
+
+```bash
+.venv/bin/python tools/create_user.py voce@exemplo.com --role admin
+.venv/bin/python tools/create_user.py voce@exemplo.com --reset
+```
+
+### Via Docker
 
 ```bash
 cp .env.example .env
-# Edite .env com a OPENROUTER_API_KEY
-
-docker compose up
+docker compose up --build
 ```
 
-## Uso via CLI (lote)
+### Instalação em servidor (cliente)
+
+Windows, com serviço e auto-start: [`INSTALACAO-SERVIDOR.md`](INSTALACAO-SERVIDOR.md).
+
+---
+
+## Uso
+
+**Web** (principal) — upload → preview → commit, em `http://127.0.0.1:3636`.
+
+**CLI em lote:**
 
 ```bash
-# Coloque os arquivos de pedido em input/
 cp meus_pedidos/*.pdf input/
-
-# Processe
-python main.py
-
-# Arquivos gerados em output/
+python main.py                   # resultado em output/
 ```
+
+**Worker** (outbox, polls, retenção, backup):
+
+```bash
+python -m app.worker
+```
+
+---
 
 ## Formatos suportados
 
+Dez parsers determinísticos, tentados em cascata; o LLM só entra se todos falharem.
+
 | Fornecedor | Tipo | Particularidade |
-|------------|------|----------------|
-| SBF / Centauro | PDF | EAN na tabela "Dados Variante" |
+|---|---|---|
 | Riachuelo — Mercado Eletrônico | PDF | Split por CNPJ de loja |
 | Riachuelo — Pedido Compras Revenda | PDF | Blocos PREPACK |
+| SBF / Centauro | PDF | EAN na tabela "Dados Variante"; CNPJ de **faturamento**, não de cobrança |
 | Beira Rio | PDF | Ranges de tamanho (33/38 + 39/44) |
-| Kolosh / Dakota Nordeste | PDF | Números no formato americano |
-| Sam's Club | PDF | EAN como código de produto |
+| Kolosh / Dakota Nordeste | PDF | Números em formato americano (`500.000` = 500 un.) |
+| Sam's Club | PDF | Dois layouts: consolidado e GRADE (Cross Docking, qty em embalagens) |
 | Kallan | XLSX | Colunas por código de loja |
-| Magic Feet / Authentic Feet / NBA | XLSX | Desmembramento por loja |
+| Authentic Feet / Magic Feet / Pulmão (Grupo Afeet) | XLSX | Loja única; quantidade em `TOTAL KITS` |
+| NBA / desmembramento | XLSX | Um arquivo de saída por loja |
+| Genérico | PDF/XLS | Regex + heurística de tabela |
+| _(fallback)_ | qualquer | LLM via OpenRouter, só se a cascata inteira falhar |
+
+---
 
 ## Testes
 
@@ -65,27 +92,43 @@ python main.py
 .venv/bin/pytest tests/ -v
 ```
 
-48 testes, todos passando. Samples em `samples/`.
+**877 testes** em 84 arquivos. Samples reais em `samples/`.
 
-## Adicionar um novo parser
+---
 
-1. Criar `app/parsers/novo_fornecedor_parser.py` herdando de `BaseParser`
-2. Implementar `can_parse()` e `parse()`
-3. Registrar em `app/pipeline.py` antes do `GenericParser`
-4. Adicionar sample em `samples/` e testes em `tests/test_new_parsers.py`
+## Documentação
 
-Detalhes em [ARCHITECTURE.md](ARCHITECTURE.md) e [PRD.md](PRD.md).
+| Onde | O quê |
+|---|---|
+| [`CLAUDE.md`](CLAUDE.md) | Contrato de execução: protocolo, stack, mapa do repo, env vars |
+| [`docs/ai/00-index.md`](docs/ai/00-index.md) | Roteador: task → domínio → arquivos → testes |
+| [`docs/ai/modules/`](docs/ai/modules/) | Um doc por domínio (parsers, erp, web, worker, …) |
+| [`docs/BACKLOG.md`](docs/BACKLOG.md) | Escopo aberto |
+| [`docs/superpowers/`](docs/superpowers/) | Specs e planos de implementação (histórico) |
+| [`docs/history/`](docs/history/) | PRD e ARCHITECTURE da v1 — congelados, não são fonte de verdade |
 
-## Variáveis de Ambiente
+Para adicionar um parser novo, siga o passo a passo em
+[`docs/ai/modules/parsers.md`](docs/ai/modules/parsers.md).
+
+---
+
+## Variáveis de ambiente
+
+Lista completa e comentada em [`CLAUDE.md`](CLAUDE.md#variáveis-de-ambiente). O mínimo:
 
 | Variável | Obrigatório | Descrição |
-|----------|-------------|-----------|
-| `OPENROUTER_API_KEY` | Sim (fallback LLM) | Chave da API OpenRouter (https://openrouter.ai/keys) |
-| `INPUT_DIR` | Não | Diretório de entrada (padrão: `input/`) |
-| `OUTPUT_DIR` | Não | Diretório de saída (padrão: `output/`) |
+|---|---|---|
+| `OPENROUTER_API_KEY` | Sim, para o fallback LLM | Chave OpenRouter |
+| `PORTAL_PORT` | Não | Porta do web (padrão `3636`) |
+| `PORTAL_HOST` | Não | `127.0.0.1` (padrão) ou `0.0.0.0` para a rede local |
+| `EXPORT_MODE` | Não | `xlsx` (padrão), `db` ou `both` |
+| `APP_DATA_DIR` | Não | Onde ficam os SQLite (padrão `data/`) |
+
+---
 
 ## Health check
 
 ```
-GET /health → {"status": "ok", "service": "importar-pedidos"}
+GET /health   → {"status": "ok", "service": "importar-pedidos"}
+GET /metrics  → métricas Prometheus
 ```

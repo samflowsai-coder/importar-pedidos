@@ -70,15 +70,21 @@ http://<IP-DO-SERVIDOR>:3636
 
 ## 5. Atualização (enviar uma nova versão)
 
-Quando você receber um novo pacote `portal-pedidos-AAAAMMDD.zip`:
+O Portal se atualiza **por dentro do próprio Portal**. Não precisa mexer em arquivo
+no servidor nem rodar nada na mão.
 
-1. **Extraia o novo `.zip` por cima da pasta atual**, substituindo os arquivos.
-   - O `.env` (configurações/senhas) e os dados (usuários, histórico) **não
-     são tocados** — eles não vêm no pacote.
-2. Dê **duplo-clique em `atualizar.bat`**.
-   - Ele para o serviço, atualiza as dependências e reinicia sozinho.
+1. Entre no Portal como **admin** e abra **Atualização** (`/admin/atualizacao`).
+2. Envie o pacote `portal-pedidos-AAAAMMDD.zip` que você recebeu.
+3. O Portal valida o pacote e mostra a versão. Confirme em **Aplicar**.
+4. Ele para o serviço, aplica, atualiza as dependências e volta sozinho — a própria
+   tela acompanha o progresso.
 
-Nada de reconfigurar: usuários, chave e configurações permanecem.
+O `.env` (configurações e senhas) e os dados (usuários, histórico, ambientes) **não são
+tocados**: não vêm no pacote. Nada de reconfigurar depois.
+
+> **Caminho manual — só para recuperar uma instalação quebrada.** Se o Portal não sobe,
+> e portanto não dá para usar a tela: extraia o `.zip` **por cima** da pasta atual
+> (nunca apagar-e-extrair) e dê duplo-clique em `atualizar.bat`.
 
 ---
 
@@ -102,9 +108,12 @@ Nada de reconfigurar: usuários, chave e configurações permanecem.
   (estático ou reserva de DHCP).
 - **Porta 3636 ocupada** — edite `PORTAL_PORT` no `.env` para outra porta e rode
   `atualizar.bat` (ou reinicie o serviço).
-- **Esqueci a senha do admin / criar outro usuário** — no servidor, dentro da
-  pasta:
+- **Esqueci a senha do admin** — no servidor, dentro da pasta:
+  `\.venv\Scripts\python.exe tools\create_user.py email@exemplo.com --reset`
+- **Criar outro usuário** — o caminho normal é convidar pelo Portal
+  (**Usuários** → convite). Pela linha de comando:
   `\.venv\Scripts\python.exe tools\create_user.py email@exemplo.com --role admin`
+  (esse comando **falha se o e-mail já existir** — para esse caso use `--reset`).
 
 ---
 
@@ -113,5 +122,5 @@ Nada de reconfigurar: usuários, chave e configurações permanecem.
 ```
 Servidor (1 vez):   instalar.bat  →  setup-service.bat (Admin)
 Estações:           navegador → http://<IP-do-servidor>:3636
-Atualizar:          extrair novo zip por cima  →  atualizar.bat
+Atualizar:          Portal → Atualização → enviar o .zip → Aplicar
 ```

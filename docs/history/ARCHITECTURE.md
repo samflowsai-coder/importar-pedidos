@@ -1,5 +1,17 @@
 # ARCHITECTURE — Automação de Pedidos (PDF + XLS → ERP)
 
+> **DOCUMENTO CONGELADO — não é fonte de verdade.**
+> Último conteúdo válido: 2026-04-25. Arquivado em 2026-08-21 por estar
+> defasado (falava em 8 parsers, 48 testes e uma árvore de 14 pastas; o
+> projeto tem 10 parsers específicos, 877 testes e 22 pacotes em `app/`).
+> Mantido pelo registro das **decisões de stack** e do custo estimado.
+>
+> Arquitetura viva: [`docs/ai/00-index.md`](../ai/00-index.md) e
+> [`docs/ai/modules/`](../ai/modules/).
+
+---
+
+
 ## Stack
 
 | Ferramenta | Por quê |
