@@ -34,6 +34,8 @@ cp -R app scripts tools "$STAGE/"
 cp ui.py main.py pyproject.toml .env.example "$STAGE/"
 cp instalar.bat iniciar.bat atualizar.bat setup-service.bat desinstalar.bat "$STAGE/"
 cp configurar-integracao.bat sincronizar-catalogo.bat "$STAGE/"
+# Diagnostico de campo: rodados a mao no servidor quando algo quebra.
+cp DIAGNOSTICO-APP.bat DIAGNOSTICO-PIP.bat REINICIAR-APP.bat "$STAGE/"
 # Bats com o token de prod embutido — específicos do cliente, fora do git
 # (.gitignore). Só entram no pacote se existirem no working tree.
 [ -f ligar-flowpcp.bat ] && cp ligar-flowpcp.bat "$STAGE/"

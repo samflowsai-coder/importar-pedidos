@@ -68,3 +68,7 @@ pip-log.txt
 /comparacao_catalogo_confeccao_x_americanense.xlsx
 # Amostras de debug ad-hoc (não são fixtures do repo)
 samples/Erro Magic Feet/
+
+# Saidas dos scripts de diagnostico (geradas no servidor do cliente)
+app-boot-out.txt
+app-boot-err.txt
