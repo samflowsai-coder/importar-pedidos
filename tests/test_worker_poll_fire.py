@@ -53,13 +53,82 @@ def _make_entry(
 
 
 def _make_fb_ctx(status: str) -> MagicMock:
-    fb_row = MagicMock()
-    fb_row.__getitem__ = lambda self, k: status if k == "STATUS" else 42
+    # Linha posicional (CODIGO, STATUS), como o fdb realmente devolve —
+    # nada de acesso por nome, que só um MagicMock aceitaria.
+    row = (42, status)
+    cursor = MagicMock()
+    cursor.fetchone.return_value = row
     ctx = MagicMock()
     ctx.__enter__ = MagicMock(return_value=ctx)
     ctx.__exit__ = MagicMock(return_value=False)
-    ctx.execute.return_value.fetchone.return_value = fb_row
+    ctx.cursor.return_value = cursor
     return ctx
+
+
+class _FakeCursorFdb:
+    """Forma real do cursor `fdb`: execute/fetchone/close, linha como tupla."""
+
+    def __init__(self, linhas):
+        self._linhas = linhas
+
+    def execute(self, sql, params=None):
+        return self
+
+    def fetchone(self):
+        return self._linhas[0] if self._linhas else None
+
+    def close(self):
+        pass
+
+
+class _FakeConnFdb:
+    """Forma real de `fdb.Connection`: só `cursor()`, sem `.execute()`.
+
+    Um MagicMock aceitaria `.execute()` em qualquer objeto — é exatamente
+    esse o bug que este fake existe para pegar.
+    """
+
+    def __init__(self, linhas):
+        self._cursor = _FakeCursorFdb(linhas)
+
+    def cursor(self):
+        return self._cursor
+
+    # NÃO existe .execute aqui — de propósito.
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+@patch("app.worker.jobs.poll_fire.FirebirdConnection")
+@patch("app.worker.jobs.poll_fire.repo")
+@patch("app.worker.jobs.poll_fire.append_event")
+def test_poll_usa_cursor_e_le_status_por_posicao(mock_append, mock_repo, mock_fb):
+    """Com fire_codigo preenchido o job alcança a query no Firebird.
+
+    Antes da correção, `poll_fire.py` chama `conn.execute(...)` — método que
+    existe em `fdb.Cursor`, não em `fdb.Connection` — e depois lê a linha por
+    nome (`row["STATUS"]"`), quando o driver devolve tupla posicional. Um
+    MagicMock aceita ambas as coisas sem reclamar; o fake acima tem a forma
+    real do `fdb` e por isso estoura exatamente como o driver real estouraria.
+    """
+    mock_fb.return_value.is_configured.return_value = True
+    entry = _make_entry(last_seen="PEDIDO", fire_codigo=42)
+    mock_repo.list_pending_for_fire_poll.return_value = [entry]
+    linhas = [(42, "LIBERADO")]  # (CODIGO, STATUS) — posicional, como o fdb devolve
+    mock_fb.return_value.connect_with_config.return_value = _FakeConnFdb(linhas)
+
+    with patch("app.worker.jobs.poll_fire.app_config") as mock_cfg:
+        mock_cfg.load.return_value = {"fire_trigger_status": ""}
+        from app.worker.jobs.poll_fire import run_poll_fire
+        run_poll_fire()
+
+    mock_repo.update_fire_poll_result.assert_called_once()
+    assert mock_repo.update_fire_poll_result.call_args[0][1] == "LIBERADO"
+    mock_append.assert_called_once()
 
 
 def test_returns_early_when_no_envs_configured(tmp_path):
