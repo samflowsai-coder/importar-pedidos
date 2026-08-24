@@ -361,8 +361,20 @@ def _decidir_candidato(candidato: Candidato, linhas: list[tuple]) -> Achado | No
 def _montar_achado(
     candidato: Candidato, linhas: list[tuple], *, caminho: int, lojas_casadas: int
 ) -> Achado:
-    """`fire_codigo` = menor V.CODIGO (coluna 1) entre as linhas casadas."""
-    escolhida = min(linhas, key=lambda linha: linha[1])
+    """`fire_codigo` = menor V.CODIGO (coluna 1) entre as linhas casadas —
+    mas primeiro descarta CANCELADO do desempate, se houver alternativa.
+
+    Cadastrou, cancelou, recadastrou: o mesmo PEDIDO_CLIENTE gera duas linhas
+    no Fire, e a cancelada é a mais antiga (CODIGO menor). `min()` puro
+    elegeria a cancelada e o selo mentiria "CANCELADO" para um pedido que na
+    verdade está FATURADO. Só quando TODAS as linhas casadas estão CANCELADO
+    (nenhuma alternativa) é que uma delas é escolhida mesmo assim.
+    """
+    nao_canceladas = [
+        linha for linha in linhas if (linha[2] or "").strip().upper() != "CANCELADO"
+    ]
+    candidatas = nao_canceladas or linhas
+    escolhida = min(candidatas, key=lambda linha: linha[1])
     return Achado(
         import_id=candidato.import_id,
         fire_codigo=escolhida[1],

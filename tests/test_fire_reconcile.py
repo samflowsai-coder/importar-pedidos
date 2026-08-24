@@ -313,6 +313,26 @@ def test_caminho_3_fire_status_vem_da_linha_de_menor_codigo(monkeypatch):
     assert achados["i1"].fire_status == "APROVADO"
 
 
+def test_desempate_ignora_cancelado_mesmo_com_codigo_menor(monkeypatch):
+    """Cadastrou, cancelou, recadastrou: duas linhas no Fire com o mesmo
+    PEDIDO_CLIENTE. `min(V.CODIGO)` sozinho pega a linha CANCELADA (mais
+    antiga, código menor) — o selo mostraria "Cadastrado no Fire (CANCELADO)"
+    para um pedido que na verdade está FATURADO. O desempate tem que preferir
+    a linha não-CANCELADO; só entre as não-canceladas o menor CODIGO decide.
+    """
+    _plugar(
+        monkeypatch,
+        [
+            _linha("6702645869", 900, "12.345.678/0001-99", status="CANCELADO"),
+            _linha("6702645869", 901, "12.345.678/0001-99", status="FATURADO"),
+        ],
+    )
+    cand = Candidato("i1", "6702645869", None, "12.345.678/0001-99", (), "2026-08-01")
+    achados = buscar_no_fire([cand], env_slug="mm")
+    assert achados["i1"].fire_codigo == 901
+    assert achados["i1"].fire_status == "FATURADO"
+
+
 # ── Fix round 1 (reviewer): erro_conexao explícito no retorno, não em getter
 # separado sobre estado global — imune à corrida entre duas chamadas
 # concorrentes pro mesmo env_slug (casos B/C/D provados pelo reviewer) ──
