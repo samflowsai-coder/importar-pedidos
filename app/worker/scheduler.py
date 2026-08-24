@@ -2,13 +2,22 @@
 
 Run with:  python -m app.worker
 
-Two recurring jobs:
-  drain_outbox — every 15s, drains pending rows from the outbox table.
-  poll_fire    — every 60s, polls Firebird for order status changes.
+Recurring jobs:
+  drain_outbox   — every 15s, drains pending rows from the outbox table.
+  poll_fire      — every 60s, polls Firebird for order status changes.
+  reconcile_fire — 07h/12h/18h local, reconcilia pedidos cadastrados à mão
+                   no Fire. Registrado aqui para deploys docker (onde o
+                   worker existe); o processo web registra o MESMO runner
+                   numa thread própria (ver `app/web/server.py`) porque
+                   `scripts/setup-service.ps1` só agenda `ui.py` no Windows
+                   do cliente — o worker nunca roda lá. A trava em
+                   `app.reconcile.runner` evita trabalho dobrado quando os
+                   dois disparam perto um do outro.
 
-Both use coalesce=True + max_instances=1 to prevent pile-up when a run
-takes longer than the interval.
+All periodic jobs use coalesce=True + max_instances=1 to prevent pile-up
+when a run takes longer than the interval.
 """
+
 from __future__ import annotations
 
 import signal
@@ -20,6 +29,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 from app.persistence.db import db_path
 from app.persistence.db import init as db_init
+from app.reconcile.runner import HORARIOS_LOCAIS, reconciliar_todos_os_ambientes
 from app.utils.logger import logger
 from app.worker.jobs.drain_outbox import run_drain_outbox
 from app.worker.jobs.poll_fire import run_poll_fire
@@ -32,6 +42,7 @@ _POLL_INTERVAL_S = 60
 _FLOWPCP_INTERVAL_S = 30  # poll de decisões FlowPCP (só ambientes MM habilitados)
 _SCAN_INTERVAL_S = 30  # watcher multi-pasta — ingesta arquivos novos por env
 _RETENTION_HOUR = 3  # 03:00 local — low-traffic window
+_RECONCILE_HOURS = ",".join(str(h) for h in HORARIOS_LOCAIS)  # mesma grade do web
 
 
 def start() -> None:
@@ -82,6 +93,13 @@ def start() -> None:
         "interval",
         seconds=_FLOWPCP_INTERVAL_S,
         id="poll_flowpcp",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        reconciliar_todos_os_ambientes,
+        "cron",
+        hour=_RECONCILE_HOURS,
+        id="reconcile_fire",
         replace_existing=True,
     )
 

@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +16,9 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 
 from app.observability.trace import current_trace_id, new_trace_id, with_trace_id
+from app.persistence import context as env_context
 from app.persistence import invites_repo, sessions_repo, users_repo
+from app.reconcile.runner import Resultado, loop_periodico, reconciliar
 from app.security import (
     PasswordTooLongError,
     WeakPasswordError,
@@ -129,6 +132,25 @@ app.include_router(environments_router)
 from app.web import routes_update  # noqa: E402
 
 app.include_router(routes_update.router)
+
+
+@app.on_event("startup")
+def _iniciar_reconciliacao_periodica() -> None:
+    """Reconciliação com o Fire, periódica (07h/12h/18h local) — registrada
+    AQUI (processo web), não só no scheduler do worker.
+
+    `scripts/setup-service.ps1` só registra `ui.py` como tarefa agendada no
+    Windows do cliente — o worker (`python -m app.worker`) nunca roda lá. Um
+    job registrado só no APScheduler do worker nunca dispararia em produção
+    nesse deploy. `app/worker/scheduler.py` registra o MESMO runner com
+    `CronTrigger` nos mesmos horários, para os deploys docker onde o worker
+    existe; a trava de `app.reconcile.runner` evita trabalho dobrado quando
+    os dois processos rodam ao mesmo tempo.
+
+    Thread daemon: não impede o processo de encerrar, e nunca bloqueia o
+    startup do FastAPI (só dorme e reconcilia, em loop, fora do event loop
+    de request/response)."""
+    threading.Thread(target=loop_periodico, name="reconcile-periodico", daemon=True).start()
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────
@@ -1238,6 +1260,19 @@ def get_imported(import_id: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Importação não encontrada")
     audit = repo.list_audit(import_id)
     return JSONResponse({"entry": entry, "audit": audit})
+
+
+@app.post("/api/imported/reconciliar-fire")
+def reconciliar_fire_agora(
+    _user: User = Depends(require_user),
+) -> Resultado:
+    """Botão manual: reconcilia o ambiente ativo agora, ignorando a trava —
+    a operadora pediu explicitamente, não é o loop periódico esbarrando nele
+    mesmo. `erro_conexao` distingue "consultei e não achei nada" de "não
+    consegui consultar o Fire" — sem isso a operadora vê '0 casaram' e
+    conclui que a feature quebrou."""
+    slug = env_context.current_env_slug()
+    return reconciliar(slug, respeitar_trava=False)
 
 
 class ReimportRequest(BaseModel):

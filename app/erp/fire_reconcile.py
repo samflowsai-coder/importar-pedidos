@@ -88,6 +88,20 @@ def limpar_cache() -> None:
     _FALHA_RECENTE.clear()
 
 
+def houve_falha_de_conexao(env_slug: str) -> bool:
+    """`True` se o cool-down de conexão está armado para `env_slug` agora.
+
+    Sinal específico de "não consegui perguntar ao Fire" — armado só em volta
+    de `connect_with_config` (nunca por config inválida ou dado ruim numa
+    linha, ver os comentários do `_COOLDOWN_S` acima). `buscar_no_fire()`
+    devolve `{}` tanto quando não achou nada quanto quando não conseguiu
+    conectar; quem chama e precisa distinguir os dois casos (ex.: o botão
+    manual da reconciliação, que devolve isso pra operadora) consulta este
+    helper depois da chamada, em vez de inferir de "achados veio vazio".
+    """
+    return env_slug in _FALHA_RECENTE
+
+
 def buscar_no_fire(candidatos: list[Candidato], *, env_slug: str) -> dict[str, Achado]:
     """Para cada candidato, tenta achar o pedido correspondente no Fire.
 
