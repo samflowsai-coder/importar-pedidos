@@ -1122,6 +1122,63 @@ def test_imported_filter_by_multiple_portal_status():
     assert order_numbers == {"PM-1", "PM-2"}
 
 
+def test_imported_counts_conta_todo_status_e_respeita_os_outros_filtros():
+    """`counts` alimenta os contadores dos chips de status.
+
+    Contrato em uma frase: conta por `portal_status` com TODOS os outros
+    filtros aplicados e o próprio `portal_status` de fora. É o que faz o
+    número do chip ser exatamente o que aparece ao clicar nele.
+
+    Sem isso a reconciliação move a maioria dos pedidos de uma vez e a tela
+    só encolhe — o operador vê "12 pedido(s)" e nenhuma pista de onde foram
+    parar os outros 296.
+    """
+    import uuid
+    from datetime import datetime
+
+    from app.persistence import repo
+
+    marca = f"CNT{uuid.uuid4().hex[:8].upper()}"
+    for sufixo, status in [
+        ("A", "parsed"),
+        ("B", "sent_to_fire"),
+        ("C", "found_in_fire"),
+        ("D", "cancelled"),
+        ("E", "error"),
+    ]:
+        repo.insert_import(
+            {
+                "id": str(uuid.uuid4()),
+                "source_filename": "x.pdf",
+                "imported_at": datetime.now().isoformat(timespec="seconds"),
+                "order_number": f"{marca}-{sufixo}",
+                "status": "success",
+                "portal_status": status,
+            }
+        )
+
+    r = client.get(f"/api/imported?q={marca}&portal_status=parsed")
+    assert r.status_code == 200
+    body = r.json()
+
+    # `total` continua obedecendo o chip ativo — é o tamanho da lista.
+    assert body["total"] == 1
+
+    # `counts` NÃO obedece o chip ativo (é o eixo contado), mas obedece a
+    # busca: só os cinco pedidos desta marca entram.
+    assert body["counts"] == {
+        "parsed": 1,
+        "sent_to_fire": 1,
+        "found_in_fire": 1,
+        "cancelled": 1,
+        "error": 1,
+    }, "counts deve ignorar o filtro de portal_status e respeitar q"
+
+    # O chip "Tudo" soma o dict; `error` não tem chip próprio mas aparece ao
+    # clicar em "Tudo", então precisa estar na soma.
+    assert sum(body["counts"].values()) == 5
+
+
 # ── Manual cliente override (CLIENT_NOT_FOUND recovery) ──────────────────────
 
 

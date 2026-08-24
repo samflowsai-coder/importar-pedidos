@@ -1253,7 +1253,27 @@ def list_imported(
         date_from=date_from,
         date_to=date_to,
     )
-    return JSONResponse({"entries": entries, "total": total, "limit": limit, "offset": offset})
+    # `counts` alimenta os contadores dos chips de status. Vai junto da lista,
+    # e não numa rota própria, para que os números NUNCA divirjam do que a
+    # tela acabou de renderizar — duas chamadas separadas podem cair em lados
+    # opostos de uma reconciliação em background e mostrar 12 na lista com 308
+    # no chip.
+    counts = repo.count_by_portal_status(
+        status=status,
+        production_status=production_status,
+        customer_search=q,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return JSONResponse(
+        {
+            "entries": entries,
+            "total": total,
+            "counts": counts,
+            "limit": limit,
+            "offset": offset,
+        }
+    )
 
 
 @app.get("/api/imported/{import_id}")

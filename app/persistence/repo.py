@@ -250,6 +250,46 @@ def count_imports(
     return int(row["n"])
 
 
+def count_by_portal_status(
+    status: str | None = None,
+    production_status: str | None = None,
+    customer_search: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, int]:
+    """Quantos pedidos existem em CADA `portal_status`, numa ida só ao banco.
+
+    Quem consome é o seletor de status da lista ("Em revisão" / "No Fire" /
+    "Cancelado"). Sem isto, a reconciliação move 296 dos 308 pedidos de uma vez
+    e a tela não diz para onde eles foram — o contador do rodapé conta só o
+    filtro ativo, então a lista simplesmente encolhe.
+
+    `portal_status` fica DE FORA do WHERE de propósito: é o eixo que está sendo
+    contado. Todos os OUTROS filtros entram, para que o número do chip seja
+    exatamente o que aparece ao clicar nele — um contador que discordasse da
+    lista seria pior que contador nenhum.
+
+    A coluna é `NOT NULL DEFAULT 'sent_to_fire'` (`schema_env.py:27`), então
+    toda linha cai em algum balde. Estados sem chip próprio (hoje `error`)
+    voltam no dict mesmo assim: quem soma decide o que mostrar, e a rota não
+    deve mentir por omissão.
+    """
+    clause, params = _build_where(
+        status, None, production_status, customer_search, date_from, date_to
+    )
+    with db.connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT portal_status AS ps, COUNT(*) AS n
+            FROM imports
+            {clause}
+            GROUP BY portal_status
+            """,
+            params,
+        ).fetchall()
+    return {row["ps"]: int(row["n"]) for row in rows}
+
+
 def get_import(import_id: str) -> dict | None:
     with db.connect() as conn:
         row = conn.execute(

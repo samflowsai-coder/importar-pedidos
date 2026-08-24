@@ -276,6 +276,21 @@ a operadora entender por quê. O status vem junto (`Achado.fire_status`,
 gravado em `imports.fire_status_last_seen`) e a UI mostra: "Cadastrado no
 Fire (CANCELADO)".
 
+### Limitação 1↔N (conhecida, documentada)
+
+Um import Riachuelo vira **N linhas** em `CAB_VENDAS` — uma por loja, cada
+uma com cliente e CNPJ próprios. `imports.fire_codigo` é uma coluna só, e
+guarda **o menor `V.CODIGO` entre as linhas casadas que não estão
+canceladas** (`_escolher_representante`, `fire_reconcile.py:375`). O
+desempate ignora `CANCELADO` de propósito: quando uma loja é recadastrada,
+a linha viva tem `CODIGO` maior que a cancelada, e `min()` puro faria o
+portal exibir "CANCELADO" para um pedido que está vivo no Fire.
+
+É representação **parcial** e inofensiva enquanto o `poll_fire` não roda na
+MM (`setup-service.ps1` registra só `ui.py`). No dia em que rodar, o poll
+seguirá o status de uma loja só. A saída, se importar, é uma tabela de
+ligação `import_id ↔ fire_codigo` — não alargar esta coluna.
+
 ### Degradação — nunca levanta
 
 `buscar_no_fire` (wrapper público) / `_buscar_no_fire_detalhado`

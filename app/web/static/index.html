@@ -470,6 +470,26 @@
     .seg-btn:last-child { border-right: none; }
     .seg-btn:hover { background: var(--surface-hover); color: var(--text); }
     .seg-btn.active { background: var(--accent-bg); color: var(--accent-hover); font-weight: 600; }
+    /* Contador do chip. Sem ele, a reconciliação move a maioria dos pedidos de
+       uma vez e a lista só encolhe — o operador não vê para ONDE foram. */
+    .seg-btn:has(.seg-count) {
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 6px; min-width: 0;
+    }
+    .seg-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .seg-count {
+      flex: none;
+      font-variant-numeric: tabular-nums;  /* dígito não dança ao atualizar */
+      font-size: 10px; font-weight: 600; line-height: 1.5;
+      /* --text-secondary (não --text-muted): mede 7.0:1 sobre --surface-hover;
+         --text-muted daria 4.4:1, abaixo do mínimo AA para texto pequeno. */
+      color: var(--text-secondary);
+      background: var(--surface-hover);
+      border-radius: 999px;
+      padding: 0 5px; min-width: 18px;
+    }
+    .seg-btn:hover .seg-count { background: var(--bg); }
+    .seg-btn.active .seg-count { color: var(--accent-hover); background: var(--surface-raised); }
 
     /* Firebird status in config */
     .fb-status-row {
@@ -713,10 +733,10 @@
                style="flex:1;max-width:360px;height:30px;font-size:12px"
                oninput="onLogSearchInput()">
         <div class="seg-ctrl" style="grid-template-columns:repeat(4,1fr);height:30px">
-          <button class="seg-btn" data-portal-filter="" onclick="setPortalFilter('')" style="padding:0 10px;font-size:11px">Tudo</button>
-          <button class="seg-btn active" data-portal-filter="parsed" onclick="setPortalFilter('parsed')" style="padding:0 10px;font-size:11px">Em revisão</button>
-          <button class="seg-btn" data-portal-filter="sent_to_fire,found_in_fire" onclick="setPortalFilter('sent_to_fire,found_in_fire')" style="padding:0 10px;font-size:11px">No Fire</button>
-          <button class="seg-btn" data-portal-filter="cancelled" onclick="setPortalFilter('cancelled')" style="padding:0 10px;font-size:11px">Cancelado</button>
+          <button class="seg-btn" data-portal-filter="" onclick="setPortalFilter('')" style="padding:0 8px;font-size:11px"><span class="seg-label">Tudo</span><span class="seg-count" aria-hidden="true"></span></button>
+          <button class="seg-btn active" data-portal-filter="parsed" onclick="setPortalFilter('parsed')" style="padding:0 8px;font-size:11px"><span class="seg-label">Em revisão</span><span class="seg-count" aria-hidden="true"></span></button>
+          <button class="seg-btn" data-portal-filter="sent_to_fire,found_in_fire" onclick="setPortalFilter('sent_to_fire,found_in_fire')" style="padding:0 8px;font-size:11px"><span class="seg-label">No Fire</span><span class="seg-count" aria-hidden="true"></span></button>
+          <button class="seg-btn" data-portal-filter="cancelled" onclick="setPortalFilter('cancelled')" style="padding:0 8px;font-size:11px"><span class="seg-label">Cancelado</span><span class="seg-count" aria-hidden="true"></span></button>
         </div>
         <button class="btn" onclick="loadImported()">
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
@@ -1142,7 +1162,38 @@ async function loadImported() {
         ? `${total} pedido(s)`
         : `Mostrando ${entries.length} de ${total}`;
     }
+    renderChipCounts(data.counts);
   } catch (_) {}
+}
+
+/* Contadores dos chips de status.
+ *
+ * `counts` vem de `/api/imported` com TODOS os filtros ativos menos o próprio
+ * `portal_status` — então o número do chip é exatamente o que aparece ao
+ * clicar nele, inclusive com busca digitada.
+ *
+ * "Tudo" soma o dict em vez de usar `total`: `total` já vem filtrado pelo chip
+ * ativo (12 quando o filtro é "Em revisão"), e o chip "Tudo" precisa dos 308.
+ * Somar o dict também inclui estados sem chip próprio (`error`), que é
+ * justamente o que "Tudo" mostra ao ser clicado. */
+function renderChipCounts(counts) {
+  if (!counts || typeof counts !== 'object') return;
+  const totalGeral = Object.values(counts).reduce((a, b) => a + (Number(b) || 0), 0);
+  document.querySelectorAll('[data-portal-filter]').forEach(btn => {
+    const alvo = btn.querySelector('.seg-count');
+    if (!alvo) return;
+    const filtro = btn.dataset.portalFilter;
+    const n = filtro
+      ? filtro.split(',').reduce((soma, s) => soma + (Number(counts[s]) || 0), 0)
+      : totalGeral;
+    alvo.textContent = n;
+    // O span é aria-hidden: lido solto, "Em revisão 12" vira ambiguidade
+    // ("pedido 12"?). O rótulo acessível carrega a unidade.
+    const rotulo = btn.querySelector('.seg-label');
+    if (rotulo) {
+      btn.setAttribute('aria-label', `${rotulo.textContent}: ${n} pedido${n === 1 ? '' : 's'}`);
+    }
+  });
 }
 
 /* ── Verificar no Fire (reconciliação manual) ──
