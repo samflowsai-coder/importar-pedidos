@@ -1118,31 +1118,23 @@ function onLogSearchInput() {
 
 async function loadImported() {
   try {
-    // `/api/imported?portal_status=` só aceita UM valor por chamada (repetir a
-    // query string faz o backend ficar só com o último). O chip "No Fire"
-    // precisa mostrar `sent_to_fire` + `found_in_fire` juntos, então quando o
-    // filtro tem vírgula fazemos uma chamada por status e mesclamos aqui —
-    // sem isso o segundo status "vence" e o outro some da lista em silêncio.
-    const statuses = logFilter.portal ? logFilter.portal.split(',') : [''];
-    const fetchOne = (status) => {
-      const params = new URLSearchParams({ limit: '200', offset: '0' });
-      if (logFilter.q) params.set('q', logFilter.q);
-      if (status) params.set('portal_status', status);
-      return api('/api/imported?' + params.toString());
-    };
-    const results = await Promise.all(statuses.map(fetchOne));
-    const entries = results.flatMap(d => d.entries || []);
-    entries.sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')));
-    const total = results.reduce(
-      (sum, d) => sum + (typeof d.total === 'number' ? d.total : (d.entries || []).length),
-      0
-    );
+    // `/api/imported?portal_status=` aceita o parâmetro repetido — o chip
+    // "No Fire" manda `sent_to_fire` e `found_in_fire` juntos numa chamada
+    // só; a rota já repassa a lista pro repo (`portal_status IN (...)`).
+    const params = new URLSearchParams({ limit: '200', offset: '0' });
+    if (logFilter.q) params.set('q', logFilter.q);
+    if (logFilter.portal) {
+      logFilter.portal.split(',').forEach(s => params.append('portal_status', s));
+    }
+    const data = await api('/api/imported?' + params.toString());
+    const entries = data.entries || [];
     lastLoadedEntries = entries;
     // drop selection ids that no longer exist in view
     const visibleIds = new Set(entries.filter(e => (e.portal_status || '') === 'parsed').map(e => e.id));
     batchSelection = new Set([...batchSelection].filter(id => visibleIds.has(id)));
     renderImported(entries);
     updateBatchBar();
+    const total = typeof data.total === 'number' ? data.total : entries.length;
     document.getElementById('importedCount').textContent = total;
     const meta = document.getElementById('logMeta');
     if (meta) {
@@ -1179,7 +1171,7 @@ async function reconciliarFire() {
 
     if (status === 'erro_conexao') {
       window.appShell?.showError?.(
-        'Não consegui falar com o Fire — a conexão falhou. Nenhum pedido foi verificado (não é "0 encontrados").'
+        'Não consegui falar com o Fire. Nenhum pedido foi verificado.'
       );
     } else if (status === 'em_execucao') {
       window.appShell?.showInfo?.(
@@ -1335,6 +1327,18 @@ function portalStatusBg(s) {
     : 'var(--surface-hover)';
 }
 
+// Selo reutilizado pela lista (`renderImported`) e pelo modal de detalhe
+// (`renderPreviewFooter`) — mesmo formato nos dois lugares. Um pedido pode
+// existir no Fire (sent_to_fire ou found_in_fire) e estar CANCELADO lá; sem
+// o status junto do selo, "Cadastrado no Fire" parece "resolvido" quando na
+// verdade precisa de atenção — por isso o sufixo aparece nos dois estados,
+// não só em found_in_fire.
+function portalStatusBadgeHtml(ps, fireStatusLastSeen) {
+  const showsFireStatus = (ps === 'sent_to_fire' || ps === 'found_in_fire') && fireStatusLastSeen;
+  const suffix = showsFireStatus ? ` (${esc(fireStatusLastSeen)})` : '';
+  return `<span class="preview-group-chip" style="background:${portalStatusBg(ps)};color:${portalStatusColor(ps)};font-size:10px;padding:2px 8px">${esc(portalStatusLabel(ps))}${suffix}</span>`;
+}
+
 function renderImported(entries) {
   const el = document.getElementById('logList');
   if (!entries.length) {
@@ -1361,15 +1365,7 @@ function renderImported(entries) {
     ].filter(Boolean).join(' &middot; ');
 
     const ps = e.portal_status || (e.fire_codigo != null ? 'sent_to_fire' : 'parsed');
-    // O pedido pode existir no Fire (sent_to_fire ou found_in_fire) e estar
-    // CANCELADO lá — sem mostrar o status junto do selo, "Cadastrado no
-    // Fire" parece "resolvido" quando na verdade precisa de atenção.
-    const showsFireStatus = (ps === 'sent_to_fire' || ps === 'found_in_fire') && e.fire_status_last_seen;
-    const fireStatusSuffix = showsFireStatus ? ` (${esc(e.fire_status_last_seen)})` : '';
-    const statusPill = `
-      <span class="preview-group-chip" style="background:${portalStatusBg(ps)};color:${portalStatusColor(ps)};font-size:10px;padding:2px 8px">
-        ${esc(portalStatusLabel(ps))}${fireStatusSuffix}
-      </span>`;
+    const statusPill = portalStatusBadgeHtml(ps, e.fire_status_last_seen);
     const fireBadge = e.fire_codigo != null
       ? `<span class="preview-group-chip" title="CAB_VENDAS.CODIGO no Fire" style="background:var(--success-bg);color:var(--success);font-size:10px;padding:2px 8px">Fire #${esc(e.fire_codigo)}</span>`
       : '';
@@ -2273,10 +2269,14 @@ function renderPreviewFooter(data, itemsCount) {
         ${action.label}
       </button>`;
   } else if (ps === 'sent_to_fire') {
-    note.innerHTML = `Pedido <strong>cadastrado no Fire</strong>${data.fire_codigo ? ` (CAB_VENDAS.CODIGO = ${esc(data.fire_codigo)})` : ''}. Status deve ser validado diretamente no Fire.`;
+    const badge = portalStatusBadgeHtml(ps, data.fire_status_last_seen);
+    const verifique = data.fire_status_last_seen ? '' : ' Status ainda não verificado — confira diretamente no Fire.';
+    note.innerHTML = `${badge} Pedido cadastrado no Fire${data.fire_codigo ? ` (CAB_VENDAS.CODIGO = ${esc(data.fire_codigo)})` : ''}.${verifique}`;
     actions.innerHTML = `<button class="btn btn-primary" onclick="closePreviewModal()">Fechar</button>`;
   } else if (ps === 'found_in_fire') {
-    note.innerHTML = 'Pedido <strong>já estava cadastrado no Fire</strong> — não foi o portal que enviou. Status deve ser validado diretamente no Fire.';
+    const badge = portalStatusBadgeHtml(ps, data.fire_status_last_seen);
+    const verifique = data.fire_status_last_seen ? '' : ' Status ainda não verificado — confira diretamente no Fire.';
+    note.innerHTML = `${badge} Pedido já estava cadastrado no Fire — não foi o portal que enviou.${verifique}`;
     actions.innerHTML = `<button class="btn btn-primary" onclick="closePreviewModal()">Fechar</button>`;
   } else if (ps === 'cancelled') {
     note.innerHTML = 'Pedido <strong>cancelado</strong>. Não foi enviado ao Fire.';

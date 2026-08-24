@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -1222,12 +1222,17 @@ def list_imported(
     limit: int = 100,
     offset: int = 0,
     status: str | None = None,
-    portal_status: str | None = None,
+    portal_status: list[str] | None = Query(None),
     production_status: str | None = None,
     q: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> JSONResponse:
+    """`?portal_status=` aceita o parâmetro repetido (`?portal_status=a&portal_status=b`)
+    para filtrar por múltiplos estados numa chamada só (ex.: chip "No Fire" da UI,
+    que precisa casar `sent_to_fire` e `found_in_fire` de uma vez). Um único valor
+    continua funcionando exatamente como antes — vira uma lista de 1 item, e
+    `repo._build_where` trata `IN (?)` como equivalente a `= ?`."""
     from app.persistence import repo
 
     entries = repo.list_imports(
@@ -2730,6 +2735,7 @@ def rehydrate_preview(import_id: str, request: Request) -> JSONResponse:
     payload = _build_preview_payload(import_id, entry.get("source_filename", ""), order, check)
     payload["portal_status"] = entry.get("portal_status")
     payload["fire_codigo"] = entry.get("fire_codigo")
+    payload["fire_status_last_seen"] = entry.get("fire_status_last_seen")
 
     # Surface the manual cliente override into the check banner so the UI shows
     # it in green instead of the original "✗ Cliente não encontrado" red flag.
