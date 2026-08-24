@@ -3,6 +3,9 @@ name: Release
 # Dispara na tag. O pacote publicado passa a ser um artefato rastreavel
 # (tag -> commit -> zip -> sha256), no lugar do build manual no Mac.
 # O deploy continua sendo humano: baixar o zip e subir em /admin/atualizacao.
+#
+# Sem `concurrency` de proposito: duas tags em sequencia produzem Releases
+# distintos, entao runs paralelos nao se atrapalham. Cancelar um seria pior.
 on:
   push:
     tags: ["v*"]
@@ -12,6 +15,11 @@ on:
         description: "Versao do pacote (default: carimbo AAAAMMDD-HHMM)"
         required: false
         type: string
+      with_wheelhouse:
+        description: "Embarcar os wheels das deps (necessario quando pyproject muda)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -19,7 +27,7 @@ permissions:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -42,51 +50,114 @@ jobs:
 
       # tag v20260824-1530 -> PORTAL_VERSION=20260824-1530, para que
       # tag == manifest.version == nome do zip.
+      #
+      # O input NAO e' interpolado direto no shell (`${{ inputs.version }}` no
+      # corpo do `run` seria injecao de comando por quem tem write). Vai por
+      # `env:`, que o runner passa como variavel, nao como texto do script.
       - name: Resolver versao
         id: ver
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          EVENT: ${{ github.event_name }}
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "$EVENT" = "push" ]; then
             V="${GITHUB_REF_NAME#v}"
           else
-            V="${{ inputs.version }}"
+            V="$INPUT_VERSION"
           fi
           [ -n "$V" ] || V="$(date +%Y%m%d-%H%M)"
+          case "$V" in
+            *[!A-Za-z0-9._-]*)
+              echo "::error::versao invalida: '$V' (use so [A-Za-z0-9._-])"; exit 2 ;;
+          esac
+          # Falha AGORA, nao depois de lint+testes+build: no caminho dispatch a
+          # tag e' criada no fim, e uma tag ja existente derrubaria o job com
+          # ~5min de trabalho jogado fora.
+          if [ "$EVENT" != "push" ] && git ls-remote --exit-code origin "refs/tags/v$V" >/dev/null 2>&1; then
+            echo "::error::a tag v$V ja existe no remote — escolha outra versao"; exit 2
+          fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "Versao do pacote: $V"
+
+      # So com o input ligado: baixar os wheels custa minutos e a maioria das
+      # releases nao muda deps. Sem isto, na primeira mudanca de pyproject o
+      # servidor do cliente (que roda como SYSTEM e nao alcanca o PyPI) nao
+      # instala -- e a saida seria voltar ao build manual no Mac.
+      - name: Wheelhouse (deps para instalar offline)
+        if: ${{ inputs.with_wheelhouse }}
+        run: ./tools/build_wheelhouse.sh
 
       - name: Build do pacote
         env:
           PORTAL_VERSION: ${{ steps.ver.outputs.version }}
-        run: ./tools/build_package.sh
+          WITH_WHEELHOUSE: ${{ inputs.with_wheelhouse }}
+        run: |
+          if [ "$WITH_WHEELHOUSE" = "true" ]; then
+            ./tools/build_package.sh --with-wheelhouse
+          else
+            ./tools/build_package.sh
+          fi
 
       # Dogfooding: o pacote passa pelo MESMO validador que o portal do cliente
       # roda no upload. Pega drift entre build_package.sh e a allowlist do
-      # updater antes do zip sair daqui -- foi exatamente esse par que precisou
-      # de ajuste manual quando os .bat de diagnostico entraram.
+      # updater -- foi esse par que precisou de ajuste manual quando os .bat de
+      # diagnostico entraram.
+      #
+      # O validador so recusa o que SOBRA. O que FALTA passa batido e o cliente
+      # descobre em producao, entao conferimos presenca dos criticos na mao.
       - name: Smoke — validar o pacote com o validador do portal
         id: smoke
         env:
           ZIP: dist/portal-pedidos-${{ steps.ver.outputs.version }}.zip
+          ESPERADO: ${{ steps.ver.outputs.version }}
         run: |
           python - <<'PY'
-          import os, tempfile, hashlib, json
+          import hashlib
+          import os
+          import tempfile
           from pathlib import Path
+
           from app.updates import package
 
           zp = Path(os.environ["ZIP"])
+          esperado = os.environ["ESPERADO"]
           assert zp.exists(), f"pacote nao encontrado: {zp}"
+
           with tempfile.TemporaryDirectory() as td:
               res = package.validate_and_stage(
                   zp, Path(td), Path("pyproject.toml"), update_id="ci-smoke"
               )
+              staged = Path(td) / "ci-smoke" / "portal-pedidos"
+
+              # Identidade: tag == manifest.version == nome do zip.
+              assert res.version == esperado, (
+                  f"manifest.version={res.version!r} != versao pedida {esperado!r}"
+              )
+
+              # Sub-inclusao: o que o build esqueceu de copiar nao levanta erro
+              # no validador, so some. Estes quebram a instalacao se faltarem.
+              criticos = [
+                  "ui.py",
+                  "main.py",
+                  "pyproject.toml",
+                  "manifest.json",
+                  "app/web/server.py",
+                  "app/updates/package.py",
+                  "scripts/apply-update.ps1",
+                  "instalar.bat",
+                  "atualizar.bat",
+              ]
+              faltando = [c for c in criticos if not (staged / c).exists()]
+              assert not faltando, f"pacote sem arquivos criticos: {faltando}"
+
           sha = hashlib.sha256(zp.read_bytes()).hexdigest()
           size_mb = zp.stat().st_size / 1024 / 1024
           print(f"VALIDADO OK  version={res.version}  commit={res.git_commit}  files={res.files_count}")
+          print(f"criticos presentes: {len(criticos)}/{len(criticos)}")
+
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"sha256={sha}\n")
-              f.write(f"size_mb={size_mb:.1f}\n")
-              f.write(f"files={res.files_count}\n")
-              f.write(f"git_commit={res.git_commit}\n")
+
           notes = res.notes or "_(sem notas nesta versao)_"
           Path("release_body.md").write_text(
               f"{notes}\n\n"
@@ -108,9 +179,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
+          EVENT: ${{ github.event_name }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          if [ "${{ github.event_name }}" != "push" ]; then
+          if [ "$EVENT" = "push" ]; then
+            TAG="$GITHUB_REF_NAME"
+          else
             TAG="v${VERSION}"
             git tag "$TAG"
             git push origin "$TAG"
