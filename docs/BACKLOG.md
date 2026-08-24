@@ -132,10 +132,18 @@ Próximo passo se aprovado: brainstorm → spec.
 
 ## 5. Verificação pendente (não dá para afirmar hoje)
 
-### 5.1 O cliente já roda a versão com o de-para de cliente?
-O pacote `dist/portal-pedidos-20260725.zip` **contém** o de-para (verificado), mas não
-há como afirmar que foi aplicado no cliente, nem que `intercompany_cnpj` /
+### 5.1 Os campos do de-para intercompany estão preenchidos no cliente?
+**Metade resolvido em 2026-08-24:** o cliente roda `20260824-1408` (commit `212e8cd`,
+aplicado 24/08 14:10, confirmado na tela), que contém o de-para. A dúvida sobre a versão
+acabou.
+
+**O que segue aberto:** ninguém confirmou que `intercompany_cnpj` e
 `intercompany_env_slug` foram preenchidos em `/admin/ambientes`. Precisa do share
-`/Volumes/SamFlowsAI` montado ou da VPN para checar `data/applied_update.json` + a
-tabela `environments`.
-**Enquanto os dois campos estiverem vazios, a feature é inerte** — não muda nada em produção.
+`/Volumes/SamFlowsAI` montado ou da VPN para ler a tabela `environments`.
+**Enquanto os dois campos estiverem vazios, a feature é inerte** — não muda nada em
+produção.
+
+### 5.2 A Daju funciona com OC real?
+O parser subiu em `20260824-1408` e passa em 21 testes contra o sample. **Ninguém subiu
+uma OC de verdade ainda.** Confirmar com a operação antes de considerar fechado —
+especialmente quantidade e preço, que é onde este repo já errou (Magic Feet, Sam's).
