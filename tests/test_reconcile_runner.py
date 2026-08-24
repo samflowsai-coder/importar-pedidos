@@ -114,6 +114,52 @@ def dois_ambientes(tmp_path: Path):
     db.reset_init_cache()
 
 
+def test_reconciliar_so_toca_pedido_em_parsed(env_db_com_import, monkeypatch):
+    """A garantia estrutural (`list_parsed_for_reconcile` só lista
+    `portal_status='parsed'`, `mark_found_in_fire` só grava sobre `parsed`
+    via compare-and-set) já tem teste no nível do repo
+    (`tests/test_reconcile_repo.py::test_pedido_ja_no_fire_nao_e_candidato`).
+    Este é o equivalente ponta a ponta no nível do runner: um pedido
+    `sent_to_fire` e um `cancelled` convivem no mesmo ambiente com o
+    `parsed` de sempre ("com-header") — depois de uma reconciliação real
+    (usando o `list_parsed_for_reconcile` de verdade, não mockado), nenhum
+    dos dois pode ter sido tocado."""
+    from app.erp.fire_reconcile import Achado
+    from app.reconcile import runner
+    from app.state import events as ev
+
+    repo.insert_import(
+        _entry(id="ja-enviado", order_number="2001", customer_cnpj="00000000000300")
+        | {"portal_status": "sent_to_fire"}
+    )
+    repo.insert_import(
+        _entry(id="cancelado", order_number="2002", customer_cnpj="00000000000400")
+        | {"portal_status": "cancelled"}
+    )
+
+    def _busca(cands, *, env_slug):
+        # Realista: só devolve achado pros ids que o runner de fato mandou
+        # — e o runner só manda quem `list_parsed_for_reconcile` listou.
+        return (
+            {c.import_id: Achado(c.import_id, 900, "PEDIDO", 2, 0) for c in cands},
+            False,
+        )
+
+    monkeypatch.setattr(runner, "_buscar_no_fire_detalhado", _busca)
+
+    r = runner.reconciliar("mm", respeitar_trava=False)
+
+    assert repo.get_import("ja-enviado")["portal_status"] == "sent_to_fire"
+    assert repo.get_import("cancelado")["portal_status"] == "cancelled"
+    assert not ev.list_events("ja-enviado")
+    assert not ev.list_events("cancelado")
+    # o `parsed` de sempre foi tocado — prova que o teste não é um cenário
+    # vazio onde "ninguém foi tocado" seria trivialmente verdade.
+    assert repo.get_import("com-header")["portal_status"] == "found_in_fire"
+    assert r.verificados == 1
+    assert r.casaram == 1
+
+
 def test_ambiente_com_firebird_fora_nao_impede_os_outros(monkeypatch, dois_ambientes):
     """Um Firebird inalcançável não pode cancelar a varredura dos demais."""
     from app.reconcile import runner
