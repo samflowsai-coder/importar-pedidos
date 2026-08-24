@@ -1269,10 +1269,12 @@ def reconciliar_fire_agora(
     """Botão manual: reconcilia o ambiente ativo agora, ignorando a trava —
     a operadora pediu explicitamente, não é o loop periódico esbarrando nele
     mesmo (a exclusão mútua por ambiente continua valendo: duplo clique não
-    dispara dois scans, ver `app.reconcile.runner._lock_for`). `erro_conexao`
-    distingue "consultei e não achei nada" de "não consegui consultar o
-    Fire" — sem isso a operadora vê '0 casaram' e conclui que a feature
-    quebrou."""
+    dispara dois scans, devolve `status="em_execucao"` na hora — ver
+    `app.reconcile.runner._lock_for` e `Resultado.status`). `status`
+    distingue "rodou e não achou nada" (`"ok"`) de "não consegui consultar o
+    Fire" (`"erro_conexao"`) de "já tem uma reconciliação deste ambiente em
+    andamento" (`"em_execucao"`) — sem essa distinção a operadora vê
+    '0 casaram' pros três casos e conclui, errado, que a feature quebrou."""
     from app.utils.logger import logger
 
     slug = env_context.current_env_slug()
@@ -1281,7 +1283,7 @@ def reconciliar_fire_agora(
     logger.info(
         f"reconcile.web: botão manual '{slug}' por {user.email} -> "
         f"verificados={resultado.verificados} casaram={resultado.casaram} "
-        f"erro_conexao={resultado.erro_conexao}"
+        f"status={resultado.status}"
     )
     return resultado
 

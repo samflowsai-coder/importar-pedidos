@@ -130,7 +130,7 @@ def test_ambiente_com_firebird_fora_nao_impede_os_outros(monkeypatch, dois_ambie
     runner.reconciliar("quebrado")
     r = runner.reconciliar("mm")
     assert "mm" in chamados
-    assert r.erro_conexao is False
+    assert r.status == "ok"
 
 
 def test_dois_gatilhos_concorrentes_geram_um_evento(env_db_com_import, monkeypatch):
@@ -165,8 +165,9 @@ def test_trava_barra_a_segunda_execucao(env_db_com_import, monkeypatch):
 
     monkeypatch.setattr(runner, "_buscar_no_fire_detalhado", _busca)
     runner.reconciliar("mm")
-    runner.reconciliar("mm")
+    r2 = runner.reconciliar("mm")
     assert len(execucoes) == 1
+    assert r2.status == "trava_ativa"
 
 
 def test_botao_ignora_a_trava(env_db_com_import, monkeypatch):
@@ -185,9 +186,10 @@ def test_botao_ignora_a_trava(env_db_com_import, monkeypatch):
 
 
 def test_erro_de_conexao_real_e_reportado_no_resultado(env_db_com_import, monkeypatch):
-    """`erro_conexao` tem que vir de um sinal de verdade (falha de conexão),
-    não de "achados veio vazio" — um Firebird fora e "nada casou porque não
-    achou" são achados idênticos (`{}`) e a operadora precisa distingui-los.
+    """`status="erro_conexao"` tem que vir de um sinal de verdade (falha de
+    conexão), não de "achados veio vazio" — um Firebird fora e "nada casou
+    porque não achou" são achados idênticos (`{}`) e a operadora precisa
+    distingui-los.
 
     Usa o `buscar_no_fire` REAL (não mocka `runner._buscar_no_fire_detalhado`)
     contra uma conexão que falha de propósito, do mesmo jeito que
@@ -208,7 +210,7 @@ def test_erro_de_conexao_real_e_reportado_no_resultado(env_db_com_import, monkey
 
     try:
         r = runner.reconciliar("mm")
-        assert r.erro_conexao is True
+        assert r.status == "erro_conexao"
     finally:
         fire_reconcile.limpar_cache()
 
@@ -287,8 +289,12 @@ def test_duas_chamadas_concorrentes_do_mesmo_ambiente_uma_so_roda(env_db_com_imp
     t.join(timeout=2.0)
 
     assert duracao < 1.0, "a 2ª chamada esperou a 1ª em vez de devolver na hora"
-    assert r2 == runner.Resultado(verificados=0, casaram=0, erro_conexao=False)
-    assert resultado_primeira[0].erro_conexao is False
+    # Coordenador, complemento fix round 1: "já em execução" é a MESMA
+    # família de zero silencioso que erro_conexao existe pra evitar — sem um
+    # status próprio, r2 pareceria "rodou, achou zero" quando na real não
+    # rodou nada.
+    assert r2 == runner.Resultado(verificados=0, casaram=0, status="em_execucao")
+    assert resultado_primeira[0].status == "ok"
 
 
 def test_lock_e_liberado_apos_excecao_para_a_proxima_chamada_rodar(env_db_com_import, monkeypatch):
@@ -303,11 +309,11 @@ def test_lock_e_liberado_apos_excecao_para_a_proxima_chamada_rodar(env_db_com_im
 
     monkeypatch.setattr(runner, "_buscar_no_fire_detalhado", _explode)
     r1 = runner.reconciliar("mm", respeitar_trava=False)
-    assert r1.erro_conexao is True
+    assert r1.status == "erro_conexao"
 
     monkeypatch.setattr(runner, "_buscar_no_fire_detalhado", lambda cands, *, env_slug: ({}, False))
     r2 = runner.reconciliar("mm", respeitar_trava=False)
-    assert r2.erro_conexao is False
+    assert r2.status == "ok"
 
 
 # ── Fix round 1 (reviewer): guard PORTAL_RECONCILE_PERIODICO ──

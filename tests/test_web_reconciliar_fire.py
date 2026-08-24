@@ -64,9 +64,9 @@ def test_rota_devolve_o_resultado(client, monkeypatch):
     from app.reconcile.runner import Resultado
     from app.web import server
 
-    monkeypatch.setattr(server, "reconciliar", lambda slug, **kw: Resultado(12, 5, False))
+    monkeypatch.setattr(server, "reconciliar", lambda slug, **kw: Resultado(12, 5, "ok"))
     body = client.post("/api/imported/reconciliar-fire").json()
-    assert body == {"verificados": 12, "casaram": 5, "erro_conexao": False}
+    assert body == {"verificados": 12, "casaram": 5, "status": "ok"}
 
 
 def test_firebird_fora_nao_vira_zero_silencioso(client, monkeypatch):
@@ -74,9 +74,25 @@ def test_firebird_fora_nao_vira_zero_silencioso(client, monkeypatch):
     from app.reconcile.runner import Resultado
     from app.web import server
 
-    monkeypatch.setattr(server, "reconciliar", lambda slug, **kw: Resultado(12, 0, True))
+    monkeypatch.setattr(server, "reconciliar", lambda slug, **kw: Resultado(12, 0, "erro_conexao"))
     body = client.post("/api/imported/reconciliar-fire").json()
-    assert body["erro_conexao"] is True
+    assert body["status"] == "erro_conexao"
+
+
+def test_ja_em_execucao_nao_vira_zero_silencioso(client, monkeypatch):
+    """Mesma família de zero silencioso que `erro_conexao` resolve, pelo
+    terceiro caminho: um lock ocupado (outra reconciliação do MESMO ambiente
+    já rodando neste processo) não pode parecer '0 casaram, tudo certo' pra
+    quem lê a tela. Alcançável pelo caminho mais comum que existe: a
+    operadora troca de ambiente (dispara o gatilho de entrada em background),
+    abre a tela e clica o botão — o lock nega, e sem `status="em_execucao"`
+    ela veria zero como se tivesse rodado e não achado nada."""
+    from app.reconcile.runner import Resultado
+    from app.web import server
+
+    monkeypatch.setattr(server, "reconciliar", lambda slug, **kw: Resultado(0, 0, "em_execucao"))
+    body = client.post("/api/imported/reconciliar-fire").json()
+    assert body["status"] == "em_execucao"
 
 
 def test_startup_dispara_thread_daemon_do_loop_periodico(monkeypatch):

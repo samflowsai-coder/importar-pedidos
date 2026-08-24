@@ -42,6 +42,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from datetime import time as dt_time
+from typing import Literal
 
 from app.erp.fire_reconcile import _buscar_no_fire_detalhado
 from app.observability.metrics import reconcile_fire_last_run_ok
@@ -85,16 +86,43 @@ _LOCKS_GUARD = threading.Lock()
 _ENV_VAR_PERIODICO = "PORTAL_RECONCILE_PERIODICO"
 
 
+# Fix round 1 complemento (review): `status` substitui o antigo `erro_conexao:
+# bool` — um campo único de motivo em vez de dois booleanos independentes.
+# Os dois booleanos permitiam representar um estado impossível ("erro_conexao
+# E já em execução" ao mesmo tempo, quando na real são mutuamente exclusivos
+# — cada caminho de saída de `reconciliar()` só preenche UM motivo). Com
+# `status`, o tipo já impede essa combinação inválida.
+ResultadoStatus = Literal["ok", "erro_conexao", "em_execucao", "trava_ativa"]
+
+
 @dataclass(frozen=True)
 class Resultado:
-    """O que os três gatilhos recebem de volta de uma passada de reconciliação."""
+    """O que os três gatilhos recebem de volta de uma passada de reconciliação.
+
+    `status`:
+      - `"ok"`: rodou e terminou normalmente. `casaram == 0` pode ser
+        "não achei nada" — não é erro.
+      - `"erro_conexao"`: rodou, mas não conseguiu FALAR com o Fire (ver
+        `fire_reconcile._buscar_no_fire_detalhado`). Distinto de "conversou
+        e não achou nada" — sem essa distinção a operadora vê "0 casaram" e
+        conclui que a feature quebrou.
+      - `"em_execucao"`: NÃO rodou — outra reconciliação do MESMO ambiente já
+        está em andamento neste processo (`_lock_for`, `acquire(blocking=
+        False)` negado). Mesma família de zero silencioso que
+        `"erro_conexao"` existe para evitar, pelo caminho mais comum: a
+        operadora troca de ambiente (dispara a entrada do operador em
+        background), abre a tela e clica o botão — o lock nega, e sem este
+        status ela veria "0 casaram" como se tivesse rodado e não achado
+        nada.
+      - `"trava_ativa"`: NÃO rodou — já rodou há menos de `_TRAVA_S`
+        segundos e `respeitar_trava=True`. Só os gatilhos periódicos passam
+        por aqui; o botão manual sempre usa `respeitar_trava=False` e nunca
+        vê este status.
+    """
 
     verificados: int
     casaram: int
-    # `True` quando `buscar_no_fire` não conseguiu FALAR com o Fire (cool-down
-    # de conexão armado) — distinto de "conversou e não achou nada". Sem essa
-    # distinção a operadora vê "0 casaram" e conclui que a feature quebrou.
-    erro_conexao: bool
+    status: ResultadoStatus
 
 
 def limpar_trava() -> None:
@@ -135,12 +163,12 @@ def reconciliar(env_slug: str, *, respeitar_trava: bool = True) -> Resultado:
     lock = _lock_for(env_slug)
     if not lock.acquire(blocking=False):
         logger.info(f"reconcile.runner: '{env_slug}' já em execução, pulando sem esperar")
-        return Resultado(verificados=0, casaram=0, erro_conexao=False)
+        return Resultado(verificados=0, casaram=0, status="em_execucao")
 
     try:
         if respeitar_trava and _trava_ativa(env_slug):
             logger.info(f"reconcile.runner: trava ativa p/ '{env_slug}', pulando")
-            return Resultado(verificados=0, casaram=0, erro_conexao=False)
+            return Resultado(verificados=0, casaram=0, status="trava_ativa")
 
         _ULTIMA_EXECUCAO[env_slug] = _clock()
 
@@ -149,14 +177,14 @@ def reconciliar(env_slug: str, *, respeitar_trava: bool = True) -> Resultado:
             resultado = _reconciliar_agora(env_slug)
         except Exception as exc:  # noqa: BLE001 — nunca levanta a partir daqui
             logger.warning(f"reconcile.runner: falha ao reconciliar '{env_slug}': {exc!r}")
-            resultado = Resultado(verificados=0, casaram=0, erro_conexao=True)
+            resultado = Resultado(verificados=0, casaram=0, status="erro_conexao")
 
         logger.info(
             f"reconcile.runner: concluído '{env_slug}' verificados={resultado.verificados} "
-            f"casaram={resultado.casaram} erro_conexao={resultado.erro_conexao}"
+            f"casaram={resultado.casaram} status={resultado.status}"
         )
         reconcile_fire_last_run_ok.labels(environment=env_slug).set(
-            0 if resultado.erro_conexao else 1
+            0 if resultado.status == "erro_conexao" else 1
         )
         return resultado
     finally:
@@ -167,12 +195,12 @@ def _reconciliar_agora(env_slug: str) -> Resultado:
     env = environments_repo.get_by_slug(env_slug)
     if env is None:
         logger.warning(f"reconcile.runner: ambiente '{env_slug}' não existe")
-        return Resultado(verificados=0, casaram=0, erro_conexao=False)
+        return Resultado(verificados=0, casaram=0, status="ok")
 
     with env_context.active_env(env["id"], env["slug"]):
         candidatos = repo.list_parsed_for_reconcile()
         if not candidatos:
-            return Resultado(verificados=0, casaram=0, erro_conexao=False)
+            return Resultado(verificados=0, casaram=0, status="ok")
 
         try:
             achados, erro_conexao = _buscar_no_fire_detalhado(candidatos, env_slug=env_slug)
@@ -182,7 +210,7 @@ def _reconciliar_agora(env_slug: str) -> Resultado:
             # de um Resultado, não de uma exceção subindo pro loop
             # periódico/worker/handler.
             logger.warning(f"reconcile.runner: buscar_no_fire falhou p/ '{env_slug}': {exc!r}")
-            return Resultado(verificados=len(candidatos), casaram=0, erro_conexao=True)
+            return Resultado(verificados=len(candidatos), casaram=0, status="erro_conexao")
 
         agora = datetime.now(UTC).isoformat(timespec="seconds")
         casaram = 0
@@ -198,7 +226,8 @@ def _reconciliar_agora(env_slug: str) -> Resultado:
             if venceu:
                 casaram += 1
 
-        return Resultado(verificados=len(candidatos), casaram=casaram, erro_conexao=erro_conexao)
+        status: ResultadoStatus = "erro_conexao" if erro_conexao else "ok"
+        return Resultado(verificados=len(candidatos), casaram=casaram, status=status)
 
 
 def _periodico_habilitado() -> bool:
