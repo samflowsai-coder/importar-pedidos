@@ -295,6 +295,16 @@ devolve (`app/web/server.py:1270`), "consultei e não achei nada" de "não
 consegui consultar o Fire". Sem essa distinção, `casaram=0` nos dois casos
 faria a operadora concluir, errado, que a feature quebrou.
 
+**`erro_conexao=True` cobre falha de conexão E falha de leitura/dado.**
+Fix de 2026-08-24 (achado em teste real de navegador): a distinção fina
+entre "falhou ao conectar" e "conectou mas falhou ao ler" só importa para o
+cool-down (que continua armando exclusivamente em volta do
+`connect_with_config`, como acima) — para quem lê o resultado (operadora,
+via `Resultado.status`) as duas são igualmente "não consegui consultar o
+Fire". Antes do fix, falha de leitura devolvia `erro_conexao=False`,
+fazendo a UI reportar "0 casaram" (dado como se tivesse consultado e não
+achado nada) quando na verdade a consulta nem completou.
+
 ### Testes
 `tests/test_fire_reconcile.py` — os 3 caminhos, "todas as lojas", variante
 sem sufixo (caso Sam's), guarda temporal, CNPJ divergente, Fire fora

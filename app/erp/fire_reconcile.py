@@ -128,14 +128,22 @@ def _buscar_no_fire_detalhado(
     a partir do que aconteceu dentro dela mesma, nunca de um estado
     compartilhado lido depois do fato.
 
-    `erro_conexao=True` cobre toda falha que impede uma resposta de verdade
-    do Fire (cool-down ativo, lookup do ambiente, config inválida —
-    `to_fb_config` pode falhar sem ser problema de rede [senha não decripta] e
-    ainda assim é "não consegui consultar" do ponto de vista de quem lê o
-    resultado —, e a conexão em si). `False` cobre "nada a verificar" (sem
-    candidatos/números) e falha de LEITURA/DADO já dentro de uma conexão que
-    funcionou (SQL malformado, linha suja) — isso é bug de dado, não de
-    conexão, e não arma cool-down pelo mesmo motivo (ver `_COOLDOWN_S`).
+    `erro_conexao=True` cobre TODA falha que impede uma resposta de verdade
+    do Fire — cool-down ativo, lookup do ambiente, config inválida
+    (`to_fb_config` pode falhar sem ser problema de rede [senha não decripta]
+    e ainda assim é "não consegui consultar" do ponto de vista de quem lê o
+    resultado), a conexão em si, E TAMBÉM falha de LEITURA/DADO já dentro de
+    uma conexão que funcionou (SQL malformado, linha suja, decodificação).
+    Quem lê `erro_conexao` do lado de fora (a operadora, via `Resultado.
+    status` do runner) não distingue "não conectei" de "conectei mas não
+    consegui ler" — as duas são "não consegui consultar o Fire" pra ela, e
+    tratar a segunda como sucesso silencioso ("0 casaram") é o bug que este
+    módulo existe pra evitar (achado em teste real de navegador, 2026-08-24).
+    `False` só cobre "nada a verificar" (sem candidatos/números) e o caminho
+    feliz — a distinção fina entre "erro de conexão" e "erro de leitura/dado"
+    segue existindo, mas só importa para o COOL-DOWN (`_COOLDOWN_S`), que
+    continua armando exclusivamente em volta do `connect_with_config`; o
+    valor devolvido aqui não carrega mais essa distinção.
     """
     if not candidatos:
         return {}, False
@@ -182,23 +190,26 @@ def _buscar_no_fire_detalhado(
     _FALHA_RECENTE.pop(env_slug, None)
 
     # Leitura num try separado: erro aqui (SQL malformado, charset, linha
-    # ruim) loga e devolve vazio, mas NÃO arma o cool-down nem conta como
-    # erro_conexao — a conexão funcionou, o problema é de dado/SQL.
+    # ruim) loga e devolve vazio. NÃO arma o cool-down — a conexão funcionou,
+    # o problema é de dado/SQL, e um erro de dado não pode suprimir a
+    # reconciliação do ambiente inteiro por 45s. MAS ainda é erro_conexao=True:
+    # quem lê o resultado não fala com o Fire nos dois casos, e reportar
+    # "sucesso, zero achados" aqui é o zero silencioso do teste de navegador.
     try:
         linhas = _consultar_em_blocos(conn, numeros)
     except Exception as exc:  # noqa: BLE001 — nunca levanta a partir do Fire
         logger.warning(f"fire_reconcile: leitura do Fire ('{env_slug}') falhou: {exc}")
         with contextlib.suppress(Exception):
             mgr.__exit__(type(exc), exc, exc.__traceback__)
-        return {}, False
+        return {}, True
 
     with contextlib.suppress(Exception):
         mgr.__exit__(None, None, None)
 
     # Dado cru do Fire a partir daqui (TRIM que falha em não-string, CODIGO
     # nulo que quebra o min() do desempate) — try próprio, sem armar cool-down
-    # nem contar como erro_conexao (não é falha de conexão, é dado ruim numa
-    # linha).
+    # (não é falha de conexão, é dado ruim numa linha), mas ainda
+    # erro_conexao=True pelo mesmo motivo do bloco de leitura acima.
     try:
         indice = _indexar_por_numero(linhas)
 
@@ -211,7 +222,7 @@ def _buscar_no_fire_detalhado(
         return achados, False
     except Exception as exc:  # noqa: BLE001 — nunca levanta a partir do Fire
         logger.warning(f"fire_reconcile: dado do Fire ('{env_slug}') inesperado: {exc}")
-        return {}, False
+        return {}, True
 
 
 def _todos_numeros(candidatos: list[Candidato]) -> list[str]:

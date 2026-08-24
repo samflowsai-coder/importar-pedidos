@@ -215,6 +215,55 @@ def test_erro_de_conexao_real_e_reportado_no_resultado(env_db_com_import, monkey
         fire_reconcile.limpar_cache()
 
 
+def test_erro_de_leitura_real_tambem_vira_erro_conexao_no_resultado(
+    env_db_com_import, monkeypatch
+):
+    """Zero silencioso pela 3ª porta (achado em teste real de navegador,
+    2026-08-24): a conexão funcionava, a LEITURA que falhava (`invalid
+    database handle`), e mesmo assim o botão manual devolvia `status="ok"`
+    com `casaram=0` — a operadora lia "consultei o Fire: nenhum pedido está
+    cadastrado lá ainda", que é mentira, a consulta nem completou.
+
+    Usa o `_buscar_no_fire_detalhado` REAL (não mocka o runner) contra uma
+    conexão que CONECTA mas falha ao ler, espelhando
+    `tests/test_fire_reconcile.py::test_detalhado_leitura_ruim_tem_erro_conexao_true`
+    — aqui provamos que o sinal atravessa até o `Resultado` do runner e
+    nunca vira `"ok"`.
+    """
+    from app.erp import fire_reconcile
+    from app.erp.connection import FirebirdConnection
+    from app.reconcile import runner
+
+    class _FakeCursorRuim:
+        def execute(self, sql, params=None):
+            raise RuntimeError("invalid database handle (no active connection)")
+
+        def close(self):
+            pass
+
+    class _FakeConnRuim:
+        def cursor(self):
+            return _FakeCursorRuim()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    fire_reconcile.limpar_cache()
+    monkeypatch.setattr(
+        FirebirdConnection, "connect_with_config", lambda self, cfg: _FakeConnRuim()
+    )
+
+    try:
+        r = runner.reconciliar("mm", respeitar_trava=False)
+        assert r.status == "erro_conexao"
+        assert r.status != "ok"
+    finally:
+        fire_reconcile.limpar_cache()
+
+
 # ── Gatilho periódico (07h/12h/18h local) — só a parte pura, testável ──
 
 

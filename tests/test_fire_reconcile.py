@@ -428,10 +428,21 @@ class _FakeConnRuim:
         return False
 
 
-def test_detalhado_leitura_ruim_tem_erro_conexao_false(monkeypatch):
-    """Conectou (Firebird de pé); a query/leitura falhou. Bug de dado/SQL,
-    não de conexão — não pode contar como erro_conexao (senão qualquer linha
-    suja no Fire faria a operadora achar que o Firebird caiu)."""
+# Fix de 2026-08-24 (achado em teste real de navegador): falha de LEITURA
+# devolvia erro_conexao=False, e o log mostrava a leitura falhando enquanto a
+# UI dizia "consultei e nenhum dos pedidos está cadastrado lá ainda" — mentira
+# pra operadora, que não tem como saber que a consulta nem completou. As duas
+# asserções abaixo estavam coladas num teste só (que fixava o bug como
+# contrato); agora são dois testes distintos, cada um com a garantia certa.
+
+
+def test_detalhado_leitura_ruim_tem_erro_conexao_true(monkeypatch):
+    """Conectou (Firebird de pé); a query/leitura falhou. Ainda é
+    erro_conexao=True: quem lê o resultado (a operadora, via `Resultado.
+    status` do runner) não consegue distinguir "não conectei" de "conectei
+    mas não consegui ler" — as duas são "não consegui consultar o Fire" pra
+    ela. A distinção fina entre os dois só importa pro cool-down (ver o
+    teste seguinte)."""
     monkeypatch.setattr(
         fire_reconcile.environments_repo, "get_by_slug", lambda slug: {"slug": slug}
     )
@@ -445,7 +456,34 @@ def test_detalhado_leitura_ruim_tem_erro_conexao_false(monkeypatch):
     cand = Candidato("i1", "K01", None, "12.345.678/0001-99", (), "2026-08-01")
     achados, erro_conexao = _buscar_no_fire_detalhado([cand], env_slug="mm")
     assert achados == {}
-    assert erro_conexao is False
+    assert erro_conexao is True
+
+
+def test_detalhado_leitura_ruim_nao_arma_cooldown(monkeypatch):
+    """Bug de dado/SQL, não de conexão — não pode armar o cool-down (senão
+    qualquer linha suja no Fire suprimiria a reconciliação do ambiente
+    inteiro por 45s, o mesmo desvio já catalogado pro `depara_cliente`).
+    Prova: uma 2ª chamada, na sequência, ainda tenta a rede de verdade — não
+    é interceptada pelo cool-down (comparar com
+    `test_detalhado_cooldown_ativo_tem_erro_conexao_true`, onde a 2ª chamada
+    NÃO tenta)."""
+    tentativas = []
+    monkeypatch.setattr(
+        fire_reconcile.environments_repo, "get_by_slug", lambda slug: {"slug": slug}
+    )
+    monkeypatch.setattr(fire_reconcile.environments_repo, "to_fb_config", lambda env: object())
+
+    def _connect(self, cfg):
+        tentativas.append(1)
+        return _FakeConnRuim()
+
+    monkeypatch.setattr(fire_reconcile.FirebirdConnection, "connect_with_config", _connect)
+
+    cand = Candidato("i1", "K01", None, "12.345.678/0001-99", (), "2026-08-01")
+    _buscar_no_fire_detalhado([cand], env_slug="mm")
+    _buscar_no_fire_detalhado([cand], env_slug="mm")
+
+    assert len(tentativas) == 2  # cool-down não armou: a 2ª tentou a rede de novo
 
 
 def test_buscar_no_fire_publico_continua_so_o_dict(monkeypatch):
