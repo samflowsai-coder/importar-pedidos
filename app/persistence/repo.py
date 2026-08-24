@@ -580,6 +580,14 @@ def mark_found_in_fire(
     para não duplicar a lógica de payload/environment_id/ingested_at; não dá
     para usar `append_event()` pública porque ela abre a própria conexão).
 
+    A mesma UPDATE também bumpa `state_version` (`+1`, dentro do próprio
+    compare-and-set — não numa instrução separada, senão deixaria de ser
+    atômico). `state_version` é o campo de concorrência otimista que
+    `transition()` valida via `expected_state_version` e que volta em
+    respostas de webhook (`app/web/webhooks.py`) — sem o bump aqui, quem
+    estivesse segurando a versão de antes da reconciliação não teria como
+    detectar que o estado mudou por fora do `transition()`.
+
     Devolve `True` se este chamador ganhou a corrida, `False` se outro
     gatilho já tinha marcado o pedido (sem evento duplicado, sem log de
     erro — perder a corrida é o caminho feliz, não uma falha).
@@ -591,7 +599,8 @@ def mark_found_in_fire(
                SET portal_status = 'found_in_fire',
                    fire_codigo = ?,
                    fire_status_last_seen = ?,
-                   fire_status_polled_at = ?
+                   fire_status_polled_at = ?,
+                   state_version = state_version + 1
              WHERE id = ? AND portal_status = 'parsed'
             """,
             (fire_codigo, fire_status, at, import_id),

@@ -135,6 +135,49 @@ def test_marca_e_grava_as_quatro_colunas(env_db_com_import):
     assert row["fire_status_last_seen"] == "PEDIDO"
 
 
+def test_marca_incrementa_state_version_e_derruba_expected_stale(env_db_com_import):
+    """`mark_found_in_fire` muda `portal_status` por fora do `transition()`.
+    Sem bumpar `state_version` na MESMA UPDATE do compare-and-set, um worker
+    que leu a versão antes da reconciliação (ex.: o poll de status do Fire,
+    que faz `transition(..., expected_state_version=...)`) não teria como
+    perceber que o estado mudou por baixo dele — a próxima escrita dele
+    aplicaria sobre um pressuposto errado ("ainda parsed") em vez de ser
+    rejeitada.
+    """
+    from app.state.events import StaleStateError, transition
+    from app.state.machine import EventSource, LifecycleEvent
+
+    versao_antes = repo.get_import("com-header")["state_version"]
+
+    ok = repo.mark_found_in_fire(
+        "com-header", fire_codigo=900, fire_status="PEDIDO",
+        caminho=2, lojas_casadas=0, at="2026-08-24T12:00:00Z",
+    )
+    assert ok is True
+
+    versao_depois = repo.get_import("com-header")["state_version"]
+    assert versao_depois > versao_antes
+
+    # Cenário natural: o poll de status do Fire leu a versão ANTES da
+    # reconciliação e só agora tenta gravar um FIRE_STATUS_CHANGED — tem que
+    # ser rejeitado, não aplicado silenciosamente sobre estado obsoleto.
+    with pytest.raises(StaleStateError):
+        transition(
+            "com-header",
+            LifecycleEvent.FIRE_STATUS_CHANGED,
+            source=EventSource.FIRE,
+            expected_state_version=versao_antes,
+        )
+
+    # E a versão atual (pós-reconciliação) segue funcionando normalmente.
+    transition(
+        "com-header",
+        LifecycleEvent.FIRE_STATUS_CHANGED,
+        source=EventSource.FIRE,
+        expected_state_version=versao_depois,
+    )
+
+
 def test_segunda_marcacao_perde_a_corrida_e_nao_duplica_evento(env_db_com_import):
     """Chamada sequencial: NÃO prova ausência de corrida real entre threads/processos —
     só prova que a segunda chamada, feita depois que a primeira já comitou, encontra
