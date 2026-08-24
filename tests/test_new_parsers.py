@@ -555,3 +555,70 @@ def test_daju_total_row_not_imported():
     order = _process("Cliente NOVO OC-70610.xlsx")
     assert all(item.quantity == 300.0 for item in order.items)
     assert sum(item.total_price for item in order.items) == 76932.0
+
+
+# ── Daju: os números, que é onde este repo já se queimou ─────────────────────
+#
+# Quantidade lida errado é o modo de falha clássico daqui: Magic Feet leu cor no
+# lugar de qty, Sam's leu embalagem no lugar de unidade. Entra pedido errado no
+# ERP, passa no validador (qty > 0) e ninguém percebe. A conversão PDF->xlsx que
+# origina estes arquivos é instável — ela já come o dia da data de entrega —
+# então a MESMA coluna pode vir como número nativo hoje e como texto amanhã.
+
+
+@pytest.mark.parametrize(
+    ("valor", "esperado"),
+    [
+        # Nativos do openpyxl: o tipo já resolve, não há o que adivinhar.
+        (300, 300.0),
+        (16.12, 16.12),
+        # Texto brasileiro com decimal.
+        ("16,12", 16.12),
+        ("1.234,56", 1234.56),
+        ("R$ 16,12", 16.12),
+        # O caso que quebrava: milhar sem vírgula virava 1.3 — pedido MIL VEZES
+        # menor entrando no Fire, silencioso.
+        ("1.300", 1300.0),
+        ("1.234.567", 1234567.0),
+        # E o oposto, que um fix ingênuo (str.replace(".", "")) estragaria:
+        # float stringificado tem 1 dígito depois do ponto, é decimal.
+        ("300.0", 300.0),
+        ("300", 300.0),
+        # Vazio / ausente.
+        ("", None),
+        (None, None),
+        ("—", None),
+    ],
+)
+def test_daju_parse_number_nao_adivinha(valor, esperado):
+    from app.parsers.daju_parser import DajuParser
+
+    assert DajuParser()._parse_number(valor) == esperado
+
+
+def test_daju_quantidade_bate_com_o_total_de_cada_item():
+    """qty × preço == total, item a item. Pega troca de coluna sem depender de
+    valor fixo — se a qty vier de outra coluna, a identidade quebra."""
+    order = _process("Cliente NOVO OC-70610.xlsx")
+    for item in order.items:
+        assert item.quantity and item.unit_price and item.total_price
+        assert item.quantity * item.unit_price == pytest.approx(item.total_price, abs=0.01)
+
+
+def test_daju_soma_dos_itens_bate_com_o_total_da_oc():
+    order = _process("Cliente NOVO OC-70610.xlsx")
+    assert sum(i.total_price for i in order.items) == pytest.approx(76932.0, abs=0.01)
+
+
+def test_daju_todo_item_tem_ean_de_13_digitos():
+    order = _process("Cliente NOVO OC-70610.xlsx")
+    for item in order.items:
+        assert item.ean is None or (item.ean.isdigit() and len(item.ean) == 13)
+
+
+def test_daju_data_de_entrega_completa_e_lida():
+    """O sample real vem sem o dia; este cobre o caminho em que o regex CASA."""
+    from app.parsers.daju_parser import DajuParser
+
+    texto = "Entrega prevista: 15/09/2026"
+    assert DajuParser()._find(texto, r"Entrega prevista:\s*(\d{2}/\d{2}/\d{4})") == "15/09/2026"

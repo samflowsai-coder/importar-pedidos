@@ -1,5 +1,2 @@
-O que muda nesta versão
-
-1) O portal agora entende a Ordem de Compra da Daju (cliente novo). É só subir o arquivo da OC que o pedido sai completo no preview: número da OC, CNPJ da Daju, os itens com o código do fornecedor (Ref. Forn.), EAN, quantidade e preço.
-
-2) Atenção: a OC da Daju pode chegar com a data de entrega incompleta (sem o dia). Quando isso acontecer, o campo vem vazio no preview — confira e preencha a data antes de confirmar a importação.
+(obsoleto — as notas de versão vivem em CHANGELOG.md desde 24/08/2026.
+Este arquivo só existe como fallback do build e sai na próxima release.)

@@ -4,7 +4,10 @@
 Transformar a saída do extractor (texto + tabelas) em um `Order` (pydantic). Cascata determinística: cada parser tenta `can_parse()` e, se positivo, chama `parse()`. Para no primeiro match.
 
 ## Arquivos críticos
-- `app/parsers/base_parser.py` — `BaseParser` com `_find`, `_parse_br_number`. **Sempre herde dele.**
+- `app/parsers/base_parser.py` — `BaseParser`: só os abstratos `parse` e `can_parse`.
+  **Sempre herde dele.** ⚠️ `_find` e `_parse_br_number` NÃO moram aqui — cada parser
+  tem a sua cópia. Dívida conhecida (ver `docs/BACKLOG.md`); ao mexer num parser,
+  copie do vizinho mais próximo em vez de inventar variante.
 - `app/parsers/generic_parser.py` — fallback determinístico antes do LLM.
 - `app/parsers/<cliente>_parser.py` — **11 parsers específicos**: Mercado Eletrônico, Pedido Compras Revenda, SBF/Centauro, Beira Rio, Kolosh, Sam's Club, Kallan XLS, Authentic Feet, Daju, Desmembramento XLS, e o Generic.
 - `app/pipeline.py` — registro da cascata na lista `_parsers`.
@@ -78,6 +81,15 @@ Feet e pedidos "Pulmão" do Grupo Afeet — mesmo fornecedor, mesmo template.
   coluna "Código" (interno da Daju). O bloco do comprador é o primeiro `Nome\nCNPJ:` do
   arquivo; tudo a partir de "FORNECEDOR" é a Nasmar e não pode virar cliente.
 - **"Entrega prevista" pode vir sem o dia** (`/09/2026` — perdido na conversão). Data
-  incompleta → `delivery_date = None`; o operador define no preview.
+  incompleta → `delivery_date = None`. **Não há edição de data no preview** — o
+  `CommitRequest` só carrega `preview_id` (`app/web/server.py:1491`). O pedido entra com
+  `DT_ENTREGA_ITEM = NULL` no Fire, ajustável lá depois. Se o FlowPCP for ligado neste
+  ambiente, atenção: `/recebimento` é insert-only, então `prazoSolicitado` nulo vira
+  permanente sem patch manual (mesmo incidente do `tools/reprocessar_prazos_flow.py`).
+- **Números: use o valor CRU da célula, não o stringificado.** `_parse_number` é
+  tipo-consciente porque a conversão PDF→xlsx é instável: a mesma coluna vem como número
+  nativo hoje e como texto amanhã. Texto só-com-ponto usa a regra do último grupo —
+  3 dígitos = milhar (`1.300` → 1300), senão decimal (`300.0` → 300.0). A versão ingênua
+  lia `1.300` como `1.3`: pedido mil vezes menor, silencioso, aprovado pelo validador.
 - Sem este parser o arquivo caía no `GenericParser`, que extraía pedido `'DA'` e
   quantidades erradas — bug real observado no RED do TDD.
