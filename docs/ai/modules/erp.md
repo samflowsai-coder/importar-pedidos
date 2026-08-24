@@ -232,6 +232,19 @@ do candidato − 90 dias" (`_dentro_da_janela`, `fire_reconcile.py:279-302`).
 Candidato sem `data_pedido` não aplica a guarda (passa tudo); candidato ou
 linha do Fire com data ilegível descarta por segurança, não abre exceção.
 
+**Risco residual: a guarda não tem teto.** `_dentro_da_janela` só filtra pra
+trás (`data_linha >= data_candidato − 90 dias`) — não existe limite pra
+frente. Um pedido antigo que continua `parsed` (nunca casou) pode, em tese,
+casar com um cadastro novo do mesmo número e cliente feito mais de 90 dias
+depois. É o último caminho de falso positivo que sobrou nesta feature, e não
+foi fechado de propósito: um teto simétrico (também descartar linhas do Fire
+"tarde demais" em relação ao candidato) quebraria o caso real que motivou a
+feature — os 308 pedidos que ficaram `parsed` porque a operadora só cadastra
+no Fire meses depois do import. Se um dia isso doer, um teto largo (na faixa
+de 270 a 400 dias) fecharia o reuso anual de número (o próprio motivo da
+guarda de 90 dias) sem barrar o cadastro tardio que a feature existe para
+cobrir.
+
 ### Variantes do número
 
 `app/erp/numero_pedido.py::variantes(numero)` gera as formas aceitas como

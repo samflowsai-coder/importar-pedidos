@@ -64,6 +64,16 @@ existem. A lista correta está no `CLAUDE.md`.
 ### 2.6 `app/sync/` vazio
 Só resta `__pycache__`. Ou remover o diretório, ou explicar o que era.
 
+### 2.7 Starvation acima de 500 candidatos na reconciliação Fire
+`repo.list_parsed_for_reconcile` (`app/persistence/repo.py:529`) pega os 500 pedidos
+`parsed` mais antigos (`ORDER BY imported_at ASC LIMIT 500`). Quem não casa no Fire
+continua `parsed`, ocupando as mesmas 500 vagas para sempre — um pedido novo nunca
+chega a ser tentado enquanto a fila estiver cheia de velhos que nunca casam, e nada
+sinaliza esse starvation. Hoje com 308 pendentes é irrelevante (cabe tudo numa
+página). **Fix, se doer:** rotacionar a fila (cursor avançando por `imported_at`
+em vez de sempre pegar os 500 mais antigos) ou desistir de candidato "velho demais
+sem casar" depois de N tentativas, liberando a vaga.
+
 ---
 
 ## 3. Bloqueado em terceiros
