@@ -1315,6 +1315,8 @@ function portalStatusColor(s) {
     // found_in_fire: mesma família "sucesso" do sent_to_fire (o pedido
     // existe no Fire nos dois casos), mas selo preenchido — distingue a
     // origem (alguém cadastrou por fora do portal) sem inventar cor nova.
+    // Texto branco sobre var(--success) mede só 3.30:1 (abaixo do AA de
+    // 4.5:1) — por isso o fundo usa --success-strong, não --success.
     : s === 'found_in_fire' ? '#fff'
     : s === 'cancelled' ? 'var(--text-muted)'
     : 'var(--text-muted)';
@@ -1322,7 +1324,10 @@ function portalStatusColor(s) {
 function portalStatusBg(s) {
   return s === 'parsed' ? 'var(--warn-bg)'
     : s === 'sent_to_fire' ? 'var(--success-bg)'
-    : s === 'found_in_fire' ? 'var(--success)'
+    // --success-strong (não --success): branco sobre --success mede 3.30:1,
+    // abaixo do mínimo AA de 4.5:1 pro texto pequeno do selo. Sobre
+    // --success-strong mede 5.02:1 — ver tokens.css.
+    : s === 'found_in_fire' ? 'var(--success-strong)'
     : s === 'cancelled' ? 'var(--surface-hover)'
     : 'var(--surface-hover)';
 }

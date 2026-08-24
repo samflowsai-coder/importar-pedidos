@@ -28,6 +28,11 @@
   /* Status */
   --success:        #16A34A;
   --success-bg:     rgba(22,163,74,.08);
+  /* Verde mais escuro que --success, só para combinações de alto contraste
+     (ex.: texto branco sobre preenchimento sólido em fonte pequena) — mede
+     5.02:1 contra #FFFFFF, acima do mínimo AA de 4.5:1. --success sozinho
+     (3.30:1 com texto branco) não passa nesse uso. */
+  --success-strong: #15803D;
   --error:          #DC2626;
   --error-bg:       rgba(220,38,38,.08);
   --warn:           #D97706;
