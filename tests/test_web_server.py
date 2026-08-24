@@ -474,6 +474,38 @@ def test_cancel_sent_to_fire_rejected():
     assert r.status_code == 409
 
 
+def test_cancel_found_in_fire_rejected_without_audit():
+    """found_in_fire (reconciliado, não inserido pelo portal) não pode ser
+    cancelado — e a tentativa recusada não deve gravar audit 'cancelled',
+    porque o cancelamento não aconteceu."""
+    import uuid
+    from datetime import datetime
+
+    from app.persistence import repo
+
+    entry_id = str(uuid.uuid4())
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "TEST-FOUND",
+            "status": "success",
+            "portal_status": "found_in_fire",
+            "fire_codigo": 555,
+            "snapshot": {"header": {"order_number": "TEST-FOUND"}, "items": []},
+        }
+    )
+    r = client.post(f"/api/imported/{entry_id}/cancel", json={"reason": "duplicado"})
+    assert r.status_code == 409
+
+    got = repo.get_import(entry_id)
+    assert got["portal_status"] == "found_in_fire"
+
+    audit_events = [a["event_type"] for a in repo.list_audit(entry_id)]
+    assert "cancelled" not in audit_events
+
+
 def test_send_to_fire_rejects_wrong_portal_status():
     import uuid
     from datetime import datetime
@@ -822,6 +854,36 @@ def test_export_xlsx_rejects_wrong_portal_status():
     )
     r = client.post(f"/api/imported/{entry_id}/export-xlsx")
     assert r.status_code == 409
+
+
+def test_export_xlsx_rejects_found_in_fire_with_explanation():
+    """found_in_fire já está no ERP — reexportar convida duplicata. A mensagem
+    precisa explicar o motivo (não é erro do usuário)."""
+    import uuid
+    from datetime import datetime
+
+    from app.persistence import repo
+
+    entry_id = str(uuid.uuid4())
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "XLSX-FOUND",
+            "status": "success",
+            "portal_status": "found_in_fire",
+            "fire_codigo": 777,
+            "snapshot": {"header": {"order_number": "XLSX-FOUND"}, "items": []},
+        }
+    )
+    r = client.post(f"/api/imported/{entry_id}/export-xlsx")
+    assert r.status_code == 409
+    detail = r.json()["detail"].lower()
+    # Mensagem dedicada, não a genérica de "wrong_status": precisa explicar
+    # que o pedido já está no Fire (não é erro do usuário reexportar).
+    assert "já" in detail and "fire" in detail
+    assert "em revisão" not in detail
 
 
 def test_batch_send_to_fire_rejects_empty_and_oversized():

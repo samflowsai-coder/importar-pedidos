@@ -1881,6 +1881,16 @@ def _export_one_xlsx(
         return _XlsxExportOutcome(
             False, reason="not_found", http_status=404, detail="Pedido não encontrado"
         )
+    if entry.get("portal_status") == "found_in_fire":
+        return _XlsxExportOutcome(
+            False,
+            reason="found_in_fire",
+            http_status=409,
+            detail=(
+                "Pedido já consta no Fire — não é possível exportar novamente "
+                "(reexportar cadastraria duplicata no ERP)"
+            ),
+        )
     if entry.get("portal_status") != "parsed":
         return _XlsxExportOutcome(
             False,
@@ -2259,10 +2269,14 @@ def cancel_import(
             status_code=409,
             detail="Pedido já foi enviado ao Fire — não pode ser cancelado pelo portal",
         )
+    if entry.get("portal_status") == "found_in_fire":
+        raise HTTPException(
+            status_code=409,
+            detail="Pedido já consta no Fire — não pode ser cancelado pelo portal",
+        )
 
     reason = body.reason if body else None
     with with_trace_id(entry.get("trace_id")):
-        repo.append_audit(import_id, "cancelled", {"reason": reason})
         try:
             result = transition(
                 import_id,
@@ -2272,6 +2286,7 @@ def cancel_import(
             )
         except InvalidTransitionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        repo.append_audit(import_id, "cancelled", {"reason": reason})
     return JSONResponse(
         {
             "entry_id": import_id,
