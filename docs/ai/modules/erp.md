@@ -297,6 +297,8 @@ faria a operadora concluir, errado, que a feature quebrou.
 
 ### Testes
 `tests/test_fire_reconcile.py` — os 3 caminhos, "todas as lojas", variante
-sem sufixo (caso Sam's), zeros à esquerda, guarda temporal, CNPJ
-divergente, Fire fora devolve vazio sem levantar, cool-down só em erro de
-conexão, lote > 200.
+sem sufixo (caso Sam's), guarda temporal, CNPJ divergente, Fire fora
+devolve vazio sem levantar, cool-down só em erro de conexão, lote > 200.
+
+`tests/test_numero_pedido.py` — as variantes de número em isolamento,
+incluindo zeros à esquerda (`test_zeros_a_esquerda_viram_variante`).
