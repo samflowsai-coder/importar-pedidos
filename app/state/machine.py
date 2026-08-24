@@ -22,6 +22,7 @@ from enum import Enum
 class PortalStatus(str, Enum):
     PARSED = "parsed"               # in human review, not yet in Fire
     SENT_TO_FIRE = "sent_to_fire"   # CAB_VENDAS row created
+    FOUND_IN_FIRE = "found_in_fire"  # existe no Fire; o portal NÃO foi quem inseriu
     CANCELLED = "cancelled"         # killed in portal before reaching Fire
     ERROR = "error"                 # parsing/import-time failure (terminal)
 
@@ -64,6 +65,9 @@ class LifecycleEvent(str, Enum):
     # Phase 5 — poll worker
     FIRE_STATUS_CHANGED = "fire_status_changed"
 
+    # Reconciliação — pedido cadastrado à mão no Fire, observado pelo portal
+    FOUND_IN_FIRE = "found_in_fire"
+
 
 class InvalidTransitionError(Exception):
     """The (current_state, event) pair is not in the transition table."""
@@ -101,6 +105,16 @@ PORTAL_TRANSITIONS: dict[tuple[PortalStatus, LifecycleEvent], PortalStatus] = {
     (PortalStatus.SENT_TO_FIRE, LifecycleEvent.PRODUCTION_UPDATE): PortalStatus.SENT_TO_FIRE,
     (PortalStatus.SENT_TO_FIRE, LifecycleEvent.PRODUCTION_COMPLETED): PortalStatus.SENT_TO_FIRE,
     (PortalStatus.SENT_TO_FIRE, LifecycleEvent.PRODUCTION_CANCELLED): PortalStatus.SENT_TO_FIRE,
+
+    # Reconciliação — pedido cadastrado à mão no Fire, observado pelo portal
+    (PortalStatus.PARSED, LifecycleEvent.FOUND_IN_FIRE): PortalStatus.FOUND_IN_FIRE,
+    (PortalStatus.FOUND_IN_FIRE, LifecycleEvent.FIRE_STATUS_CHANGED): PortalStatus.FOUND_IN_FIRE,
+    (PortalStatus.FOUND_IN_FIRE, LifecycleEvent.POST_TO_GESTOR_REQUESTED): PortalStatus.FOUND_IN_FIRE,
+    (PortalStatus.FOUND_IN_FIRE, LifecycleEvent.POST_TO_GESTOR_SENT): PortalStatus.FOUND_IN_FIRE,
+    (PortalStatus.FOUND_IN_FIRE, LifecycleEvent.POST_TO_GESTOR_FAILED): PortalStatus.FOUND_IN_FIRE,
+    (PortalStatus.FOUND_IN_FIRE, LifecycleEvent.PRODUCTION_UPDATE): PortalStatus.FOUND_IN_FIRE,
+    (PortalStatus.FOUND_IN_FIRE, LifecycleEvent.PRODUCTION_COMPLETED): PortalStatus.FOUND_IN_FIRE,
+    (PortalStatus.FOUND_IN_FIRE, LifecycleEvent.PRODUCTION_CANCELLED): PortalStatus.FOUND_IN_FIRE,
 }
 
 # (current_production, event) -> new_production
@@ -135,6 +149,9 @@ PRODUCTION_TRANSITIONS: dict[tuple[ProductionStatus, LifecycleEvent], Production
         ProductionStatus.COMPLETED,
     (ProductionStatus.IN_PRODUCTION, LifecycleEvent.PRODUCTION_CANCELLED):
         ProductionStatus.PRODUCTION_CANCELLED,
+
+    # Reconciliação — pedido cadastrado à mão no Fire, observado pelo portal
+    (ProductionStatus.NONE, LifecycleEvent.FOUND_IN_FIRE): ProductionStatus.NONE,
 }
 
 TERMINAL_PORTAL_STATES: frozenset[PortalStatus] = frozenset(
