@@ -75,7 +75,7 @@ task → domínio → arquivos a carregar → testes a rodar. Não carregue o pr
 | Agendamento | **APScheduler** — `app/worker/` |
 | Log | **loguru** com rotação |
 | Lint/format | **ruff** |
-| Testes | **pytest** — **877 testes** em 84 arquivos |
+| Testes | **pytest** — **882 testes** em 84 arquivos |
 
 ---
 
@@ -86,7 +86,7 @@ Cada linha aponta pro doc que tem o detalhe. Este mapa é roteamento, não refer
 | Pacote | Papel | Doc |
 |---|---|---|
 | `app/ingestion/`, `app/classifiers/`, `app/extractors/` | disco → bytes → formato → texto/tabelas | `modules/extractors.md` |
-| `app/parsers/` | cascata determinística: 10 específicos + genérico | `modules/parsers.md` |
+| `app/parsers/` | cascata determinística: 11 específicos + genérico | `modules/parsers.md` |
 | `app/llm/` | fallback OpenRouter quando a cascata inteira falha | `modules/llm.md` |
 | `app/normalizers/`, `app/validators/` | datas/case/CNPJ; obrigatórios e qty > 0 | `modules/normalizers.md`, `modules/validators.md` |
 | `app/exporters/` | XLSX (split por loja) e Firebird | `modules/exporters.md` |
@@ -117,7 +117,7 @@ pip install -e ".[dev]"                  # instalar
 ruff check app/ tests/                   # lint
 ruff format app/ tests/                  # format
 
-.venv/bin/pytest tests/ -v               # suíte completa (877 testes)
+.venv/bin/pytest tests/ -v               # suíte completa (882 testes)
 .venv/bin/pytest tests/<arquivo>.py -v   # direcionado (use este durante a task)
 
 python ui.py                             # web → http://127.0.0.1:3636
