@@ -320,13 +320,20 @@ def FIND_ORDERS_BY_PEDIDO_CLIENTE(n: int) -> str:
     Generaliza a `FIND_CLIENTE_REAL_BY_PEDIDO_CLIENTE` para receber N números
     de uma vez — 308 pedidos viram 2 idas ao banco em vez de 308.
 
-    As colunas duplicadas vêm ALIASADAS: a query original devolve `V.CODIGO` e
-    `C.CODIGO` sem alias, e quem lê por posição erra na leitura.
+    As colunas duplicadas NÃO têm alias no SQL — quem lê o cursor por posição
+    (índice 0-based) deve usar: índice 1 = V.CODIGO (pedido no Fire),
+    índice 4 = C.CODIGO (cliente no Fire). São nomes iguais (`CODIGO`) em
+    tabelas diferentes; a posição é o que distingue, não o nome.
 
     `DATA_PEDIDO` sai junto porque a guarda temporal precisa dela: número curto
     e sequencial (K01, MF048, AF198) se repete entre anos no MESMO cliente, e a
     chave dupla não fecha esse caso sozinha.
     """
+    if n <= 0:
+        raise ValueError(
+            "FIND_ORDERS_BY_PEDIDO_CLIENTE requer n >= 1 "
+            "(IN () é SQL inválida no Firebird)"
+        )
     marcadores = ", ".join("?" for _ in range(n))
     return f"""
     SELECT TRIM(V.PEDIDO_CLIENTE), V.CODIGO, V.STATUS, V.DATA_PEDIDO,
