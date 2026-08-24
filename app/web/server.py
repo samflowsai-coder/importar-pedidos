@@ -1264,15 +1264,26 @@ def get_imported(import_id: str) -> JSONResponse:
 
 @app.post("/api/imported/reconciliar-fire")
 def reconciliar_fire_agora(
-    _user: User = Depends(require_user),
+    user: User = Depends(require_user),
 ) -> Resultado:
     """Botão manual: reconcilia o ambiente ativo agora, ignorando a trava —
     a operadora pediu explicitamente, não é o loop periódico esbarrando nele
-    mesmo. `erro_conexao` distingue "consultei e não achei nada" de "não
-    consegui consultar o Fire" — sem isso a operadora vê '0 casaram' e
-    conclui que a feature quebrou."""
+    mesmo (a exclusão mútua por ambiente continua valendo: duplo clique não
+    dispara dois scans, ver `app.reconcile.runner._lock_for`). `erro_conexao`
+    distingue "consultei e não achei nada" de "não consegui consultar o
+    Fire" — sem isso a operadora vê '0 casaram' e conclui que a feature
+    quebrou."""
+    from app.utils.logger import logger
+
     slug = env_context.current_env_slug()
-    return reconciliar(slug, respeitar_trava=False)
+    logger.info(f"reconcile.web: botão manual acionado por {user.email} em '{slug}'")
+    resultado = reconciliar(slug, respeitar_trava=False)
+    logger.info(
+        f"reconcile.web: botão manual '{slug}' por {user.email} -> "
+        f"verificados={resultado.verificados} casaram={resultado.casaram} "
+        f"erro_conexao={resultado.erro_conexao}"
+    )
+    return resultado
 
 
 class ReimportRequest(BaseModel):

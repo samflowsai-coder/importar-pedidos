@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from app.erp import fire_reconcile
-from app.erp.fire_reconcile import Candidato, buscar_no_fire
+from app.erp.fire_reconcile import Candidato, _buscar_no_fire_detalhado, buscar_no_fire
 
 
 class _FakeCursor:
@@ -311,3 +311,128 @@ def test_caminho_3_fire_status_vem_da_linha_de_menor_codigo(monkeypatch):
     )
     achados = buscar_no_fire([cand], env_slug="mm")
     assert achados["i1"].fire_status == "APROVADO"
+
+
+# ── Fix round 1 (reviewer): erro_conexao explícito no retorno, não em getter
+# separado sobre estado global — imune à corrida entre duas chamadas
+# concorrentes pro mesmo env_slug (casos B/C/D provados pelo reviewer) ──
+
+
+def test_detalhado_sucesso_tem_erro_conexao_false(monkeypatch):
+    _plugar(monkeypatch, [_linha("6702645869", 900, "12.345.678/0001-99")])
+    cand = Candidato("i1", "6702645869", None, "12.345.678/0001-99", (), "2026-08-01")
+    achados, erro_conexao = _buscar_no_fire_detalhado([cand], env_slug="mm")
+    assert achados["i1"].fire_codigo == 900
+    assert erro_conexao is False
+
+
+def test_detalhado_falha_de_conexao_tem_erro_conexao_true(monkeypatch):
+    _plugar(monkeypatch, [], erro=RuntimeError("host inalcançável"))
+    cand = Candidato("i1", "K01", None, "12.345.678/0001-99", (), "2026-08-01")
+    achados, erro_conexao = _buscar_no_fire_detalhado([cand], env_slug="mm")
+    assert achados == {}
+    assert erro_conexao is True
+
+
+def test_detalhado_cooldown_ativo_tem_erro_conexao_true(monkeypatch):
+    """A 2ª chamada nem tenta a rede (cool-down) — mesmo assim é
+    erro_conexao=True: sabemos, agora, que o Fire está indisponível."""
+    tentativas = []
+    monkeypatch.setattr(
+        fire_reconcile.environments_repo, "get_by_slug", lambda slug: {"slug": slug}
+    )
+    monkeypatch.setattr(
+        fire_reconcile.environments_repo, "to_fb_config", lambda env: object()
+    )
+
+    def _connect(self, cfg):
+        tentativas.append(1)
+        raise RuntimeError("fora")
+
+    monkeypatch.setattr(fire_reconcile.FirebirdConnection, "connect_with_config", _connect)
+
+    cand = Candidato("i1", "K01", None, "12.345.678/0001-99", (), "2026-08-01")
+    _, erro1 = _buscar_no_fire_detalhado([cand], env_slug="mm")
+    _, erro2 = _buscar_no_fire_detalhado([cand], env_slug="mm")
+    assert erro1 is True
+    assert erro2 is True
+    assert len(tentativas) == 1  # só a 1ª tentou de verdade; a 2ª leu o cool-down
+
+
+def test_detalhado_to_fb_config_invalido_tem_erro_conexao_true(monkeypatch):
+    """Caso C do reviewer: senha do ambiente não decripta. Não é falha de
+    rede (não arma cool-down), mas é "não consegui consultar" pra quem lê o
+    resultado — tem que chegar como erro_conexao=True, não False."""
+    tentativas = []
+    monkeypatch.setattr(
+        fire_reconcile.environments_repo, "get_by_slug", lambda slug: {"slug": slug}
+    )
+
+    def _to_fb_config(env):
+        tentativas.append(1)
+        raise RuntimeError("senha corrompida")
+
+    monkeypatch.setattr(fire_reconcile.environments_repo, "to_fb_config", _to_fb_config)
+
+    cand = Candidato("i1", "K01", None, "12.345.678/0001-99", (), "2026-08-01")
+    achados, erro_conexao = _buscar_no_fire_detalhado([cand], env_slug="mm")
+    assert achados == {}
+    assert erro_conexao is True
+    assert len(tentativas) == 1  # não arma cool-down: sem 2ª chamada aqui pra provar
+
+
+def test_detalhado_ambiente_inexistente_tem_erro_conexao_true(monkeypatch):
+    monkeypatch.setattr(fire_reconcile.environments_repo, "get_by_slug", lambda slug: None)
+    cand = Candidato("i1", "K01", None, "12.345.678/0001-99", (), "2026-08-01")
+    achados, erro_conexao = _buscar_no_fire_detalhado([cand], env_slug="mm")
+    assert achados == {}
+    assert erro_conexao is True
+
+
+class _FakeCursorRuim:
+    def execute(self, sql, params=None):
+        raise RuntimeError("SQL malformado")
+
+    def close(self):
+        pass
+
+
+class _FakeConnRuim:
+    def cursor(self):
+        return _FakeCursorRuim()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_detalhado_leitura_ruim_tem_erro_conexao_false(monkeypatch):
+    """Conectou (Firebird de pé); a query/leitura falhou. Bug de dado/SQL,
+    não de conexão — não pode contar como erro_conexao (senão qualquer linha
+    suja no Fire faria a operadora achar que o Firebird caiu)."""
+    monkeypatch.setattr(
+        fire_reconcile.environments_repo, "get_by_slug", lambda slug: {"slug": slug}
+    )
+    monkeypatch.setattr(fire_reconcile.environments_repo, "to_fb_config", lambda env: object())
+    monkeypatch.setattr(
+        fire_reconcile.FirebirdConnection,
+        "connect_with_config",
+        lambda self, cfg: _FakeConnRuim(),
+    )
+
+    cand = Candidato("i1", "K01", None, "12.345.678/0001-99", (), "2026-08-01")
+    achados, erro_conexao = _buscar_no_fire_detalhado([cand], env_slug="mm")
+    assert achados == {}
+    assert erro_conexao is False
+
+
+def test_buscar_no_fire_publico_continua_so_o_dict(monkeypatch):
+    """`buscar_no_fire()` é o wrapper de uma linha — devolve só o dict, nunca
+    a tupla, preservando o contrato dos 18 testes acima (`== {}`)."""
+    _plugar(monkeypatch, [], erro=RuntimeError("host inalcançável"))
+    cand = Candidato("i1", "K01", None, "12.345.678/0001-99", (), "2026-08-01")
+    resultado = buscar_no_fire([cand], env_slug="mm")
+    assert resultado == {}
+    assert isinstance(resultado, dict)

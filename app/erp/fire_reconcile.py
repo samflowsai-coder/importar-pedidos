@@ -88,55 +88,86 @@ def limpar_cache() -> None:
     _FALHA_RECENTE.clear()
 
 
-def houve_falha_de_conexao(env_slug: str) -> bool:
-    """`True` se o cool-down de conexão está armado para `env_slug` agora.
-
-    Sinal específico de "não consegui perguntar ao Fire" — armado só em volta
-    de `connect_with_config` (nunca por config inválida ou dado ruim numa
-    linha, ver os comentários do `_COOLDOWN_S` acima). `buscar_no_fire()`
-    devolve `{}` tanto quando não achou nada quanto quando não conseguiu
-    conectar; quem chama e precisa distinguir os dois casos (ex.: o botão
-    manual da reconciliação, que devolve isso pra operadora) consulta este
-    helper depois da chamada, em vez de inferir de "achados veio vazio".
-    """
-    return env_slug in _FALHA_RECENTE
-
-
 def buscar_no_fire(candidatos: list[Candidato], *, env_slug: str) -> dict[str, Achado]:
     """Para cada candidato, tenta achar o pedido correspondente no Fire.
 
     Devolve só os `import_id` que casaram — chave dupla fechada (número E
     identidade de cliente) e dentro da janela temporal. Nunca levanta.
+
+    Wrapper de uma linha sobre `_buscar_no_fire_detalhado` — existe pra manter
+    o contrato congelado (18 testes em `tests/test_fire_reconcile.py` fazem
+    `assert buscar_no_fire(...) == {}`, inclusive pra falha de conexão).
+    Quem precisa saber SE foi falha de conexão (não só "veio vazio") usa
+    `_buscar_no_fire_detalhado` diretamente — é o que `app.reconcile.runner`
+    faz.
+    """
+    achados, _erro_conexao = _buscar_no_fire_detalhado(candidatos, env_slug=env_slug)
+    return achados
+
+
+def _buscar_no_fire_detalhado(
+    candidatos: list[Candidato], *, env_slug: str
+) -> tuple[dict[str, Achado], bool]:
+    """Implementação real de `buscar_no_fire`, com o sinal de conexão explícito.
+
+    `erro_conexao` (2º elemento) é uma variável LOCAL desta chamada — nunca
+    lida de `_FALHA_RECENTE` (estado de módulo, compartilhado) DEPOIS que a
+    chamada termina. Isso importa: se o sinal fosse lido de fora via um
+    getter separado (como uma versão anterior desta função fazia,
+    `houve_falha_de_conexao(env_slug)`), duas chamadas concorrentes pro MESMO
+    `env_slug` — o loop periódico do web e o botão manual, por exemplo —
+    poderiam contaminar o resultado uma da outra:
+      - A conecta com sucesso, mas B (mesmo slug) falha *entre* A terminar e
+        A checar o estado global — A herdaria um erro que não é dela.
+      - A falha, mas B (mesmo slug) conecta com sucesso logo depois e limpa
+        `_FALHA_RECENTE` *entre* A falhar e A checar o estado — A herdaria
+        um sucesso que não é dela (zero silencioso: A não achou nada porque
+        não conseguiu conectar, mas reportaria erro_conexao=False).
+    Devolver o booleano como parte do retorno desta função elimina essa
+    janela por construção — cada chamada decide o próprio `erro_conexao` só
+    a partir do que aconteceu dentro dela mesma, nunca de um estado
+    compartilhado lido depois do fato.
+
+    `erro_conexao=True` cobre toda falha que impede uma resposta de verdade
+    do Fire (cool-down ativo, lookup do ambiente, config inválida —
+    `to_fb_config` pode falhar sem ser problema de rede [senha não decripta] e
+    ainda assim é "não consegui consultar" do ponto de vista de quem lê o
+    resultado —, e a conexão em si). `False` cobre "nada a verificar" (sem
+    candidatos/números) e falha de LEITURA/DADO já dentro de uma conexão que
+    funcionou (SQL malformado, linha suja) — isso é bug de dado, não de
+    conexão, e não arma cool-down pelo mesmo motivo (ver `_COOLDOWN_S`).
     """
     if not candidatos:
-        return {}
+        return {}, False
 
     numeros = _todos_numeros(candidatos)
     if not numeros:
-        return {}
+        return {}, False
 
     falha_em = _FALHA_RECENTE.get(env_slug)
     if falha_em is not None and (_clock() - falha_em) < _COOLDOWN_S:
-        # Cool-down ativo: nem tenta a rede.
-        return {}
+        # Cool-down ativo: nem tenta a rede. Sabemos, agora, que o Fire está
+        # indisponível — isso É um erro de conexão pra quem lê o resultado.
+        return {}, True
 
     try:
         env = environments_repo.get_by_slug(env_slug)
     except Exception as exc:  # noqa: BLE001 — nunca levanta a partir do Fire
         logger.warning(f"fire_reconcile: lookup do ambiente '{env_slug}' falhou: {exc}")
-        return {}
+        return {}, True
 
     if env is None:
         logger.warning(f"fire_reconcile: ambiente '{env_slug}' não existe")
-        return {}
+        return {}, True
 
     try:
         cfg = environments_repo.to_fb_config(env)
     except Exception as exc:  # noqa: BLE001 — nunca levanta a partir do Fire
         # Não é falha de rede (lê SQLite local + decripta senha) — não arma
-        # cool-down, só loga e desiste desta chamada.
+        # cool-down, só loga e desiste desta chamada. Mas AINDA é "não
+        # consegui consultar" pra quem lê o resultado (erro_conexao=True).
         logger.warning(f"fire_reconcile: config do ambiente '{env_slug}' inválida: {exc}")
-        return {}
+        return {}, True
 
     # Conexão isolada num try próprio: só ela arma o cool-down.
     try:
@@ -145,27 +176,29 @@ def buscar_no_fire(candidatos: list[Candidato], *, env_slug: str) -> dict[str, A
     except Exception as exc:  # noqa: BLE001 — nunca levanta a partir do Fire
         logger.warning(f"fire_reconcile: conexão ao Fire ('{env_slug}') falhou: {exc}")
         _FALHA_RECENTE[env_slug] = _clock()
-        return {}
+        return {}, True
 
     # Conectou — Firebird está de pé. Limpa cool-down anterior desse slug.
     _FALHA_RECENTE.pop(env_slug, None)
 
     # Leitura num try separado: erro aqui (SQL malformado, charset, linha
-    # ruim) loga e devolve vazio, mas NÃO arma o cool-down.
+    # ruim) loga e devolve vazio, mas NÃO arma o cool-down nem conta como
+    # erro_conexao — a conexão funcionou, o problema é de dado/SQL.
     try:
         linhas = _consultar_em_blocos(conn, numeros)
     except Exception as exc:  # noqa: BLE001 — nunca levanta a partir do Fire
         logger.warning(f"fire_reconcile: leitura do Fire ('{env_slug}') falhou: {exc}")
         with contextlib.suppress(Exception):
             mgr.__exit__(type(exc), exc, exc.__traceback__)
-        return {}
+        return {}, False
 
     with contextlib.suppress(Exception):
         mgr.__exit__(None, None, None)
 
     # Dado cru do Fire a partir daqui (TRIM que falha em não-string, CODIGO
     # nulo que quebra o min() do desempate) — try próprio, sem armar cool-down
-    # (não é falha de conexão, é dado ruim numa linha).
+    # nem contar como erro_conexao (não é falha de conexão, é dado ruim numa
+    # linha).
     try:
         indice = _indexar_por_numero(linhas)
 
@@ -175,10 +208,10 @@ def buscar_no_fire(candidatos: list[Candidato], *, env_slug: str) -> dict[str, A
             achado = _decidir_candidato(candidato, linhas_candidato)
             if achado is not None:
                 achados[candidato.import_id] = achado
-        return achados
+        return achados, False
     except Exception as exc:  # noqa: BLE001 — nunca levanta a partir do Fire
         logger.warning(f"fire_reconcile: dado do Fire ('{env_slug}') inesperado: {exc}")
-        return {}
+        return {}, False
 
 
 def _todos_numeros(candidatos: list[Candidato]) -> list[str]:
