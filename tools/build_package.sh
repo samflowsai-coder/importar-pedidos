@@ -24,7 +24,14 @@ for arg in "$@"; do
 done
 
 NAME="portal-pedidos"
-STAMP="$(date +%Y%m%d)"
+# Versao do pacote. Sem override, carimbo com HORA -- so a data fazia dois
+# builds do mesmo dia se sobrescreverem em dist/. PORTAL_VERSION deixa o CI
+# passar a tag, para que tag == manifest.version == nome do zip.
+VERSION="${PORTAL_VERSION:-$(date +%Y%m%d-%H%M)}"
+if ! printf '%s' "$VERSION" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+    echo "ERRO: PORTAL_VERSION invalida: '$VERSION' (use so [A-Za-z0-9._-])" >&2
+    exit 2
+fi
 TMP="$(mktemp -d)"
 STAGE="$TMP/$NAME"
 mkdir -p "$STAGE"
@@ -67,7 +74,6 @@ find "$STAGE" -type f \( \
     \) ! -name '.env.example' -delete
 
 # ── manifest.json (fonte de versão + hash de deps p/ o auto-update) ──────────
-STAMP_HHMM="$(date +%Y%m%d-%H%M)"
 BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 GIT_COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 # deps_sha256: bloco [project].dependencies normalizado (linhas trimadas, ordenadas)
@@ -98,7 +104,7 @@ PY
 cat > "$STAGE/manifest.json" <<JSON
 {
   "name": "portal-pedidos",
-  "version": "$STAMP_HHMM",
+  "version": "$VERSION",
   "built_at": "$BUILT_AT",
   "git_commit": "$GIT_COMMIT",
   "deps_sha256": "$DEPS_SHA",
@@ -131,7 +137,7 @@ fi
 
 # ── Empacotar ────────────────────────────────────────────────────────────────
 mkdir -p "$ROOT/dist"
-OUT="$ROOT/dist/${NAME}-${STAMP}.zip"
+OUT="$ROOT/dist/${NAME}-${VERSION}.zip"
 rm -f "$OUT"
 ( cd "$TMP" && zip -rq "$OUT" "$NAME" )
 rm -rf "$TMP"

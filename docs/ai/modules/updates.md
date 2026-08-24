@@ -17,7 +17,28 @@ recuperar uma instalação que não sobe.
 - `app/web/routes_update.py` — API admin-only, prefixo **`/api/admin/update`**.
 - `app/web/static/admin-atualizacao.html` — a tela (`GET /admin/atualizacao`).
 - `scripts/apply-update.ps1` — o updater de verdade (roda fora do app).
-- `tools/build_package.sh` — gera o pacote do lado do dev.
+- `tools/build_package.sh` — gera o pacote. Versão em `PORTAL_VERSION` (sem
+  override, carimba `AAAAMMDD-HHMM`); o nome do zip **é** a versão, então dois
+  builds do mesmo dia não se sobrescrevem mais.
+- `.github/workflows/release.yml` — **de onde o pacote oficial sai**.
+
+## Como o pacote é produzido
+
+Push de uma tag `v*` dispara o release: lint + suíte completa → build com
+`PORTAL_VERSION` = a tag sem o `v` → **smoke que passa o zip pelo
+`validate_and_stage` deste próprio módulo** → GitHub Release com o zip anexado e
+sha256 no corpo.
+
+O smoke é dogfooding deliberado: `tools/build_package.sh` (o que entra no zip) e
+`package.ALLOWED_TOP` + `_member_ok` (o que o portal aceita) são duas listas que
+precisam concordar, e já divergiram na prática. O CI agora pega isso antes do zip
+sair.
+
+Resultado: **tag == `manifest.version` == nome do zip == Release**. O build manual
+segue funcionando como fallback (`./tools/build_package.sh`).
+
+O deploy continua sendo humano: baixar o zip do Release e subir em
+`/admin/atualizacao`. Nada é empurrado pro cliente automaticamente.
 
 ## Rotas (todas `require_admin`)
 

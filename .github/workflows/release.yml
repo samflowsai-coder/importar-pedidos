@@ -1,0 +1,121 @@
+name: Release
+
+# Dispara na tag. O pacote publicado passa a ser um artefato rastreavel
+# (tag -> commit -> zip -> sha256), no lugar do build manual no Mac.
+# O deploy continua sendo humano: baixar o zip e subir em /admin/atualizacao.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versao do pacote (default: carimbo AAAAMMDD-HHMM)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Nao se publica pacote de codigo que nao passa. Mesmo gate do CI.
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Tests
+        run: pytest -q --durations=25
+
+      # tag v20260824-1530 -> PORTAL_VERSION=20260824-1530, para que
+      # tag == manifest.version == nome do zip.
+      - name: Resolver versao
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V="${{ inputs.version }}"
+          fi
+          [ -n "$V" ] || V="$(date +%Y%m%d-%H%M)"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Versao do pacote: $V"
+
+      - name: Build do pacote
+        env:
+          PORTAL_VERSION: ${{ steps.ver.outputs.version }}
+        run: ./tools/build_package.sh
+
+      # Dogfooding: o pacote passa pelo MESMO validador que o portal do cliente
+      # roda no upload. Pega drift entre build_package.sh e a allowlist do
+      # updater antes do zip sair daqui -- foi exatamente esse par que precisou
+      # de ajuste manual quando os .bat de diagnostico entraram.
+      - name: Smoke — validar o pacote com o validador do portal
+        id: smoke
+        env:
+          ZIP: dist/portal-pedidos-${{ steps.ver.outputs.version }}.zip
+        run: |
+          python - <<'PY'
+          import os, tempfile, hashlib, json
+          from pathlib import Path
+          from app.updates import package
+
+          zp = Path(os.environ["ZIP"])
+          assert zp.exists(), f"pacote nao encontrado: {zp}"
+          with tempfile.TemporaryDirectory() as td:
+              res = package.validate_and_stage(
+                  zp, Path(td), Path("pyproject.toml"), update_id="ci-smoke"
+              )
+          sha = hashlib.sha256(zp.read_bytes()).hexdigest()
+          size_mb = zp.stat().st_size / 1024 / 1024
+          print(f"VALIDADO OK  version={res.version}  commit={res.git_commit}  files={res.files_count}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"sha256={sha}\n")
+              f.write(f"size_mb={size_mb:.1f}\n")
+              f.write(f"files={res.files_count}\n")
+              f.write(f"git_commit={res.git_commit}\n")
+          notes = res.notes or "_(sem notas nesta versao)_"
+          Path("release_body.md").write_text(
+              f"{notes}\n\n"
+              f"---\n\n"
+              f"| | |\n|---|---|\n"
+              f"| Versao | `{res.version}` |\n"
+              f"| Commit | `{res.git_commit}` |\n"
+              f"| Arquivos | {res.files_count} |\n"
+              f"| Tamanho | {size_mb:.1f} MB |\n"
+              f"| SHA-256 | `{sha}` |\n\n"
+              f"Validado pelo `validate_and_stage` do proprio portal.\n\n"
+              f"**Como aplicar:** baixe o `.zip` e suba em `/admin/atualizacao` "
+              f"no servidor, como admin. Nao extraia na mao.\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Publicar o Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" != "push" ]; then
+            TAG="v${VERSION}"
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+          gh release create "$TAG" \
+            "dist/portal-pedidos-${VERSION}.zip" \
+            --title "Portal de Pedidos ${VERSION}" \
+            --notes-file release_body.md

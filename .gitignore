@@ -72,3 +72,6 @@ samples/Erro Magic Feet/
 # Saidas dos scripts de diagnostico (geradas no servidor do cliente)
 app-boot-out.txt
 app-boot-err.txt
+
+# Corpo do GitHub Release (gerado pelo workflow de release)
+release_body.md
