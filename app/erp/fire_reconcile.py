@@ -77,6 +77,9 @@ class Achado:
     fire_codigo: int
     fire_status: str
     caminho: int  # 1 = override, 2 = CNPJ header, 3 = lojas
+    # Só o caminho 3 avalia lojas de fato — quantos CNPJs de entrega distintos
+    # casaram. Caminhos 1/2 usam `0`, não `1`: a checagem ali foi por cliente
+    # inteiro, não por loja, e `1` mentiria "bati 1 loja" pra quem ler o campo.
     lojas_casadas: int
 
 
@@ -113,7 +116,13 @@ def buscar_no_fire(candidatos: list[Candidato], *, env_slug: str) -> dict[str, A
         logger.warning(f"fire_reconcile: ambiente '{env_slug}' não existe")
         return {}
 
-    cfg = environments_repo.to_fb_config(env)
+    try:
+        cfg = environments_repo.to_fb_config(env)
+    except Exception as exc:  # noqa: BLE001 — nunca levanta a partir do Fire
+        # Não é falha de rede (lê SQLite local + decripta senha) — não arma
+        # cool-down, só loga e desiste desta chamada.
+        logger.warning(f"fire_reconcile: config do ambiente '{env_slug}' inválida: {exc}")
+        return {}
 
     # Conexão isolada num try próprio: só ela arma o cool-down.
     try:
@@ -140,15 +149,22 @@ def buscar_no_fire(candidatos: list[Candidato], *, env_slug: str) -> dict[str, A
     with contextlib.suppress(Exception):
         mgr.__exit__(None, None, None)
 
-    indice = _indexar_por_numero(linhas)
+    # Dado cru do Fire a partir daqui (TRIM que falha em não-string, CODIGO
+    # nulo que quebra o min() do desempate) — try próprio, sem armar cool-down
+    # (não é falha de conexão, é dado ruim numa linha).
+    try:
+        indice = _indexar_por_numero(linhas)
 
-    achados: dict[str, Achado] = {}
-    for candidato in candidatos:
-        linhas_candidato = _linhas_do_candidato(candidato, indice)
-        achado = _decidir_candidato(candidato, linhas_candidato)
-        if achado is not None:
-            achados[candidato.import_id] = achado
-    return achados
+        achados: dict[str, Achado] = {}
+        for candidato in candidatos:
+            linhas_candidato = _linhas_do_candidato(candidato, indice)
+            achado = _decidir_candidato(candidato, linhas_candidato)
+            if achado is not None:
+                achados[candidato.import_id] = achado
+        return achados
+    except Exception as exc:  # noqa: BLE001 — nunca levanta a partir do Fire
+        logger.warning(f"fire_reconcile: dado do Fire ('{env_slug}') inesperado: {exc}")
+        return {}
 
 
 def _todos_numeros(candidatos: list[Candidato]) -> list[str]:
@@ -216,14 +232,20 @@ def _parse_data(valor) -> date | None:
 def _dentro_da_janela(data_linha, data_candidato: str | None) -> bool:
     """Guarda temporal: `False` derruba a linha do conjunto de candidatas a match.
 
-    Candidato sem `data_pedido` não aplica a guarda (guarda passa tudo). Linha
-    do Fire cuja data não dá pra interpretar é tratada como fora da janela —
-    incerteza aqui deve descartar, nunca casar (falso positivo é o pior
-    desfecho desta feature).
+    Candidato SEM `data_pedido` (`None`/vazio) não aplica a guarda — é a regra
+    da spec, guarda passa tudo. Candidato COM `data_pedido` preenchido mas
+    ilegível é outro caso: não dá pra confiar, e a incerteza tem que descartar
+    a linha, não deixar passar — se o desarmasse igual ao "sem data", uma
+    mudança de chamador que passasse lixo na data desligaria a guarda inteira
+    em silêncio. Linha do Fire ilegível segue a mesma regra (descarta).
     """
+    if not data_candidato:
+        return True
+
     referencia = _parse_data(data_candidato)
     if referencia is None:
-        return True
+        logger.warning(f"fire_reconcile: data_pedido do candidato ilegível: {data_candidato!r}")
+        return False
 
     data_linha_parsed = _parse_data(data_linha)
     if data_linha_parsed is None:
@@ -254,7 +276,7 @@ def _decidir_candidato(candidato: Candidato, linhas: list[tuple]) -> Achado | No
         casadas = [linha for linha in linhas_na_janela if linha[4] == candidato.cliente_codigo]
         if not casadas:
             return None
-        return _montar_achado(candidato, casadas, caminho=1, lojas_casadas=1)
+        return _montar_achado(candidato, casadas, caminho=1, lojas_casadas=0)
 
     if candidato.cnpj_header:
         alvo = cnpj_digits(candidato.cnpj_header)
@@ -263,7 +285,7 @@ def _decidir_candidato(candidato: Candidato, linhas: list[tuple]) -> Achado | No
         ]
         if not casadas:
             return None
-        return _montar_achado(candidato, casadas, caminho=2, lojas_casadas=1)
+        return _montar_achado(candidato, casadas, caminho=2, lojas_casadas=0)
 
     if candidato.cnpjs_entrega:
         grupos: dict[str, list[tuple]] = {}
@@ -271,7 +293,14 @@ def _decidir_candidato(candidato: Candidato, linhas: list[tuple]) -> Achado | No
             grupos.setdefault(cnpj_digits(linha[5]), []).append(linha)
 
         alvo_cnpjs = {cnpj_digits(c) for c in candidato.cnpjs_entrega}
-        if not alvo_cnpjs or any(not grupos.get(cnpj) for cnpj in alvo_cnpjs):
+        # "" bloqueia, não descarta: um `delivery_cnpj` sem dígito ("A
+        # COMBINAR", "N/A", texto livre do LLM/parser) normaliza pra "" — e
+        # CADASTRO.CPF_CNPJ NULL/branco no Fire normaliza pro MESMO "". Sem
+        # este guard os dois vazios se encontram e o match fecha sem nenhuma
+        # âncora de cliente real. Uma loja não-verificável impede provar
+        # "todas as lojas casaram" — o pedido tem que continuar `parsed`, não
+        # sair da fila com uma contagem de lojas inflada.
+        if not alvo_cnpjs or "" in alvo_cnpjs or any(not grupos.get(cnpj) for cnpj in alvo_cnpjs):
             # Só marca quando TODA loja de entrega tem pelo menos uma linha —
             # match parcial (2 de 3 lojas, caso Riachuelo) não é reconciliação.
             return None

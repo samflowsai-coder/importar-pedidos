@@ -203,3 +203,111 @@ def test_lote_acima_de_200_quebra_em_blocos(monkeypatch):
     buscar_no_fire(cands, env_slug="mm")
     # 250 números viram 2 execuções, não 250
     assert len(fake_conn.cursor().executados) == 2
+
+
+# ── Fix round 1: caminho 3 furava a chave dupla com CNPJ de entrega sem dígito ──
+
+
+def test_caminho_3_cnpj_de_entrega_sem_digito_nao_casa(monkeypatch):
+    """'A COMBINAR' vira "" via cnpj_digits; CADASTRO.CPF_CNPJ NULL no Fire
+    também vira "". Os dois vazios não podem se encontrar — falta de âncora
+    tem que bloquear o match inteiro, nunca descartar só a entrada ruim."""
+    _plugar(monkeypatch, [_linha("K01", 900, None, cliente=1)])
+    cand = Candidato("i1", "K01", None, None, ("A COMBINAR",), "2026-08-01")
+    assert buscar_no_fire([cand], env_slug="mm") == {}
+
+
+def test_caminho_3_uma_loja_real_mais_sem_cnpj_nao_casa(monkeypatch):
+    """1 loja real bate, mas a 2ª entrega sem CNPJ não pode ser ignorada —
+    senão 'lojas_casadas' infla contando uma loja não-verificável como se
+    tivesse batido."""
+    _plugar(monkeypatch, [_linha("K01", 900, "11.111.111/0001-11", cliente=1)])
+    cand = Candidato("i1", "K01", None, None, ("11.111.111/0001-11", "S/CNPJ"), "2026-08-01")
+    assert buscar_no_fire([cand], env_slug="mm") == {}
+
+
+# ── Fix round 1: "nunca levanta" precisa valer nas 4 fases, não só em 2 ──
+
+
+def test_to_fb_config_falha_nao_levanta_nem_arma_cooldown(monkeypatch):
+    """Não é falha de rede (lê SQLite local + decripta senha) — não pode
+    armar o cool-down do slug."""
+    tentativas = []
+
+    monkeypatch.setattr(
+        fire_reconcile.environments_repo, "get_by_slug", lambda slug: {"slug": slug}
+    )
+
+    def _to_fb_config(env):
+        tentativas.append(1)
+        raise RuntimeError("senha corrompida")
+
+    monkeypatch.setattr(fire_reconcile.environments_repo, "to_fb_config", _to_fb_config)
+
+    cand = Candidato("i1", "K01", None, "12.345.678/0001-99", (), "2026-08-01")
+    assert buscar_no_fire([cand], env_slug="mm") == {}
+    assert buscar_no_fire([cand], env_slug="mm") == {}
+    assert len(tentativas) == 2  # sem cool-down: a segunda chamada tenta de novo
+
+
+def test_pedido_cliente_nao_string_nao_levanta(monkeypatch):
+    """PEDIDO_CLIENTE não-string (ex.: numérico no Fire) quebraria o TRIM em
+    Python (`.strip()` num int) — precisa virar {} e log, não estourar."""
+    linha_ruim = (12345, 900, "PEDIDO", "2026-08-01", 77, "12.345.678/0001-99")
+    _plugar(monkeypatch, [linha_ruim])
+    cand = Candidato("i1", "K01", None, "12.345.678/0001-99", (), "2026-08-01")
+    assert buscar_no_fire([cand], env_slug="mm") == {}
+
+
+def test_v_codigo_nulo_nao_levanta(monkeypatch):
+    """V.CODIGO nulo numa linha casada quebra o min() do desempate
+    (None não compara com int) — precisa virar {} e log, não estourar."""
+    linhas = [
+        _linha("K01", None, "12.345.678/0001-99"),
+        _linha("K01", 900, "12.345.678/0001-99"),
+    ]
+    _plugar(monkeypatch, linhas)
+    cand = Candidato("i1", "K01", None, "12.345.678/0001-99", (), "2026-08-01")
+    assert buscar_no_fire([cand], env_slug="mm") == {}
+
+
+# ── Fix round 1: data ilegível do candidato não pode desarmar a guarda ──
+
+
+def test_data_candidato_ilegivel_nao_desliga_a_guarda(monkeypatch):
+    """Data do candidato preenchida mas ilegível não é a mesma coisa que
+    'sem data' — a incerteza tem que descartar a linha, não deixar passar."""
+    _plugar(monkeypatch, [_linha("K01", 900, "12.345.678/0001-99", data="2026-08-01")])
+    cand = Candidato("i1", "K01", None, "12.345.678/0001-99", (), "não é uma data")
+    assert buscar_no_fire([cand], env_slug="mm") == {}
+
+
+def test_candidato_sem_data_guarda_nao_se_aplica(monkeypatch):
+    """Regressão: candidato SEM data_pedido continua sem guarda (regra da spec)."""
+    _plugar(monkeypatch, [_linha("K01", 900, "12.345.678/0001-99", data="2020-01-01")])
+    cand = Candidato("i1", "K01", None, "12.345.678/0001-99", (), None)
+    achados = buscar_no_fire([cand], env_slug="mm")
+    assert achados["i1"].fire_codigo == 900
+
+
+# ── Fix round 1: fire_status deve vir da mesma linha que decide fire_codigo ──
+
+
+def test_caminho_3_fire_status_vem_da_linha_de_menor_codigo(monkeypatch):
+    _plugar(
+        monkeypatch,
+        [
+            _linha("6702645869", 900, "11.111.111/0001-11", cliente=1, status="APROVADO"),
+            _linha("6702645869", 901, "22.222.222/0002-22", cliente=2, status="FATURADO"),
+        ],
+    )
+    cand = Candidato(
+        "i1",
+        "6702645869",
+        None,
+        None,
+        ("11.111.111/0001-11", "22.222.222/0002-22"),
+        "2026-08-01",
+    )
+    achados = buscar_no_fire([cand], env_slug="mm")
+    assert achados["i1"].fire_status == "APROVADO"
