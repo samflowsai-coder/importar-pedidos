@@ -1,250 +1,272 @@
 # Reconciliação de pedidos com o Fire — design
 
-**Data:** 2026-08-24
-**Status:** aguardando revisão do Samuel
+**Data:** 2026-08-24 · **Revisão 2** (pós-review, com medição em dado real)
+**Status:** aprovado para implementação
 **Domínios:** `erp`, `worker`, `state`, `persistence`, `web`
 
 ---
 
 ## O problema
 
-A lista de pedidos do cliente tem **308 registros e todos em "Em revisão"**. Ela só
-cresce: 308 hoje, 400 no mês que vem, e nenhuma forma de distinguir "ainda preciso
-fazer" de "já fiz em julho".
+A lista do cliente tem **308 pedidos, todos em "Em revisão"**, e só cresce. Não há como
+distinguir "ainda preciso fazer" de "já fiz em julho".
 
-A causa não é bug, é um buraco no modelo. `PortalStatus.PARSED` significa, no próprio
-código, *"in human review, not yet in Fire"*. O pedido só sai desse estado quando **o
-portal** insere no Fire (`SENT_TO_FIRE`, quando cria a linha em `CAB_VENDAS`).
+Não é bug, é buraco no modelo. `PortalStatus.PARSED` significa, no próprio código, *"in
+human review, not yet in Fire"*, e o pedido só sai desse estado quando **o portal**
+insere (`SENT_TO_FIRE`). Com `EXPORT_MODE=xlsx`, a operadora exporta o XLS e cadastra à
+mão no Fire — o portal nunca insere, nada nunca sai de `parsed`.
 
-O cliente roda `EXPORT_MODE=xlsx`: a operadora exporta o XLS e cadastra à mão no Fire.
-O portal nunca insere, logo nada nunca sai de `parsed`. **O portal não tem como saber
-que o trabalho já foi feito.**
+### Três fatos medidos que moldam o desenho
 
-### O mecanismo já existe, gated na condição errada
+**1. Riachuelo não tem CNPJ no header.** `MercadoEletronicoParser` monta o `OrderHeader`
+sem `customer_cnpj`, de propósito (`mercado_eletronico_parser.py:56`: *"Customer CNPJ is
+not in the header — each store has its own CNPJ in items"*). Como `imports.customer_cnpj`
+deriva do header, **os 308 pedidos que motivam a feature não têm CNPJ de cliente**. Uma
+chave que exija CNPJ de header entrega zero no caso motivador.
 
-`app/worker/jobs/poll_fire.py` roda a cada 60s e consulta o Fire — mas
-`repo.list_pending_for_fire_poll` exige `fire_codigo IS NOT NULL`, e `fire_codigo` só é
-preenchido quando o portal insere. **O worker só olha para os pedidos que ele mesmo
-criou** — exatamente os que não precisam de reconciliação. Para o cliente XLS-only, ele
-nunca teve o que fazer.
+**2. Um import Riachuelo vira N linhas no Fire.** No backup real da MM, cada número de
+pedido aparece em ~3 registros de `CAB_VENDAS` — um por loja, cada um com cliente e CNPJ
+próprios. O modelo é 1↔N, não 1↔1.
+
+**3. O worker não roda no cliente.** `scripts/setup-service.ps1` registra apenas `ui.py`
+como tarefa agendada. `python -m app.worker` só existe no `docker-compose.yml`. **Nenhum
+job do APScheduler dispara na MM.** Qualquer coisa periódica precisa viver no processo
+web.
 
 ### Armadilha acoplada (§1.3 do BACKLOG)
 
-`poll_fire.py:67` chama `conn.execute(...)`, que não existe em `fdb.Connection` (só em
-`Cursor`), e indexa `row["STATUS"]` numa tupla. Hoje dorme porque o job nunca alcança
-essa linha. **Este trabalho passa a preencher `fire_codigo`, o que acorda o bug.**
-Corrigir não é escopo extra: é pré-requisito.
+`poll_fire.py:67` chama `conn.execute(...)`, que não existe em `fdb.Connection`, e indexa
+`row["STATUS"]` numa tupla. Este trabalho preenche `fire_codigo` e liga o caminho —
+corrigir é pré-requisito.
 
 ---
 
 ## Objetivo
 
-Descobrir quais pedidos em `parsed` já existem no Fire, marcar essa condição e tirá-los
-da visão padrão da lista — para que a tela mostre trabalho pendente, não arquivo morto.
+Descobrir quais pedidos em `parsed` já existem no Fire, marcar, e tirá-los da visão
+padrão — para a tela mostrar trabalho pendente em vez de arquivo morto.
 
 ### Não-objetivos
 
-- **Não** inserir nada no Fire. Reconciliação é leitura; nunca cria, altera ou cancela.
-- **Não** mexer em `EXPORT_MODE`. A decisão de inserir direto no Fire segue parada.
-- **Não** reconciliar por valor ou por item. Ver "Chave de match".
-- **Não** apagar nem arquivar pedido. Nada some do banco; só muda de estado e de filtro.
+Inserir no Fire. Mexer em `EXPORT_MODE`. Reconciliar por valor ou item. Apagar ou
+arquivar pedido. Disparar FlowPCP a partir da reconciliação.
 
 ---
 
 ## Chave de match
 
-**Um pedido é considerado cadastrado no Fire quando existe linha em `CAB_VENDAS` com o
-mesmo número de pedido E o CNPJ do cliente conferindo.**
+**Regra geral: sempre duas pernas — número do pedido E identidade do cliente.** O que
+muda é de onde vem a segunda perna.
 
-Os dois, sempre. Número sozinho pode colidir entre clientes distintos; o CNPJ fecha essa
-porta. `PEDIDO_CLIENTE` já foi validado na Fire viva durante o de-para intercompany:
-zero ambiguidade em 939 pedidos.
+### Três caminhos, em ordem de força
 
-### Por que não `CHECK_ORDER_EXISTS`
+| # | Quando | Segunda perna | Marca quando |
+|---|---|---|---|
+| 1 | `cliente_override_codigo` presente | `CAB_VENDAS.CLIENTE = <codigo>` | achou ≥1 linha |
+| 2 | `customer_cnpj` no header | CNPJ do `CADASTRO` da linha | achou ≥1 linha com CNPJ igual |
+| 3 | Sem CNPJ no header (Riachuelo, NBA) | conjunto de `delivery_cnpj` dos itens | **TODAS** as lojas têm linha |
 
-A query existente exige o código inteiro do `CLIENTE` (`CADASTRO.CODIGO`), que o portal
-**não persiste** para pedidos XLS-only. Exigi-lo obrigaria a resolver o cliente antes,
-adicionando uma ida ao banco e um modo de falha novo.
+O caminho 1 é o mais forte e sai de graça: o override já persiste o código do cliente
+(`schema_env.py:36`).
 
-`FIND_CLIENTE_REAL_BY_PEDIDO_CLIENTE` (`queries.py:307`), criada no de-para, já busca por
-`PEDIDO_CLIENTE` com `JOIN CADASTRO` e devolve `CPF_CNPJ` — exatamente o que falta. A
-query nova é essa, generalizada para receber uma lista.
+O caminho 3 mantém a chave dupla — o CNPJ da loja **pertence comprovadamente ao pedido**,
+veio do próprio arquivo. A regra **"todas as lojas"** é a trava conservadora: pedido com
+3 lojas e só 2 no Fire continua `parsed`. Meio-cadastrado é trabalho pendente, e silêncio
+é melhor que marca errada.
 
-### Regra de decisão
+### Normalização do número
 
-| Situação no Fire | Decisão |
-|---|---|
-| Nenhuma linha com o número | Não casou. Segue `parsed`. |
-| Uma ou mais linhas, CNPJ igual ao do pedido | **Casou.** Usa a de menor `CODIGO`. |
-| Linhas existem, nenhuma com CNPJ igual | Não casou. Segue `parsed`, sem evento. |
-| Linhas com CNPJs diferentes, uma delas igual | **Casou** na que bate. As outras são de outro cliente. |
-| Pedido sem CNPJ no header | **Não tenta.** Sem a segunda chave não há match seguro. |
+Comparação por variantes, sempre com a perna do cliente junto:
 
-Comparação de CNPJ por **dígitos apenas**, via `app/erp/cnpj.py` (já existe).
+- exato;
+- sem sufixo `-NNNN` — **Sam's guarda `06654993-0000` no portal e `06654993` no Fire**;
+  sem isso, 100% de falso negativo em Sam's;
+- sem zeros à esquerda.
+
+### Guarda temporal contra reuso de número
+
+Kallan usa `K01`, Magic Feet `MF048`, Authentic `AF198` — códigos curtos e sequenciais,
+**com** CNPJ no header. Um `K02` novo casaria com o `K02` do ano passado: mesmo número,
+mesmo cliente. A chave dupla **não** fecha isso.
+
+A query devolve `DATA_PEDIDO` e só aceita linha com data **≥ (data do pedido − 90 dias)**.
+
+### Query
+
+Generalização de `FIND_CLIENTE_REAL_BY_PEDIDO_CLIENTE` (`queries.py:307`) recebendo lista
+de números, devolvendo `DATA_PEDIDO`, com **as colunas duplicadas aliasadas** (`V.CODIGO`
+e `C.CODIGO` colidem na original). Lotes de 200: 308 pedidos viram 2 idas ao banco.
 
 ---
 
 ## Modelo de dados
 
-### Estado novo
+**Estado novo:** `PortalStatus.FOUND_IN_FIRE = "found_in_fire"` — *"existe no Fire; o
+portal não inseriu"*. Distinto de `SENT_TO_FIRE` para preservar **quem** cadastrou.
 
-`PortalStatus.FOUND_IN_FIRE = "found_in_fire"` — *"existe no Fire; o portal não foi quem
-inseriu"*.
+**Evento:** `LifecycleEvent.FOUND_IN_FIRE`, origem `EventSource.FIRE`. Payload:
+`fire_codigo`, `fire_status`, `pedido_cliente`, `caminho_match` (1|2|3), `lojas_casadas`.
 
-Distinto de `SENT_TO_FIRE` de propósito: preservar **quem** cadastrou importa para
-auditoria e para o dia em que o insert direto for ligado. Reusar `sent_to_fire` faria o
-histórico mentir sobre a origem.
+**Transições a wirar em `app/state/machine.py`** — nos dois eixos:
 
-Transição permitida: `parsed → found_in_fire`. Apenas essa. Um pedido `sent_to_fire`,
-`cancelled` ou `error` nunca é tocado pela reconciliação.
+- `(PARSED, FOUND_IN_FIRE) → FOUND_IN_FIRE`
+- `(FOUND_IN_FIRE, FIRE_STATUS_CHANGED) → FOUND_IN_FIRE`
+- `(FOUND_IN_FIRE, POST_TO_GESTOR_REQUESTED) → FOUND_IN_FIRE`
 
-### Evento de ciclo de vida
+As duas últimas não são teoria: sem elas, `_enqueue_gestor` (`poll_fire.py:121-148`)
+enfileira no outbox e a transição estoura depois, deixando **outbox órfão** — e o `except
+Exception` genérico engole o erro.
 
-`LifecycleEvent.FOUND_IN_FIRE`, com `EventSource.FIRE` — que já existe no enum e é
-descrito como *"observed in the Firebird ERP (poll worker)"*. Payload: `fire_codigo`,
-`fire_status`, `pedido_cliente`, `cnpj_conferido`.
+**Colunas:** nenhuma nova. Reusa `portal_status`, `fire_codigo`, `fire_status_last_seen`,
+`fire_status_polled_at`.
 
-### Colunas
-
-Nenhuma coluna nova. Reusa o que existe em `imports`:
-
-- `portal_status` → `found_in_fire`
-- `fire_codigo` → `CAB_VENDAS.CODIGO` encontrado
-- `fire_status_last_seen` → `CAB_VENDAS.STATUS` no momento
-- `fire_status_polled_at` → timestamp da reconciliação
-
-Efeito colateral desejado: com `fire_codigo` preenchido, o `poll_fire` que já existe
-passa a acompanhar esse pedido normalmente — o pedido cadastrado à mão entra no
-monitoramento de status sem código adicional.
+**Limitação 1↔N documentada:** com N lojas, `fire_codigo` guarda a linha de menor
+`CODIGO`. É representação parcial, inofensiva enquanto o poll não roda na MM. Se um dia
+importar, vira coluna de ligação própria.
 
 ---
 
 ## Componentes
 
-Quatro unidades, cada uma com uma responsabilidade e testável sozinha.
+**`app/erp/fire_reconcile.py`** — leitura pura. Recebe candidatos, devolve o que achou.
+Não conhece `imports`, não decide estado, não grava. Nunca levanta. Cool-down por
+ambiente após erro de conexão, armado **só em volta do `connect_with_config`** (o §1.4 do
+BACKLOG feito certo desde o começo, em vez de repetido).
 
-### 1. `app/erp/fire_reconcile.py` — leitura pura
+**`app/persistence/repo.py`** — `list_parsed_for_reconcile()` (elegíveis: com override,
+ou com CNPJ de header, ou com `delivery_cnpj` nos itens) e `mark_found_in_fire()`.
 
-```
-buscar_no_fire(numeros: list[str], *, env_slug: str) -> dict[str, HitFire]
-```
+**`app/reconcile/runner.py`** — orquestra para um ambiente: lista → busca → aplica.
+Chamado pelos três gatilhos, sem duplicar lógica.
 
-Só lê o Firebird e devolve o que achou. Não conhece `imports`, não decide estado, não
-grava nada. Espelha a forma de `app/erp/depara_cliente.py`:
-
-- **Nunca levanta.** Falha vira dicionário vazio + log.
-- **Cool-down** por ambiente após erro de conexão, armado **só em volta do
-  `connect_with_config`** — não no bloco inteiro. Este é o §1.4 do BACKLOG feito certo
-  desde o começo, em vez de repetido.
-- **Consulta em lote:** `WHERE TRIM(PEDIDO_CLIENTE) IN (...)`, blocos de 200. 308 pedidos
-  viram 2 idas ao banco, não 308.
-
-### 2. `app/persistence/repo.py` — candidatos e aplicação
-
-- `list_parsed_for_reconcile(limit)` — pedidos em `parsed` **com CNPJ no header**, mais
-  antigos primeiro.
-- `mark_found_in_fire(import_id, *, fire_codigo, fire_status, at)` — grava as quatro
-  colunas e o evento, em uma transação.
-
-### 3. `app/worker/jobs/reconcile_fire.py` — o job
-
-Para cada ambiente ativo: lista candidatos → busca em lote → aplica os que casaram.
-Um ambiente com Firebird fora **não derruba os outros** (mesmo padrão do `poll_flowpcp`).
-
-Registrado no scheduler existente com `coalesce=True` + `max_instances=1`, como os
-demais.
-
-### 4. `app/web/` — gatilho manual e lista
-
-- `POST /api/imported/reconciliar-fire` — dispara para o ambiente ativo, devolve quantos
-  casaram. Exige usuário autenticado.
-- Botão **"Verificar no Fire"** ao lado de "Atualizar".
-- Chip de filtro **"No Fire"**; a visão padrão passa a excluir `found_in_fire`.
+**`app/web/`** — rota `POST /api/imported/reconciliar-fire`, botão, chip, filtro.
 
 ---
 
 ## Gatilhos
 
-| Gatilho | Quando | Comportamento |
+| Gatilho | Onde vive | Trava |
 |---|---|---|
-| **Agendado** | 3x/dia (07h, 12h, 18h, hora do servidor) | Todos os ambientes ativos |
-| **Manual** | Botão na tela | Só o ambiente ativo, resposta com o total |
-| **Entrada do operador** | `POST /api/env/select` | Só aquele ambiente, **em background** |
+| Periódico 3x/dia (07h, 12h, 18h) | **processo web** (o worker não sobe na MM) | sim |
+| Botão "Verificar no Fire" | rota | **ignora** — é pedido explícito |
+| Entrada do operador | `POST /api/env/select`, background | sim |
 
-### Por que `env/select` e não `auth/login`
+Registrar também no scheduler do worker, para deploys docker onde ele existe. Os dois
+caminhos chamam o mesmo runner.
 
-No `POST /api/auth/login` **ainda não existe ambiente ativo** — o operador escolhe a
-empresa depois, em `/selecionar-ambiente`. Reconciliar no login não teria contra qual
-Firebird consultar. `env/select` é o momento em que o portal sabe a empresa e é
-exatamente quando a pessoa vai olhar a lista. Do ponto de vista de quem usa, continua
-sendo "ao entrar".
+**Por que `env/select` e não `auth/login`:** no login ainda não há ambiente ativo — o
+operador escolhe a empresa depois. Não haveria contra qual Firebird consultar. O
+disparo em background precisa **ativar `active_env` explicitamente** com o ambiente
+recém-selecionado; o contexto do request ainda aponta pro anterior.
 
-### Não bloqueia
+**Trava:** 10 min por ambiente, dict em memória no processo web (uvicorn é
+single-process). Não coordena com o worker — quem cobre a corrida é o CAS abaixo.
 
-O gatilho de entrada dispara em background e a resposta volta na hora. Consulta ao
-Firebird na rede do cliente leva segundos; ninguém deve esperar isso para ver a tela.
+---
 
-**Trava de 10 minutos por ambiente:** se já reconciliou nesse intervalo, o gatilho de
-entrada não repete. Dois operadores entrando em seguida não batem duas vezes no banco.
-O botão manual **ignora a trava** — é pedido explícito.
+## Idempotência — de verdade
+
+`transition()` lê o estado **fora** da transação de escrita (conexão `DEFERRED`;
+`router.py:123`). Web e worker são processos distintos: dois gatilhos podem ler `parsed`
+e ambos gravar o evento. Duplicata no log canônico.
+
+`mark_found_in_fire` faz **compare-and-set**, não usa `transition()` cru:
+
+1. `UPDATE imports SET portal_status='found_in_fire', ... WHERE id=? AND
+   portal_status='parsed'` — adquire o write-lock;
+2. `rowcount == 1`? Se não, outro gatilho ganhou: sai sem evento;
+3. só então grava o evento de ciclo de vida.
+
+---
+
+## Wiring do poll (o que a revisão 1 errou)
+
+A revisão 1 afirmava que preencher `fire_codigo` faria o `poll_fire` adotar o pedido.
+**Falso:** `list_pending_for_fire_poll` (`repo.py:428`) filtra `portal_status =
+'sent_to_fire'`. Correções:
+
+- incluir `'found_in_fire'` no filtro;
+- reavaliar a janela `imported_at >= now-7d` (`repo.py:431`) — pedido reconciliado tarde
+  nunca seria polled. Passa a considerar a data da reconciliação.
+
+---
+
+## UI
+
+**Colisão de nome:** já existe chip "No Fire" = `sent_to_fire` (`index.html:718`).
+Resolução: "No Fire" passa a significar `IN ('sent_to_fire','found_in_fire')`, com badge
+distinguindo a origem; o padrão da tela vira **"Em revisão"**, que é o trabalho pendente.
+
+Isso exige `_build_where`/`list_imports`/`count_imports` (`repo.py:154-222`) aceitarem
+**multi-status** — hoje só fazem igualdade. Contrato que muda.
+
+`portalStatusLabel/Color/Bg` (`index.html:1234-1250`) ganham `found_in_fire`.
+
+**Rotas que passam a ver o estado novo:**
+
+- `cancel` (`server.py:2209`) só bloqueia `sent_to_fire`; cancelar um `found_in_fire`
+  cairia no 409, mas o `append_audit("cancelled")` grava **antes** da transição —
+  auditoria mentirosa. Ajustar guard e ordem.
+- `export-xlsx` (`server.py:1836`) passa a recusar pedido reconciliado: já está no ERP,
+  reexportar convida a duplicata.
+
+**Botão manual devolve `{verificados, casaram, erro_conexao}`.** "Nunca levanta" é certo
+para o job e errado para o pedido explícito: sem distinguir, a Grazi vê "0 casaram" com o
+Firebird fora e conclui que quebrou.
 
 ---
 
 ## Erro e degradação
 
-Reconciliação é observação. Toda falha degrada para "não sei", nunca para dado errado.
+Reconciliação é observação: toda falha degrada para "não sei", nunca para dado errado.
+Firebird fora → nada muda, log, cool-down. Pedido inelegível → fora dos candidatos, não é
+erro. Match parcial no caminho 3 → continua `parsed`.
 
-- **Firebird fora:** nada muda, log em `warning`, cool-down arma. Próxima janela tenta.
-- **Pedido sem CNPJ:** não entra na lista de candidatos. Não é erro.
-- **Match ambíguo sem CNPJ conferindo:** não casa. Silêncio é melhor que marcar errado.
-- **`fire_codigo` órfão** (linha some do Fire depois): fora de escopo. O `poll_fire`
-  existente já lida com pedido não encontrado.
-
-O caminho é idempotente: rodar duas vezes no mesmo pedido não gera evento duplicado —
-`mark_found_in_fire` só age sobre quem está em `parsed`.
+`found_in_fire` **não** dispara `push_new_order` do FlowPCP — status quo preservado.
 
 ---
 
 ## Testes
 
-Firebird falso, como o resto do repo. Sem teste que toque banco real.
+Firebird falso; nada toca banco real.
 
-**`tests/test_fire_reconcile.py`** — casa exato; CNPJ divergente não casa; várias linhas
-mesmo CNPJ casa na de menor `CODIGO`; CNPJs diferentes casa só na certa; sem match;
-Firebird fora devolve vazio sem levantar; cool-down arma só em erro de conexão; lote
-acima de 200 quebra em blocos.
+**`test_fire_reconcile.py`** — os 3 caminhos de chave; "todas as lojas" (parcial não
+marca); variante sem sufixo (caso Sam's `06654993-0000`); zeros à esquerda; guarda
+temporal barra número reusado fora da janela; CNPJ divergente não casa; Fire fora devolve
+vazio sem levantar; cool-down só em erro de conexão; lote > 200.
 
-**`tests/test_worker_reconcile_fire.py`** — ambiente ruim não derruba os outros;
-idempotência; só toca `parsed`.
+**`test_reconcile_runner.py`** — ambiente ruim não derruba os outros; CAS: dois gatilhos
+concorrentes geram **um** evento; só toca `parsed`.
 
-**`tests/test_web_reconciliar_fire.py`** — rota exige auth; devolve total; trava de 10min
-barra o gatilho de entrada e não barra o botão; filtro `found_in_fire` sai do padrão.
+**`test_web_reconciliar_fire.py`** — auth; payload distingue 0-casaram de erro de conexão;
+trava barra entrada e não barra botão; filtro multi-status; cancel e export-xlsx sobre
+`found_in_fire`.
 
-**Correção acoplada:** `tests/test_worker_poll_fire.py` ganha o caso que hoje não existe
-— `fire_codigo` preenchido, exercitando a linha 67 que quebraria.
+**`test_worker_poll_fire.py`** — o fake atual dá `ctx.execute` de MagicMock e **jamais
+pegaria o §1.3**. Fake novo com `cursor()` e linhas-tupla (sem acesso por nome), que falha
+antes da correção.
 
 ---
 
 ## Riscos
 
-**O bug do `poll_fire` acorda.** Alto e certo. Mitigação: corrigir no mesmo PR, com teste
-que falha antes.
+**Falso positivo tira pedido da fila sem estar no Fire.** Travas: chave dupla nos 3
+caminhos, "todas as lojas", guarda temporal de 90 dias. Nada sai do banco; o chip mostra
+tudo; reverter é uma linha de SQL.
 
-**Falso positivo marca pedido como feito sem estar.** Baixo com a chave dupla, alto em
-consequência — some da lista de trabalho. Mitigação: exigir CNPJ; nada some do banco; o
-chip "No Fire" mostra tudo; reverter é uma linha de SQL.
+**Falso negativo em massa faz a feature parecer quebrada.** Era o risco fatal da revisão
+1 (zero em Riachuelo). Fechado pelo caminho 3 e pela normalização do número.
 
-**Carga no Firebird do cliente.** Baixo: 2 consultas em lote, 3x/dia. Menor que o
-`poll_fire` atual, que roda a cada 60s.
+**O bug do `poll_fire` acorda.** Certo. Corrigido no mesmo PR, com teste que falha antes.
 
-**A lista "esvaziar" assusta.** Real. O contador do chip "No Fire" e uma linha de
-resultado ("N pedidos já estavam no Fire") tornam a mudança explicável em vez de
-misteriosa.
+**A lista esvaziar assusta.** Contador no chip e resultado explícito no botão ("N pedidos
+já estavam no Fire").
 
 ---
 
-## Fora de escopo
+## Nota sobre evidência
 
-Reconciliar por item ou valor. Insert direto no Fire. Desfazer reconciliação pela UI
-(reverter é SQL, e o caso deve ser raro). Notificar a operação quando um lote grande for
-reconciliado.
+A validação "939 pedidos, 0 ambiguidade" citada na revisão 1 é da Fire **da revenda**
+(`queries.py:302-306`), não da Fire da MM que esta feature consulta. Vale como indício de
+que `PEDIDO_CLIENTE` é chave utilizável, não como prova para este banco. É por isso que a
+chave é dupla nos três caminhos, e não confia no número sozinho.
