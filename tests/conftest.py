@@ -28,6 +28,50 @@ def pytest_configure(config):  # noqa: ARG001 — pytest hook signature
     os.environ.setdefault("PORTAL_COOKIE_SECURE", "0")
 
 
+# Toda variavel que `app/erp/connection.py` le para decidir PARA ONDE conectar.
+# Se uma delas vazar de um teste para o proximo, o teste seguinte tenta abrir
+# TCP de verdade contra um host que nao existe.
+_FB_ENV_KEYS = (
+    "FB_DATABASE",
+    "FB_HOST",
+    "FB_PORT",
+    "FB_USER",
+    "FB_CHARSET",
+    "FB_PASSWORD",
+    "FB_CLIENT_LIBRARY",
+    "FB_CODEMPRESA",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_firebird_env():
+    """Impede que config de Firebird vaze de um teste para o proximo.
+
+    `firebird_config.apply_to_env()` grava DIRETO em `os.environ` — e' o
+    contrato dele em producao, para que `connection.py` (que le `os.environ` a
+    cada conexao, sem cache) pegue a credencial nova sem reiniciar o app. Em
+    teste isso escapa do `monkeypatch`: `monkeypatch.delenv(k, raising=False)`
+    sobre uma chave que NAO existe nao registra nada para desfazer, entao o
+    valor escrito durante o teste sobrevive ao teardown.
+
+    O estrago e' invisivel na maquina do dev e caro no CI. Um teste gravou
+    `FB_HOST=10.0.0.1`; dali em diante, todo teste que tocasse o Firebird
+    tentava conectar naquele host. No macOS o connect falha na hora; no Linux
+    do runner ele espera os SYN retries — ~127s por chamada. Custava 24 minutos
+    de CI por push, contra 70 segundos locais, sem nenhum teste falhando.
+
+    Snapshot antes, restaura depois. Barato (8 chaves) e vale para qualquer
+    teste, presente ou futuro.
+    """
+    saved = {k: os.environ.get(k) for k in _FB_ENV_KEYS}
+    yield
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
 @pytest.fixture
 def real_auth(monkeypatch):
     """Disable auth bypass — caller will exercise the real login flow."""
