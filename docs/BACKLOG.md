@@ -4,7 +4,7 @@
 > sai daqui e vive no histórico do git. Cada item diz o que é, onde dói e o que
 > destrava.
 >
-> Último passe de verificação: **2026-08-21** (referências de código conferidas
+> Último passe de verificação: **2026-08-24** (referências de código conferidas
 > contra a `main`; o que depende de sistema externo está marcado como não verificado).
 
 ---
@@ -26,14 +26,6 @@ antes do re-check.
 intercompany levantar, o código dá `return False` **sem contar tentativa**. Com o
 Firebird fora do ar, a decisão nunca confirma e **segura o cursor** do poll.
 **Fix:** contar tentativa também no caminho de exceção.
-
-### 1.3 `poll_fire.py:67` — `conn.execute` não existe em `fdb.Connection`
-`app/worker/jobs/poll_fire.py:67` chama `conn.execute(...)` (só existe em `Cursor`) e
-indexa `row["STATUS"]` numa tupla. Um commit, mesmo padrão do fix `fea7ee7`.
-**Por que ainda não estourou:** `list_pending_for_fire_poll` exige
-`fire_codigo IS NOT NULL`, e hoje é sempre NULL (o cliente é XLS-only). **Não** é por
-`FIRE_TRIGGER_STATUS` vazio — o trigger só é lido depois do crash. Quebra a cada 60s no
-dia em que alguém usar "Cadastrar no Fire" com sucesso.
 
 ### 1.4 Cool-down do de-para de cliente arma largo demais
 `app/erp/depara_cliente.py` — o cool-down de 45s arma no bloco inteiro (`to_fb_config`
