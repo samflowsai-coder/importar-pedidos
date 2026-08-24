@@ -713,9 +713,9 @@
                style="flex:1;max-width:360px;height:30px;font-size:12px"
                oninput="onLogSearchInput()">
         <div class="seg-ctrl" style="grid-template-columns:repeat(4,1fr);height:30px">
-          <button class="seg-btn active" data-portal-filter="" onclick="setPortalFilter('')" style="padding:0 10px;font-size:11px">Tudo</button>
-          <button class="seg-btn" data-portal-filter="parsed" onclick="setPortalFilter('parsed')" style="padding:0 10px;font-size:11px">Em revisão</button>
-          <button class="seg-btn" data-portal-filter="sent_to_fire" onclick="setPortalFilter('sent_to_fire')" style="padding:0 10px;font-size:11px">No Fire</button>
+          <button class="seg-btn" data-portal-filter="" onclick="setPortalFilter('')" style="padding:0 10px;font-size:11px">Tudo</button>
+          <button class="seg-btn active" data-portal-filter="parsed" onclick="setPortalFilter('parsed')" style="padding:0 10px;font-size:11px">Em revisão</button>
+          <button class="seg-btn" data-portal-filter="sent_to_fire,found_in_fire" onclick="setPortalFilter('sent_to_fire,found_in_fire')" style="padding:0 10px;font-size:11px">No Fire</button>
           <button class="seg-btn" data-portal-filter="cancelled" onclick="setPortalFilter('cancelled')" style="padding:0 10px;font-size:11px">Cancelado</button>
         </div>
         <button class="btn" onclick="loadImported()">
@@ -723,6 +723,13 @@
             <path d="M11 6.5A4.5 4.5 0 112.5 4M2.5 1.5V4H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
           Atualizar
+        </button>
+        <button class="btn" id="reconciliarFireBtn" onclick="reconciliarFire()" title="Consulta o Fire e marca pedidos cadastrados por lá manualmente">
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M4 6.6l1.7 1.7L9.3 4.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Verificar no Fire
         </button>
       </div>
       <div class="toolbar" id="logMeta" style="padding:0 0 4px;border:none;min-height:14px;font-size:11px;color:var(--text-muted)"></div>
@@ -1089,7 +1096,7 @@ async function previewPending(filename) {
 
 
 /* ── Imported ── */
-let logFilter = { portal: '', q: '' };
+let logFilter = { portal: 'parsed', q: '' };
 let logSearchTimer = null;
 let lastLoadedEntries = [];
 let batchSelection = new Set(); // ids of parsed orders selected for batch send
@@ -1111,18 +1118,31 @@ function onLogSearchInput() {
 
 async function loadImported() {
   try {
-    const params = new URLSearchParams({ limit: '200', offset: '0' });
-    if (logFilter.q) params.set('q', logFilter.q);
-    if (logFilter.portal) params.set('portal_status', logFilter.portal);
-    const data = await api('/api/imported?' + params.toString());
-    const entries = data.entries || [];
+    // `/api/imported?portal_status=` só aceita UM valor por chamada (repetir a
+    // query string faz o backend ficar só com o último). O chip "No Fire"
+    // precisa mostrar `sent_to_fire` + `found_in_fire` juntos, então quando o
+    // filtro tem vírgula fazemos uma chamada por status e mesclamos aqui —
+    // sem isso o segundo status "vence" e o outro some da lista em silêncio.
+    const statuses = logFilter.portal ? logFilter.portal.split(',') : [''];
+    const fetchOne = (status) => {
+      const params = new URLSearchParams({ limit: '200', offset: '0' });
+      if (logFilter.q) params.set('q', logFilter.q);
+      if (status) params.set('portal_status', status);
+      return api('/api/imported?' + params.toString());
+    };
+    const results = await Promise.all(statuses.map(fetchOne));
+    const entries = results.flatMap(d => d.entries || []);
+    entries.sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')));
+    const total = results.reduce(
+      (sum, d) => sum + (typeof d.total === 'number' ? d.total : (d.entries || []).length),
+      0
+    );
     lastLoadedEntries = entries;
     // drop selection ids that no longer exist in view
     const visibleIds = new Set(entries.filter(e => (e.portal_status || '') === 'parsed').map(e => e.id));
     batchSelection = new Set([...batchSelection].filter(id => visibleIds.has(id)));
     renderImported(entries);
     updateBatchBar();
-    const total = typeof data.total === 'number' ? data.total : entries.length;
     document.getElementById('importedCount').textContent = total;
     const meta = document.getElementById('logMeta');
     if (meta) {
@@ -1131,6 +1151,65 @@ async function loadImported() {
         : `Mostrando ${entries.length} de ${total}`;
     }
   } catch (_) {}
+}
+
+/* ── Verificar no Fire (reconciliação manual) ──
+ * `POST /api/imported/reconciliar-fire` devolve
+ * {verificados, casaram, status}, onde status é um de:
+ *   "ok"           — consultou o Fire de verdade (casaram pode ser 0: rodou
+ *                    e não achou nada — isso é diferente de não ter rodado).
+ *   "erro_conexao" — NÃO conseguiu falar com o Fire. Nunca pode aparecer
+ *                    como "0 encontrados" — a Grazi concluiria, errado, que
+ *                    está tudo certo quando a consulta nem aconteceu.
+ *   "em_execucao"  — já tem uma verificação deste ambiente rodando agora
+ *                    (comum: trocar de ambiente dispara uma em segundo
+ *                    plano) — nada foi verificado por esta chamada.
+ *   "trava_ativa"  — a última rodou há pouco (rate-limit do periódico); não
+ *                    é alcançável por este botão hoje (ele sempre ignora a
+ *                    trava), mas tratado aqui por completude do contrato. */
+async function reconciliarFire() {
+  const btn = document.getElementById('reconciliarFireBtn');
+  if (!btn) return;
+  btn.disabled = true;
+  const prev = btn.innerHTML;
+  btn.innerHTML = '<span class="spin"></span> Verificando…';
+  try {
+    const res = await api('/api/imported/reconciliar-fire', { method: 'POST' });
+    const { verificados, casaram, status } = res;
+
+    if (status === 'erro_conexao') {
+      window.appShell?.showError?.(
+        'Não consegui falar com o Fire — a conexão falhou. Nenhum pedido foi verificado (não é "0 encontrados").'
+      );
+    } else if (status === 'em_execucao') {
+      window.appShell?.showInfo?.(
+        'Já tem uma verificação rodando neste ambiente agora. Aguarde alguns instantes e tente de novo.'
+      );
+    } else if (status === 'trava_ativa') {
+      window.appShell?.showInfo?.(
+        'A última verificação deste ambiente rodou há pouco tempo. Tente novamente em alguns minutos.'
+      );
+    } else if (status === 'ok') {
+      let msg;
+      if (!verificados) {
+        msg = 'Nenhum pedido em revisão para verificar no Fire.';
+      } else if (casaram > 0) {
+        msg = `${casaram} de ${verificados} pedido(s) em revisão encontrados no Fire agora.`;
+      } else {
+        msg = `Consultei o Fire: nenhum dos ${verificados} pedido(s) em revisão está cadastrado lá ainda.`;
+      }
+      if (casaram > 0) window.appShell?.showSuccess?.(msg);
+      else window.appShell?.showInfo?.(msg);
+      await loadImported();
+    } else {
+      window.appShell?.showError?.('Resultado inesperado da verificação no Fire.');
+    }
+  } catch (err) {
+    window.appShell?.showError?.(err.message || 'Falha ao verificar no Fire');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = prev;
+  }
 }
 
 function parsedEntriesInView() {
@@ -1233,19 +1312,25 @@ async function doBatchPrimary() {
 
 function portalStatusLabel(s) {
   return s === 'parsed' ? 'Em revisão'
-    : s === 'sent_to_fire' ? 'No Fire'
+    : s === 'sent_to_fire' ? 'Enviado pelo portal'
+    : s === 'found_in_fire' ? 'Cadastrado no Fire'
     : s === 'cancelled' ? 'Cancelado'
     : s || '—';
 }
 function portalStatusColor(s) {
   return s === 'parsed' ? 'var(--warn)'
     : s === 'sent_to_fire' ? 'var(--success)'
+    // found_in_fire: mesma família "sucesso" do sent_to_fire (o pedido
+    // existe no Fire nos dois casos), mas selo preenchido — distingue a
+    // origem (alguém cadastrou por fora do portal) sem inventar cor nova.
+    : s === 'found_in_fire' ? '#fff'
     : s === 'cancelled' ? 'var(--text-muted)'
     : 'var(--text-muted)';
 }
 function portalStatusBg(s) {
   return s === 'parsed' ? 'var(--warn-bg)'
     : s === 'sent_to_fire' ? 'var(--success-bg)'
+    : s === 'found_in_fire' ? 'var(--success)'
     : s === 'cancelled' ? 'var(--surface-hover)'
     : 'var(--surface-hover)';
 }
@@ -1276,9 +1361,14 @@ function renderImported(entries) {
     ].filter(Boolean).join(' &middot; ');
 
     const ps = e.portal_status || (e.fire_codigo != null ? 'sent_to_fire' : 'parsed');
+    // O pedido pode existir no Fire (sent_to_fire ou found_in_fire) e estar
+    // CANCELADO lá — sem mostrar o status junto do selo, "Cadastrado no
+    // Fire" parece "resolvido" quando na verdade precisa de atenção.
+    const showsFireStatus = (ps === 'sent_to_fire' || ps === 'found_in_fire') && e.fire_status_last_seen;
+    const fireStatusSuffix = showsFireStatus ? ` (${esc(e.fire_status_last_seen)})` : '';
     const statusPill = `
       <span class="preview-group-chip" style="background:${portalStatusBg(ps)};color:${portalStatusColor(ps)};font-size:10px;padding:2px 8px">
-        ${esc(portalStatusLabel(ps))}
+        ${esc(portalStatusLabel(ps))}${fireStatusSuffix}
       </span>`;
     const fireBadge = e.fire_codigo != null
       ? `<span class="preview-group-chip" title="CAB_VENDAS.CODIGO no Fire" style="background:var(--success-bg);color:var(--success);font-size:10px;padding:2px 8px">Fire #${esc(e.fire_codigo)}</span>`
@@ -2184,6 +2274,9 @@ function renderPreviewFooter(data, itemsCount) {
       </button>`;
   } else if (ps === 'sent_to_fire') {
     note.innerHTML = `Pedido <strong>cadastrado no Fire</strong>${data.fire_codigo ? ` (CAB_VENDAS.CODIGO = ${esc(data.fire_codigo)})` : ''}. Status deve ser validado diretamente no Fire.`;
+    actions.innerHTML = `<button class="btn btn-primary" onclick="closePreviewModal()">Fechar</button>`;
+  } else if (ps === 'found_in_fire') {
+    note.innerHTML = 'Pedido <strong>já estava cadastrado no Fire</strong> — não foi o portal que enviou. Status deve ser validado diretamente no Fire.';
     actions.innerHTML = `<button class="btn btn-primary" onclick="closePreviewModal()">Fechar</button>`;
   } else if (ps === 'cancelled') {
     note.innerHTML = 'Pedido <strong>cancelado</strong>. Não foi enviado ao Fire.';
