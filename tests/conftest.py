@@ -14,6 +14,7 @@ Auth bypass for legacy tests:
 from __future__ import annotations
 
 import os
+import socket
 import sqlite3
 from pathlib import Path
 
@@ -28,9 +29,12 @@ def pytest_configure(config):  # noqa: ARG001 — pytest hook signature
     os.environ.setdefault("PORTAL_COOKIE_SECURE", "0")
 
 
-# Toda variavel que `app/erp/connection.py` le para decidir PARA ONDE conectar.
-# Se uma delas vazar de um teste para o proximo, o teste seguinte tenta abrir
-# TCP de verdade contra um host que nao existe.
+# Toda variavel que decide PARA ONDE o app conecta ou como ele fala com o
+# Firebird. Lidas em `app/erp/connection.py` E em `app/erp/mapper.py`
+# (FB_CODEMPRESA); escritas por `firebird_config.apply_to_env()`. Se uma delas
+# vazar de um teste para o proximo, o seguinte tenta abrir TCP de verdade contra
+# um host que nao existe. `tests/test_env_leak_guard.py` falha se esta lista
+# ficar para tras do codigo.
 _FB_ENV_KEYS = (
     "FB_DATABASE",
     "FB_HOST",
@@ -40,6 +44,10 @@ _FB_ENV_KEYS = (
     "FB_PASSWORD",
     "FB_CLIENT_LIBRARY",
     "FB_CODEMPRESA",
+    # Mesma classe de vazamento, dano menor: `db.set_db_path()` grava direto em
+    # os.environ e varios testes escrevem a chave na mao. Aponta para disco
+    # local, entao falha rapido e visivel -- nada de SYN retry. Uma linha.
+    "APP_DATA_DIR",
 )
 
 
@@ -70,6 +78,38 @@ def _isolate_firebird_env():
             os.environ.pop(k, None)
         else:
             os.environ[k] = v
+
+
+@pytest.fixture(autouse=True)
+def _no_real_sockets():
+    """Nenhum teste abre socket para fora. Conferido: a suite faz ZERO conexoes.
+
+    Segunda cerca para o mesmo pasto, de proposito. A guarda de env acima impede
+    a causa conhecida; esta transforma QUALQUER recorrencia -- por env, por
+    config, por caminho que ninguem previu -- de "minutos de espera em silencio"
+    em erro instantaneo apontando a linha. Foi exatamente a falta desse sinal
+    que deixou 24 minutos de CI passarem despercebidos, com a suite verde.
+
+    Loopback e socket unix continuam livres: nao ha uso real hoje, mas bloquear
+    o que e' legitimo seria trocar um falso negativo por um falso positivo.
+    """
+    original = socket.socket.connect
+
+    def _bloqueia(self, address):
+        host = address[0] if isinstance(address, tuple) else None
+        if host is None or str(host).startswith("127.") or str(host) in ("localhost", "::1"):
+            return original(self, address)
+        raise RuntimeError(
+            f"teste tentou abrir socket para {address!r}. Testes nao falam com a "
+            f"rede: mocke a chamada, ou confira se config vazou de outro teste "
+            f"(ver tests/test_env_leak_guard.py)."
+        )
+
+    socket.socket.connect = _bloqueia
+    try:
+        yield
+    finally:
+        socket.socket.connect = original
 
 
 @pytest.fixture

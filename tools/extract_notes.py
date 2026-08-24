@@ -31,8 +31,10 @@ from pathlib import Path
 _MAX_CHARS = 4000
 
 _HEADING = re.compile(r"^## +(.+?) *$", re.MULTILINE)
-# `---` separando seções é diagramação, não conteúdo.
-_TRAILING_RULE = re.compile(r"\n+-{3,}\s*$")
+# `---` separa seções: é diagramação, não conteúdo. A régua encerra a seção, e
+# tudo que vier DEPOIS dela também não pertence ao corpo — sem o `.*$` o rodapé
+# do arquivo grudava nas notas da última seção e ia parar na tela do cliente.
+_TRAILING_RULE = re.compile(r"\n+-{3,}\s*(?:\n.*)?$", re.S)
 
 
 def parse_sections(texto: str) -> list[tuple[str, str]]:
