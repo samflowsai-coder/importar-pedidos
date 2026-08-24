@@ -624,6 +624,14 @@ def mark_found_in_fire(
         if cur.rowcount != 1:
             return False  # outro gatilho ganhou a corrida; nada a gravar
 
+        # `pedido_cliente` sai de uma leitura própria, não do parâmetro
+        # `import_id` (esse é o id interno do portal, não o número do
+        # pedido) — sem ele, auditar o evento no log exige join com
+        # `imports` só pra saber a que pedido ele se refere.
+        pedido_cliente = conn.execute(
+            "SELECT order_number FROM imports WHERE id = ?", (import_id,)
+        ).fetchone()["order_number"]
+
         _insert_event(
             conn,
             import_id=import_id,
@@ -632,7 +640,8 @@ def mark_found_in_fire(
             payload={
                 "fire_codigo": fire_codigo,
                 "fire_status": fire_status,
-                "caminho": caminho,
+                "pedido_cliente": pedido_cliente,
+                "caminho_match": caminho,
                 "lojas_casadas": lojas_casadas,
             },
             trace_id=current_trace_id(),

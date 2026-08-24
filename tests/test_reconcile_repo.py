@@ -136,6 +136,32 @@ def test_marca_e_grava_as_quatro_colunas(env_db_com_import):
     assert row["fire_status_last_seen"] == "PEDIDO"
 
 
+def test_evento_found_in_fire_carrega_pedido_cliente_e_caminho_match(env_db_com_import):
+    """Spec (Modelo de dados): o payload do evento tem que carregar
+    `pedido_cliente` (o número do pedido, não o `import_id` interno) e
+    `caminho_match` — sem o número, auditar o log exige join com `imports`."""
+    from app.state import events as ev
+
+    repo.mark_found_in_fire(
+        "com-header",
+        fire_codigo=900,
+        fire_status="PEDIDO",
+        caminho=2,
+        lojas_casadas=0,
+        at="2026-08-24T12:00:00Z",
+    )
+
+    eventos = [e for e in ev.list_events("com-header") if e["event_type"] == "found_in_fire"]
+    assert len(eventos) == 1
+    payload = eventos[0]["payload"]
+    assert payload["pedido_cliente"] == "1001"  # order_number de "com-header" na fixture
+    assert payload["caminho_match"] == 2
+    assert "caminho" not in payload  # renomeado, não duplicado
+    assert payload["fire_codigo"] == 900
+    assert payload["fire_status"] == "PEDIDO"
+    assert payload["lojas_casadas"] == 0
+
+
 def test_marca_incrementa_state_version_e_derruba_expected_stale(env_db_com_import):
     """`mark_found_in_fire` muda `portal_status` por fora do `transition()`.
     Sem bumpar `state_version` na MESMA UPDATE do compare-and-set, um worker
