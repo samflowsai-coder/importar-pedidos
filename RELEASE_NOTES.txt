@@ -1,7 +1,5 @@
 O que muda nesta versão
 
-1) Depois de aplicar uma atualização, as mudanças de tela aparecem sozinhas, sem precisar recarregar a página na mão.
+1) O portal agora entende a Ordem de Compra da Daju (cliente novo). É só subir o arquivo da OC que o pedido sai completo no preview: número da OC, CNPJ da Daju, os itens com o código do fornecedor (Ref. Forn.), EAN, quantidade e preço.
 
-2) Quando você vincula um produto, a contagem de "sem match" na lista de pedidos atualiza na hora, sem precisar dar refresh.
-
-3) O botão "Descartar" nesta tela agora remove de verdade um pacote enviado. Antes ele só limpava a tela e o pacote voltava a aparecer ao recarregar a página.
+2) Atenção: a OC da Daju pode chegar com a data de entrega incompleta (sem o dia). Quando isso acontecer, o campo vem vazio no preview — confira e preencha a data antes de confirmar a importação.

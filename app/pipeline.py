@@ -9,6 +9,7 @@ from app.models.order import Order
 from app.normalizers.order_normalizer import OrderNormalizer
 from app.parsers.authentic_feet_parser import AuthenticFeetParser
 from app.parsers.beira_rio_parser import BeiranRioParser
+from app.parsers.daju_parser import DajuParser
 from app.parsers.desmembramento_xls_parser import DesmembramentoXlsParser
 from app.parsers.generic_parser import GenericParser
 from app.parsers.kallan_xls_parser import KallanXlsParser
@@ -32,6 +33,7 @@ _parsers = [
     SamsClubParser(),
     KallanXlsParser(),
     AuthenticFeetParser(),
+    DajuParser(),
     DesmembramentoXlsParser(),
     GenericParser(),
 ]

@@ -6,7 +6,7 @@ Transformar a saída do extractor (texto + tabelas) em um `Order` (pydantic). Ca
 ## Arquivos críticos
 - `app/parsers/base_parser.py` — `BaseParser` com `_find`, `_parse_br_number`. **Sempre herde dele.**
 - `app/parsers/generic_parser.py` — fallback determinístico antes do LLM.
-- `app/parsers/<cliente>_parser.py` — **10 parsers específicos**: Mercado Eletrônico, Pedido Compras Revenda, SBF/Centauro, Beira Rio, Kolosh, Sam's Club, Kallan XLS, Authentic Feet, Desmembramento XLS, e o Generic.
+- `app/parsers/<cliente>_parser.py` — **11 parsers específicos**: Mercado Eletrônico, Pedido Compras Revenda, SBF/Centauro, Beira Rio, Kolosh, Sam's Club, Kallan XLS, Authentic Feet, Daju, Desmembramento XLS, e o Generic.
 - `app/pipeline.py` — registro da cascata na lista `_parsers`.
 
 ## Como adicionar um parser novo
@@ -65,3 +65,19 @@ Feet e pedidos "Pulmão" do Grupo Afeet — mesmo fornecedor, mesmo template.
   `AUTHENTICFEET`/`MAGICFEET` no conteúdo (a marca só aparece no nome do arquivo).
 - **A quantidade real é `TOTAL KITS`.** Sem este parser o arquivo cai no `GenericParser`,
   que lê a coluna `REF COR` (cor) como quantidade — bug real de produção.
+
+## Daju: Ref. Forn. é o código, e a data de entrega pode vir sem o dia
+
+`DajuParser` cobre a Ordem de Compra da Daju LTDA — um **PDF convertido pra xlsx**
+(aba "Table 1", colunas vazias intercaladas). Sample: `samples/Cliente NOVO OC-70610.xlsx`.
+
+- **`can_parse`:** `"DAJU"` + `"ORDEM DE COMPRA"` no texto.
+- **Colunas mapeadas por nome do cabeçalho** (`Ref. Forn.`, `Qtd.`, ...), nunca por
+  índice fixo — a conversão PDF→xlsx desloca colunas entre arquivos.
+- **`product_code` = coluna "Ref. Forn."** (código Nasmar, que o Fire conhece), não a
+  coluna "Código" (interno da Daju). O bloco do comprador é o primeiro `Nome\nCNPJ:` do
+  arquivo; tudo a partir de "FORNECEDOR" é a Nasmar e não pode virar cliente.
+- **"Entrega prevista" pode vir sem o dia** (`/09/2026` — perdido na conversão). Data
+  incompleta → `delivery_date = None`; o operador define no preview.
+- Sem este parser o arquivo caía no `GenericParser`, que extraía pedido `'DA'` e
+  quantidades erradas — bug real observado no RED do TDD.

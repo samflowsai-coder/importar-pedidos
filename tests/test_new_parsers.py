@@ -510,3 +510,48 @@ def test_riachuelo_me_no_null_product_codes():
         assert item.product_code is not None, (
             f"Item with no product_code: description={item.description!r}"
         )
+
+
+# ── NOVO: Daju — Ordem de Compra XLSX (PDF convertido) ───────────────────────
+
+
+def test_daju_item_count():
+    order = _process("Cliente NOVO OC-70610.xlsx")
+    assert order is not None
+    assert len(order.items) == 18
+
+
+def test_daju_header():
+    order = _process("Cliente NOVO OC-70610.xlsx")
+    assert order.header.order_number == "OC-70610"
+    assert order.header.issue_date == "11/08/2026"
+    assert order.header.customer_name == "Daju Ltda"
+    # CNPJ do comprador (Daju), nunca o do fornecedor (Nasmar 34.513.679/0001-34)
+    assert order.header.customer_cnpj == "76.917.624/0004-82"
+
+
+def test_daju_first_item_uses_ref_forn_not_client_code():
+    """CODIGO_PRODUTO deve ser a Ref. Forn. (código que o Fire conhece),
+    não o código interno da Daju (271626)."""
+    order = _process("Cliente NOVO OC-70610.xlsx")
+    item = order.items[0]
+    assert item.product_code == "K3CBCCIL1G"
+    assert item.product_code != "271626"
+    assert item.ean == "7901045304456"
+    assert item.quantity == 300.0
+    assert item.unit_price == 16.12
+    assert item.total_price == 4836.0
+
+
+def test_daju_delivery_date_without_day_stays_none():
+    """O arquivo traz 'Entrega prevista: /09/2026' (dia perdido na conversão).
+    Data incompleta não pode virar delivery_date — operador ajusta no preview."""
+    order = _process("Cliente NOVO OC-70610.xlsx")
+    for item in order.items:
+        assert item.delivery_date is None
+
+
+def test_daju_total_row_not_imported():
+    order = _process("Cliente NOVO OC-70610.xlsx")
+    assert all(item.quantity == 300.0 for item in order.items)
+    assert sum(item.total_price for item in order.items) == 76932.0
