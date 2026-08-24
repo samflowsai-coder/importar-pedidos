@@ -43,10 +43,10 @@ def test_parsed_para_found_in_fire():
         LifecycleEvent,
         PortalStatus,
         ProductionStatus,
-        transition,
+        apply_event,
     )
 
-    portal, producao = transition(
+    portal, producao = apply_event(
         PortalStatus.PARSED, ProductionStatus.NONE, LifecycleEvent.FOUND_IN_FIRE
     )
     assert portal == PortalStatus.FOUND_IN_FIRE
@@ -59,10 +59,10 @@ def test_found_in_fire_aceita_evento_de_status_do_fire():
         LifecycleEvent,
         PortalStatus,
         ProductionStatus,
-        transition,
+        apply_event,
     )
 
-    portal, _ = transition(
+    portal, _ = apply_event(
         PortalStatus.FOUND_IN_FIRE,
         ProductionStatus.NONE,
         LifecycleEvent.FIRE_STATUS_CHANGED,
@@ -77,10 +77,10 @@ def test_found_in_fire_aceita_enfileiramento_no_gestor():
         LifecycleEvent,
         PortalStatus,
         ProductionStatus,
-        transition,
+        apply_event,
     )
 
-    portal, producao = transition(
+    portal, producao = apply_event(
         PortalStatus.FOUND_IN_FIRE,
         ProductionStatus.NONE,
         LifecycleEvent.POST_TO_GESTOR_REQUESTED,
@@ -95,12 +95,12 @@ def test_sent_to_fire_nao_regride_para_found_in_fire():
         LifecycleEvent,
         PortalStatus,
         ProductionStatus,
-        transition,
+        apply_event,
     )
     import pytest
 
     with pytest.raises(InvalidTransitionError):
-        transition(
+        apply_event(
             PortalStatus.SENT_TO_FIRE,
             ProductionStatus.NONE,
             LifecycleEvent.FOUND_IN_FIRE,
