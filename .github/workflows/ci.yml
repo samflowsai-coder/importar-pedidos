@@ -14,10 +14,11 @@ concurrency:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
-    # A suite roda em ~70s na maquina local e ~24min aqui (medido nos runs
-    # 32581512751 e 32597951619). Enquanto essa diferenca nao for explicada,
-    # o teto evita que um hang consuma horas de quota em silencio.
-    timeout-minutes: 35
+    # A diferenca de 24min ja foi explicada e corrigida: FB_HOST vazava entre
+    # testes e o Linux esperava os SYN retries (~127s por chamada) -- ver PR #50
+    # e tests/test_env_leak_guard.py. O job fecha em ~90s hoje, entao o teto
+    # deixa de ser rede frouxa e vira alarme: passou de 10min, tem regressao.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -34,7 +35,8 @@ jobs:
       - name: Ruff lint
         run: ruff check .
 
-      # --durations=25: sem isso o runner e' uma caixa-preta. O tempo esta
-      # concentrado em ~16% dos testes; esta linha nomeia quais.
+      # --durations=25 fica permanente: foi o que nomeou os 9 testes que
+      # concentravam 96% do tempo. Sem ele o runner volta a ser caixa-preta e a
+      # proxima regressao passa despercebida, com a suite verde.
       - name: Tests
         run: pytest -q --durations=25
