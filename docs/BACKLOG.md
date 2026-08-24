@@ -74,6 +74,35 @@ página). **Fix, se doer:** rotacionar a fila (cursor avançando por `imported_a
 em vez de sempre pegar os 500 mais antigos) ou desistir de candidato "velho demais
 sem casar" depois de N tentativas, liberando a vaga.
 
+### 2.8 Fallback LLM não alcança formato de cliente novo — o genérico chega antes
+
+Hoje o LLM só roda quando **todo** parser da cascata devolve `None`
+(`app/pipeline.py`). O `GenericParser` não sobrescreve `can_parse` — herda o `True`
+do `BaseParser` — e só devolve `None` quando não encontra item nenhum. Em qualquer
+outro caso ele devolve um `Order`, **mesmo errado**, e o LLM nunca é chamado.
+
+Efeito prático: cliente novo entra com dado errado em silêncio. Foi o caso da Daju
+(o genérico extraía o pedido como `'DA'`, com quantidades erradas) e antes dele o do
+Authentic Feet, que lia a coluna de cor como quantidade — ver `modules/parsers.md`.
+O conserto, nos dois, foi escrever mais um parser dedicado. Enquanto isso não muda,
+**cada cliente novo custa um parser**, e o custo aparece só quando alguém confere.
+
+`OrderValidator.validate` já detecta parte disso (número do pedido ausente,
+`quantity <= 0`), mas devolve um `bool` que `pipeline.process` **descarta** — só sobra
+warning no log, e o pedido segue para o preview como se estivesse bom.
+
+Se o LLM chegar a ser chamado, ainda há duas limitações no caminho
+(`app/llm/fallback_parser.py`): manda só `extracted["text"]` cortado em
+`MAX_TEXT_CHARS = 8000`, **sem sinalizar o corte** (pedido longo perde itens em
+silêncio), e descarta `rows`/`tables`. Em planilha isso é grave: o
+`XLSExtractor._make_text` junta as células com espaço, então a estrutura de coluna —
+justamente o que identifica o formato — se perde antes de chegar ao modelo.
+
+**O que destrava:** usar o resultado do validator como gate (parse fraco do genérico
+→ tenta LLM em vez de aceitar), mandar as linhas/tabela em vez do blob de texto, e
+sinalizar truncamento. Custo continua zero nos formatos que já têm parser — o LLM só
+entra onde hoje o dado sai errado de graça.
+
 ---
 
 ## 3. Bloqueado em terceiros
