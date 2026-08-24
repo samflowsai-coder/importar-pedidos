@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS imports (
     cliente_override_by      TEXT,
     fire_status_last_seen    TEXT,
     fire_status_polled_at    TEXT,
+    reconciled_at            TEXT,
     file_sha256              TEXT,
     original_path            TEXT,
     sem_preco_ack_by         TEXT,
@@ -180,4 +181,9 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("imports", "sem_preco_ack_by", "ALTER TABLE imports ADD COLUMN sem_preco_ack_by TEXT"),
     ("imports", "sem_preco_ack_at", "ALTER TABLE imports ADD COLUMN sem_preco_ack_at TEXT"),
     ("imports", "sem_preco_ack_items", "ALTER TABLE imports ADD COLUMN sem_preco_ack_items TEXT"),
+    # Âncora FIXA da janela do poll de status Fire — gravada uma única vez em
+    # `mark_found_in_fire`, nunca recarimbada por `update_fire_poll_result`.
+    # Sem ela, a janela usava `fire_status_polled_at` (que o próprio poll
+    # renova a cada tick) e nunca expirava — ver `list_pending_for_fire_poll`.
+    ("imports", "reconciled_at", "ALTER TABLE imports ADD COLUMN reconciled_at TEXT"),
 )

@@ -431,11 +431,16 @@ def list_pending_for_fire_poll(window_days: int = 7) -> list[dict]:
     Criteria: sent_to_fire OR found_in_fire (reconciliado à mão pode mudar de
     status no Fire tanto quanto o que o próprio portal inseriu), no production
     started, fire_codigo present, within the given time window. The window is
-    measured from the last poll (`fire_status_polled_at`), falling back to
-    `imported_at` for rows never polled — senão um pedido reconciliado meses
-    depois da importação original nunca entraria no poll (a janela original
-    olhava só `imported_at`). Ordered so least-recently-polled entries come
-    first (NULL treated as older than any timestamp).
+    measured from a FIXED anchor — `reconciled_at` (stamped once by
+    `mark_found_in_fire`) falling back to `imported_at` for rows never
+    reconciled by hand (plain `sent_to_fire`). Neither anchor ever moves after
+    it's first set, which is the point: `fire_status_polled_at` used to be the
+    anchor, but `update_fire_poll_result` recarimba esse campo a CADA poll —
+    então toda linha que entrasse na janela uma vez nunca mais saía, ela
+    renovava a própria âncora sozinha (regressão fechada; ver
+    `tests/test_reconcile_repo.py::test_janela_do_poll_ancora_na_reconciliacao_nao_no_ultimo_poll`).
+    Ordered so least-recently-polled entries come first (NULL treated as
+    older than any timestamp).
     """
     with db.connect() as conn:
         rows = conn.execute(
@@ -446,7 +451,7 @@ def list_pending_for_fire_poll(window_days: int = 7) -> list[dict]:
             WHERE portal_status IN ('sent_to_fire', 'found_in_fire')
               AND production_status = 'none'
               AND fire_codigo IS NOT NULL
-              AND COALESCE(fire_status_polled_at, imported_at)
+              AND COALESCE(reconciled_at, imported_at)
                     >= datetime('now', '-' || ? || ' days')
             ORDER BY fire_status_polled_at ASC
             """,
@@ -456,7 +461,12 @@ def list_pending_for_fire_poll(window_days: int = 7) -> list[dict]:
 
 
 def update_fire_poll_result(import_id: str, fire_status: str, polled_at: str) -> None:
-    """Stamp the latest Firebird status and poll timestamp. No state machine event."""
+    """Stamp the latest Firebird status and poll timestamp. No state machine event.
+
+    Nunca toca `reconciled_at` — essa coluna é a âncora fixa da janela do
+    poll (ver `list_pending_for_fire_poll`) e só `mark_found_in_fire` a
+    grava, uma única vez.
+    """
     with db.connect() as conn:
         conn.execute(
             """
@@ -588,6 +598,11 @@ def mark_found_in_fire(
     estivesse segurando a versão de antes da reconciliação não teria como
     detectar que o estado mudou por fora do `transition()`.
 
+    Também grava `reconciled_at = at` — a âncora FIXA da janela do poll
+    (`list_pending_for_fire_poll`). Só esta função escreve nessa coluna, e só
+    aqui: `update_fire_poll_result` (chamado a cada tick do worker) nunca a
+    toca, senão a janela nunca expiraria para uma linha reconciliada.
+
     Devolve `True` se este chamador ganhou a corrida, `False` se outro
     gatilho já tinha marcado o pedido (sem evento duplicado, sem log de
     erro — perder a corrida é o caminho feliz, não uma falha).
@@ -600,10 +615,11 @@ def mark_found_in_fire(
                    fire_codigo = ?,
                    fire_status_last_seen = ?,
                    fire_status_polled_at = ?,
+                   reconciled_at = ?,
                    state_version = state_version + 1
              WHERE id = ? AND portal_status = 'parsed'
             """,
-            (fire_codigo, fire_status, at, import_id),
+            (fire_codigo, fire_status, at, at, import_id),
         )
         if cur.rowcount != 1:
             return False  # outro gatilho ganhou a corrida; nada a gravar

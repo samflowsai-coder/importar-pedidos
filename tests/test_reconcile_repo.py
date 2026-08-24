@@ -8,6 +8,7 @@ dois gatilhos simultâneos gravam o evento duas vezes no log canônico.
 from __future__ import annotations
 
 import threading
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -259,6 +260,35 @@ def test_concorrencia_real_duas_threads_uma_so_grava_evento(env_db_com_import):
 
     eventos = [e for e in ev.list_events("com-header") if e["event_type"] == "found_in_fire"]
     assert len(eventos) == 1
+
+
+def test_janela_do_poll_ancora_na_reconciliacao_nao_no_ultimo_poll(env_db_com_import):
+    """Regressão: `update_fire_poll_result` recarimba `fire_status_polled_at`
+    a CADA poll (mudando de status ou não), e a janela usava esse carimbo
+    como âncora (`COALESCE(fire_status_polled_at, imported_at)`) — uma linha
+    reconciliada uma vez nunca mais saía da janela de 7 dias, porque o
+    próprio poll renovava a âncora que deveria fazê-la expirar. A âncora
+    certa é o momento fixo da reconciliação: `reconciled_at`, gravado uma
+    única vez em `mark_found_in_fire` e nunca tocado por `update_fire_poll_result`.
+    """
+    reconciliado_em = (datetime.now(UTC) - timedelta(days=10)).isoformat()
+    ok = repo.mark_found_in_fire(
+        "com-header",
+        fire_codigo=900,
+        fire_status="PEDIDO",
+        caminho=2,
+        lojas_casadas=0,
+        at=reconciliado_em,
+    )
+    assert ok is True
+
+    # Poll recente, sem mudança de status — se a âncora fosse
+    # `fire_status_polled_at`, a linha continuaria (erradamente) dentro da
+    # janela para sempre, não importa há quanto tempo foi reconciliada.
+    repo.update_fire_poll_result("com-header", "PEDIDO", datetime.now(UTC).isoformat())
+
+    pendentes = {e["id"] for e in repo.list_pending_for_fire_poll(window_days=7)}
+    assert "com-header" not in pendentes
 
 
 def test_filtro_aceita_lista_de_status(env_db_com_import):
