@@ -17,6 +17,7 @@ recuperar uma instalação que não sobe.
 - `app/web/routes_update.py` — API admin-only, prefixo **`/api/admin/update`**.
 - `app/web/static/admin-atualizacao.html` — a tela (`GET /admin/atualizacao`).
 - `scripts/apply-update.ps1` — o updater de verdade (roda fora do app).
+- `CHANGELOG.md` + `tools/extract_notes.py` — as notas que a operação lê na tela.
 - `tools/build_package.sh` — gera o pacote. Versão em `PORTAL_VERSION` (sem
   override, carimba `AAAAMMDD-HHMM`); o nome do zip **é** a versão, então dois
   builds do mesmo dia não se sobrescrevem mais.
@@ -39,6 +40,19 @@ segue funcionando como fallback (`./tools/build_package.sh`).
 
 O deploy continua sendo humano: baixar o zip do Release e subir em
 `/admin/atualizacao`. Nada é empurrado pro cliente automaticamente.
+
+### As notas de versão
+
+`manifest.notes` sai do `CHANGELOG.md` via `tools/extract_notes.py`: a seção com
+o nome **exato** da versão; sem ela, a seção do topo (`## Não publicado`). Se o
+CHANGELOG não existir, cai no legado `RELEASE_NOTES.txt` — um arquivo solto que
+era sobrescrito a cada build, então as notas de cada versão sumiam. O fallback
+existe por uma release e depois sai.
+
+O mesmo texto alimenta três lugares: o `manifest.json` do pacote, a tela
+`/admin/atualizacao` do cliente e o corpo do GitHub Release. Uma fonte só.
+
+Testes: `tests/test_extract_notes.py`.
 
 ## Rotas (todas `require_admin`)
 
