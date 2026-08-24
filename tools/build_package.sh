@@ -88,19 +88,12 @@ norm = "\n".join(sorted(d.strip() for d in deps if d.strip()))
 print(hashlib.sha256(norm.encode()).hexdigest())
 PY
 )"
-# notes: resumo em linguagem natural do que a versao corrige. Vem de
-# RELEASE_NOTES.txt na raiz (opcional) — o dev escreve antes de buildar. JSON
-# ja com aspas/escape (json.dumps), string vazia se o arquivo nao existir.
-NOTES_JSON="$(python3 - "$ROOT/RELEASE_NOTES.txt" <<'PY'
-import sys, json, os
-p = sys.argv[1]
-txt = ""
-if os.path.exists(p):
-    with open(p, encoding="utf-8") as f:
-        txt = f.read().strip()
-print(json.dumps(txt[:4000]))
-PY
-)"
+# notes: resumo em linguagem natural do que a versao corrige, escrito para quem
+# OPERA. Fonte: CHANGELOG.md -- a secao com o nome EXATO da versao; se nao
+# houver, a secao do topo ("Nao publicado"). Fallback: RELEASE_NOTES.txt, o
+# formato antigo -- um arquivo solto, sobrescrito a cada build, que sumia do
+# historico. Mantido por uma release para nao quebrar quem ja tem o arquivo.
+NOTES_JSON="$(python3 "$ROOT/tools/extract_notes.py" "$ROOT/CHANGELOG.md" "$VERSION" "$ROOT/RELEASE_NOTES.txt")"
 cat > "$STAGE/manifest.json" <<JSON
 {
   "name": "portal-pedidos",

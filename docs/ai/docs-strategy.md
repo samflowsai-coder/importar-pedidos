@@ -12,6 +12,7 @@
 | `docs/ai/00-index.md` | roteamento task → domínio → arquivos → testes | o conteúdo do domínio |
 | `docs/ai/modules/<x>.md` | **a verdade** do domínio: contratos, armadilhas, testes | visão de produto |
 | `docs/BACKLOG.md` | só o que está **aberto** | histórico de item fechado (isso é git) |
+| `CHANGELOG.md` | o que muda **para quem opera**, por versão | detalhe técnico, nome de arquivo, número de PR |
 | `docs/history/`, `docs/superpowers/` | registro **congelado** | qualquer coisa citada como estado atual |
 
 Se um fato aparece em dois lugares, o de baixo na tabela ganha e o de cima vira link.
@@ -29,6 +30,7 @@ Se um fato aparece em dois lugares, o de baixo na tabela ganha e o de cima vira 
 | Decisão arquitetural | `01-project-overview.md` (Decisões inegociáveis) |
 | Bug conhecido que não vai ser corrigido agora | `docs/BACKLOG.md` — com arquivo e linha |
 | Item do backlog resolvido | **remova** de `docs/BACKLOG.md` |
+| Mudança que a operação percebe na tela | `CHANGELOG.md`, seção `## Não publicado` |
 
 ## O que NÃO documentar
 - Detalhe que o código já expressa (assinatura, tipo, campo óbvio).
