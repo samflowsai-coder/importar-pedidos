@@ -5,9 +5,19 @@ on:
     branches: [main]
   pull_request:
 
+# Um push novo no mesmo ref cancela o run anterior. Sem isso, dois pushes
+# seguidos num PR pagam a suite duas vezes e o resultado do primeiro e' lixo.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+    # A suite roda em ~70s na maquina local e ~24min aqui (medido nos runs
+    # 32581512751 e 32597951619). Enquanto essa diferenca nao for explicada,
+    # o teto evita que um hang consuma horas de quota em silencio.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -24,5 +34,7 @@ jobs:
       - name: Ruff lint
         run: ruff check .
 
+      # --durations=25: sem isso o runner e' uma caixa-preta. O tempo esta
+      # concentrado em ~16% dos testes; esta linha nomeia quais.
       - name: Tests
-        run: pytest -q
+        run: pytest -q --durations=25
