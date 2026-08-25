@@ -23,7 +23,21 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
-_(nada ainda)_
+1) A lista de pedidos agora separa o que ainda falta fazer do que já está no Fire. O portal consulta o Fire e marca sozinho os pedidos que foram cadastrados lá na mão — eles saem de "Em revisão" e passam para "No Fire".
+
+2) A tela abre em "Em revisão", que é o trabalho pendente. **Na primeira vez a lista vai encolher bastante** — é esperado: são os pedidos antigos que já estavam no Fire. Nenhum pedido foi apagado.
+
+3) Cada filtro agora mostra quantos pedidos tem. Se "Em revisão" cair de 308 para 12, o número em "No Fire" sobe na mesma medida — dá para ver exatamente para onde os pedidos foram.
+
+4) A verificação acontece sozinha ao entrar no ambiente e mais três vezes por dia (7h, 12h e 18h). O botão "Verificar no Fire" consulta na hora, quando você quiser.
+
+5) O pedido marcado mostra o número dele no Fire e a situação lá — por exemplo "Cadastrado no Fire (PEDIDO)" ou "(CANCELADO)". O badge também diferencia quem cadastrou: o portal ou uma pessoa.
+
+6) Pedido que já consta no Fire não pode mais ser cancelado nem reexportado pelo portal. Ele já está no ERP, e refazer convidaria pedido duplicado.
+
+7) Se o Fire estiver fora do ar, o portal diz isso com todas as letras. Ele nunca responde "nenhum pedido encontrado" quando na verdade não conseguiu consultar.
+
+8) Para marcar um pedido, o portal exige duas confirmações: o número do pedido **e** a identidade do cliente. Pedido dividido em várias lojas só é marcado quando **todas** as lojas aparecem no Fire — faltando uma, ele continua em revisão. Na dúvida, o portal prefere deixar em revisão a marcar errado.
 
 ---
 
