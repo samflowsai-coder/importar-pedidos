@@ -45,6 +45,14 @@ Decisões que vieram do negócio e mandam sobre qualquer inferência dos dados:
    por quinzena"*.
 4. Premissa dele para justificar (2): *"cada cliente tem seu produto"* — ver fato 10.
 
+**Fechado pelo Samuel em 2026-08-25, depois de ver os números do fato 3:**
+
+5. **A janela entra ligada em SEMANAL.** Continua parametrizável (quinzenal na tela,
+   sem código), mas o default de produção é semanal.
+6. **O percentual e o método valem para TODOS os clientes, sem exceção cadastrada —
+   inclusive Centauro.** Não existe coluna de override por cliente. A uniformidade é o
+   ponto: é ela que corrige o desvio de R$ 101 mil medido em 2026.
+
 Esta revisão substitui o eixo de agrupamento por rede/marca da Revisão 1.
 
 ---
@@ -68,24 +76,30 @@ Torna a Fase 0 (mapper completo) pré-requisito, não polimento.
 9 tabelas cadastradas têm no máximo 176 produtos com `VALOR > 0` de ~600 linhas. Não é
 fonte de preço utilizável — some com a ideia.
 
-**3. O histórico do fator NÃO é 7% uniforme.** Casei todos os pedidos de 2026 pelas duas
-pernas e agreguei por cliente final:
+**3. O histórico do fator NÃO é 7% uniforme — a operação erra nas duas direções.**
+Casei todos os pedidos de 2026 pelas duas pernas e comparei o faturado contra o que a
+regra (`nota ÷ 1,07`) mandaria:
 
-| Cliente final | pedidos | total `.4` | total `.7` | fator | prática |
-|---|---:|---:|---:|---:|---|
-| Calçados Beira Rio | 5 | 1.813.866,00 | 1.728.764,69 | 1,0492 | misto |
-| **Calcenter (Centauro)** | **60** | **1.084.111,80** | **1.079.212,92** | **1,0045** | **0%** |
-| Dakota Nordeste | 3 | 268.080,00 | 247.680,00 | 1,0824 | misto |
-| DAJU | 1 | 76.932,00 | 71.899,08 | 1,0700 | 7% |
-| Cami, Campus, Multix, G&P, CRA, Aguiar | 6 | 23.774,30 | 23.774,30 | 1,0000 | 0% |
+| Cliente final | ped. | nota Nasmar | faturado MM | devido | desvio |
+|---|---:|---:|---:|---:|---:|
+| Calçados Beira Rio | 5 | 1.813.866,00 | 1.728.764,69 | 1.695.201,87 | **+33.562,82** |
+| **Calcenter (Centauro)** | **60** | 1.084.111,80 | 1.079.212,92 | 1.013.188,60 | **+66.024,32** |
+| Dakota Nordeste | 3 | 268.080,00 | 247.680,00 | 250.542,06 | **−2.862,06** |
+| DAJU | 1 | 76.932,00 | 71.899,08 | 71.899,07 | +0,01 |
+| Outros seis clientes | 6 | 23.774,30 | 23.774,30 | 22.218,97 | **+1.555,33** |
+| **Total** | **75** | **3.266.764,10** | **3.151.330,99** | **3.053.050,56** | **+98.280,43** |
 
-**O Centauro saiu a 0% em 60 de 60 pedidos, movimentando R$ 1,08 milhão.** Aplicar 7%
-global reduz a base da perna MM em **R$ 66.024,32** só no Centauro, **R$ 67.579,63**
-somando os demais clientes a 0% — só em 2026.
+- **R$ 101.142,49 faturado ACIMA da regra** — base de cálculo inflada, imposto pago a
+  mais.
+- **R$ 2.862,06 abaixo**, na Dakota — base a menor.
+- **1 pedido em 75 bateu a regra** (DAJU, desvio de R$ 0,01). Os outros 74 desviaram.
+- O Centauro nunca teve o ajuste aplicado: 60 pedidos pelo valor cheio da nota,
+  respondendo sozinho por R$ 66.024,32 da base inflada.
 
-Isto **não invalida a diretriz** — o Rafael está definindo política daqui pra frente, não
-descrevendo o passado. Mas é mudança material de base de cálculo fiscal e precisa de
-confirmação explícita antes de automatizar. Ver "Questões abertas".
+Este é o **argumento central da feature**, não um risco dela. A conta é feita à mão em
+centenas de pedidos por ano, cada um com dezenas de linhas — é exatamente o erro que some
+quando o cálculo passa a ser do sistema. Daí a diretriz 6: percentual uniforme, sem
+exceção por cliente.
 
 **3b. "Nota −7%" e a prática são contas DIFERENTES.** A frase do Rafael lê naturalmente
 como `preço × 0,93`. O que está gravado no Fire é `preço ÷ 1,07`:
@@ -179,8 +193,7 @@ colunas do mapper; correção da perna de volta (Flow) para o vínculo registrad
 
 **Fora:** ressuscitar a tabela de preço do Fire (fato 2); reabertura de lote fechado;
 estorno automático da perna espelho; consolidar pedidos que não caem numa rota
-cadastrada; percentual por cliente (a diretriz é um parâmetro global — ver "Questões
-abertas" se isso mudar).
+cadastrada; percentual ou método por cliente.
 
 ---
 
@@ -205,7 +218,7 @@ rota_intercompany            quem compra da revenda
 
 lote_config                  um por par origem -> espelho
   env_origem_slug, env_espelho_slug, cnpj_revenda,
-  janela ('semanal'|'quinzenal'), dia_fechamento,
+  janela ('semanal'|'quinzenal', default 'semanal'), dia_fechamento,
   modo_preco ('divisor'|'desconto'), fator_preco (NULLABLE), ativo
     dia_fechamento  0=segunda .. 6=domingo; na quinzena, fecha dias 15 e ultimo
     modo_preco      'divisor'  -> preco / (1 + fator)   [pratica atual]
@@ -445,16 +458,13 @@ Vão no PDF de validação. Nenhuma bloqueia começar a Fase 0.
 
 1. **"Nota −7%" é `÷ 1,07` ou `× 0,93`?** (fato 3b) O Fire hoje tem `÷ 1,07`: uma nota de
    R$ 16,12 virou R$ 15,07 para a MM. A leitura literal daria R$ 14,99. Diferença de
-   ~R$ 15 mil/ano na base de cálculo. É a pergunta mais cara das cinco.
-2. **7% também no Centauro?** Historicamente 60 de 60 pedidos saíram a 0%, R$ 1,08
-   milhão. Aplicar 7% global tira R$ 66.024,32 da base em 2026. Confirma que passa a ser
-   7% para todos, ou o Centauro é exceção cadastrada?
-3. **Semanal ou quinzenal para começar?** Ambos são parâmetro; a pergunta é qual entra
-   ligado. Semanal dá lotes de mediana 6 pedidos e pico de 43.
-4. **Qual dia fecha?** Semanal precisa de um dia (sugestão: segunda de manhã, fechando a
-   semana anterior). Quinzenal fecha dia 15 e no último dia do mês.
-5. **Quando o percentual mudar, vale a partir de quando?** O desenho congela o fator no
+   ~R$ 15 mil/ano na base de cálculo. É a pergunta mais cara das três.
+2. **Qual dia a semana fecha?** Sugestão: segunda de manhã, fechando a semana anterior.
+3. **Quando o percentual mudar, vale a partir de quando?** O desenho congela o fator no
    fechamento do lote — lote já fechado não é reescrito. Confirma?
+
+Fechadas em 2026-08-25 e movidas para "Diretriz comercial": a janela entra semanal, e o
+percentual vale para todos os clientes sem exceção.
 
 ---
 
@@ -490,5 +500,6 @@ derivada da nova ou aposentada.
 - Reabertura de lote fechado
 - Estorno ou cancelamento automático da perna espelho
 - Consolidar pedidos que não caem numa rota cadastrada
-- Percentual por cliente (a diretriz é parâmetro global; se virar por cliente, é uma
-  coluna em `rota_intercompany` e um teste a mais)
+- **Percentual ou método por cliente.** Decidido em 2026-08-25: o parâmetro é global e
+  não existe override. A uniformidade é o que corrige o desvio do fato 3 — uma exceção
+  cadastrada reabriria exatamente o buraco que a feature fecha.

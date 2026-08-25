@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Gera o PDF de validacao comercial do roteamento intercompany Nasmar -> MM.
 
-Destinatario: Rafael. O documento existe para ele confirmar cinco decisoes
+Destinatario: Rafael. O documento existe para ele confirmar tres decisoes
 comerciais antes de qualquer linha ser escrita no ERP. Cada pergunta vem com o
 numero medido na base real, para a resposta ser informada e nao intuitiva.
 
@@ -133,6 +133,8 @@ class Doc(FPDF):
         self.ln(2)
 
     def item(self, titulo: str, corpo: str) -> None:
+        self.set_font("Helvetica", size=9)
+        self.cabe_ou_quebra(6 + 4.4 * self._linhas(self.util, corpo) + 4)
         self.set_font("Helvetica", "B", 9.5)
         self.set_text_color(*TINTA)
         self.multi_cell(0, 4.8, s(titulo))
@@ -194,8 +196,17 @@ class Doc(FPDF):
         self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
         self.ln(5)
 
-    def tabela(self, cabecalho: list[str], linhas: list[list[str]], larguras: list[float]) -> None:
-        self.set_font("Helvetica", "B", 7)
+    def tabela(
+        self,
+        cabecalho: list[str],
+        linhas: list[list[str]],
+        larguras: list[float],
+        total: list[str] | None = None,
+        col_destaque: int | None = None,
+    ) -> None:
+        """Prefixo '*' na primeira celula pinta a linha inteira de DESTAQUE.
+        `col_destaque` pinta so aquela coluna, em todas as linhas."""
+        self.set_font("Helvetica", "B", 6.5)
         self.set_text_color(*SUAVE)
         for i, (t, w) in enumerate(zip(cabecalho, larguras)):
             self.cell(w, 5, s(t.upper()), align="L" if i == 0 else "R")
@@ -206,13 +217,59 @@ class Doc(FPDF):
         self.ln(1.5)
 
         for linha in linhas:
-            destaque = linha[0].startswith("*")
-            self.set_font("Helvetica", "B" if destaque else "", 8.5)
-            self.set_text_color(*(DESTAQUE if destaque else TINTA))
+            realce = linha[0].startswith("*")
             for i, (t, w) in enumerate(zip(linha, larguras)):
+                pinta = realce or i == col_destaque
+                self.set_font("Helvetica", "B" if pinta else "", 8)
+                self.set_text_color(*(DESTAQUE if pinta else TINTA))
                 self.cell(w, 5.4, s(t.lstrip("*")), align="L" if i == 0 else "R")
             self.ln(5.4)
+
+        if total:
+            self.ln(0.5)
+            self.set_draw_color(*REGUA)
+            self.set_line_width(0.3)
+            self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
+            self.ln(1.5)
+            for i, (t, w) in enumerate(zip(total, larguras)):
+                self.set_font("Helvetica", "B", 8)
+                self.set_text_color(*(DESTAQUE if i == col_destaque else TINTA))
+                self.cell(w, 5.4, s(t), align="L" if i == 0 else "R")
+            self.ln(5.4)
         self.ln(3)
+
+    def _linhas(self, largura: float, texto: str) -> int:
+        """Quantas linhas o texto ocupa, sem desenhar. Precisa medir ANTES para
+        o fundo ser desenhado primeiro — retangulo depois do texto pinta por
+        cima dele."""
+        return len(self.multi_cell(largura, 5, s(texto), dry_run=True, output="LINES"))
+
+    def selo(self, titulo: str, corpo: str) -> None:
+        """Regra ja decidida. Nao e pergunta: e o que vai ser aplicado."""
+        largura = self.util - 12
+        self.set_font("Helvetica", "B", 10)
+        n_tit = self._linhas(largura, titulo)
+        self.set_font("Helvetica", size=8.8)
+        n_cor = self._linhas(largura, corpo)
+        alt = 5.2 * n_tit + 4.5 * n_cor + 9
+
+        self.cabe_ou_quebra(alt + 4)
+        self.ln(1)
+        y0 = self.get_y()
+        self.set_fill_color(*FUNDO_ACENTO)
+        self.rect(self.l_margin, y0, self.util, alt, style="F")
+
+        self.set_y(y0 + 4)
+        self.set_x(self.l_margin + 6)
+        self.set_font("Helvetica", "B", 10)
+        self.set_text_color(*ACENTO)
+        self.multi_cell(largura, 5.2, s(titulo))
+        self.set_x(self.l_margin + 6)
+        self.set_font("Helvetica", size=8.8)
+        self.set_text_color(*TINTA)
+        self.multi_cell(largura, 4.5, s(corpo))
+        self.set_y(y0 + alt)
+        self.ln(4)
 
     def conta(self, linhas: list[tuple[str, str, str]]) -> None:
         """Bloco de comparacao de calculo: expressao, resultado, glosa."""
@@ -337,32 +394,109 @@ def build() -> Path:
         "170 linhas — se nascer errado, erra tudo de uma vez."
     )
 
+    # ── o desvio de hoje ──────────────────────────────────────────────────
+    pdf.add_page()
+    pdf.secao("O que os números mostram", "O desvio de hoje")
+
+    pdf.p(
+        "Comparamos todos os pedidos de 2026 que aparecem nos dois sistemas: "
+        "75 pedidos, R$ 3,27 milhões em nota. Para cada um, olhamos o que foi "
+        "faturado da MM para a Nasmar e o que a regra dos 7% mandaria faturar."
+    )
+    pdf.p("O resultado é que quase nada segue a regra.")
+
+    pdf.tabela(
+        ["Cliente final", "Ped.", "Nota Nasmar", "Faturado MM", "Devido (/1,07)", "Desvio"],
+        [
+            ["Beira Rio", "5", "1.813.866,00", "1.728.764,69", "1.695.201,87", "+33.562,82"],
+            [
+                "*Calcenter (Centauro)",
+                "60",
+                "1.084.111,80",
+                "1.079.212,92",
+                "1.013.188,60",
+                "+66.024,32",
+            ],
+            ["Dakota Nordeste", "3", "268.080,00", "247.680,00", "250.542,06", "-2.862,06"],
+            ["DAJU", "1", "76.932,00", "71.899,08", "71.899,07", "+0,01"],
+            ["Outros seis clientes", "6", "23.774,30", "23.774,30", "22.218,97", "+1.555,33"],
+        ],
+        [50, 12, 28, 28, 28, 24],
+        total=["Total", "75", "3.266.764,10", "3.151.330,99", "3.053.050,56", "+98.280,43"],
+        col_destaque=5,
+    )
+
+    pdf.nota("Valores em reais. Desvio positivo = faturado ACIMA do que a regra manda.")
+    pdf.ln(1)
+
+    pdf.item(
+        "Faturamos R$ 101.142,49 acima da regra em 2026",
+        "Base de cálculo inflada nesse valor, com o imposto correspondente pago a "
+        "mais. Não é dinheiro que volta sozinho.",
+    )
+    pdf.item(
+        "E R$ 2.862,06 abaixo, na Dakota",
+        "O erro acontece nas duas direções. Nesse caso a base ficou a menor.",
+    )
+    pdf.item(
+        "Um único pedido em 75 bateu a regra",
+        "O da DAJU, de 24 de agosto, com R$ 0,01 de diferença. Todos os outros 74 "
+        "desviaram para mais ou para menos.",
+    )
+    pdf.item(
+        "O Centauro nunca teve o ajuste aplicado",
+        "Sessenta pedidos, R$ 1,08 milhão, todos faturados pelo valor cheio da nota. "
+        "Sozinho responde por R$ 66.024,32 dos R$ 101 mil de base inflada. Não é "
+        "regra diferente para ele — é o desconto que nunca foi feito.",
+    )
+
+    pdf.p(
+        "Nada disso é falha de quem digita: são centenas de pedidos por ano, cada um "
+        "com dezenas de linhas, e a conta é feita à mão. É exatamente o tipo de erro "
+        "que some quando o cálculo passa a ser do sistema.",
+    )
+
+    # ── regras definidas ──────────────────────────────────────────────────
+    pdf.secao("Definido", "Duas regras que já estão fechadas")
+
+    pdf.selo(
+        "O período é semanal",
+        "Continua parametrizável — dá para virar quinzenal na tela quando quiser, "
+        "sem depender de programador. Mas entra ligado em semanal.",
+    )
+    pdf.selo(
+        "O percentual e o método valem para TODOS os clientes",
+        "Sem exceção cadastrada, inclusive Centauro. É o que corrige o desvio "
+        "mostrado acima: a mesma conta para todo mundo, feita pelo sistema, "
+        "em todo pedido.",
+    )
+
     # ── decisoes ──────────────────────────────────────────────────────────
     pdf.add_page()
-    pdf.secao("Decisões", "Cinco confirmações")
+    pdf.secao("Decisões", "Três confirmações")
 
     pdf.set_font("Times", "B", 12)
     pdf.set_text_color(*TINTA)
-    pdf.multi_cell(pdf.util, 5.8, s('1.  O que exatamente é "nota menos 7%"?'))
+    pdf.multi_cell(pdf.util, 5.8, s("1.  A conta é dividir por 1,07 ou tirar 7% do valor?"))
     pdf.ln(1.2)
     pdf.set_font("Helvetica", size=9)
     pdf.multi_cell(
         pdf.util,
         4.6,
         s(
-            "A frase pode ser lida de dois jeitos, e eles dão valores "
-            "diferentes. Um produto que sai a R$ 16,12 na nota da Nasmar:"
+            "A frase pode ser lida de dois jeitos, e eles dão valores diferentes. "
+            "Um produto que sai a R$ 16,12 na nota da Nasmar:"
         ),
     )
     pdf.conta(
         [
-            ("16,12 / 1,07", "15,07", "é o que está gravado no sistema hoje"),
+            ("16,12 / 1,07", "15,07", "é a conta usada no quadro acima"),
             ("16,12 x 0,93", "14,99", 'leitura literal de "menos 7%"'),
         ]
     )
     for op in [
-        "Dividir por 1,07 — mantém o que a operação já faz",
-        "Tirar 7% do valor — muda o cálculo atual",
+        "Dividir por 1,07 - mantém a conta que a operação tenta fazer hoje",
+        "Tirar 7% do valor - muda a base em relação ao que vinha sendo feito",
     ]:
         yq = pdf.get_y()
         pdf.set_draw_color(120, 120, 128)
@@ -382,8 +516,8 @@ def build() -> Path:
         pdf.util - 4,
         4.4,
         s(
-            "Diferença de 0,46% do valor. Sobre os R$ 3,27 milhões de "
-            "2026, são cerca de R$ 15 mil por ano de base de cálculo."
+            "Diferença de 0,46% do valor. Sobre os R$ 3,27 milhões de 2026, são "
+            "cerca de R$ 15 mil por ano de base de cálculo."
         ),
     )
     pdf.set_draw_color(*DESTAQUE)
@@ -397,42 +531,9 @@ def build() -> Path:
 
     pdf.pergunta(
         2,
-        "Os 7% valem também para o Centauro?",
-        "Medimos todos os pedidos de 2026 nos dois sistemas. O percentual aplicado "
-        "hoje não é o mesmo para todo mundo:",
-        [
-            "Sim — 7% para todos, inclusive Centauro",
-            "Não — Centauro fica em 0%, cadastrado como exceção",
-        ],
-        peso="O Centauro saiu a 0% em 60 de 60 pedidos, R$ 1,08 milhão. Aplicar 7% "
-        "nele reduz a base em R$ 66.024,32 só em 2026.",
-    )
-
-    pdf.tabela(
-        ["Cliente final", "Pedidos", "Percentual hoje"],
-        [
-            ["Beira Rio", "5", "misto"],
-            ["*Calcenter (Centauro)", "60", "0%"],
-            ["Dakota Nordeste", "3", "misto"],
-            ["DAJU", "1", "7%"],
-            ["Cami, Campus, Multix, G&P, CRA, Aguiar", "6", "0%"],
-        ],
-        [95, 30, 45],
-    )
-
-    pdf.pergunta(
-        3,
-        "Semanal ou quinzenal para começar?",
-        "Os dois ficam configuráveis; a pergunta é qual entra ligado agora. "
-        "Medindo 2026 na Nasmar, uma semana tem em média 6 pedidos, com pico de 43.",
-        ["Semanal", "Quinzenal"],
-    )
-
-    pdf.pergunta(
-        4,
-        "Que dia o período fecha?",
+        "Que dia a semana fecha?",
         "O fechamento é o momento em que o pedido da MM é montado. Pedido que "
-        "chegar depois entra no período seguinte — o fechado não reabre.",
+        "chegar depois entra na semana seguinte - a fechada não reabre.",
         [
             "Segunda de manhã, fechando a semana anterior",
             "Sexta à noite, fechando a própria semana",
@@ -441,16 +542,15 @@ def build() -> Path:
     )
 
     pdf.pergunta(
-        5,
+        3,
         "Quando o percentual mudar, vale a partir de quando?",
-        "A proposta é congelar o percentual no momento em que o período fecha. "
+        "A proposta é congelar o percentual no momento em que a semana fecha. "
         "Mudar o parâmetro depois não mexe em pedido já montado.",
         [
-            "Sim — só vale para os períodos seguintes",
-            "Não — quero poder recalcular período já fechado",
+            "Sim - só vale para as semanas seguintes",
+            "Não - quero poder recalcular semana já fechada",
         ],
     )
-
     # ── ja definido ───────────────────────────────────────────────────────
     pdf.secao("Já definido", "O que não precisa de resposta")
     pdf.p(
@@ -460,13 +560,9 @@ def build() -> Path:
 
     for titulo, corpo in [
         (
-            "Um pedido por período, com todos os clientes juntos",
+            "Um pedido por semana, com todos os clientes juntos",
             "Não é um pedido por cliente nem por marca. Tudo que entrou na Nasmar "
-            "no período vira um pedido só para a MM.",
-        ),
-        (
-            "O percentual é parâmetro, não número fixo no sistema",
-            "Muda na tela, sem depender de programador.",
+            "na semana vira um pedido só para a MM.",
         ),
         (
             "Produtos iguais somam quantidade",
@@ -481,7 +577,7 @@ def build() -> Path:
             "valor — e escolher errado é nota errada.",
         ),
         (
-            "Sem percentual definido, o período não fecha",
+            "Sem percentual definido, a semana não fecha",
             "O sistema para e pergunta, em vez de assumir um valor. Preço errado em "
             "nota é imposto errado.",
         ),
@@ -498,7 +594,7 @@ def build() -> Path:
         "O sistema nunca gravou pedido nesses bancos — hoje quem grava é sempre "
         "uma pessoa. Por isso o primeiro pedido gerado será conferido campo a campo "
         "contra um pedido feito à mão, numa cópia do banco, antes de "
-        "qualquer coisa tocar o sistema de verdade. E o primeiro período fechado "
+        "qualquer coisa tocar o sistema de verdade. E a primeira semana fechada "
         "vai ser conferido por vocês antes de faturar."
     )
 
@@ -512,7 +608,7 @@ def build() -> Path:
     pdf.cell(
         0,
         5,
-        s("Respondidas as cinco perguntas, o resto já está pronto para começar."),
+        s("Respondidas as três perguntas, o resto já está pronto para começar."),
         new_x=XPos.LMARGIN,
         new_y=YPos.NEXT,
     )

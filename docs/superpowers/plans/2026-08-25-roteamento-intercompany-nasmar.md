@@ -2338,5 +2338,6 @@ git commit -m "docs(ai): lote intercompany em environments, web, worker e erp"
       diff no PR.
 - [ ] **Primeiro lote real conferido a olho antes de faturar.** Um lote de semana cheia
       tem ~170 linhas e concentra o risco de um jeito que o 1:1 de hoje não concentra.
-- [ ] Respostas do Rafael às 5 questões abertas da spec refletidas em `lote_config`
-      (`modo_preco`, `fator_preco`, `janela`, `dia_fechamento`) antes de ligar o job.
+- [ ] Respostas do Rafael às 3 questões abertas da spec refletidas em `lote_config`
+      (`modo_preco`, `fator_preco`, `dia_fechamento`) antes de ligar o job. `janela`
+      já entra `'semanal'` por decisão de 25/08.
