@@ -4,18 +4,21 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 
 from app.observability.trace import current_trace_id, new_trace_id, with_trace_id
+from app.persistence import context as env_context
 from app.persistence import invites_repo, sessions_repo, users_repo
+from app.reconcile.runner import Resultado, loop_periodico, reconciliar
 from app.security import (
     PasswordTooLongError,
     WeakPasswordError,
@@ -129,6 +132,25 @@ app.include_router(environments_router)
 from app.web import routes_update  # noqa: E402
 
 app.include_router(routes_update.router)
+
+
+@app.on_event("startup")
+def _iniciar_reconciliacao_periodica() -> None:
+    """Reconciliação com o Fire, periódica (07h/12h/18h local) — registrada
+    AQUI (processo web), não só no scheduler do worker.
+
+    `scripts/setup-service.ps1` só registra `ui.py` como tarefa agendada no
+    Windows do cliente — o worker (`python -m app.worker`) nunca roda lá. Um
+    job registrado só no APScheduler do worker nunca dispararia em produção
+    nesse deploy. `app/worker/scheduler.py` registra o MESMO runner com
+    `CronTrigger` nos mesmos horários, para os deploys docker onde o worker
+    existe; a trava de `app.reconcile.runner` evita trabalho dobrado quando
+    os dois processos rodam ao mesmo tempo.
+
+    Thread daemon: não impede o processo de encerrar, e nunca bloqueia o
+    startup do FastAPI (só dorme e reconcilia, em loop, fora do event loop
+    de request/response)."""
+    threading.Thread(target=loop_periodico, name="reconcile-periodico", daemon=True).start()
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────
@@ -1200,12 +1222,17 @@ def list_imported(
     limit: int = 100,
     offset: int = 0,
     status: str | None = None,
-    portal_status: str | None = None,
+    portal_status: list[str] | None = Query(None),
     production_status: str | None = None,
     q: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> JSONResponse:
+    """`?portal_status=` aceita o parâmetro repetido (`?portal_status=a&portal_status=b`)
+    para filtrar por múltiplos estados numa chamada só (ex.: chip "No Fire" da UI,
+    que precisa casar `sent_to_fire` e `found_in_fire` de uma vez). Um único valor
+    continua funcionando exatamente como antes — vira uma lista de 1 item, e
+    `repo._build_where` trata `IN (?)` como equivalente a `= ?`."""
     from app.persistence import repo
 
     entries = repo.list_imports(
@@ -1226,7 +1253,27 @@ def list_imported(
         date_from=date_from,
         date_to=date_to,
     )
-    return JSONResponse({"entries": entries, "total": total, "limit": limit, "offset": offset})
+    # `counts` alimenta os contadores dos chips de status. Vai junto da lista,
+    # e não numa rota própria, para que os números NUNCA divirjam do que a
+    # tela acabou de renderizar — duas chamadas separadas podem cair em lados
+    # opostos de uma reconciliação em background e mostrar 12 na lista com 308
+    # no chip.
+    counts = repo.count_by_portal_status(
+        status=status,
+        production_status=production_status,
+        customer_search=q,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return JSONResponse(
+        {
+            "entries": entries,
+            "total": total,
+            "counts": counts,
+            "limit": limit,
+            "offset": offset,
+        }
+    )
 
 
 @app.get("/api/imported/{import_id}")
@@ -1238,6 +1285,32 @@ def get_imported(import_id: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Importação não encontrada")
     audit = repo.list_audit(import_id)
     return JSONResponse({"entry": entry, "audit": audit})
+
+
+@app.post("/api/imported/reconciliar-fire")
+def reconciliar_fire_agora(
+    user: User = Depends(require_user),
+) -> Resultado:
+    """Botão manual: reconcilia o ambiente ativo agora, ignorando a trava —
+    a operadora pediu explicitamente, não é o loop periódico esbarrando nele
+    mesmo (a exclusão mútua por ambiente continua valendo: duplo clique não
+    dispara dois scans, devolve `status="em_execucao"` na hora — ver
+    `app.reconcile.runner._lock_for` e `Resultado.status`). `status`
+    distingue "rodou e não achou nada" (`"ok"`) de "não consegui consultar o
+    Fire" (`"erro_conexao"`) de "já tem uma reconciliação deste ambiente em
+    andamento" (`"em_execucao"`) — sem essa distinção a operadora vê
+    '0 casaram' pros três casos e conclui, errado, que a feature quebrou."""
+    from app.utils.logger import logger
+
+    slug = env_context.current_env_slug()
+    logger.info(f"reconcile.web: botão manual acionado por {user.email} em '{slug}'")
+    resultado = reconciliar(slug, respeitar_trava=False)
+    logger.info(
+        f"reconcile.web: botão manual '{slug}' por {user.email} -> "
+        f"verificados={resultado.verificados} casaram={resultado.casaram} "
+        f"status={resultado.status}"
+    )
+    return resultado
 
 
 class ReimportRequest(BaseModel):
@@ -1833,6 +1906,16 @@ def _export_one_xlsx(
         return _XlsxExportOutcome(
             False, reason="not_found", http_status=404, detail="Pedido não encontrado"
         )
+    if entry.get("portal_status") == "found_in_fire":
+        return _XlsxExportOutcome(
+            False,
+            reason="found_in_fire",
+            http_status=409,
+            detail=(
+                "Pedido já consta no Fire — não é possível exportar novamente "
+                "(reexportar cadastraria duplicata no ERP)"
+            ),
+        )
     if entry.get("portal_status") != "parsed":
         return _XlsxExportOutcome(
             False,
@@ -2211,10 +2294,14 @@ def cancel_import(
             status_code=409,
             detail="Pedido já foi enviado ao Fire — não pode ser cancelado pelo portal",
         )
+    if entry.get("portal_status") == "found_in_fire":
+        raise HTTPException(
+            status_code=409,
+            detail="Pedido já consta no Fire — não pode ser cancelado pelo portal",
+        )
 
     reason = body.reason if body else None
     with with_trace_id(entry.get("trace_id")):
-        repo.append_audit(import_id, "cancelled", {"reason": reason})
         try:
             result = transition(
                 import_id,
@@ -2224,6 +2311,7 @@ def cancel_import(
             )
         except InvalidTransitionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        repo.append_audit(import_id, "cancelled", {"reason": reason})
     return JSONResponse(
         {
             "entry_id": import_id,
@@ -2667,6 +2755,7 @@ def rehydrate_preview(import_id: str, request: Request) -> JSONResponse:
     payload = _build_preview_payload(import_id, entry.get("source_filename", ""), order, check)
     payload["portal_status"] = entry.get("portal_status")
     payload["fire_codigo"] = entry.get("fire_codigo")
+    payload["fire_status_last_seen"] = entry.get("fire_status_last_seen")
 
     # Surface the manual cliente override into the check banner so the UI shows
     # it in green instead of the original "✗ Cliente não encontrado" red flag.

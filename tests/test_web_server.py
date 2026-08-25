@@ -474,6 +474,38 @@ def test_cancel_sent_to_fire_rejected():
     assert r.status_code == 409
 
 
+def test_cancel_found_in_fire_rejected_without_audit():
+    """found_in_fire (reconciliado, não inserido pelo portal) não pode ser
+    cancelado — e a tentativa recusada não deve gravar audit 'cancelled',
+    porque o cancelamento não aconteceu."""
+    import uuid
+    from datetime import datetime
+
+    from app.persistence import repo
+
+    entry_id = str(uuid.uuid4())
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "TEST-FOUND",
+            "status": "success",
+            "portal_status": "found_in_fire",
+            "fire_codigo": 555,
+            "snapshot": {"header": {"order_number": "TEST-FOUND"}, "items": []},
+        }
+    )
+    r = client.post(f"/api/imported/{entry_id}/cancel", json={"reason": "duplicado"})
+    assert r.status_code == 409
+
+    got = repo.get_import(entry_id)
+    assert got["portal_status"] == "found_in_fire"
+
+    audit_events = [a["event_type"] for a in repo.list_audit(entry_id)]
+    assert "cancelled" not in audit_events
+
+
 def test_send_to_fire_rejects_wrong_portal_status():
     import uuid
     from datetime import datetime
@@ -824,6 +856,36 @@ def test_export_xlsx_rejects_wrong_portal_status():
     assert r.status_code == 409
 
 
+def test_export_xlsx_rejects_found_in_fire_with_explanation():
+    """found_in_fire já está no ERP — reexportar convida duplicata. A mensagem
+    precisa explicar o motivo (não é erro do usuário)."""
+    import uuid
+    from datetime import datetime
+
+    from app.persistence import repo
+
+    entry_id = str(uuid.uuid4())
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "XLSX-FOUND",
+            "status": "success",
+            "portal_status": "found_in_fire",
+            "fire_codigo": 777,
+            "snapshot": {"header": {"order_number": "XLSX-FOUND"}, "items": []},
+        }
+    )
+    r = client.post(f"/api/imported/{entry_id}/export-xlsx")
+    assert r.status_code == 409
+    detail = r.json()["detail"].lower()
+    # Mensagem dedicada, não a genérica de "wrong_status": precisa explicar
+    # que o pedido já está no Fire (não é erro do usuário reexportar).
+    assert "já" in detail and "fire" in detail
+    assert "em revisão" not in detail
+
+
 def test_batch_send_to_fire_rejects_empty_and_oversized():
     r = client.post("/api/batch/send-to-fire", json={"ids": []})
     assert r.status_code == 400
@@ -871,6 +933,90 @@ def test_rehydrate_preview_returns_snapshot():
     assert body["check"]["available"] is False
 
 
+def test_rehydrate_preview_includes_fire_status_last_seen():
+    """Um pedido `found_in_fire` CANCELADO no Fire reconcilia e some da fila de
+    revisão — corretamente, porque existe lá. Mas se o modal de detalhe não
+    mostrar o status, a operadora conclui, errado, que está tudo resolvido.
+    O selo da lista já mostrava `fire_status_last_seen`; o modal precisa do
+    mesmo dado no payload."""
+    import uuid
+    from datetime import datetime
+
+    from app.persistence import repo
+
+    entry_id = str(uuid.uuid4())
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "REHYDR-2",
+            "customer": "ACME",
+            "status": "success",
+            "portal_status": "found_in_fire",
+            "snapshot": {
+                "header": {"order_number": "REHYDR-2", "customer_name": "ACME"},
+                "items": [{"description": "item A", "quantity": 3.0}],
+                "source_file": "",
+            },
+            "check": {
+                "available": False,
+                "reason": "FB_DATABASE_NOT_SET",
+                "client": {"match": False},
+                "items": [],
+                "summary": {},
+            },
+        }
+    )
+    repo.update_fire_poll_result(
+        entry_id, "CANCELADO", datetime.now().isoformat(timespec="seconds")
+    )
+
+    r = client.get(f"/api/imported/{entry_id}/preview")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["portal_status"] == "found_in_fire"
+    assert body["fire_status_last_seen"] == "CANCELADO"
+
+
+def test_rehydrate_preview_fire_status_last_seen_absent_when_never_polled():
+    """Sem poll ainda, o campo vem `None` — não deve virar string vazia nem
+    quebrar o payload."""
+    import uuid
+    from datetime import datetime
+
+    from app.persistence import repo
+
+    entry_id = str(uuid.uuid4())
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "REHYDR-3",
+            "customer": "ACME",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {
+                "header": {"order_number": "REHYDR-3", "customer_name": "ACME"},
+                "items": [{"description": "item A", "quantity": 3.0}],
+                "source_file": "",
+            },
+            "check": {
+                "available": False,
+                "reason": "FB_DATABASE_NOT_SET",
+                "client": {"match": False},
+                "items": [],
+                "summary": {},
+            },
+        }
+    )
+
+    r = client.get(f"/api/imported/{entry_id}/preview")
+    assert r.status_code == 200
+    assert r.json()["fire_status_last_seen"] is None
+
+
 def test_imported_filter_by_search_and_status():
     # Seed a few rows directly
     import uuid
@@ -905,6 +1051,132 @@ def test_imported_filter_by_search_and_status():
     r2 = client.get("/api/imported?status=error")
     assert r2.status_code == 200
     assert r2.json()["total"] == 1
+
+
+def test_imported_filter_by_single_portal_status():
+    """Um único `portal_status` na query continua funcionando exatamente como
+    antes de `portal_status` virar `list[str] | None = Query(None)` — vira
+    uma lista de 1 item, que `repo._build_where` trata como `IN (?)`."""
+    import uuid
+    from datetime import datetime
+
+    from app.persistence import repo
+
+    for order_number, status in [
+        ("PS-1", "parsed"),
+        ("PS-2", "sent_to_fire"),
+        ("PS-3", "cancelled"),
+    ]:
+        repo.insert_import(
+            {
+                "id": str(uuid.uuid4()),
+                "source_filename": "x.pdf",
+                "imported_at": datetime.now().isoformat(timespec="seconds"),
+                "order_number": order_number,
+                "customer": "ACME",
+                "status": "success",
+                "portal_status": status,
+            }
+        )
+
+    r = client.get("/api/imported?portal_status=parsed")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert body["entries"][0]["order_number"] == "PS-1"
+    assert body["entries"][0]["portal_status"] == "parsed"
+
+
+def test_imported_filter_by_multiple_portal_status():
+    """`?portal_status=a&portal_status=b` (parâmetro repetido) filtra pela
+    UNIÃO dos dois estados numa chamada só — é o que o chip "No Fire" da UI
+    usa para casar `sent_to_fire` e `found_in_fire` juntos."""
+    import uuid
+    from datetime import datetime
+
+    from app.persistence import repo
+
+    for order_number, status in [
+        ("PM-1", "sent_to_fire"),
+        ("PM-2", "found_in_fire"),
+        ("PM-3", "parsed"),
+        ("PM-4", "cancelled"),
+    ]:
+        repo.insert_import(
+            {
+                "id": str(uuid.uuid4()),
+                "source_filename": "x.pdf",
+                "imported_at": datetime.now().isoformat(timespec="seconds"),
+                "order_number": order_number,
+                "customer": "ACME",
+                "status": "success",
+                "portal_status": status,
+            }
+        )
+
+    r = client.get("/api/imported?portal_status=sent_to_fire&portal_status=found_in_fire")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2
+    order_numbers = {e["order_number"] for e in body["entries"]}
+    assert order_numbers == {"PM-1", "PM-2"}
+
+
+def test_imported_counts_conta_todo_status_e_respeita_os_outros_filtros():
+    """`counts` alimenta os contadores dos chips de status.
+
+    Contrato em uma frase: conta por `portal_status` com TODOS os outros
+    filtros aplicados e o próprio `portal_status` de fora. É o que faz o
+    número do chip ser exatamente o que aparece ao clicar nele.
+
+    Sem isso a reconciliação move a maioria dos pedidos de uma vez e a tela
+    só encolhe — o operador vê "12 pedido(s)" e nenhuma pista de onde foram
+    parar os outros 296.
+    """
+    import uuid
+    from datetime import datetime
+
+    from app.persistence import repo
+
+    marca = f"CNT{uuid.uuid4().hex[:8].upper()}"
+    for sufixo, status in [
+        ("A", "parsed"),
+        ("B", "sent_to_fire"),
+        ("C", "found_in_fire"),
+        ("D", "cancelled"),
+        ("E", "error"),
+    ]:
+        repo.insert_import(
+            {
+                "id": str(uuid.uuid4()),
+                "source_filename": "x.pdf",
+                "imported_at": datetime.now().isoformat(timespec="seconds"),
+                "order_number": f"{marca}-{sufixo}",
+                "status": "success",
+                "portal_status": status,
+            }
+        )
+
+    r = client.get(f"/api/imported?q={marca}&portal_status=parsed")
+    assert r.status_code == 200
+    body = r.json()
+
+    # `total` continua obedecendo o chip ativo — é o tamanho da lista.
+    assert body["total"] == 1
+
+    # `counts` NÃO obedece o chip ativo (é o eixo contado), mas obedece a
+    # busca: só os cinco pedidos desta marca entram.
+    assert body["counts"] == {
+        "parsed": 1,
+        "sent_to_fire": 1,
+        "found_in_fire": 1,
+        "cancelled": 1,
+        "error": 1,
+    }, "counts deve ignorar o filtro de portal_status e respeitar q"
+
+    # O chip "Tudo" soma o dict; `error` não tem chip próprio mas aparece ao
+    # clicar em "Tudo", então precisa estar na soma.
+    assert sum(body["counts"].values()) == 5
 
 
 # ── Manual cliente override (CLIENT_NOT_FOUND recovery) ──────────────────────

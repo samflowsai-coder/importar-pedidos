@@ -4,7 +4,7 @@
 > sai daqui e vive no histórico do git. Cada item diz o que é, onde dói e o que
 > destrava.
 >
-> Último passe de verificação: **2026-08-21** (referências de código conferidas
+> Último passe de verificação: **2026-08-24** (referências de código conferidas
 > contra a `main`; o que depende de sistema externo está marcado como não verificado).
 
 ---
@@ -26,14 +26,6 @@ antes do re-check.
 intercompany levantar, o código dá `return False` **sem contar tentativa**. Com o
 Firebird fora do ar, a decisão nunca confirma e **segura o cursor** do poll.
 **Fix:** contar tentativa também no caminho de exceção.
-
-### 1.3 `poll_fire.py:67` — `conn.execute` não existe em `fdb.Connection`
-`app/worker/jobs/poll_fire.py:67` chama `conn.execute(...)` (só existe em `Cursor`) e
-indexa `row["STATUS"]` numa tupla. Um commit, mesmo padrão do fix `fea7ee7`.
-**Por que ainda não estourou:** `list_pending_for_fire_poll` exige
-`fire_codigo IS NOT NULL`, e hoje é sempre NULL (o cliente é XLS-only). **Não** é por
-`FIRE_TRIGGER_STATUS` vazio — o trigger só é lido depois do crash. Quebra a cada 60s no
-dia em que alguém usar "Cadastrar no Fire" com sucesso.
 
 ### 1.4 Cool-down do de-para de cliente arma largo demais
 `app/erp/depara_cliente.py` — o cool-down de 45s arma no bloco inteiro (`to_fb_config`
@@ -71,6 +63,45 @@ existem. A lista correta está no `CLAUDE.md`.
 
 ### 2.6 `app/sync/` vazio
 Só resta `__pycache__`. Ou remover o diretório, ou explicar o que era.
+
+### 2.7 Starvation acima de 500 candidatos na reconciliação Fire
+`repo.list_parsed_for_reconcile` (`app/persistence/repo.py:529`) pega os 500 pedidos
+`parsed` mais antigos (`ORDER BY imported_at ASC LIMIT 500`). Quem não casa no Fire
+continua `parsed`, ocupando as mesmas 500 vagas para sempre — um pedido novo nunca
+chega a ser tentado enquanto a fila estiver cheia de velhos que nunca casam, e nada
+sinaliza esse starvation. Hoje com 308 pendentes é irrelevante (cabe tudo numa
+página). **Fix, se doer:** rotacionar a fila (cursor avançando por `imported_at`
+em vez de sempre pegar os 500 mais antigos) ou desistir de candidato "velho demais
+sem casar" depois de N tentativas, liberando a vaga.
+
+### 2.8 Fallback LLM não alcança formato de cliente novo — o genérico chega antes
+
+Hoje o LLM só roda quando **todo** parser da cascata devolve `None`
+(`app/pipeline.py`). O `GenericParser` não sobrescreve `can_parse` — herda o `True`
+do `BaseParser` — e só devolve `None` quando não encontra item nenhum. Em qualquer
+outro caso ele devolve um `Order`, **mesmo errado**, e o LLM nunca é chamado.
+
+Efeito prático: cliente novo entra com dado errado em silêncio. Foi o caso da Daju
+(o genérico extraía o pedido como `'DA'`, com quantidades erradas) e antes dele o do
+Authentic Feet, que lia a coluna de cor como quantidade — ver `modules/parsers.md`.
+O conserto, nos dois, foi escrever mais um parser dedicado. Enquanto isso não muda,
+**cada cliente novo custa um parser**, e o custo aparece só quando alguém confere.
+
+`OrderValidator.validate` já detecta parte disso (número do pedido ausente,
+`quantity <= 0`), mas devolve um `bool` que `pipeline.process` **descarta** — só sobra
+warning no log, e o pedido segue para o preview como se estivesse bom.
+
+Se o LLM chegar a ser chamado, ainda há duas limitações no caminho
+(`app/llm/fallback_parser.py`): manda só `extracted["text"]` cortado em
+`MAX_TEXT_CHARS = 8000`, **sem sinalizar o corte** (pedido longo perde itens em
+silêncio), e descarta `rows`/`tables`. Em planilha isso é grave: o
+`XLSExtractor._make_text` junta as células com espaço, então a estrutura de coluna —
+justamente o que identifica o formato — se perde antes de chegar ao modelo.
+
+**O que destrava:** usar o resultado do validator como gate (parse fraco do genérico
+→ tenta LLM em vez de aceitar), mandar as linhas/tabela em vez do blob de texto, e
+sinalizar truncamento. Custo continua zero nos formatos que já têm parser — o LLM só
+entra onde hoje o dado sai errado de graça.
 
 ---
 

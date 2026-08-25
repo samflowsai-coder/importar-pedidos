@@ -178,3 +178,152 @@ Fast-follow se o cliente migrar de `xlsx`.
 (`find_products_by_eans_sql` / `_codes_sql` / `_seqs_sql`), chunk de 200, dedup
 antes. Contrato de saída inalterado. Caveat: `TRIM(CODPROD_ALTERN) IN (...)` não
 usa índice — se pesar no volume real, medir antes de otimizar.
+
+## Reconciliação com o Fire (pedido cadastrado à mão)
+
+`app/erp/fire_reconcile.py` — leitura pura do Firebird para achar, entre os
+pedidos `parsed` do portal, quais já foram cadastrados manualmente no Fire.
+Motivo de existir: o cliente roda `EXPORT_MODE=xlsx`, a operadora exporta o
+XLS e cadastra à mão no Fire, e o portal nunca fica sabendo — o pedido fica
+`parsed` pra sempre. O módulo não conhece `Order`, não decide estado, não
+escreve nada; devolve um dict `import_id → Achado` para
+`app/reconcile/runner.py` decidir e gravar (ver `state.md`, seção
+`found_in_fire`).
+
+### Chave dupla, três caminhos
+
+`_decidir_candidato` (`fire_reconcile.py:305`) tenta, na ordem, o primeiro
+caminho cuja âncora de cliente está preenchida no `Candidato` — sem
+fallback entre eles, e nenhum casa só pelo número:
+
+1. **`cliente_override_codigo`** (override manual do picker, ver "Cliente
+   override" acima) — casa por `CAB_VENDAS.CLIENTE` igual ao código
+   (`fire_reconcile.py:322-326`).
+2. **`customer_cnpj` do header** — casa por CNPJ do `CADASTRO` da linha,
+   comparado em dígitos (`fire_reconcile.py:328-335`).
+3. **Sem CNPJ no header** (Riachuelo, NBA — o CNPJ real é por loja, em
+   `delivery_cnpj` de cada item) — compara o conjunto de `delivery_cnpj`
+   distintos do pedido contra o Fire (`fire_reconcile.py:337-356`).
+
+### Regra "todas as lojas"
+
+O caminho 3 só marca quando **cada** CNPJ de entrega do pedido tem pelo
+menos uma linha casada no Fire — um pedido com 3 lojas e só 2 cadastradas
+continua `parsed` (`fire_reconcile.py:350-356`). Meio-cadastrado é
+trabalho pendente, não confirmado; silêncio é melhor que marca errada.
+
+A mesma checagem fecha uma armadilha: um `delivery_cnpj` sem dígito (texto
+livre tipo `"A COMBINAR"` ou `"N/A"`) normaliza para `""`, e
+`CADASTRO.CPF_CNPJ` nulo/vazio no Fire normaliza para o MESMO `""`. Sem o
+guard `"" in alvo_cnpjs` (`fire_reconcile.py:350`), os dois vazios se
+encontrariam e o pedido casaria sem nenhuma âncora de cliente real. A
+regra que vale: **um CNPJ de entrega não-verificável bloqueia o pedido
+inteiro** — não é descartado do conjunto — porque com uma loja que não dá
+para provar, não dá para provar "todas as lojas".
+
+### Guarda temporal de 90 dias
+
+Números curtos e sequenciais — `K01` (Kallan), `MF048` (Magic Feet),
+`AF198` (Authentic) — se repetem entre anos no MESMO cliente. Um `K01`
+novo casaria com o `K01` do ano passado: mesmo número, mesmo CNPJ, chave
+dupla fechada e errada. `_JANELA_DIAS = 90` (`fire_reconcile.py:43`)
+descarta qualquer linha do Fire cuja `DATA_PEDIDO` seja anterior a "data
+do candidato − 90 dias" (`_dentro_da_janela`, `fire_reconcile.py:279-302`).
+Candidato sem `data_pedido` não aplica a guarda (passa tudo); candidato ou
+linha do Fire com data ilegível descarta por segurança, não abre exceção.
+
+**Risco residual: a guarda não tem teto.** `_dentro_da_janela` só filtra pra
+trás (`data_linha >= data_candidato − 90 dias`) — não existe limite pra
+frente. Um pedido antigo que continua `parsed` (nunca casou) pode, em tese,
+casar com um cadastro novo do mesmo número e cliente feito mais de 90 dias
+depois. É o último caminho de falso positivo que sobrou nesta feature, e não
+foi fechado de propósito: um teto simétrico (também descartar linhas do Fire
+"tarde demais" em relação ao candidato) quebraria o caso real que motivou a
+feature — os 308 pedidos que ficaram `parsed` porque a operadora só cadastra
+no Fire meses depois do import. Se um dia isso doer, um teto largo (na faixa
+de 270 a 400 dias) fecharia o reuso anual de número (o próprio motivo da
+guarda de 90 dias) sem barrar o cadastro tardio que a feature existe para
+cobrir.
+
+### Variantes do número
+
+`app/erp/numero_pedido.py::variantes(numero)` gera as formas aceitas como
+"mesmo número", da mais específica pra menos: exata, sem sufixo `-NNNN`
+(hífen seguido de exatamente 4 dígitos no fim), sem zeros à esquerda.
+Nunca substituem a segunda perna da chave — só ampliam o que conta como
+"mesmo número" antes de checar a âncora de cliente.
+
+**Caso real medido:** Sam's Club guarda `06654993-0000` no portal e
+`06654993` no Fire (`numero_pedido.py:3-5`) — sem cortar o sufixo, 100% de
+falso negativo em Sam's.
+
+### Query em lote
+
+`FIND_ORDERS_BY_PEDIDO_CLIENTE(n)` (`queries.py:317-344`) generaliza
+`FIND_CLIENTE_REAL_BY_PEDIDO_CLIENTE` (`queries.py:307`) para receber N
+números de uma vez — lotes de `_BLOCO = 200` (`fire_reconcile.py:36`), 308
+pedidos pendentes viram ~2 idas ao banco. As colunas duplicadas **não têm
+alias** no SQL: índice 1 = `V.CODIGO` (pedido no Fire), índice 4 =
+`C.CODIGO` (cliente no Fire) — quem lê por nome de coluna quebra; a
+posição é o que distingue.
+
+**Sem filtro de `STATUS`.** Medido no backup real do cliente
+(`bkp Fire Novo/MM_AMERICANENSE.fdb`) em 2026-08-24: `FATURADO` 3365,
+`PEDIDO` 322, `CANCELADO` 22, `EM ANÁLISE` 1. `found_in_fire` significa
+"existe no Fire" — um pedido `CANCELADO` existe (foi cadastrado e depois
+cancelado). Filtrar deixaria ele preso na fila de revisão pra sempre sem
+a operadora entender por quê. O status vem junto (`Achado.fire_status`,
+gravado em `imports.fire_status_last_seen`) e a UI mostra: "Cadastrado no
+Fire (CANCELADO)".
+
+### Limitação 1↔N (conhecida, documentada)
+
+Um import Riachuelo vira **N linhas** em `CAB_VENDAS` — uma por loja, cada
+uma com cliente e CNPJ próprios. `imports.fire_codigo` é uma coluna só, e
+guarda **o menor `V.CODIGO` entre as linhas casadas que não estão
+canceladas** (`_escolher_representante`, `fire_reconcile.py:375`). O
+desempate ignora `CANCELADO` de propósito: quando uma loja é recadastrada,
+a linha viva tem `CODIGO` maior que a cancelada, e `min()` puro faria o
+portal exibir "CANCELADO" para um pedido que está vivo no Fire.
+
+É representação **parcial** e inofensiva enquanto o `poll_fire` não roda na
+MM (`setup-service.ps1` registra só `ui.py`). No dia em que rodar, o poll
+seguirá o status de uma loja só. A saída, se importar, é uma tabela de
+ligação `import_id ↔ fire_codigo` — não alargar esta coluna.
+
+### Degradação — nunca levanta
+
+`buscar_no_fire` (wrapper público) / `_buscar_no_fire_detalhado`
+(implementação, com o sinal de conexão) nunca levantam — qualquer falha
+vira `{}` + log. Cool-down de 45s por ambiente (`_COOLDOWN_S`,
+`fire_reconcile.py:51`), armado **só** em volta do `connect_with_config` —
+a mesma lição do cool-down largo demais do `depara_cliente`
+(`docs/BACKLOG.md` §1.4), feita certo desde o início aqui: erro de
+leitura/dado depois da conexão (SQL malformado, linha suja) não arma
+cool-down, só loga.
+
+`_buscar_no_fire_detalhado` devolve `(achados, erro_conexao)` — o booleano
+é o que permite `app/reconcile/runner.py` distinguir, no
+`Resultado.status` (`ok | erro_conexao | em_execucao | trava_ativa`,
+`app/reconcile/runner.py:95`) que `POST /api/imported/reconciliar-fire`
+devolve (`app/web/server.py:1270`), "consultei e não achei nada" de "não
+consegui consultar o Fire". Sem essa distinção, `casaram=0` nos dois casos
+faria a operadora concluir, errado, que a feature quebrou.
+
+**`erro_conexao=True` cobre falha de conexão E falha de leitura/dado.**
+Fix de 2026-08-24 (achado em teste real de navegador): a distinção fina
+entre "falhou ao conectar" e "conectou mas falhou ao ler" só importa para o
+cool-down (que continua armando exclusivamente em volta do
+`connect_with_config`, como acima) — para quem lê o resultado (operadora,
+via `Resultado.status`) as duas são igualmente "não consegui consultar o
+Fire". Antes do fix, falha de leitura devolvia `erro_conexao=False`,
+fazendo a UI reportar "0 casaram" (dado como se tivesse consultado e não
+achado nada) quando na verdade a consulta nem completou.
+
+### Testes
+`tests/test_fire_reconcile.py` — os 3 caminhos, "todas as lojas", variante
+sem sufixo (caso Sam's), guarda temporal, CNPJ divergente, Fire fora
+devolve vazio sem levantar, cool-down só em erro de conexão, lote > 200.
+
+`tests/test_numero_pedido.py` — as variantes de número em isolamento,
+incluindo zeros à esquerda (`test_zeros_a_esquerda_viram_variante`).

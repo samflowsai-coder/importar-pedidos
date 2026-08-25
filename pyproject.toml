@@ -57,6 +57,9 @@ ignore = [
 "app/parsers/desmembramento_xls_parser.py" = ["N806"]
 # Exceção de domínio sem sufixo Error; rename é refactor, fora do escopo deste chore
 "app/persistence/environments_repo.py" = ["N818"]
+# N802: FIND_ORDERS_BY_PEDIDO_CLIENTE é função (N placeholders dinâmicos), mas
+# segue a convenção UPPER_CASE das demais queries do módulo (todas "constantes" SQL)
+"app/erp/queries.py" = ["N802"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

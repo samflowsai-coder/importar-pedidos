@@ -6,8 +6,12 @@ import json
 from datetime import datetime
 from typing import Any
 
+from app.erp.fire_reconcile import Candidato
+from app.observability.trace import current_trace_id
 from app.persistence import context as env_context
 from app.persistence import db
+from app.state.events import _insert_event
+from app.state.machine import EventSource, LifecycleEvent
 
 _MAX_PAGE_SIZE = 500
 
@@ -144,6 +148,8 @@ def _row_to_entry(row) -> dict:
         "sem_preco_ack_items": (
             json.loads(_get("sem_preco_ack_items")) if _get("sem_preco_ack_items") else None
         ),
+        "fire_status_last_seen": _get("fire_status_last_seen"),
+        "fire_status_polled_at": _get("fire_status_polled_at"),
         "output_files": json.loads(row["output_files_json"]) if row["output_files_json"] else [],
         "db_result": json.loads(row["db_result_json"]) if row["db_result_json"] else None,
         "snapshot": json.loads(row["snapshot_json"]) if row["snapshot_json"] else None,
@@ -153,7 +159,7 @@ def _row_to_entry(row) -> dict:
 
 def _build_where(
     status: str | None,
-    portal_status: str | None,
+    portal_status: str | list[str] | None,
     production_status: str | None,
     customer_search: str | None,
     date_from: str | None,
@@ -165,8 +171,13 @@ def _build_where(
         where.append("status = ?")
         params.append(status)
     if portal_status:
-        where.append("portal_status = ?")
-        params.append(portal_status)
+        if isinstance(portal_status, list):
+            placeholders = ", ".join("?" for _ in portal_status)
+            where.append(f"portal_status IN ({placeholders})")
+            params.extend(portal_status)
+        else:
+            where.append("portal_status = ?")
+            params.append(portal_status)
     if production_status:
         where.append("production_status = ?")
         params.append(production_status)
@@ -187,7 +198,7 @@ def list_imports(
     limit: int = 100,
     offset: int = 0,
     status: str | None = None,
-    portal_status: str | None = None,
+    portal_status: str | list[str] | None = None,
     production_status: str | None = None,
     customer_search: str | None = None,
     date_from: str | None = None,
@@ -210,7 +221,8 @@ def list_imports(
                trace_id, state_version, gestor_order_id, apontae_order_id,
                cliente_override_codigo, cliente_override_razao,
                cliente_override_at, cliente_override_by,
-               sem_preco_ack_by, sem_preco_ack_at, sem_preco_ack_items
+               sem_preco_ack_by, sem_preco_ack_at, sem_preco_ack_items,
+               fire_status_last_seen, fire_status_polled_at
         FROM imports
         {clause}
         ORDER BY imported_at DESC
@@ -224,7 +236,7 @@ def list_imports(
 
 def count_imports(
     status: str | None = None,
-    portal_status: str | None = None,
+    portal_status: str | list[str] | None = None,
     production_status: str | None = None,
     customer_search: str | None = None,
     date_from: str | None = None,
@@ -236,6 +248,46 @@ def count_imports(
     with db.connect() as conn:
         row = conn.execute(f"SELECT COUNT(*) AS n FROM imports {clause}", params).fetchone()
     return int(row["n"])
+
+
+def count_by_portal_status(
+    status: str | None = None,
+    production_status: str | None = None,
+    customer_search: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, int]:
+    """Quantos pedidos existem em CADA `portal_status`, numa ida só ao banco.
+
+    Quem consome é o seletor de status da lista ("Em revisão" / "No Fire" /
+    "Cancelado"). Sem isto, a reconciliação move 296 dos 308 pedidos de uma vez
+    e a tela não diz para onde eles foram — o contador do rodapé conta só o
+    filtro ativo, então a lista simplesmente encolhe.
+
+    `portal_status` fica DE FORA do WHERE de propósito: é o eixo que está sendo
+    contado. Todos os OUTROS filtros entram, para que o número do chip seja
+    exatamente o que aparece ao clicar nele — um contador que discordasse da
+    lista seria pior que contador nenhum.
+
+    A coluna é `NOT NULL DEFAULT 'sent_to_fire'` (`schema_env.py:27`), então
+    toda linha cai em algum balde. Estados sem chip próprio (hoje `error`)
+    voltam no dict mesmo assim: quem soma decide o que mostrar, e a rota não
+    deve mentir por omissão.
+    """
+    clause, params = _build_where(
+        status, None, production_status, customer_search, date_from, date_to
+    )
+    with db.connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT portal_status AS ps, COUNT(*) AS n
+            FROM imports
+            {clause}
+            GROUP BY portal_status
+            """,
+            params,
+        ).fetchall()
+    return {row["ps"]: int(row["n"]) for row in rows}
 
 
 def get_import(import_id: str) -> dict | None:
@@ -251,7 +303,8 @@ def get_import(import_id: str) -> dict | None:
                    trace_id, state_version, gestor_order_id, apontae_order_id,
                    cliente_override_codigo, cliente_override_razao,
                    cliente_override_at, cliente_override_by,
-                   sem_preco_ack_by, sem_preco_ack_at, sem_preco_ack_items
+                   sem_preco_ack_by, sem_preco_ack_at, sem_preco_ack_items,
+                   fire_status_last_seen, fire_status_polled_at
             FROM imports WHERE id = ?
             """,
             (import_id,),
@@ -415,9 +468,19 @@ def set_sem_preco_ack(
 def list_pending_for_fire_poll(window_days: int = 7) -> list[dict]:
     """Return imports eligible for Firebird status polling.
 
-    Criteria: sent_to_fire, no production started, fire_codigo present,
-    within the given time window. Ordered so least-recently-polled entries
-    come first (NULL treated as older than any timestamp).
+    Criteria: sent_to_fire OR found_in_fire (reconciliado à mão pode mudar de
+    status no Fire tanto quanto o que o próprio portal inseriu), no production
+    started, fire_codigo present, within the given time window. The window is
+    measured from a FIXED anchor — `reconciled_at` (stamped once by
+    `mark_found_in_fire`) falling back to `imported_at` for rows never
+    reconciled by hand (plain `sent_to_fire`). Neither anchor ever moves after
+    it's first set, which is the point: `fire_status_polled_at` used to be the
+    anchor, but `update_fire_poll_result` recarimba esse campo a CADA poll —
+    então toda linha que entrasse na janela uma vez nunca mais saía, ela
+    renovava a própria âncora sozinha (regressão fechada; ver
+    `tests/test_reconcile_repo.py::test_janela_do_poll_ancora_na_reconciliacao_nao_no_ultimo_poll`).
+    Ordered so least-recently-polled entries come first (NULL treated as
+    older than any timestamp).
     """
     with db.connect() as conn:
         rows = conn.execute(
@@ -425,10 +488,11 @@ def list_pending_for_fire_poll(window_days: int = 7) -> list[dict]:
             SELECT id, fire_codigo, trace_id, snapshot_json,
                    fire_status_last_seen, fire_status_polled_at
             FROM imports
-            WHERE portal_status = 'sent_to_fire'
+            WHERE portal_status IN ('sent_to_fire', 'found_in_fire')
               AND production_status = 'none'
               AND fire_codigo IS NOT NULL
-              AND imported_at >= datetime('now', '-' || ? || ' days')
+              AND COALESCE(reconciled_at, imported_at)
+                    >= datetime('now', '-' || ? || ' days')
             ORDER BY fire_status_polled_at ASC
             """,
             (window_days,),
@@ -437,7 +501,12 @@ def list_pending_for_fire_poll(window_days: int = 7) -> list[dict]:
 
 
 def update_fire_poll_result(import_id: str, fire_status: str, polled_at: str) -> None:
-    """Stamp the latest Firebird status and poll timestamp. No state machine event."""
+    """Stamp the latest Firebird status and poll timestamp. No state machine event.
+
+    Nunca toca `reconciled_at` — essa coluna é a âncora fixa da janela do
+    poll (ver `list_pending_for_fire_poll`) e só `mark_found_in_fire` a
+    grava, uma única vez.
+    """
     with db.connect() as conn:
         conn.execute(
             """
@@ -472,3 +541,150 @@ def list_audit(import_id: str, limit: int = 200) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def _delivery_cnpjs(snapshot_json: str | None) -> tuple[str, ...]:
+    """CNPJs de entrega distintos, na ordem de primeira ocorrência.
+
+    Itens sem `delivery_cnpj` são ignorados. Snapshot ausente/inválido vira
+    tupla vazia — não é motivo para explodir a listagem de candidatos.
+    """
+    if not snapshot_json:
+        return ()
+    try:
+        snapshot = json.loads(snapshot_json)
+    except (TypeError, ValueError):
+        return ()
+    vistos: list[str] = []
+    seen: set[str] = set()
+    for item in snapshot.get("items") or []:
+        cnpj = item.get("delivery_cnpj")
+        if not cnpj or cnpj in seen:
+            continue
+        seen.add(cnpj)
+        vistos.append(cnpj)
+    return tuple(vistos)
+
+
+def list_parsed_for_reconcile(limit: int = 500) -> list[Candidato]:
+    """Pedidos `parsed` com pelo menos uma âncora de identidade de cliente
+    (override de código, CNPJ do header, ou CNPJ de entrega dos itens) — os
+    únicos que `fire_reconcile._decidir_candidato` consegue de fato casar.
+    Mais antigos primeiro: quem espera há mais tempo é tentado primeiro.
+    """
+    limit = max(1, min(int(limit), _MAX_PAGE_SIZE))
+    with db.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, order_number, cliente_override_codigo, customer_cnpj,
+                   snapshot_json, imported_at
+            FROM imports
+            WHERE portal_status = 'parsed'
+            ORDER BY imported_at ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    candidatos: list[Candidato] = []
+    for row in rows:
+        cliente_codigo = row["cliente_override_codigo"]
+        cnpj_header = row["customer_cnpj"]
+        cnpjs_entrega = _delivery_cnpjs(row["snapshot_json"])
+        if cliente_codigo is None and not cnpj_header and not cnpjs_entrega:
+            continue  # sem nenhuma âncora de cliente — nunca casa, nem tenta
+        candidatos.append(
+            Candidato(
+                import_id=row["id"],
+                numero=row["order_number"] or "",
+                cliente_codigo=cliente_codigo,
+                cnpj_header=cnpj_header,
+                cnpjs_entrega=cnpjs_entrega,
+                data_pedido=row["imported_at"],
+            )
+        )
+    return candidatos
+
+
+def mark_found_in_fire(
+    import_id: str,
+    *,
+    fire_codigo: int,
+    fire_status: str,
+    caminho: int,
+    lojas_casadas: int,
+    at: str,
+) -> bool:
+    """Marca o pedido como `found_in_fire` — compare-and-set de verdade.
+
+    Web e worker rodam em processos distintos, e `transition()` (app.state.
+    events) lê o estado com um SELECT FORA da transação de escrita — dois
+    gatilhos concorrentes poderiam ambos ler 'parsed' e ambos gravarem o
+    evento no log canônico. Por isso NÃO usamos `transition()` aqui: o UPDATE
+    abaixo, com `portal_status = 'parsed'` no WHERE, é quem decide o vencedor
+    — o SQLite serializa escritores, então só uma das UPDATEs concorrentes
+    consegue mudar a linha (`rowcount == 1`); a outra chega depois e já não
+    bate mais a condição (`rowcount == 0`). O evento de ciclo de vida só é
+    gravado pelo vencedor, na MESMA transação/conexão do UPDATE (via
+    `_insert_event`, o helper interno de `app.state.events` — reaproveitado
+    para não duplicar a lógica de payload/environment_id/ingested_at; não dá
+    para usar `append_event()` pública porque ela abre a própria conexão).
+
+    A mesma UPDATE também bumpa `state_version` (`+1`, dentro do próprio
+    compare-and-set — não numa instrução separada, senão deixaria de ser
+    atômico). `state_version` é o campo de concorrência otimista que
+    `transition()` valida via `expected_state_version` e que volta em
+    respostas de webhook (`app/web/webhooks.py`) — sem o bump aqui, quem
+    estivesse segurando a versão de antes da reconciliação não teria como
+    detectar que o estado mudou por fora do `transition()`.
+
+    Também grava `reconciled_at = at` — a âncora FIXA da janela do poll
+    (`list_pending_for_fire_poll`). Só esta função escreve nessa coluna, e só
+    aqui: `update_fire_poll_result` (chamado a cada tick do worker) nunca a
+    toca, senão a janela nunca expiraria para uma linha reconciliada.
+
+    Devolve `True` se este chamador ganhou a corrida, `False` se outro
+    gatilho já tinha marcado o pedido (sem evento duplicado, sem log de
+    erro — perder a corrida é o caminho feliz, não uma falha).
+    """
+    with db.connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE imports
+               SET portal_status = 'found_in_fire',
+                   fire_codigo = ?,
+                   fire_status_last_seen = ?,
+                   fire_status_polled_at = ?,
+                   reconciled_at = ?,
+                   state_version = state_version + 1
+             WHERE id = ? AND portal_status = 'parsed'
+            """,
+            (fire_codigo, fire_status, at, at, import_id),
+        )
+        if cur.rowcount != 1:
+            return False  # outro gatilho ganhou a corrida; nada a gravar
+
+        # `pedido_cliente` sai de uma leitura própria, não do parâmetro
+        # `import_id` (esse é o id interno do portal, não o número do
+        # pedido) — sem ele, auditar o evento no log exige join com
+        # `imports` só pra saber a que pedido ele se refere.
+        pedido_cliente = conn.execute(
+            "SELECT order_number FROM imports WHERE id = ?", (import_id,)
+        ).fetchone()["order_number"]
+
+        _insert_event(
+            conn,
+            import_id=import_id,
+            event_type=LifecycleEvent.FOUND_IN_FIRE,
+            source=EventSource.FIRE,
+            payload={
+                "fire_codigo": fire_codigo,
+                "fire_status": fire_status,
+                "pedido_cliente": pedido_cliente,
+                "caminho_match": caminho,
+                "lojas_casadas": lojas_casadas,
+            },
+            trace_id=current_trace_id(),
+            occurred_at=at,
+        )
+    return True

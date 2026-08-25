@@ -17,6 +17,7 @@
 | Rotas FastAPI, preview, upload, download, app shell | `web` | `modules/web.md` |
 | Log de execuções em SQLite, repositório de pedidos processados | `persistence` | `modules/persistence.md` |
 | Mudar status de pedido, adicionar evento ao ciclo de vida, propagar trace_id | `state` | `modules/state.md` |
+| Reconciliação de pedido cadastrado à mão no Fire (`found_in_fire`, chave dupla, gatilho periódico) | `erp` + `state` + `worker` | `modules/erp.md`, `modules/state.md`, `modules/worker.md` |
 | Chamada HTTP de saída (Gestor, OpenRouter, qualquer API externa) | `http` | `modules/http.md` |
 | Integração Gestor de Produção (outbox, mapper, rota post-to-gestor) | `gestor` | `modules/gestor.md` |
 | Integração FlowPCP (push de pedido, decisões→Fire, catálogo, clientes) | `flowpcp` | `modules/flowpcp.md` |
@@ -55,11 +56,12 @@
 | exporters | `tests/test_exporter_split.py`, `tests/test_smoke_exporter.py`, `tests/test_firebird_exporter_override.py` | `.venv/bin/pytest tests/test_exporter_split.py tests/test_smoke_exporter.py -v` |
 | pipeline | `tests/test_smoke_pipeline.py` | `.venv/bin/pytest tests/test_smoke_pipeline.py -v` |
 | worker | `tests/test_worker_drain_outbox.py`, `tests/test_worker_poll_fire.py`, `tests/test_retention.py` | `.venv/bin/pytest tests/test_worker_drain_outbox.py tests/test_worker_poll_fire.py tests/test_retention.py -v` |
+| reconcile (Fire) | `tests/test_fire_reconcile.py`, `tests/test_reconcile_repo.py`, `tests/test_reconcile_runner.py`, `tests/test_web_reconciliar_fire.py` | `.venv/bin/pytest tests/test_fire_reconcile.py tests/test_reconcile_repo.py tests/test_reconcile_runner.py tests/test_web_reconciliar_fire.py -v` |
 | llm | `tests/test_smoke_llm_fallback.py`, `tests/test_outbound_client.py` | `.venv/bin/pytest tests/test_smoke_llm_fallback.py tests/test_outbound_client.py -v` |
 | web | `tests/test_web_server.py`, `tests/test_preview_cache.py` | `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py -v` |
 | Suite completa (antes de commit) | todos | `.venv/bin/pytest tests/ -v` |
 
-> **Suíte completa: 882 testes em 84 arquivos.** `erp`, `exporters` e `pipeline` hoje TÊM
+> **Suíte completa: 1021 testes em 91 arquivos (conferido 2026-08-24).** `erp`, `exporters` e `pipeline` hoje TÊM
 > teste (ver linhas acima), mas nenhum toca Firebird de verdade — mudança em SQL/mapper
 > ainda pede validação manual com `.fdb` de **cópia** e sample real.
 

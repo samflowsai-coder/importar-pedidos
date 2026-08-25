@@ -64,11 +64,18 @@ def _do_poll_for_env(env: dict) -> None:
     with fire_conn.connect_with_config(fb_cfg) as conn:
         for entry in pending:
             fire_codigo = entry["fire_codigo"]
-            row = conn.execute(GET_ORDER_STATUS_BY_CODE, (fire_codigo,)).fetchone()
+            cur = conn.cursor()
+            try:
+                cur.execute(GET_ORDER_STATUS_BY_CODE, (fire_codigo,))
+                row = cur.fetchone()
+            finally:
+                cur.close()
             if not row:
                 continue
 
-            new_status: str = row["STATUS"]
+            # GET_ORDER_STATUS_BY_CODE: SELECT CODIGO, STATUS — fdb devolve
+            # tupla posicional, sem acesso por nome.
+            new_status: str = row[1]
             repo.update_fire_poll_result(entry["id"], new_status, now_iso)
 
             if new_status == entry["fire_status_last_seen"]:

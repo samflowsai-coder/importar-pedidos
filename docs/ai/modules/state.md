@@ -15,7 +15,7 @@ por código.
 
 ## Arquivos críticos
 - `app/state/machine.py` — **puro**, sem I/O.
-  - `PortalStatus` (parsed | sent_to_fire | cancelled | error)
+  - `PortalStatus` (parsed | sent_to_fire | found_in_fire | cancelled | error)
   - `ProductionStatus` (none | production_requested | in_production |
     completed | production_cancelled)
   - `LifecycleEvent` — vocabulário completo de eventos, **incluindo os de
@@ -57,6 +57,42 @@ with with_trace_id(entry["trace_id"]):
 # result.portal_status == PortalStatus.SENT_TO_FIRE
 # result.state_version foi bumpado
 ```
+
+## `found_in_fire` (reconciliação com o Fire)
+
+Estado novo (`PortalStatus.FOUND_IN_FIRE = "found_in_fire"`,
+`machine.py:25`): **existe no Fire, mas o portal NÃO foi quem inseriu.**
+Distinto de `sent_to_fire` (que significa "o próprio portal chamou o
+INSERT") só para preservar **quem** cadastrou — o cliente roda
+`EXPORT_MODE=xlsx`, a operadora exporta o XLS e cadastra à mão no Fire, e
+sem este estado o pedido ficava `parsed` pra sempre. Gravado por
+`app/persistence/repo.py::mark_found_in_fire` via compare-and-set direto
+em SQL, não por `transition()` — o `UPDATE ... WHERE portal_status =
+'parsed'` é quem decide o vencedor entre web e worker concorrentes; só o
+vencedor grava o evento `LifecycleEvent.FOUND_IN_FIRE` /
+`EventSource.FIRE`.
+
+Transições wiradas em `PORTAL_TRANSITIONS` (`machine.py:110-117`):
+`(PARSED, FOUND_IN_FIRE) → FOUND_IN_FIRE`, e a partir de `FOUND_IN_FIRE`
+os MESMOS eventos que `SENT_TO_FIRE` aceita —
+`FIRE_STATUS_CHANGED`, `POST_TO_GESTOR_REQUESTED/SENT/FAILED`,
+`PRODUCTION_UPDATE/COMPLETED/CANCELLED` — todas mantendo o estado
+(`PRODUCTION_TRANSITIONS` correspondente em `machine.py:154`).
+
+**Por que essas transições precisam existir a partir daqui, e não só a
+partir de `sent_to_fire`:** `_enqueue_gestor`
+(`app/worker/jobs/poll_fire.py:107-155`) primeiro grava a linha no outbox
+(`outbox_repo.enqueue`, linha 129) e só DEPOIS chama `transition(...,
+POST_TO_GESTOR_REQUESTED, ...)` (linha 137). Se `FOUND_IN_FIRE` não
+aceitasse esse evento, `transition()` levantaria `InvalidTransitionError`
+— e o `except Exception` genérico em volta do bloco inteiro
+(`poll_fire.py:154-155`) engoliria o erro num `logger.exception` e
+retornaria normalmente. O outbox já teria a linha (drenável, vai tentar
+postar pro Gestor de qualquer forma), mas o `portal_status` do pedido
+ficaria travado em `found_in_fire` sem o `production_status` ter avançado
+para `production_requested` — **outbox órfão**: a tela mostra o pedido
+como se nada tivesse acontecido, mas já existe uma postagem em voo pro
+Gestor por trás.
 
 ## Como adicionar um evento novo
 1. Adicionar entrada em `LifecycleEvent` (machine.py).

@@ -5,12 +5,18 @@ Metrics defined here:
 - portal_outbox_dead_total      (Gauge)   — dead-letter outbox rows
 - portal_poll_fire_duration_seconds (Histogram) — Firebird poll job duration
 - portal_webhook_received_total (Counter) — inbound webhooks by provider
+- portal_reconcile_fire_last_run_ok (Gauge) — 1/0 por ambiente, última corrida
+  da reconciliação com o Fire (`app.reconcile.runner.reconciliar`)
 
 Usage
 -----
 Counters and Histograms are incremented/observed at event time (in their
 respective handlers / jobs). Gauges are refreshed by calling
 ``update_outbox_metrics()`` — the drain_outbox job does this every 15 s.
+``portal_reconcile_fire_last_run_ok`` é setado direto por `reconciliar()` ao
+fim de cada corrida de verdade (não quando pulada por trava/lock) — é o
+único jeito de responder "o job das 12h rodou?" num servidor Windows sem
+console.
 """
 
 from __future__ import annotations
@@ -49,6 +55,14 @@ price_check_blocks_total: Counter = Counter(
     "portal_price_check_blocks_total",
     "Total de envios/exports bloqueados por validação de preço",
     labelnames=("reason",),  # price_mismatch | missing_order_price | no_price_unacked
+)
+
+reconcile_fire_last_run_ok: Gauge = Gauge(
+    "portal_reconcile_fire_last_run_ok",
+    "1 se a última reconciliação com o Fire deste ambiente terminou sem "
+    "erro_conexao, 0 caso contrário. Só atualizado quando a corrida roda de "
+    "verdade (não quando pulada por trava ou por já estar em execução).",
+    ["environment"],
 )
 
 

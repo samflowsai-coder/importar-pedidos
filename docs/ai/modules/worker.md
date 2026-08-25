@@ -26,6 +26,7 @@ docker compose up worker      # via Docker (mesmo Dockerfile, cmd diferente)
 | `scan_environments` | interval 30s | `run_scan_environments()` |
 | `poll_flowpcp` | interval 30s | `run_poll_flowpcp()` |
 | `retention` | cron hour=3 | `run_retention()` |
+| `reconcile_fire` | cron 07h/12h/18h local | `reconciliar_todos_os_ambientes()` |
 
 Todos com `coalesce=True`, `max_instances=1`, `misfire_grace_time=30s`.
 
@@ -71,14 +72,31 @@ Todos com `coalesce=True`, `max_instances=1`, `misfire_grace_time=30s`.
 
 ### poll_fire
 - `app/worker/jobs/poll_fire.py`
-- Consulta `CAB_VENDAS.STATUS` dos pedidos `sent_to_fire + production_status=none`
-  nos últimos 7 dias.
+- Consulta `CAB_VENDAS.STATUS` dos pedidos `sent_to_fire` OU `found_in_fire`
+  (reconciliado à mão pode mudar de status no Fire tanto quanto o que o
+  próprio portal inseriu) com `production_status=none`, `fire_codigo`
+  presente, dentro da janela de 7 dias — medida a partir do último poll
+  (`fire_status_polled_at`), caindo para `imported_at` em quem nunca foi
+  polled (`repo.list_pending_for_fire_poll`, `app/persistence/repo.py:428`).
 - Stampa `fire_status_last_seen` + `fire_status_polled_at`.
 - Se status mudou: emite `FIRE_STATUS_CHANGED`.
 - Se status == `FIRE_TRIGGER_STATUS` (env var): enfileira no outbox + emite
   `POST_TO_GESTOR_REQUESTED`. Env vazia = automação desligada (padrão seguro).
 - No-op silencioso se Firebird não configurado.
 - Duração medida em `portal_poll_fire_duration_seconds` (Histogram Prometheus).
+
+### reconcile_fire
+- `app/reconcile/runner.py` (não um job próprio em `app/worker/jobs/` — o
+  módulo é compartilhado com o processo web, ver seção "Gatilho periódico"
+  abaixo).
+- Acha, entre os pedidos `parsed` do portal, os que já foram cadastrados à
+  mão no Fire (o cliente roda `EXPORT_MODE=xlsx`; a operadora exporta e
+  cadastra sem o portal saber). Leitura do Fire em `app/erp/fire_reconcile.py`
+  (ver `erp.md`, seção "Reconciliação com o Fire"); estado novo
+  `found_in_fire` em `app/state/machine.py` (ver `state.md`).
+- Registrado aqui com `CronTrigger(hour=_RECONCILE_HOURS)` (mesma grade
+  07h/12h/18h de `HORARIOS_LOCAIS`), para deploys docker onde o worker
+  existe.
 
 ### retention
 - `app/worker/jobs/retention.py`
@@ -125,6 +143,28 @@ RATE_LIMIT_ENABLED=true    # false bypassa rate-limit (worker não usa, mas comp
   `PRAGMA locking_mode=EXCLUSIVE` — quebraria o FastAPI.
 - **Nunca usar `coalesce=False` ou `max_instances>1`** — jobs não são
   re-entrantes (Firebird connection pooling, locks de transação).
+- **O gatilho periódico da reconciliação (`reconcile_fire`) vive de
+  verdade no processo WEB, não no worker.** `scripts/setup-service.ps1`
+  registra só `ui.py` como tarefa agendada no Windows do cliente — o
+  worker (`python -m app.worker`) nunca rodou lá. `app/web/server.py`
+  sobe `app.reconcile.runner.loop_periodico` numa thread daemon no
+  `@app.on_event("startup")`; o `CronTrigger` registrado aqui no
+  scheduler do worker é redundância intencional para os deploys docker
+  onde os dois processos existem — a trava por-ambiente de
+  `app.reconcile.runner` (10 min, `_TRAVA_S`) evita trabalho dobrado
+  quando ambos disparam perto um do outro. Se o cliente reportar que a
+  reconciliação periódica "não roda", olhar o log do `ui.py` (linha
+  `reconcile.runner: loop_periodico ...`), não o do worker.
+- **Kill switch `PORTAL_RECONCILE_PERIODICO=0`** desliga os dois gatilhos
+  verdadeiramente periódicos (loop do web + `CronTrigger` do worker) sem
+  redeploy — checado em `app.reconcile.runner._periodico_habilitado()`.
+  Qualquer valor diferente de `"0"` (inclusive ausente) mantém ligado.
+  **Não afeta** o botão manual (`POST /api/imported/reconciliar-fire`)
+  nem o gatilho de entrada do operador (`POST /api/env/select`) — só os
+  dois que varrem todos os ambientes sozinhos. `tests/conftest.py` seta
+  essa env var para `"0"` globalmente na suíte, para nenhum teste que
+  suba `TestClient(app)` abrir Firebird de verdade se a rodada cruzar
+  07h/12h/18h locais.
 - **`FIRE_TRIGGER_STATUS` vazio é seguro.** Steps 1–3 do poll rodam sempre
   (observabilidade); step 4 (enqueue) nunca dispara sem trigger configurado.
 - **Retenção não deleta `imports`.** Apenas lifecycle_events/audit — o

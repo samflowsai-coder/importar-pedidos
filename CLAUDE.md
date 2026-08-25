@@ -165,6 +165,12 @@ FIRE_TRIGGER_STATUS=             # vazio = poll_fire só observa, não dispara
 RETENTION_DAYS=180
 BACKUP_DIR=                      # vazio = backup desligado
 
+# Reconciliação com o Fire
+PORTAL_RECONCILE_PERIODICO=      # 0 desliga os gatilhos automáticos (periódico
+                                 # no processo web + job do worker). O botão
+                                 # "Verificar no Fire" continua funcionando.
+                                 # Qualquer outro valor, ou ausente = ligado.
+
 # Webhooks do Gestor
 WEBHOOK_SECRET_GESTOR=
 WEBHOOK_SECRET_GESTOR_PREVIOUS=  # janela de rotação

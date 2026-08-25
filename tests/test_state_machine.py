@@ -121,6 +121,46 @@ def test_production_completed_terminal():
     assert q == ProductionStatus.COMPLETED
 
 
+def test_parsed_para_found_in_fire():
+    """Reconciliação: pedido observado no Fire sem o portal ter inserido."""
+    portal, producao = apply_event(
+        PortalStatus.PARSED, ProductionStatus.NONE, LifecycleEvent.FOUND_IN_FIRE
+    )
+    assert portal == PortalStatus.FOUND_IN_FIRE
+    assert producao == ProductionStatus.NONE
+
+
+def test_found_in_fire_aceita_evento_de_status_do_fire():
+    """Sem isto, o poll_fire estoura ao ver mudança de status num reconciliado."""
+    portal, _ = apply_event(
+        PortalStatus.FOUND_IN_FIRE,
+        ProductionStatus.NONE,
+        LifecycleEvent.FIRE_STATUS_CHANGED,
+    )
+    assert portal == PortalStatus.FOUND_IN_FIRE
+
+
+def test_found_in_fire_aceita_enfileiramento_no_gestor():
+    """_enqueue_gestor grava no outbox ANTES da transição: sem esta linha o
+    outbox fica órfão e o except genérico engole o erro."""
+    portal, producao = apply_event(
+        PortalStatus.FOUND_IN_FIRE,
+        ProductionStatus.NONE,
+        LifecycleEvent.POST_TO_GESTOR_REQUESTED,
+    )
+    assert portal == PortalStatus.FOUND_IN_FIRE
+    assert producao == ProductionStatus.REQUESTED
+
+
+def test_sent_to_fire_nao_regride_para_found_in_fire():
+    with pytest.raises(InvalidTransitionError):
+        apply_event(
+            PortalStatus.SENT_TO_FIRE,
+            ProductionStatus.NONE,
+            LifecycleEvent.FOUND_IN_FIRE,
+        )
+
+
 def test_is_valid_matches_apply():
     """is_valid() must agree with apply_event() — same transition table."""
     for portal in PortalStatus:

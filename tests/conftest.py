@@ -27,6 +27,14 @@ def pytest_configure(config):  # noqa: ARG001 — pytest hook signature
     os.environ.setdefault("TEST_AUTH_BYPASS", "1")
     # Cookies are sent over HTTP in the test client; mark cookie non-secure.
     os.environ.setdefault("PORTAL_COOKIE_SECURE", "0")
+    # Desliga o loop periódico de reconciliação com o Fire (app.reconcile.
+    # runner) globalmente na suíte. Sem isto, `tests/test_metrics.py` e
+    # `tests/test_rate_limit.py` usam `with TestClient(app)`, que dispara o
+    # startup de verdade — e a thread daemon do loop periódico abriria uma
+    # conexão Firebird REAL de dentro do teste se a rodada atravessasse
+    # 07h/12h/18h locais. Testes que querem exercitar o loop/gatilho
+    # periódico de propósito usam `monkeypatch.setenv` para religar.
+    os.environ.setdefault("PORTAL_RECONCILE_PERIODICO", "0")
 
 
 # Toda variavel que decide PARA ONDE o app conecta ou como ele fala com o
