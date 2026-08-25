@@ -38,3 +38,34 @@ def test_entrada_vazia_devolve_lista_vazia(entrada):
 def test_sufixo_que_nao_e_de_quatro_digitos_nao_e_cortado():
     """`AF-198` não é sufixo de loja; cortar viraria match errado."""
     assert variantes("AF-198") == ["AF-198"]
+
+
+def test_sufixo_de_um_a_tres_digitos_tambem_vira_variante():
+    """Caso real medido na Fire da MM em 2026-08-24: Authentic Feet e Xambre
+    mandam `AF049-6` / `AW033-6` e o Fire guarda `AF049` / `AW033`.
+
+    A regra antiga só cortava 4 dígitos (caso Sam's) e deixava 43 dos 137
+    pedidos pendentes como falso negativo — 19 de 19 amostrados existiam no
+    Fire sob o MESMO CNPJ.
+    """
+    assert "AF049" in variantes("AF049-6")
+    assert "AW033" in variantes("AW033-6")
+    assert "AF106" in variantes("AF106 - 96")
+
+
+def test_espacos_em_volta_do_hifen_do_sufixo_nao_impedem_o_corte():
+    """`AF090 - 3` aparece assim no portal e `AF090` no Fire."""
+    assert "AF090" in variantes("AF090 - 3")
+    assert "AW013" in variantes("AW013 - 3")
+
+
+def test_corte_exige_que_o_resto_ainda_pareca_numero_de_pedido():
+    """A trava que preserva o contraexemplo da spec.
+
+    `AF-198` cortado viraria `AF`, que casaria com qualquer coisa do mesmo
+    cliente cujo número fosse `AF`. Só corta quando o resto tem ao menos 3
+    caracteres E contém dígito — `AF` falha nos dois.
+    """
+    assert variantes("AF-198") == ["AF-198"]
+    assert "AF" not in variantes("AF-1985")
+    assert "K" not in variantes("K-01")

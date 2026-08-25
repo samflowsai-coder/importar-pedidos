@@ -23,6 +23,16 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
+1) Correção importante na verificação com o Fire: quando um cliente **reusa o número do pedido** (a Authentic Feet e a Xambre fazem isso todo mês), o portal estava mostrando o número de um pedido antigo do Fire no lugar do atual. Agora ele escolhe a linha do Fire com a data mais próxima do pedido.
+
+2) Pedidos que já tinham sido marcados com o vínculo errado são **corrigidos sozinhos** na próxima verificação. O botão "Verificar no Fire" avisa quantos foram corrigidos.
+
+3) Mais pedidos passam a ser reconhecidos: números como `AF049-6` e `AF090 - 3` (com o traço e um número curto no fim) agora casam com o `AF049` e o `AF090` do Fire. Eram 43 pedidos parados em "Em revisão" sem motivo.
+
+---
+
+## 20260824-2109
+
 1) A lista de pedidos agora separa o que ainda falta fazer do que já está no Fire. O portal consulta o Fire e marca sozinho os pedidos que foram cadastrados lá na mão — eles saem de "Em revisão" e passam para "No Fire".
 
 2) A tela abre em "Em revisão", que é o trabalho pendente. **Na primeira vez a lista vai encolher bastante** — é esperado: são os pedidos antigos que já estavam no Fire. Nenhum pedido foi apagado.

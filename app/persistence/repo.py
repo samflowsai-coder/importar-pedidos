@@ -606,6 +606,98 @@ def list_parsed_for_reconcile(limit: int = 500) -> list[Candidato]:
     return candidatos
 
 
+def list_found_in_fire_for_recheck(limit: int = 500) -> list[Candidato]:
+    """Pedidos JÁ marcados, para reconferir qual linha do Fire os representa.
+
+    `mark_found_in_fire` grava um `fire_codigo` só, e a escolha dessa linha
+    pode ter sido feita por uma regra pior: até 2026-08-24 o representante era
+    o menor CODIGO, que é sempre a linha mais ANTIGA quando o cliente reusa o
+    número do pedido. Sem esta lista, os pedidos marcados por aquela regra
+    ficariam com o ponteiro errado para sempre — `list_parsed_for_reconcile`
+    só enxerga `parsed`.
+
+    Vale também em regime permanente: o status muda no Fire (PEDIDO → FATURADO
+    → CANCELADO) e reler é justamente o trabalho.
+
+    Mesma exigência de âncora da lista de `parsed`: sem identidade de cliente
+    não há o que reconferir.
+    """
+    limit = max(1, min(int(limit), _MAX_PAGE_SIZE))
+    with db.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, order_number, cliente_override_codigo, customer_cnpj,
+                   snapshot_json, imported_at
+            FROM imports
+            WHERE portal_status = 'found_in_fire'
+            ORDER BY imported_at ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    candidatos: list[Candidato] = []
+    for row in rows:
+        cliente_codigo = row["cliente_override_codigo"]
+        cnpj_header = row["customer_cnpj"]
+        cnpjs_entrega = _delivery_cnpjs(row["snapshot_json"])
+        if cliente_codigo is None and not cnpj_header and not cnpjs_entrega:
+            continue
+        candidatos.append(
+            Candidato(
+                import_id=row["id"],
+                numero=row["order_number"] or "",
+                cliente_codigo=cliente_codigo,
+                cnpj_header=cnpj_header,
+                cnpjs_entrega=cnpjs_entrega,
+                data_pedido=row["imported_at"],
+            )
+        )
+    return candidatos
+
+
+def corrigir_representante(
+    import_id: str, *, fire_codigo: int, fire_status: str, at: str
+) -> bool:
+    """Reaponta um pedido JÁ `found_in_fire` para a linha certa do Fire.
+
+    NÃO é transição de estado: o pedido continua `found_in_fire` e nenhum
+    evento de ciclo de vida é gravado — o que mudou foi qual linha o
+    representa, não o fato de ele existir no Fire. Por isso também não bumpa
+    `state_version`: quem segura uma versão não precisa reagir a isso.
+
+    NUNCA toca `reconciled_at`. Essa coluna é a âncora FIXA da janela de
+    `list_pending_for_fire_poll`; recarimbá-la aqui faria todo pedido
+    corrigido renovar a própria janela e nunca mais sair dela — exatamente a
+    regressão que `reconciled_at` existe para fechar.
+
+    O `WHERE` exige `portal_status = 'found_in_fire'` e `fire_codigo`
+    diferente: devolve `False` tanto para "já estava certo" quanto para "não
+    é um pedido marcado", e nos dois casos não escreve nada.
+    """
+    with db.connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE imports
+               SET fire_codigo = ?,
+                   fire_status_last_seen = ?,
+                   fire_status_polled_at = ?
+             WHERE id = ?
+               AND portal_status = 'found_in_fire'
+               AND (fire_codigo IS NULL OR fire_codigo <> ?)
+            """,
+            (fire_codigo, fire_status, at, import_id, fire_codigo),
+        )
+        if cur.rowcount != 1:
+            return False
+    append_audit(
+        import_id,
+        "fire_representante_corrigido",
+        {"fire_codigo": fire_codigo, "fire_status": fire_status},
+    )
+    return True
+
+
 def mark_found_in_fire(
     import_id: str,
     *,

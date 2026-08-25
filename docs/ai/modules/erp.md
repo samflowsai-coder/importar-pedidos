@@ -248,14 +248,27 @@ cobrir.
 ### Variantes do número
 
 `app/erp/numero_pedido.py::variantes(numero)` gera as formas aceitas como
-"mesmo número", da mais específica pra menos: exata, sem sufixo `-NNNN`
-(hífen seguido de exatamente 4 dígitos no fim), sem zeros à esquerda.
-Nunca substituem a segunda perna da chave — só ampliam o que conta como
-"mesmo número" antes de checar a âncora de cliente.
+"mesmo número", da mais específica pra menos: exata, sem sufixo de loja, sem
+zeros à esquerda. Nunca substituem a segunda perna da chave — só ampliam o
+que conta como "mesmo número" antes de checar a âncora de cliente.
 
-**Caso real medido:** Sam's Club guarda `06654993-0000` no portal e
-`06654993` no Fire (`numero_pedido.py:3-5`) — sem cortar o sufixo, 100% de
-falso negativo em Sam's.
+**Sufixo de loja** = `\s*-\s*\d{1,4}$` — hífen, com ou sem espaços em volta,
+seguido de 1 a 4 dígitos no fim. O corte só vale se o que sobra tiver **3+
+caracteres E ao menos um dígito** (`_resto_parece_numero_de_pedido`).
+
+**Dois casos reais medidos:**
+
+- Sam's Club guarda `06654993-0000` no portal e `06654993` no Fire — sem
+  cortar, 100% de falso negativo em Sam's.
+- Authentic Feet e Xambre mandam `AF049-6`, `AW033-6`, `AF090 - 3` e o Fire
+  guarda `AF049`, `AW033`, `AF090` (medido na Fire viva 2026-08-24). A regra
+  antiga só cortava 4 dígitos: **43 dos 137 pendentes** ficavam de fora, e 19
+  de 19 amostrados existiam no Fire sob o MESMO CNPJ.
+
+A trava do resto é o que preserva o contraexemplo `AF-198` da spec: cortado
+viraria `AF`, que casaria com qualquer pedido do mesmo cliente numerado `AF`.
+A regra antiga escapava dele por acidente (198 tem 3 dígitos, não 4) — mas
+cortava `AF-1985`, com exatamente o mesmo problema.
 
 ### Query em lote
 
@@ -275,6 +288,32 @@ cancelado). Filtrar deixaria ele preso na fila de revisão pra sempre sem
 a operadora entender por quê. O status vem junto (`Achado.fire_status`,
 gravado em `imports.fire_status_last_seen`) e a UI mostra: "Cadastrado no
 Fire (CANCELADO)".
+
+### Escolha do representante
+
+`_montar_achado` (`fire_reconcile.py`) elege, entre as linhas casadas, a de
+`DATA_PEDIDO` **mais próxima** da data do pedido no portal. Empate — ou data
+indisponível dos dois lados — desempata pelo menor `V.CODIGO`. `CANCELADO`
+sai do desempate antes de tudo, se houver alternativa.
+
+Era `min()` por `CODIGO` até 2026-08-25. Como `CODIGO` cresce com o tempo,
+isso elegia **sempre a linha mais antiga** — e os clientes reusam número: a
+Fire da MM tem **143 pares (número, cliente) repetidos**. Em produção, `AF112`
+importado em 03/08 apontava para a linha de 22/05; numa amostra de 11
+marcados, 6 estavam na linha errada, e **58 dos 169 dividiam `fire_codigo`**
+com outro pedido.
+
+O match em si estava certo (o pedido existe no Fire). Errada era a linha — o
+que faz `fire_codigo` mentir na tela e o `poll_fire` seguir o status do
+pedido errado.
+
+**Pedido já marcado também é corrigido.** `repo.list_found_in_fire_for_recheck`
++ `repo.corrigir_representante` fazem a segunda passada do runner: reapontam
+`fire_codigo`/`fire_status_last_seen` sem transição de estado, sem evento de
+ciclo de vida e **sem tocar `reconciled_at`** (é a âncora fixa da janela do
+poll). Deixa rastro em `audit_log` como `fire_representante_corrigido`. Sem
+essa passada, os pedidos marcados pela regra velha ficariam errados pra
+sempre, porque `list_parsed_for_reconcile` só enxerga `parsed`.
 
 ### Limitação 1↔N (conhecida, documentada)
 

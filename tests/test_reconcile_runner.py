@@ -464,3 +464,81 @@ def test_gauge_last_run_ok_reflete_a_ultima_corrida_real(env_db_com_import, monk
     monkeypatch.setattr(runner, "_buscar_no_fire_detalhado", lambda cands, *, env_slug: ({}, True))
     runner.reconciliar("mm", respeitar_trava=False)
     assert reconcile_fire_last_run_ok.labels(environment="mm")._value.get() == 0.0
+
+
+def test_corrige_representante_de_pedido_ja_marcado(env_db_com_import, monkeypatch):
+    """A primeira passada só enxerga `parsed`. Sem a segunda, um pedido marcado
+    por uma regra pior de representante fica com o ponteiro errado para sempre
+    — foi o que aconteceu na MM (58 dos 169 dividindo `fire_codigo`).
+    """
+    from app.erp.fire_reconcile import Achado, Candidato
+    from app.persistence import repo
+    from app.reconcile import runner
+
+    marcado = Candidato(
+        import_id="ja-marcado",
+        numero="AF112",
+        cliente_codigo=None,
+        cnpj_header="17990780000167",
+        cnpjs_entrega=(),
+        data_pedido="2026-08-03T15:39:33",
+    )
+    monkeypatch.setattr(repo, "list_parsed_for_reconcile", lambda *a, **k: [])
+    monkeypatch.setattr(repo, "list_found_in_fire_for_recheck", lambda *a, **k: [marcado])
+    monkeypatch.setattr(
+        runner,
+        "_buscar_no_fire_detalhado",
+        lambda candidatos, *, env_slug: (
+            {"ja-marcado": Achado("ja-marcado", 4573, "FATURADO", 2, 0)},
+            False,
+        ),
+    )
+    vistos: list[tuple] = []
+    monkeypatch.setattr(
+        repo,
+        "corrigir_representante",
+        lambda import_id, **kw: vistos.append((import_id, kw["fire_codigo"])) or True,
+    )
+
+    resultado = runner.reconciliar("mm", respeitar_trava=False)
+    assert resultado.corrigidos == 1
+    assert vistos == [("ja-marcado", 4573)]
+
+
+def test_erro_de_conexao_nao_dispara_correcao_de_representante(env_db_com_import, monkeypatch):
+    """Sem falar com o Fire não há contra o que reconferir. Chamar assim mesmo
+    gastaria uma segunda rodada de timeouts a cada gatilho.
+
+    Precisa de candidato `parsed`: é a primeira passada que DESCOBRE que o
+    Fire está fora. Sem nenhum candidato o runner nunca tentou conectar, não
+    sabe de nada, e aí reconferir é justamente o certo (a própria
+    `_corrigir_representantes` trata o erro por dentro)."""
+    from app.erp.fire_reconcile import Candidato
+    from app.persistence import repo
+    from app.reconcile import runner
+
+    monkeypatch.setattr(
+        repo,
+        "list_parsed_for_reconcile",
+        lambda *a, **k: [
+            Candidato(
+                import_id="p1",
+                numero="AF200",
+                cliente_codigo=None,
+                cnpj_header="17990780000167",
+                cnpjs_entrega=(),
+                data_pedido="2026-08-03",
+            )
+        ],
+    )
+    chamou = []
+    monkeypatch.setattr(
+        runner, "_corrigir_representantes", lambda slug: chamou.append(slug) or 0
+    )
+    monkeypatch.setattr(
+        runner,
+        "_buscar_no_fire_detalhado",
+        lambda candidatos, *, env_slug: ({}, True),
+    )
+    runner.reconciliar("mm", respeitar_trava=False)
+    assert chamou == [], "não deve reconferir com o Fire fora"

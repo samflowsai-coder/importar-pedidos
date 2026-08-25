@@ -42,6 +42,10 @@ _BLOCO = 200
 # 2026 que na verdade nunca foi cadastrado.
 _JANELA_DIAS = 90
 
+# Distância sentinela para linha do Fire sem DATA_PEDIDO legível: perde de
+# qualquer linha datada no desempate por proximidade, sem ser descartada.
+_DISTANCIA_SEM_DATA = 10**9
+
 # Cool-down após falha em `connect_with_config`, em segundos. Mesma razão do
 # `depara_cliente`: `fdb` não expõe timeout, host inalcançável trava a conexão
 # por dezenas de segundos. Arma SÓ em volta da conexão — erro depois dela (SQL
@@ -372,20 +376,45 @@ def _decidir_candidato(candidato: Candidato, linhas: list[tuple]) -> Achado | No
 def _montar_achado(
     candidato: Candidato, linhas: list[tuple], *, caminho: int, lojas_casadas: int
 ) -> Achado:
-    """`fire_codigo` = menor V.CODIGO (coluna 1) entre as linhas casadas —
-    mas primeiro descarta CANCELADO do desempate, se houver alternativa.
+    """`fire_codigo` = a linha casada com DATA_PEDIDO mais próxima da data do
+    pedido no portal. Empate (ou data indisponível) desempata pelo menor
+    V.CODIGO. CANCELADO sai do desempate antes de tudo, se houver alternativa.
 
-    Cadastrou, cancelou, recadastrou: o mesmo PEDIDO_CLIENTE gera duas linhas
-    no Fire, e a cancelada é a mais antiga (CODIGO menor). `min()` puro
-    elegeria a cancelada e o selo mentiria "CANCELADO" para um pedido que na
-    verdade está FATURADO. Só quando TODAS as linhas casadas estão CANCELADO
-    (nenhuma alternativa) é que uma delas é escolhida mesmo assim.
+    Duas regras, cada uma paga por um caso real:
+
+    CANCELADO fora — cadastrou, cancelou, recadastrou: o mesmo PEDIDO_CLIENTE
+    gera duas linhas, e a cancelada é a mais antiga. Elegê-la faria o selo
+    mentir "CANCELADO" para um pedido que está FATURADO. Só quando TODAS as
+    casadas estão CANCELADO é que uma delas é escolhida mesmo assim.
+
+    Proximidade de data — medido na Fire viva da MM em 2026-08-24: 143 pares
+    (número, cliente) se repetem, porque os clientes REUSAM o número. `min()`
+    por CODIGO escolhia sempre a linha mais ANTIGA (CODIGO cresce com o
+    tempo): `AF112` importado em 03/08 apontava para a linha de 22/05. Numa
+    amostra de 11 marcados em produção, 6 estavam na linha errada, e 58 dos
+    169 dividiam `fire_codigo` com outro pedido. O match em si estava certo —
+    o pedido existe no Fire; errada era a linha, o que faz `fire_codigo`
+    mentir para a operação e o `poll_fire` seguir o status do pedido errado.
     """
     nao_canceladas = [
         linha for linha in linhas if (linha[2] or "").strip().upper() != "CANCELADO"
     ]
     candidatas = nao_canceladas or linhas
-    escolhida = min(candidatas, key=lambda linha: linha[1])
+    referencia = _parse_data(candidato.data_pedido)
+
+    def _ordem(linha: tuple) -> tuple[int, int]:
+        # Sem referência, proximidade não existe e o menor CODIGO decide —
+        # determinístico, que é o que importa quando não há como saber mais.
+        if referencia is None:
+            return (0, linha[1])
+        data_linha = _parse_data(linha[3])
+        if data_linha is None:
+            # Linha sem data não pode competir com uma datada: vai para o fim,
+            # mas continua elegível se TODAS estiverem sem data.
+            return (_DISTANCIA_SEM_DATA, linha[1])
+        return (abs((data_linha - referencia).days), linha[1])
+
+    escolhida = min(candidatas, key=_ordem)
     return Achado(
         import_id=candidato.import_id,
         fire_codigo=escolhida[1],

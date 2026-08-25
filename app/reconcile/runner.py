@@ -123,6 +123,9 @@ class Resultado:
     verificados: int
     casaram: int
     status: ResultadoStatus
+    # Ponteiros de `fire_codigo` reapontados nesta corrida (pedidos que já
+    # estavam marcados). Zero é o caso normal em regime permanente.
+    corrigidos: int = 0
 
 
 def limpar_trava() -> None:
@@ -200,7 +203,16 @@ def _reconciliar_agora(env_slug: str) -> Resultado:
     with env_context.active_env(env["id"], env["slug"]):
         candidatos = repo.list_parsed_for_reconcile()
         if not candidatos:
-            return Resultado(verificados=0, casaram=0, status="ok")
+            # Nada em revisão ainda NÃO significa nada a fazer: os já marcados
+            # continuam precisando de reconferência de representante e de
+            # status. Retornar aqui direto desligaria a correção justamente
+            # quando a fila de pendentes zera, que é o estado desejado.
+            return Resultado(
+                verificados=0,
+                casaram=0,
+                status="ok",
+                corrigidos=_corrigir_representantes(env_slug),
+            )
 
         try:
             achados, erro_conexao = _buscar_no_fire_detalhado(candidatos, env_slug=env_slug)
@@ -226,8 +238,53 @@ def _reconciliar_agora(env_slug: str) -> Resultado:
             if venceu:
                 casaram += 1
 
+        # Segunda passada: reconferir quem JÁ está marcado. A primeira passada
+        # só enxerga `parsed`, então um pedido marcado por uma regra pior de
+        # representante ficaria com o ponteiro errado para sempre. Foi o que
+        # aconteceu na MM: 58 dos 169 marcados dividiam `fire_codigo` com
+        # outro pedido, porque a regra antiga elegia sempre a linha mais
+        # antiga. Pular quando a primeira passada já não conseguiu falar com
+        # o Fire — não há o que reconferir contra nada.
+        corrigidos = 0 if erro_conexao else _corrigir_representantes(env_slug)
+
         status: ResultadoStatus = "erro_conexao" if erro_conexao else "ok"
-        return Resultado(verificados=len(candidatos), casaram=casaram, status=status)
+        return Resultado(
+            verificados=len(candidatos),
+            casaram=casaram,
+            status=status,
+            corrigidos=corrigidos,
+        )
+
+
+def _corrigir_representantes(env_slug: str) -> int:
+    """Reaponta pedidos já `found_in_fire` para a linha certa do Fire.
+
+    Não muda estado e não grava evento de ciclo de vida: o pedido continua
+    existindo no Fire: o que muda é QUAL linha o representa. Nunca levanta —
+    corrigir ponteiro é melhoria, não pode derrubar a reconciliação que já
+    deu certo.
+    """
+    try:
+        marcados = repo.list_found_in_fire_for_recheck()
+        if not marcados:
+            return 0
+        achados, erro = _buscar_no_fire_detalhado(marcados, env_slug=env_slug)
+        if erro:
+            return 0
+        agora = datetime.now(UTC).isoformat(timespec="seconds")
+        return sum(
+            1
+            for import_id, achado in achados.items()
+            if repo.corrigir_representante(
+                import_id,
+                fire_codigo=achado.fire_codigo,
+                fire_status=achado.fire_status,
+                at=agora,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — ver docstring
+        logger.warning(f"reconcile.runner: correção de representante falhou em '{env_slug}': {exc!r}")
+        return 0
 
 
 def _periodico_habilitado() -> bool:
