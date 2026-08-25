@@ -325,3 +325,97 @@ def test_filtro_aceita_lista_de_status(env_db_com_import):
     linhas = repo.list_imports(portal_status=["sent_to_fire", "found_in_fire"])
     ids = {r["id"] for r in linhas}
     assert {"com-header", "ja-no-fire"} <= ids
+
+
+# ── Correção do representante em pedidos JÁ marcados ─────────────────────────
+# Achado em produção 2026-08-24: o representante era o menor CODIGO, sempre a
+# linha mais antiga. 58 dos 169 marcados na MM dividiam `fire_codigo` com
+# outro pedido. Corrigir a escolha não basta — o runner só olha `parsed`, e os
+# já marcados ficariam errados para sempre.
+
+
+@pytest.fixture
+def env_db_marcado(tmp_path: Path):
+    db.set_db_path(tmp_path / "app_state_marcado.db")
+    db.reset_init_cache()
+    db.init()
+    # Os inserts vão DENTRO do contexto: fora dele o roteador de persistência
+    # resolve outro alvo e a tabela deste banco fica vazia — o teste passaria
+    # lendo sobra de outra fixture.
+    with env_context.active_env("env-1", "mm"):
+        repo.insert_import(
+            _import_entry(
+                id="ja-marcado",
+                order_number="AF112",
+                portal_status="found_in_fire",
+                customer_cnpj="17990780000167",
+                fire_codigo=4218,
+            )
+        )
+        repo.insert_import(
+            _import_entry(
+                id="em-revisao",
+                order_number="AF113",
+                portal_status="parsed",
+                customer_cnpj="17990780000167",
+            )
+        )
+        yield
+
+
+def test_corrige_representante_quando_o_codigo_muda(env_db_marcado):
+    mudou = repo.corrigir_representante(
+        "ja-marcado", fire_codigo=4573, fire_status="FATURADO", at="2026-08-25T10:00:00"
+    )
+    assert mudou is True
+    entry = repo.get_import("ja-marcado")
+    assert entry["fire_codigo"] == 4573
+    assert entry["fire_status_last_seen"] == "FATURADO"
+    assert entry["portal_status"] == "found_in_fire", "não é transição de estado"
+
+
+def test_representante_igual_nao_conta_como_correcao(env_db_marcado):
+    assert (
+        repo.corrigir_representante(
+            "ja-marcado", fire_codigo=4218, fire_status="PEDIDO", at="2026-08-25T10:00:00"
+        )
+        is False
+    )
+
+
+def test_correcao_nao_toca_pedido_em_revisao(env_db_marcado):
+    assert (
+        repo.corrigir_representante(
+            "em-revisao", fire_codigo=999, fire_status="PEDIDO", at="2026-08-25T10:00:00"
+        )
+        is False
+    )
+    assert repo.get_import("em-revisao")["fire_codigo"] is None
+
+
+def test_correcao_nao_move_a_ancora_da_janela_do_poll(env_db_marcado):
+    """`reconciled_at` é a âncora FIXA de `list_pending_for_fire_poll`. Se a
+    correção a recarimbasse, todo pedido corrigido renovaria a própria janela
+    e nunca sairia dela — a regressão que `reconciled_at` existe para fechar.
+    """
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE imports SET reconciled_at = ? WHERE id = ?",
+            ("2026-08-24T21:00:00", "ja-marcado"),
+        )
+    repo.corrigir_representante(
+        "ja-marcado", fire_codigo=4573, fire_status="FATURADO", at="2026-08-25T10:00:00"
+    )
+    with db.connect() as conn:
+        ancora = conn.execute(
+            "SELECT reconciled_at FROM imports WHERE id = ?", ("ja-marcado",)
+        ).fetchone()["reconciled_at"]
+    assert ancora == "2026-08-24T21:00:00"
+
+
+def test_correcao_deixa_rastro_no_audit(env_db_marcado):
+    repo.corrigir_representante(
+        "ja-marcado", fire_codigo=4573, fire_status="FATURADO", at="2026-08-25T10:00:00"
+    )
+    tipos = [a["event_type"] for a in repo.list_audit("ja-marcado")]
+    assert "fire_representante_corrigido" in tipos

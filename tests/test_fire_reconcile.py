@@ -494,3 +494,79 @@ def test_buscar_no_fire_publico_continua_so_o_dict(monkeypatch):
     resultado = buscar_no_fire([cand], env_slug="mm")
     assert resultado == {}
     assert isinstance(resultado, dict)
+
+
+def test_representante_e_a_linha_mais_proxima_da_data_nao_a_de_menor_codigo(monkeypatch):
+    """Caso real AF112, medido na Fire da MM em 2026-08-24.
+
+    O cliente reusa o número do pedido: a Fire tem 143 pares (número, cliente)
+    repetidos. `AF112` existe 4 vezes para o cliente 972. O pedido do portal é
+    de 03/08 e a regra antiga (`min` por CODIGO) elegia a linha de 22/05 —
+    sempre a MAIS ANTIGA, porque CODIGO cresce com o tempo.
+
+    O match em si estava certo (o pedido existe no Fire). Errado era a linha:
+    `fire_codigo` mentia para a operação e o `poll_fire` seguiria o status do
+    pedido errado.
+    """
+    _plugar(
+        monkeypatch,
+        [
+            _linha("AF112", 4218, "17990780000167", status="FATURADO", data="2026-05-22"),
+            _linha("AF112", 4573, "17990780000167", status="FATURADO", data="2026-08-03"),
+        ],
+    )
+    candidato = Candidato(
+        import_id="i1",
+        numero="AF112",
+        cliente_codigo=None,
+        cnpj_header="17.990.780/0001-67",
+        cnpjs_entrega=(),
+        data_pedido="2026-08-03T15:39:33",
+    )
+    achado = buscar_no_fire([candidato], env_slug="mm")["i1"]
+    assert achado.fire_codigo == 4573, "elegeu a linha antiga em vez da do próprio pedido"
+
+
+def test_desempate_por_data_nao_ressuscita_linha_cancelada(monkeypatch):
+    """A regra nova não pode atropelar a antiga: CANCELADO continua descartado
+    do desempate mesmo quando é a linha de data mais próxima."""
+    _plugar(
+        monkeypatch,
+        [
+            _linha("K01", 900, "11222333000144", status="CANCELADO", data="2026-08-03"),
+            _linha("K01", 901, "11222333000144", status="PEDIDO", data="2026-07-20"),
+        ],
+    )
+    candidato = Candidato(
+        import_id="i1",
+        numero="K01",
+        cliente_codigo=None,
+        cnpj_header="11.222.333/0001-44",
+        cnpjs_entrega=(),
+        data_pedido="2026-08-03",
+    )
+    achado = buscar_no_fire([candidato], env_slug="mm")["i1"]
+    assert achado.fire_codigo == 901
+    assert achado.fire_status == "PEDIDO"
+
+
+def test_sem_data_utilizavel_o_desempate_volta_a_ser_o_menor_codigo(monkeypatch):
+    """Degradação previsível: sem data no candidato, a guarda temporal já não
+    se aplica, e o desempate não tem como usar proximidade. Volta ao menor
+    CODIGO — determinístico, não aleatório."""
+    _plugar(
+        monkeypatch,
+        [
+            _linha("K02", 910, "11222333000144", data="2026-07-01"),
+            _linha("K02", 905, "11222333000144", data="2026-08-01"),
+        ],
+    )
+    candidato = Candidato(
+        import_id="i1",
+        numero="K02",
+        cliente_codigo=None,
+        cnpj_header="11.222.333/0001-44",
+        cnpjs_entrega=(),
+        data_pedido=None,
+    )
+    assert buscar_no_fire([candidato], env_slug="mm")["i1"].fire_codigo == 905

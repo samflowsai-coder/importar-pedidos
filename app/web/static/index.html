@@ -1218,7 +1218,7 @@ async function reconciliarFire() {
   btn.innerHTML = '<span class="spin"></span> Verificando…';
   try {
     const res = await api('/api/imported/reconciliar-fire', { method: 'POST' });
-    const { verificados, casaram, status } = res;
+    const { verificados, casaram, status, corrigidos } = res;
 
     if (status === 'erro_conexao') {
       window.appShell?.showError?.(
@@ -1241,7 +1241,14 @@ async function reconciliarFire() {
       } else {
         msg = `Consultei o Fire: nenhum dos ${verificados} pedido(s) em revisão está cadastrado lá ainda.`;
       }
-      if (casaram > 0) window.appShell?.showSuccess?.(msg);
+      // Reapontamento de pedido JÁ marcado. Silenciar isso esconderia uma
+      // escrita real: na MM, a correção da regra de representante reaponta
+      // dezenas de vínculos de uma vez, e o número do Fire muda na tela sem
+      // que ninguém tenha pedido.
+      if (corrigidos > 0) {
+        msg += ` Também corrigi o vínculo com o Fire de ${corrigidos} pedido${corrigidos === 1 ? '' : 's'} que já estava${corrigidos === 1 ? '' : 'm'} marcado${corrigidos === 1 ? '' : 's'}.`;
+      }
+      if (casaram > 0 || corrigidos > 0) window.appShell?.showSuccess?.(msg);
       else window.appShell?.showInfo?.(msg);
       await loadImported();
     } else {

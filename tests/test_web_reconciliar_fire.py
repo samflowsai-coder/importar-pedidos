@@ -66,7 +66,10 @@ def test_rota_devolve_o_resultado(client, monkeypatch):
 
     monkeypatch.setattr(server, "reconciliar", lambda slug, **kw: Resultado(12, 5, "ok"))
     body = client.post("/api/imported/reconciliar-fire").json()
-    assert body == {"verificados": 12, "casaram": 5, "status": "ok"}
+    assert body == {"verificados": 12, "casaram": 5, "status": "ok", "corrigidos": 0}, (
+        "`corrigidos` entrou no payload em 2026-08-25: conta ponteiros de "
+        "`fire_codigo` reapontados em pedidos JÁ marcados"
+    )
 
 
 def test_firebird_fora_nao_vira_zero_silencioso(client, monkeypatch):
