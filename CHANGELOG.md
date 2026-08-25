@@ -23,6 +23,12 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
+_(nada ainda)_
+
+---
+
+## 20260824-1408
+
 1) O portal agora entende a Ordem de Compra da Daju (cliente novo). É só subir o arquivo da OC que o pedido sai completo no preview: número da OC, CNPJ da Daju, os itens com o código do fornecedor (Ref. Forn.), EAN, quantidade e preço.
 
 2) Atenção na Daju: quando a OC chega com a data de entrega incompleta (sem o dia), o pedido entra **sem data de entrega**. O preview mostra o campo vazio e não dá pra preencher por lá — o ajuste é no Fire, depois de importar.
