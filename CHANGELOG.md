@@ -23,6 +23,8 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
+_(nada ainda)_
+
 ---
 
 ## 20260826-1925
