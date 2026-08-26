@@ -23,6 +23,14 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
+1) Pedidos da **Tennis Station** passam a ser lidos corretamente. O arquivo dela é o mesmo formulário do Authentic Feet e do Magic Feet, só com uma diferença de maiúsculas no cabeçalho — e por causa disso o portal estava lendo 12 unidades e R$ 0 no lugar de 8.100 kits e R$ 120.882. No primeiro pedido dela, confira quantidade, valor e o nome do cliente antes de confirmar.
+
+2) Atenção no formulário da Tennis Station: se o comprador deixar o campo **"Ordem de compra" em branco**, o pedido entra sem número, e sem número o portal não consegue casar o pedido com o Fire depois. Peça pro comprador preencher.
+
+---
+
+## 20260825-1010
+
 1) Correção importante na verificação com o Fire: quando um cliente **reusa o número do pedido** (a Authentic Feet e a Xambre fazem isso todo mês), o portal estava mostrando o número de um pedido antigo do Fire no lugar do atual. Agora ele escolhe a linha do Fire com a data mais próxima do pedido.
 
 2) Pedidos que já tinham sido marcados com o vínculo errado são **corrigidos sozinhos** na próxima verificação. O botão "Verificar no Fire" avisa quantos foram corrigidos.
