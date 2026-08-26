@@ -440,6 +440,125 @@ def test_authentic_fit_single_output_file():
         assert len(paths) == 1
 
 
+# ── Tennis Station: o MESMO template, com um "K" minúsculo ───────────────────
+#
+# `TOTAL Kits` em vez de `TOTAL KITS`. O match do cabeçalho era igualdade
+# literal (`tok in cells` + `cells.index("TOTAL KITS")`), então o arquivo caía no
+# GenericParser — que lê a coluna REF COR (001, 002, 003) como quantidade. Um
+# pedido de 8.100 kits / R$ 120.882 entrava como 12 unidades / R$ 0, aprovado
+# pelo validador, sem nenhum aviso. Terceira ocorrência da mesma classe de bug
+# neste template (Magic Feet e Pulmão foram as outras duas).
+
+_TS = "PEDIDO TENNIS STATION.xlsx"
+
+
+def _rows(filename: str):
+    from app.extractors.xls_extractor import XLSExtractor
+
+    return XLSExtractor().extract(_load(filename))
+
+
+def test_tennis_station_casa_o_template_apesar_do_caixa():
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert NasmarTemplateParser().can_parse(_rows(_TS)) is True
+
+
+@pytest.mark.parametrize(
+    ("cabecalho", "casa"),
+    [
+        (["REF.", "DESCRIÇÃO PRODUTO", "TOTAL KITS", "TOTAL R$"], True),
+        (["REF.", "DESCRIÇÃO PRODUTO", "TOTAL Kits", "TOTAL R$"], True),
+        (["ref.", "descrição produto", "total kits", "total r$"], True),
+        # Excel guarda o que o usuário digitou: espaço duplo e sobra nas bordas.
+        (["REF. ", "DESCRIÇÃO  PRODUTO", " TOTAL KITS", "TOTAL R$"], True),
+        # Falta uma coluna do conjunto -> não é este template.
+        (["REF.", "DESCRIÇÃO PRODUTO", "TOTAL KITS"], False),
+    ],
+)
+def test_template_casa_cabecalho_normalizado(cabecalho, casa):
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert (NasmarTemplateParser()._match_header(cabecalho) is not None) is casa
+
+
+def test_tennis_station_quantidade_e_preco_do_primeiro_item():
+    order = _process(_TS)
+    assert order is not None
+    assert len(order.items) == 12
+    item = order.items[0]
+    assert item.product_code == "K3ABCCIL1FTS"
+    assert item.quantity == 800  # TOTAL Kits — não 001 (REF COR/cor)
+    assert item.unit_price == 12.18  # CUSTO — não 29.99 (SUGESTÃO/preço de venda)
+    assert item.total_price == 9744
+    assert "TENNIS STATION" in (item.description or "").upper()
+
+
+def test_tennis_station_qty_x_custo_bate_item_a_item():
+    """Pega troca de coluna sem depender de valor fixo: se a qty vier do REF COR
+    ou o preço da SUGESTÃO, a identidade quebra."""
+    order = _process(_TS)
+    for item in order.items:
+        assert item.quantity and item.unit_price and item.total_price
+        assert item.quantity * item.unit_price == pytest.approx(item.total_price, abs=0.01)
+
+
+def test_tennis_station_soma_bate_com_o_totalizador_da_planilha():
+    """Linha 23 do arquivo: 8.100 kits, R$ 120.882."""
+    order = _process(_TS)
+    assert sum(int(i.quantity) for i in order.items) == 8100
+    assert sum(i.total_price for i in order.items) == pytest.approx(120882.0, abs=0.01)
+
+
+def test_tennis_station_nunca_usa_a_sugestao_como_preco():
+    """SUGESTÃO é preço de venda ao consumidor. Entrar no ERP como custo infla o
+    pedido em ~2,5x — e passa em qualquer validador."""
+    order = _process(_TS)
+    assert all(i.unit_price not in (29.99, 39.99) for i in order.items)
+
+
+def test_ordem_de_compra_tem_precedencia_sobre_fantasia():
+    """O template da Tennis Station acrescentou um campo `Ordem de compra:` que o
+    do Authentic Feet não tem. Onde ele existir e estiver preenchido, ele é o
+    número do pedido — FANTASIA é apelido que o comprador digita livre, e foi de
+    onde saiu o `AF76 vs AF076` que ficou aberto na reconciliação com o Fire.
+
+    O sample real veio com o campo em branco; este cobre o caminho preenchido.
+    """
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    rows = [
+        [None, None, None, None, "Ordem de compra:", "TS-4417", None],
+        [None, "RAZÃO SOCIAL:", None, "LOJA TESTE LTDA", None, None, None],
+        [None, "CNPJ:", None, "52.671.393/0001-69", None, None, None],
+        [None, None, None, None, None, None, "FANTASIA:"],
+        [None, "REF.", "DESCRIÇÃO PRODUTO", "TOTAL Kits", "TOTAL R$", None, None],
+        [None, "K3ABCCIL1FTS", "KIT", 10, 121.80, None, None],
+    ]
+    order = NasmarTemplateParser().parse({"rows": rows, "text": "", "tables": []})
+    assert order is not None
+    assert order.header.order_number == "TS-4417"
+
+
+def test_sample_tennis_station_entra_sem_numero_de_pedido():
+    """Documenta a lacuna conhecida: com `Ordem de compra`, FANTASIA e DATA DO
+    PEDIDO todos em branco, o pedido entra sem número — e `mapper.py` grava
+    PEDIDO_CLIENTE = NULL no Fire, sem chave de idempotência. Não há edição de
+    número no preview (`CommitRequest` só carrega `preview_id`). Mesmo estado do
+    Pulmão hoje em produção."""
+    order = _process(_TS)
+    assert order.header.order_number is None
+
+
+def test_ordem_de_compra_nao_muda_o_numero_dos_pedidos_antigos():
+    """Não-regressão: o campo novo não existe no template AF/MF, então a cadeia
+    de fallback (FANTASIA) tem que continuar valendo lá."""
+    assert _process("Pedido Authentic Fit.xlsx").header.order_number == "AF198"
+    # 'mf048' no arquivo; o OrderNormalizer faz .upper() depois do parser.
+    assert _process("Pedido Magic Feet MF048.xlsx").header.order_number == "MF048"
+    assert _process("Pedido Grupo Afeet Pulmao.xlsx").header.order_number is None
+
+
 def test_nba_item_count():
     order = _process("PEDIDO NBA 3.xlsx")
     assert order is not None

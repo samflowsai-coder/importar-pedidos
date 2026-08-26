@@ -7,14 +7,35 @@ from app.models.order import Order, OrderHeader, OrderItem
 from app.parsers.base_parser import BaseParser
 
 _CNPJ_RE = re.compile(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}")
+_ESPACO = re.compile(r"\s+")
+
 # Mesmo template de "Pedido" single-customer é usado por Authentic Feet, Magic
-# Feet e pedidos "Pulmão" do Grupo Afeet (mesmo fornecedor). A assinatura é o
-# CABEÇALHO do template — não o nome da marca: pedidos Pulmão vêm com os campos
-# de cliente em branco, sem nenhum texto 'AUTHENTICFEET'/'MAGICFEET' no conteúdo
-# (a marca só aparece no nome do arquivo). O conjunto de 4 colunas abaixo é único
-# deste fornecedor. A quantidade real fica em TOTAL KITS; sem este parser o
-# arquivo cai no GenericParser, que lê o REF COR (cor) como quantidade.
+# Feet, pedidos "Pulmão" do Grupo Afeet e Tennis Station (mesmo fornecedor). A
+# assinatura é o CABEÇALHO do template — não o nome da marca: pedidos Pulmão vêm
+# com os campos de cliente em branco, sem nenhum texto 'AUTHENTICFEET'/'MAGICFEET'
+# no conteúdo (a marca só aparece no nome do arquivo). O conjunto de 4 colunas
+# abaixo é único deste fornecedor. A quantidade real fica em TOTAL KITS; sem este
+# parser o arquivo cai no GenericParser, que lê o REF COR (cor) como quantidade.
+#
+# O match é por texto NORMALIZADO (upper + espaço colapsado), nunca por igualdade
+# literal: a Tennis Station digitou `TOTAL Kits` e o arquivo inteiro escapou do
+# parser por causa do caixa de duas letras.
 _HEADER_TOKENS = ("REF.", "DESCRIÇÃO PRODUTO", "TOTAL KITS", "TOTAL R$")
+
+# Colunas opcionais: rótulo normalizado -> chave do col_map.
+_COLUNAS_OPCIONAIS = {
+    "DESCRIÇÃO COR": "cor",
+    "TAMANHOS": "tamanhos",
+    "OBS": "obs",
+    "CUSTO": "custo",
+}
+
+
+def _norm(value: object) -> str:
+    """Texto canônico de uma célula para efeito de match de cabeçalho."""
+    if value is None:
+        return ""
+    return _ESPACO.sub(" ", str(value)).strip().upper()
 
 
 class NasmarTemplateParser(BaseParser):
@@ -26,13 +47,11 @@ class NasmarTemplateParser(BaseParser):
 
     def can_parse(self, extracted: dict) -> bool:
         # O cabeçalho completo do template de kits é a assinatura confiável (não o
-        # nome da marca, que pode estar ausente). Alinhado com _find_header_row.
+        # nome da marca, que pode estar ausente). Mesma função que o _find_header_row
+        # usa — antes eram duas cópias da regra, e a que decidia o col_map era ainda
+        # mais estrita que a do gate.
         rows = extracted.get("rows", [])
-        for row in rows[:30]:
-            cells = [str(c).strip() if c is not None else "" for c in row]
-            if all(tok in cells for tok in _HEADER_TOKENS):
-                return True
-        return False
+        return any(self._match_header(row) is not None for row in rows[:30])
 
     def parse(self, extracted: dict) -> Order | None:
         if not self.can_parse(extracted):
@@ -63,15 +82,18 @@ class NasmarTemplateParser(BaseParser):
         customer_name: str | None = None
         fantasia: str | None = None
         issue_date: str | None = None
+        ordem_compra: str | None = None
 
         for row in rows[:header_idx]:
             cells = list(row)
             for j, cell in enumerate(cells):
                 if cell is None:
                     continue
-                label = str(cell).strip().upper().rstrip(":").strip()
+                label = _norm(cell).rstrip(":").strip()
 
-                if not customer_name and label in ("RAZÃO SOCIAL", "RAZAO SOCIAL"):
+                if not ordem_compra and label in ("ORDEM DE COMPRA", "ORDEM DE COMPRA Nº"):
+                    ordem_compra = self._coerce_text(self._next_raw(cells, j))
+                elif not customer_name and label in ("RAZÃO SOCIAL", "RAZAO SOCIAL"):
                     raw = self._next_raw(cells, j)
                     if raw is not None:
                         customer_name = str(raw).strip() or None
@@ -88,7 +110,12 @@ class NasmarTemplateParser(BaseParser):
                 elif not issue_date and label in ("DATA DO PEDIDO", "DATA PEDIDO"):
                     issue_date = self._coerce_date(self._next_raw(cells, j))
 
-        order_number = fantasia or issue_date
+        # `Ordem de compra` é o número de pedido de verdade — campo próprio, que o
+        # comprador preenche pra referenciar a OC dele. FANTASIA é apelido digitado
+        # livre e só serve de fallback porque o template antigo (AF/MF) não tem
+        # campo de número: foi de lá que saiu o `AF76` vs `AF076` que ficou aberto
+        # na reconciliação com o Fire. Onde os dois existirem, o campo próprio ganha.
+        order_number = ordem_compra or fantasia or issue_date
 
         return OrderHeader(
             order_number=order_number,
@@ -117,6 +144,19 @@ class NasmarTemplateParser(BaseParser):
             return v
         return None
 
+    def _coerce_text(self, value) -> str | None:
+        """Texto de um campo de identificação, sem o `.0` do float do openpyxl.
+
+        Número de pedido digitado como número puro (`4417`) volta como float, e
+        `str()` daria `'4417.0'` — que vira a chave PEDIDO_CLIENTE no Fire e não
+        casa com nada.
+        """
+        if value is None:
+            return None
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        return str(value).strip() or None
+
     def _coerce_date(self, value) -> str | None:
         if value is None:
             return None
@@ -129,28 +169,34 @@ class NasmarTemplateParser(BaseParser):
     # Itens
     # ------------------------------------------------------------------
 
+    def _match_header(self, row: list) -> dict | None:
+        """Se `row` é o cabeçalho da tabela de kits, devolve o `col_map`; senão None.
+
+        Fonte única da regra: é o gate do `can_parse` E o mapeamento de colunas. As
+        4 colunas de `_HEADER_TOKENS` são obrigatórias — o resto é opcional e cada
+        uma fica no índice da PRIMEIRA ocorrência.
+        """
+        cells = [_norm(c) for c in row]
+        if not all(tok in cells for tok in _HEADER_TOKENS):
+            return None
+
+        col_map = {
+            "ref": cells.index("REF."),
+            "produto": cells.index("DESCRIÇÃO PRODUTO"),
+            "total_kits": cells.index("TOTAL KITS"),
+            "total_rs": cells.index("TOTAL R$"),
+        }
+        for j, c in enumerate(cells):
+            chave = _COLUNAS_OPCIONAIS.get(c)
+            if chave and chave not in col_map:
+                col_map[chave] = j
+        return col_map
+
     def _find_header_row(self, rows: list) -> tuple[int | None, dict]:
         for i, row in enumerate(rows):
-            cells = [str(c).strip() if c is not None else "" for c in row]
-            if not all(tok in cells for tok in _HEADER_TOKENS):
-                continue
-
-            col_map = {
-                "ref": cells.index("REF."),
-                "produto": cells.index("DESCRIÇÃO PRODUTO"),
-                "total_kits": cells.index("TOTAL KITS"),
-                "total_rs": cells.index("TOTAL R$"),
-            }
-            for j, c in enumerate(cells):
-                if c == "DESCRIÇÃO COR" and "cor" not in col_map:
-                    col_map["cor"] = j
-                elif c == "TAMANHOS" and "tamanhos" not in col_map:
-                    col_map["tamanhos"] = j
-                elif c == "OBS" and "obs" not in col_map:
-                    col_map["obs"] = j
-                elif c == "CUSTO" and "custo" not in col_map:
-                    col_map["custo"] = j
-            return i, col_map
+            col_map = self._match_header(row)
+            if col_map is not None:
+                return i, col_map
         return None, {}
 
     def _parse_items(self, rows: list, header_idx: int, col_map: dict) -> list[OrderItem]:
