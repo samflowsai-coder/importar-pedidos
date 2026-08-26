@@ -70,9 +70,9 @@ Authentic Feet, Magic Feet, "Pulmão" do Grupo Afeet e Tennis Station. Samples:
 `Pedido Grupo Afeet Pulmao.xlsx`, `PEDIDO TENNIS STATION.xlsx`.
 
 - **`_match_header(row)` é fonte única** do gate e do `col_map` — `can_parse` e
-  `_find_header_row` chamam a mesma função. Antes eram duas cópias da regra e a do
-  `col_map` era mais estrita que a do gate, então um arquivo passava no gate e
-  explodia no mapeamento.
+  `_find_header_row` chamam a mesma função. Antes eram duas cópias literais da mesma
+  condição: idênticas, mas livres para divergir a cada edição, e qualquer divergência
+  daria arquivo aprovado no gate e `ValueError` no `cells.index()` do mapeamento.
 - **O match é por texto NORMALIZADO** (`_norm`: upper + espaço colapsado) do conjunto
   de 4 colunas `REF.`, `DESCRIÇÃO PRODUTO`, `TOTAL KITS`, `TOTAL R$` — **não** o nome
   da marca, e **nunca** igualdade literal. A Tennis Station digitou `TOTAL Kits` e o
@@ -95,6 +95,15 @@ Authentic Feet, Magic Feet, "Pulmão" do Grupo Afeet e Tennis Station. Samples:
   do último grupo — 3 dígitos = milhar (`1.300` → 1300), senão decimal (`300.0` → 300.0).
   A versão ingênua lia `1.300` como `1.3`: pedido mil vezes menor, silencioso, aprovado
   pelo validador. Mesma regra do `DajuParser._parse_number`.
+  ⚠️ `_raw` **não é cosmético**: um float nativo de 3 casas (`16.815`) stringifica pra
+  `'16.815'`, que casa com a regra de milhar e vira `16815.0`. Trocar `_raw` por `_cell`
+  nos campos numéricos reintroduz o erro de 1000x — pinado em
+  `test_custo_float_nativo_com_tres_casas_nao_vira_milhar`.
+- **`_next_raw` desiste depois de `_MAX_CELULAS_VAZIAS` (4) células vazias seguidas.**
+  O template guarda as listas de validação dos dropdowns nas colunas remotas (39 CNPJs
+  de filiais a partir da coluna X no arquivo da TS) e nada ali termina em `:`, então o
+  guard de rótulo sozinho não segura. Nos 4 samples o valor nunca está a mais de
+  **+2** células do rótulo; o lixo fica a **+19**.
 
 **Lacunas conhecidas (Tennis Station, 1 sample só) — ver `docs/BACKLOG.md`:**
 o sample real veio com `Ordem de compra`, `RAZÃO SOCIAL` e `DATA DO PEDIDO` em branco →

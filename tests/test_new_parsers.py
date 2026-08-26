@@ -617,6 +617,83 @@ def test_template_quantidade_em_milhar_como_texto_nao_encolhe_o_pedido():
     assert item.quantity * item.unit_price == pytest.approx(item.total_price, abs=0.01)
 
 
+# ── Achados da revisão adversarial (Fable) ───────────────────────────────────
+
+
+def test_ordem_de_compra_nao_alcanca_lixo_das_colunas_remotas():
+    """O template guarda a lista de validação do dropdown de filiais nas colunas
+    X+ — no arquivo real da Tennis Station são 39 CNPJs na linha 6. Nada disso
+    termina em ':', então o guard de rótulo do `_next_raw` não segura, e a
+    varredura à direita chegaria lá.
+
+    Se um CNPJ de filial virasse `order_number`, ele iria pro Fire como
+    PEDIDO_CLIENTE — a chave de idempotência. Distância real entre rótulo e valor
+    nos 4 samples do template: no máximo +2. O lixo fica a +19.
+    """
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    cells = [None] * 4 + ["Ordem de compra:"] + [None] * 18 + ["52.671.393/0001-69"]
+    assert NasmarTemplateParser()._next_raw(cells, 4) is None
+
+
+def test_next_raw_ainda_acha_o_valor_perto_do_rotulo():
+    """O limite não pode comer o caso real: valor a +1 e a +2 (o mais longe que
+    aparece nos samples) continuam sendo capturados."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    p = NasmarTemplateParser()
+    assert p._next_raw(["CNPJ:", "52.671.393/0001-69"], 0) == "52.671.393/0001-69"
+    assert p._next_raw(["FANTASIA:", None, "AF198"], 0) == "AF198"
+    assert p._next_raw(["CNPJ:", "", None, "25.014.621/0001-55"], 0) == "25.014.621/0001-55"
+
+
+def test_ordem_de_compra_date_like_nao_vira_timestamp():
+    """`Ordem de compra` é campo de texto livre: o comprador digita `12/08` e o
+    Excel coage pra data, então o openpyxl devolve datetime. `str()` cru daria
+    '2026-08-12 00:00:00' — que o `mapper.py:64` trunca em 20 chars e manda pro
+    Fire como PEDIDO_CLIENTE. Espelha o `_coerce_date`."""
+    import datetime as dt
+
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    p = NasmarTemplateParser()
+    assert p._coerce_text(dt.datetime(2026, 8, 12)) == "12/08/2026"
+    assert p._coerce_text(dt.date(2026, 8, 12)) == "12/08/2026"
+    # não-regressão: o resto da coerção continua igual
+    assert p._coerce_text(4417.0) == "4417"
+    assert p._coerce_text("TS-4417") == "TS-4417"
+    assert p._coerce_text(None) is None
+
+
+def test_custo_float_nativo_com_tres_casas_nao_vira_milhar():
+    """O único input que distingue `_raw` de `_cell`: float NATIVO cujo `str()`
+    casa com a regra de milhar. `str(16.815)` == '16.815' -> _MILHAR_BR casa ->
+    16815.0, mil vezes maior. Passar o valor cru resolve.
+
+    Sem este teste, trocar `_raw` de volta por `_cell` nos campos numéricos passa
+    nos 1068 testes e reintroduz o erro de 1000x — os outros casos usam floats de
+    2 casas, cujo `str()` é inofensivo.
+    """
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    rows = [
+        [None, "REF.", "DESCRIÇÃO PRODUTO", "CUSTO", "TOTAL Kits", "TOTAL R$"],
+        [None, "K3ABCCIL1FTS", "KIT CANO CURTO", 16.815, 200, 3363.0],
+    ]
+    order = NasmarTemplateParser().parse({"rows": rows, "text": "", "tables": []})
+    item = order.items[0]
+    assert item.unit_price == 16.815
+    assert item.quantity * item.unit_price == pytest.approx(item.total_price, abs=0.01)
+
+
+def test_template_nao_rouba_o_desmembramento_magic_feet():
+    """Não-regressão do widening: o par do `test_authentic_fit_does_not_match_
+    desmembramento`, que só pinava o arquivo do Authentic Feet."""
+    order = _process("Desmembramento Magic Feet.xlsx")
+    assert order is not None
+    assert any(it.delivery_cnpj or it.delivery_name for it in order.items)
+
+
 def test_nba_item_count():
     order = _process("PEDIDO NBA 3.xlsx")
     assert order is not None

@@ -14,6 +14,11 @@ _ESPACO = re.compile(r"\s+")
 # conhecida — ver docs/BACKLOG.md; a casa manda copiar do vizinho, não inventar).
 _MILHAR_BR = re.compile(r"\d{1,3}(?:\.\d{3})+")
 
+# Quantas células vazias seguidas o `_next_raw` atravessa antes de desistir do
+# campo. Medido nos 4 samples do template: o valor nunca está a mais de 2 células
+# do rótulo. As listas de validação dos dropdowns ficam a 19+ colunas.
+_MAX_CELULAS_VAZIAS = 4
+
 # Mesmo template de "Pedido" single-customer é usado por Authentic Feet, Magic
 # Feet, pedidos "Pulmão" do Grupo Afeet e Tennis Station (mesmo fornecedor). A
 # assinatura é o CABEÇALHO do template — não o nome da marca: pedidos Pulmão vêm
@@ -130,22 +135,31 @@ class NasmarTemplateParser(BaseParser):
         )
 
     def _next_raw(self, cells: list, label_idx: int):
-        """Devolve o primeiro valor não-vazio à direita do label, preservando o tipo
-        (datetime, float, str). Stringificar é responsabilidade do chamador.
+        """Devolve o valor à direita do label, preservando o tipo (datetime, float,
+        str). Stringificar é responsabilidade do chamador.
 
-        Se o primeiro não-vazio for OUTRO rótulo (string terminando em ':', como
-        'FANTASIA:' logo após um 'RAZÃO SOCIAL:' em branco), o campo está vazio →
-        devolve None em vez de capturar o rótulo do campo seguinte."""
+        Para em três situações, todas devolvendo None (campo vazio):
+
+        - o primeiro não-vazio é OUTRO rótulo (string terminando em ':', como
+          'FANTASIA:' logo após um 'RAZÃO SOCIAL:' em branco);
+        - a linha acabou;
+        - passou de `_MAX_CELULAS_VAZIAS` células vazias seguidas. O template
+          guarda as listas de validação dos dropdowns nas colunas remotas — o
+          arquivo da Tennis Station tem 39 CNPJs de filiais a partir da coluna X —
+          e nada disso termina em ':', então só o guard de rótulo não segura. Um
+          CNPJ dali capturado como número de pedido iria pro Fire como
+          PEDIDO_CLIENTE, a chave de idempotência.
+        """
+        vazias = 0
         for k in range(label_idx + 1, len(cells)):
             v = cells[k]
-            if v is None:
-                continue
-            if isinstance(v, str):
-                s = v.strip()
-                if not s:
-                    continue
-                if s.endswith(":"):
+            if v is None or (isinstance(v, str) and not v.strip()):
+                vazias += 1
+                if vazias > _MAX_CELULAS_VAZIAS:
                     return None
+                continue
+            if isinstance(v, str) and v.strip().endswith(":"):
+                return None
             return v
         return None
 
@@ -154,10 +168,14 @@ class NasmarTemplateParser(BaseParser):
 
         Número de pedido digitado como número puro (`4417`) volta como float, e
         `str()` daria `'4417.0'` — que vira a chave PEDIDO_CLIENTE no Fire e não
-        casa com nada.
+        casa com nada. O campo é texto livre, então o comprador também digita
+        coisa date-like (`12/08`) que o Excel coage pra data: `str()` cru daria
+        `'2026-08-12 00:00:00'`. Formato igual ao do `_coerce_date`.
         """
         if value is None:
             return None
+        if isinstance(value, (_dt.datetime, _dt.date)):
+            return value.strftime("%d/%m/%Y")
         if isinstance(value, float) and value.is_integer():
             value = int(value)
         return str(value).strip() or None
