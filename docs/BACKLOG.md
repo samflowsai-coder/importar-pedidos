@@ -192,9 +192,10 @@ Próximo passo se aprovado: brainstorm → spec.
 ## 5. Verificação pendente (não dá para afirmar hoje)
 
 ### 5.1 Os campos do de-para intercompany estão preenchidos no cliente?
-**Metade resolvido em 2026-08-24:** o cliente roda `20260824-1408` (commit `212e8cd`,
-aplicado 24/08 14:10, confirmado na tela), que contém o de-para. A dúvida sobre a versão
-acabou.
+**Metade resolvido em 2026-08-24:** a dúvida sobre a versão acabou — o cliente passou a
+rodar uma versão que contém o de-para. **Produção hoje: `20260826-1925`** (commit
+`a201910`, aplicada 26/08, confirmada pelo Samuel). Duas releases depois daquela, e o
+de-para segue embarcado.
 
 **O que segue aberto:** ninguém confirmou que `intercompany_cnpj` e
 `intercompany_env_slug` foram preenchidos em `/admin/ambientes`. Precisa do share
@@ -202,12 +203,7 @@ acabou.
 **Enquanto os dois campos estiverem vazios, a feature é inerte** — não muda nada em
 produção.
 
-### 5.2 A Daju funciona com OC real?
-O parser subiu em `20260824-1408` e passa em 21 testes contra o sample. **Ninguém subiu
-uma OC de verdade ainda.** Confirmar com a operação antes de considerar fechado —
-especialmente quantidade e preço, que é onde este repo já errou (Magic Feet, Sam's).
-
-### 5.3 O CNPJ da Tennis Station é escolha do comprador ou default?
+### 5.2 O CNPJ da Tennis Station é escolha do comprador ou default?
 
 `samples/PEDIDO TENNIS STATION.xlsx` traz `52.671.393/0001-69` no campo `CNPJ:` — e ele
 é o **primeiro de uma lista escondida de 39 CNPJs** (11 raízes) nas colunas X+ da linha 6,
@@ -217,4 +213,9 @@ vai para a filial errada no Fire.
 
 Todo o resto do cabeçalho veio em branco (razão social, ordem de compra, data), o que
 reforça a hipótese de formulário pouco preenchido.
-**O que destrava:** um segundo pedido real da TS, de preferência de outra filial.
+
+**Destravado do nosso lado:** a `20260826-1925` está em produção desde 26/08, então o
+portal já lê pedido da TS. **O que falta é dado do cliente:** um segundo pedido real, de
+preferência de outra filial. Até lá, a nota de release manda a operação conferir o nome
+do cliente na tela — o `check_order` resolve a razão social do Fire pelo CNPJ
+(`app/erp/product_check.py:143`), então filial errada é visível para quem olha.
