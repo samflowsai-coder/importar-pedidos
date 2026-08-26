@@ -8,6 +8,11 @@ from app.parsers.base_parser import BaseParser
 
 _CNPJ_RE = re.compile(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}")
 _ESPACO = re.compile(r"\s+")
+# Texto no formato de milhar brasileiro: grupos de 3 dígitos separados por ponto,
+# sem decimal (`1.300`, `1.234.567`). `300.0` NÃO casa — 1 dígito no último grupo
+# é decimal, não milhar. Mesma regra do DajuParser (helper duplicado por dívida
+# conhecida — ver docs/BACKLOG.md; a casa manda copiar do vizinho, não inventar).
+_MILHAR_BR = re.compile(r"\d{1,3}(?:\.\d{3})+")
 
 # Mesmo template de "Pedido" single-customer é usado por Authentic Feet, Magic
 # Feet, pedidos "Pulmão" do Grupo Afeet e Tennis Station (mesmo fornecedor). A
@@ -211,7 +216,10 @@ class NasmarTemplateParser(BaseParser):
                 # totalizador da última linha (REF. vazio) ou linha de rodapé
                 continue
 
-            qty = self._to_number(self._cell(row, col_map.get("total_kits")))
+            # Valor CRU, não o stringificado: é o que deixa `_to_number` distinguir
+            # o int nativo do openpyxl do texto '1.300'. Stringificar antes joga
+            # fora justamente a informação que decide milhar vs. decimal.
+            qty = self._to_number(self._raw(row, col_map.get("total_kits")))
             if qty is None or qty <= 0:
                 continue
 
@@ -224,8 +232,8 @@ class NasmarTemplateParser(BaseParser):
                 product_code=ref,
                 description=description or None,
                 quantity=qty,
-                unit_price=self._to_number(self._cell(row, col_map.get("custo"))),
-                total_price=self._to_number(self._cell(row, col_map.get("total_rs"))),
+                unit_price=self._to_number(self._raw(row, col_map.get("custo"))),
+                total_price=self._to_number(self._raw(row, col_map.get("total_rs"))),
                 obs=self._cell(row, col_map.get("obs")) or None,
             ))
 
@@ -235,27 +243,49 @@ class NasmarTemplateParser(BaseParser):
     # Helpers locais
     # ------------------------------------------------------------------
 
-    def _cell(self, row: list, idx: int | None) -> str:
+    def _raw(self, row: list, idx: int | None):
+        """Valor da célula com o tipo preservado. Use nos campos numéricos."""
         if idx is None or idx >= len(row):
-            return ""
-        v = row[idx]
+            return None
+        return row[idx]
+
+    def _cell(self, row: list, idx: int | None) -> str:
+        """Valor da célula como texto. Use só nos campos textuais."""
+        v = self._raw(row, idx)
         if v is None:
             return ""
         return str(v).strip()
 
     def _to_number(self, value) -> float | None:
-        if value is None or value == "":
-            return None
+        """Número da planilha, sem adivinhação.
+
+        Os dois caminhos — célula nativa do openpyxl e célula em texto — precisam
+        dar o MESMO resultado: um erro aqui entra no ERP como pedido de quantidade
+        errada, passa no validador (qty > 0) e ninguém percebe. O template chega
+        nativo hoje, mas o cliente que exporta de outro sistema manda texto, e a
+        Daju provou que a mesma coluna troca de tipo entre arquivos.
+
+        - `int`/`float` do openpyxl: usa direto, o tipo já resolveu.
+        - texto com vírgula: vírgula é decimal, ponto é milhar (`1.234,56`).
+        - texto só com ponto: **3 dígitos depois do último ponto = milhar**
+          (`1.300` -> 1300), caso contrário é decimal (`300.0` -> 300.0).
+          Sem essa regra, `"1.300"` virava `1.3` — pedido mil vezes menor.
+        """
         if isinstance(value, bool):
             return None
         if isinstance(value, (int, float)):
             return float(value)
-        s = re.sub(r"[R$\s]", "", str(value))
-        if not s:
+        if value is None:
+            return None
+
+        cleaned = re.sub(r"[R$\s]", "", str(value))
+        if not cleaned or cleaned in ("—", "-"):
             return None
         try:
-            if "," in s:
-                return float(s.replace(".", "").replace(",", "."))
-            return float(s)
+            if "," in cleaned:
+                return float(cleaned.replace(".", "").replace(",", "."))
+            if _MILHAR_BR.fullmatch(cleaned):
+                return float(cleaned.replace(".", ""))
+            return float(cleaned)
         except ValueError:
             return None

@@ -559,6 +559,64 @@ def test_ordem_de_compra_nao_muda_o_numero_dos_pedidos_antigos():
     assert _process("Pedido Grupo Afeet Pulmao.xlsx").header.order_number is None
 
 
+# ── O template também tinha a bomba da Daju ──────────────────────────────────
+#
+# `_to_number` fazia `float("1.300")` -> 1.3: quantidade MIL VEZES menor entrando
+# no Fire, silenciosa, aprovada pelo validador (qty > 0). Não dispara nos samples
+# de hoje porque estes xlsx são nativos e o openpyxl devolve int — mas é o mesmo
+# arquivo que passa por conversor quando o cliente exporta de outro sistema, e a
+# Daju provou que a mesma coluna vem número hoje e texto amanhã. A regra é a do
+# `DajuParser._parse_number` (copiada, não reinventada: os helpers são duplicados
+# entre parsers por dívida conhecida — ver docs/BACKLOG.md).
+
+
+@pytest.mark.parametrize(
+    ("valor", "esperado"),
+    [
+        # Nativos do openpyxl: o tipo já resolveu.
+        (800, 800.0),
+        (12.18, 12.18),
+        # Texto brasileiro com decimal.
+        ("12,18", 12.18),
+        ("1.234,56", 1234.56),
+        ("R$ 12,18", 12.18),
+        # O caso que quebrava: milhar sem vírgula virava 1.3.
+        ("1.300", 1300.0),
+        ("1.234.567", 1234567.0),
+        # E o oposto, que um fix ingênuo (str.replace(".", "")) estragaria:
+        # float stringificado tem 1 dígito depois do ponto, é decimal.
+        ("300.0", 300.0),
+        ("800", 800.0),
+        # Vazio / ausente / traço.
+        ("", None),
+        (None, None),
+        ("—", None),
+        # bool é int em Python: True não pode virar quantidade 1.
+        (True, None),
+    ],
+)
+def test_template_to_number_nao_adivinha(valor, esperado):
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert NasmarTemplateParser()._to_number(valor) == esperado
+
+
+def test_template_quantidade_em_milhar_como_texto_nao_encolhe_o_pedido():
+    """Regressão de ponta: uma linha com qty '1.300' como TEXTO tem que virar
+    1300 unidades, não 1,3."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    rows = [
+        [None, "REF.", "DESCRIÇÃO PRODUTO", "CUSTO", "TOTAL Kits", "TOTAL R$"],
+        [None, "K3ABCCIL1FTS", "KIT CANO CURTO", "12,18", "1.300", "15.834,00"],
+    ]
+    order = NasmarTemplateParser().parse({"rows": rows, "text": "", "tables": []})
+    item = order.items[0]
+    assert item.quantity == 1300.0
+    assert item.unit_price == 12.18
+    assert item.quantity * item.unit_price == pytest.approx(item.total_price, abs=0.01)
+
+
 def test_nba_item_count():
     order = _process("PEDIDO NBA 3.xlsx")
     assert order is not None
