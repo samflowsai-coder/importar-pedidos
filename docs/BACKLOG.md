@@ -192,9 +192,10 @@ Próximo passo se aprovado: brainstorm → spec.
 ## 5. Verificação pendente (não dá para afirmar hoje)
 
 ### 5.1 Os campos do de-para intercompany estão preenchidos no cliente?
-**Metade resolvido em 2026-08-24:** o cliente roda `20260824-1408` (commit `212e8cd`,
-aplicado 24/08 14:10, confirmado na tela), que contém o de-para. A dúvida sobre a versão
-acabou.
+**Metade resolvido em 2026-08-24:** a dúvida sobre a versão acabou — o cliente passou a
+rodar uma versão que contém o de-para. **Produção hoje: `20260826-1925`** (commit
+`a201910`, aplicada 26/08, confirmada pelo Samuel). Duas releases depois daquela, e o
+de-para segue embarcado.
 
 **O que segue aberto:** ninguém confirmou que `intercompany_cnpj` e
 `intercompany_env_slug` foram preenchidos em `/admin/ambientes`. Precisa do share
@@ -217,4 +218,9 @@ vai para a filial errada no Fire.
 
 Todo o resto do cabeçalho veio em branco (razão social, ordem de compra, data), o que
 reforça a hipótese de formulário pouco preenchido.
-**O que destrava:** um segundo pedido real da TS, de preferência de outra filial.
+
+**Destravado do nosso lado:** a `20260826-1925` está em produção desde 26/08, então o
+portal já lê pedido da TS. **O que falta é dado do cliente:** um segundo pedido real, de
+preferência de outra filial. Até lá, a nota de release manda a operação conferir o nome
+do cliente na tela — o `check_order` resolve a razão social do Fire pelo CNPJ
+(`app/erp/product_check.py:143`), então filial errada é visível para quem olha.
