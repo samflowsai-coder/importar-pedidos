@@ -9,7 +9,11 @@ Transformar a saída do extractor (texto + tabelas) em um `Order` (pydantic). Ca
   tem a sua cópia. Dívida conhecida (ver `docs/BACKLOG.md`); ao mexer num parser,
   copie do vizinho mais próximo em vez de inventar variante.
 - `app/parsers/generic_parser.py` — fallback determinístico antes do LLM.
-- `app/parsers/<cliente>_parser.py` — **11 parsers específicos**: Mercado Eletrônico, Pedido Compras Revenda, SBF/Centauro, Beira Rio, Kolosh, Sam's Club, Kallan XLS, Authentic Feet, Daju, Desmembramento XLS, e o Generic.
+- `app/parsers/<cliente>_parser.py` — **11 parsers específicos**: Mercado Eletrônico, Pedido Compras Revenda, SBF/Centauro, Beira Rio, Kolosh, Sam's Club, Kallan XLS, **Nasmar Template**, Daju, Desmembramento XLS, e o Generic.
+  ⚠️ Um parser cobre um **formato**, não um cliente. O `NasmarTemplateParser` sozinho
+  atende 4 clientes (AF, MF, Pulmão, Tennis Station) porque todos usam o template do
+  próprio fornecedor. Cliente novo que chega nesse template custa **zero** parser —
+  antes de escrever um novo, cheque se o formato já está coberto.
 - `app/pipeline.py` — registro da cascata na lista `_parsers`.
 
 ## Como adicionar um parser novo
@@ -57,17 +61,57 @@ Transformar a saída do extractor (texto + tabelas) em um `Order` (pydantic). Ca
 
 Ambos layouts compartilham `_parse_header()` (regex `Número (?:do )?Pedido:` cobre as duas variações). Detecção case-insensitive em `can_parse`.
 
-## Authentic Feet / Magic Feet: a assinatura é o cabeçalho, não a marca
+## Nasmar Template: a assinatura é o cabeçalho, não a marca
 
-`AuthenticFeetParser` cobre o template single-customer usado por Authentic Feet, Magic
-Feet e pedidos "Pulmão" do Grupo Afeet — mesmo fornecedor, mesmo template.
+`NasmarTemplateParser` (`app/parsers/nasmar_template_parser.py`) cobre o template de
+pedido de kits do **próprio fornecedor** (Nasmar/MM). Um template, N clientes:
+Authentic Feet, Magic Feet, "Pulmão" do Grupo Afeet e Tennis Station. Samples:
+`Pedido Authentic Fit.xlsx`, `Pedido Magic Feet MF048.xlsx`,
+`Pedido Grupo Afeet Pulmao.xlsx`, `PEDIDO TENNIS STATION.xlsx`.
 
-- **`can_parse` casa o conjunto de 4 colunas** `REF.`, `DESCRIÇÃO PRODUTO`,
-  `TOTAL KITS`, `TOTAL R$` nas primeiras 30 linhas — **não** o nome da marca. Pedidos
-  Pulmão vêm com os campos de cliente em branco e sem nenhum texto
+- **`_match_header(row)` é fonte única** do gate e do `col_map` — `can_parse` e
+  `_find_header_row` chamam a mesma função. Antes eram duas cópias literais da mesma
+  condição: idênticas, mas livres para divergir a cada edição, e qualquer divergência
+  daria arquivo aprovado no gate e `ValueError` no `cells.index()` do mapeamento.
+- **O match é por texto NORMALIZADO** (`_norm`: upper + espaço colapsado) do conjunto
+  de 4 colunas `REF.`, `DESCRIÇÃO PRODUTO`, `TOTAL KITS`, `TOTAL R$` — **não** o nome
+  da marca, e **nunca** igualdade literal. A Tennis Station digitou `TOTAL Kits` e o
+  pedido inteiro escapou do parser por causa do caixa de duas letras. Pedidos Pulmão
+  vêm com os campos de cliente em branco e sem nenhum texto
   `AUTHENTICFEET`/`MAGICFEET` no conteúdo (a marca só aparece no nome do arquivo).
 - **A quantidade real é `TOTAL KITS`.** Sem este parser o arquivo cai no `GenericParser`,
-  que lê a coluna `REF COR` (cor) como quantidade — bug real de produção.
+  que lê a coluna `REF COR` (cor) como quantidade — bug real de produção, três vezes
+  (Magic Feet, Pulmão, Tennis Station).
+- **O preço é `CUSTO`, nunca `SUGESTÃO`.** `SUGESTÃO` é preço de venda ao consumidor
+  (29,99 contra 12,18 de custo); entrar no ERP como unitário infla o pedido ~2,5x e
+  passa em qualquer validador. Coberto por teste.
+- **Número do pedido: `Ordem de compra` → `FANTASIA` → `DATA DO PEDIDO`.** O campo
+  `Ordem de compra:` só existe no template da Tennis Station, e onde existir ganha.
+  `FANTASIA` é apelido digitado livre pelo comprador e só é fallback porque o template
+  antigo não tem campo de número — é de lá que vem o `AF76` vs `AF076` aberto na
+  reconciliação com o Fire. `_coerce_text` evita o `'4417.0'` do float do openpyxl.
+- **Números: use o valor CRU da célula** (`_raw`), não o stringificado (`_cell`, só
+  para campos textuais). `_to_number` é tipo-consciente: texto só-com-ponto usa a regra
+  do último grupo — 3 dígitos = milhar (`1.300` → 1300), senão decimal (`300.0` → 300.0).
+  A versão ingênua lia `1.300` como `1.3`: pedido mil vezes menor, silencioso, aprovado
+  pelo validador. Mesma regra do `DajuParser._parse_number`.
+  ⚠️ `_raw` **não é cosmético**: um float nativo de 3 casas (`16.815`) stringifica pra
+  `'16.815'`, que casa com a regra de milhar e vira `16815.0`. Trocar `_raw` por `_cell`
+  nos campos numéricos reintroduz o erro de 1000x — pinado em
+  `test_custo_float_nativo_com_tres_casas_nao_vira_milhar`.
+- **`_next_raw` desiste depois de `_MAX_CELULAS_VAZIAS` (4) células vazias seguidas.**
+  O template guarda as listas de validação dos dropdowns nas colunas remotas (39 CNPJs
+  de filiais a partir da coluna X no arquivo da TS) e nada ali termina em `:`, então o
+  guard de rótulo sozinho não segura. Nos 4 samples o valor nunca está a mais de
+  **+2** células do rótulo; o lixo fica a **+19**.
+
+**Lacunas conhecidas (Tennis Station, 1 sample só) — ver `docs/BACKLOG.md`:**
+o sample real veio com `Ordem de compra`, `RAZÃO SOCIAL` e `DATA DO PEDIDO` em branco →
+`order_number = None` → `mapper.py:64` grava `PEDIDO_CLIENTE = NULL` no Fire, sem chave
+de idempotência, e a reconciliação não casa (mesmo estado do Pulmão hoje). E o CNPJ
+capturado é o **primeiro de uma lista escondida de 39 CNPJs** de filiais do grupo TS nas
+colunas X+ (lista de validação do dropdown) — pode ser escolha do comprador ou default
+não tocado. Confirmar com um segundo pedido real antes de confiar nele.
 
 ## Daju: Ref. Forn. é o código, e a data de entrega pode vir sem o dia
 

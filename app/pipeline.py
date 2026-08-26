@@ -7,7 +7,6 @@ from app.ingestion.file_loader import LoadedFile
 from app.llm.fallback_parser import LLMFallbackParser
 from app.models.order import Order
 from app.normalizers.order_normalizer import OrderNormalizer
-from app.parsers.authentic_feet_parser import AuthenticFeetParser
 from app.parsers.beira_rio_parser import BeiranRioParser
 from app.parsers.daju_parser import DajuParser
 from app.parsers.desmembramento_xls_parser import DesmembramentoXlsParser
@@ -15,6 +14,7 @@ from app.parsers.generic_parser import GenericParser
 from app.parsers.kallan_xls_parser import KallanXlsParser
 from app.parsers.kolosh_parser import KoloshParser
 from app.parsers.mercado_eletronico_parser import MercadoEletronicoParser
+from app.parsers.nasmar_template_parser import NasmarTemplateParser
 from app.parsers.pedido_compras_revenda_parser import PedidoComprasRevendaParser
 from app.parsers.sams_club_parser import SamsClubParser
 from app.parsers.sbf_centauro_parser import SbfCentauroParser
@@ -32,7 +32,7 @@ _parsers = [
     KoloshParser(),
     SamsClubParser(),
     KallanXlsParser(),
-    AuthenticFeetParser(),
+    NasmarTemplateParser(),
     DajuParser(),
     DesmembramentoXlsParser(),
     GenericParser(),

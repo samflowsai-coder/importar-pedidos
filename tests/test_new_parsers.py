@@ -351,7 +351,7 @@ def test_authentic_feet_items():
         assert item.product_code is not None
 
 
-# ── AuthenticFeetParser (single-customer "Pedido") ──────────────────────────
+# ── NasmarTemplateParser (single-customer "Pedido") ──────────────────────────
 
 
 def test_authentic_fit_basic():
@@ -421,7 +421,7 @@ def test_afeet_blank_razao_social_not_next_label():
 
 def test_authentic_fit_does_not_match_desmembramento():
     """Não-regressão: o sample de desmembramento continua indo para
-    DesmembramentoXlsParser, mesmo com AuthenticFeetParser registrado antes."""
+    DesmembramentoXlsParser, mesmo com NasmarTemplateParser registrado antes."""
     order = _process("Desmembramento Authentic feet (1).xlsx")
     assert order is not None
     assert any(it.delivery_cnpj or it.delivery_name for it in order.items)
@@ -438,6 +438,260 @@ def test_authentic_fit_single_output_file():
     with tempfile.TemporaryDirectory() as tmp:
         paths = ERPExporter().export(order, tmp)
         assert len(paths) == 1
+
+
+# ── Tennis Station: o MESMO template, com um "K" minúsculo ───────────────────
+#
+# `TOTAL Kits` em vez de `TOTAL KITS`. O match do cabeçalho era igualdade
+# literal (`tok in cells` + `cells.index("TOTAL KITS")`), então o arquivo caía no
+# GenericParser — que lê a coluna REF COR (001, 002, 003) como quantidade. Um
+# pedido de 8.100 kits / R$ 120.882 entrava como 12 unidades / R$ 0, aprovado
+# pelo validador, sem nenhum aviso. Terceira ocorrência da mesma classe de bug
+# neste template (Magic Feet e Pulmão foram as outras duas).
+
+_TS = "PEDIDO TENNIS STATION.xlsx"
+
+
+def _rows(filename: str):
+    from app.extractors.xls_extractor import XLSExtractor
+
+    return XLSExtractor().extract(_load(filename))
+
+
+def test_tennis_station_casa_o_template_apesar_do_caixa():
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert NasmarTemplateParser().can_parse(_rows(_TS)) is True
+
+
+@pytest.mark.parametrize(
+    ("cabecalho", "casa"),
+    [
+        (["REF.", "DESCRIÇÃO PRODUTO", "TOTAL KITS", "TOTAL R$"], True),
+        (["REF.", "DESCRIÇÃO PRODUTO", "TOTAL Kits", "TOTAL R$"], True),
+        (["ref.", "descrição produto", "total kits", "total r$"], True),
+        # Excel guarda o que o usuário digitou: espaço duplo e sobra nas bordas.
+        (["REF. ", "DESCRIÇÃO  PRODUTO", " TOTAL KITS", "TOTAL R$"], True),
+        # Falta uma coluna do conjunto -> não é este template.
+        (["REF.", "DESCRIÇÃO PRODUTO", "TOTAL KITS"], False),
+    ],
+)
+def test_template_casa_cabecalho_normalizado(cabecalho, casa):
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert (NasmarTemplateParser()._match_header(cabecalho) is not None) is casa
+
+
+def test_tennis_station_quantidade_e_preco_do_primeiro_item():
+    order = _process(_TS)
+    assert order is not None
+    assert len(order.items) == 12
+    item = order.items[0]
+    assert item.product_code == "K3ABCCIL1FTS"
+    assert item.quantity == 800  # TOTAL Kits — não 001 (REF COR/cor)
+    assert item.unit_price == 12.18  # CUSTO — não 29.99 (SUGESTÃO/preço de venda)
+    assert item.total_price == 9744
+    assert "TENNIS STATION" in (item.description or "").upper()
+
+
+def test_tennis_station_qty_x_custo_bate_item_a_item():
+    """Pega troca de coluna sem depender de valor fixo: se a qty vier do REF COR
+    ou o preço da SUGESTÃO, a identidade quebra."""
+    order = _process(_TS)
+    for item in order.items:
+        assert item.quantity and item.unit_price and item.total_price
+        assert item.quantity * item.unit_price == pytest.approx(item.total_price, abs=0.01)
+
+
+def test_tennis_station_soma_bate_com_o_totalizador_da_planilha():
+    """Linha 23 do arquivo: 8.100 kits, R$ 120.882."""
+    order = _process(_TS)
+    assert sum(int(i.quantity) for i in order.items) == 8100
+    assert sum(i.total_price for i in order.items) == pytest.approx(120882.0, abs=0.01)
+
+
+def test_tennis_station_nunca_usa_a_sugestao_como_preco():
+    """SUGESTÃO é preço de venda ao consumidor. Entrar no ERP como custo infla o
+    pedido em ~2,5x — e passa em qualquer validador."""
+    order = _process(_TS)
+    assert all(i.unit_price not in (29.99, 39.99) for i in order.items)
+
+
+def test_ordem_de_compra_tem_precedencia_sobre_fantasia():
+    """O template da Tennis Station acrescentou um campo `Ordem de compra:` que o
+    do Authentic Feet não tem. Onde ele existir e estiver preenchido, ele é o
+    número do pedido — FANTASIA é apelido que o comprador digita livre, e foi de
+    onde saiu o `AF76 vs AF076` que ficou aberto na reconciliação com o Fire.
+
+    O sample real veio com o campo em branco; este cobre o caminho preenchido.
+    """
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    rows = [
+        [None, None, None, None, "Ordem de compra:", "TS-4417", None],
+        [None, "RAZÃO SOCIAL:", None, "LOJA TESTE LTDA", None, None, None],
+        [None, "CNPJ:", None, "52.671.393/0001-69", None, None, None],
+        [None, None, None, None, None, None, "FANTASIA:"],
+        [None, "REF.", "DESCRIÇÃO PRODUTO", "TOTAL Kits", "TOTAL R$", None, None],
+        [None, "K3ABCCIL1FTS", "KIT", 10, 121.80, None, None],
+    ]
+    order = NasmarTemplateParser().parse({"rows": rows, "text": "", "tables": []})
+    assert order is not None
+    assert order.header.order_number == "TS-4417"
+
+
+def test_sample_tennis_station_entra_sem_numero_de_pedido():
+    """Documenta a lacuna conhecida: com `Ordem de compra`, FANTASIA e DATA DO
+    PEDIDO todos em branco, o pedido entra sem número — e `mapper.py` grava
+    PEDIDO_CLIENTE = NULL no Fire, sem chave de idempotência. Não há edição de
+    número no preview (`CommitRequest` só carrega `preview_id`). Mesmo estado do
+    Pulmão hoje em produção."""
+    order = _process(_TS)
+    assert order.header.order_number is None
+
+
+def test_ordem_de_compra_nao_muda_o_numero_dos_pedidos_antigos():
+    """Não-regressão: o campo novo não existe no template AF/MF, então a cadeia
+    de fallback (FANTASIA) tem que continuar valendo lá."""
+    assert _process("Pedido Authentic Fit.xlsx").header.order_number == "AF198"
+    # 'mf048' no arquivo; o OrderNormalizer faz .upper() depois do parser.
+    assert _process("Pedido Magic Feet MF048.xlsx").header.order_number == "MF048"
+    assert _process("Pedido Grupo Afeet Pulmao.xlsx").header.order_number is None
+
+
+# ── O template também tinha a bomba da Daju ──────────────────────────────────
+#
+# `_to_number` fazia `float("1.300")` -> 1.3: quantidade MIL VEZES menor entrando
+# no Fire, silenciosa, aprovada pelo validador (qty > 0). Não dispara nos samples
+# de hoje porque estes xlsx são nativos e o openpyxl devolve int — mas é o mesmo
+# arquivo que passa por conversor quando o cliente exporta de outro sistema, e a
+# Daju provou que a mesma coluna vem número hoje e texto amanhã. A regra é a do
+# `DajuParser._parse_number` (copiada, não reinventada: os helpers são duplicados
+# entre parsers por dívida conhecida — ver docs/BACKLOG.md).
+
+
+@pytest.mark.parametrize(
+    ("valor", "esperado"),
+    [
+        # Nativos do openpyxl: o tipo já resolveu.
+        (800, 800.0),
+        (12.18, 12.18),
+        # Texto brasileiro com decimal.
+        ("12,18", 12.18),
+        ("1.234,56", 1234.56),
+        ("R$ 12,18", 12.18),
+        # O caso que quebrava: milhar sem vírgula virava 1.3.
+        ("1.300", 1300.0),
+        ("1.234.567", 1234567.0),
+        # E o oposto, que um fix ingênuo (str.replace(".", "")) estragaria:
+        # float stringificado tem 1 dígito depois do ponto, é decimal.
+        ("300.0", 300.0),
+        ("800", 800.0),
+        # Vazio / ausente / traço.
+        ("", None),
+        (None, None),
+        ("—", None),
+        # bool é int em Python: True não pode virar quantidade 1.
+        (True, None),
+    ],
+)
+def test_template_to_number_nao_adivinha(valor, esperado):
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert NasmarTemplateParser()._to_number(valor) == esperado
+
+
+def test_template_quantidade_em_milhar_como_texto_nao_encolhe_o_pedido():
+    """Regressão de ponta: uma linha com qty '1.300' como TEXTO tem que virar
+    1300 unidades, não 1,3."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    rows = [
+        [None, "REF.", "DESCRIÇÃO PRODUTO", "CUSTO", "TOTAL Kits", "TOTAL R$"],
+        [None, "K3ABCCIL1FTS", "KIT CANO CURTO", "12,18", "1.300", "15.834,00"],
+    ]
+    order = NasmarTemplateParser().parse({"rows": rows, "text": "", "tables": []})
+    item = order.items[0]
+    assert item.quantity == 1300.0
+    assert item.unit_price == 12.18
+    assert item.quantity * item.unit_price == pytest.approx(item.total_price, abs=0.01)
+
+
+# ── Achados da revisão adversarial (Fable) ───────────────────────────────────
+
+
+def test_ordem_de_compra_nao_alcanca_lixo_das_colunas_remotas():
+    """O template guarda a lista de validação do dropdown de filiais nas colunas
+    X+ — no arquivo real da Tennis Station são 39 CNPJs na linha 6. Nada disso
+    termina em ':', então o guard de rótulo do `_next_raw` não segura, e a
+    varredura à direita chegaria lá.
+
+    Se um CNPJ de filial virasse `order_number`, ele iria pro Fire como
+    PEDIDO_CLIENTE — a chave de idempotência. Distância real entre rótulo e valor
+    nos 4 samples do template: no máximo +2. O lixo fica a +19.
+    """
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    cells = [None] * 4 + ["Ordem de compra:"] + [None] * 18 + ["52.671.393/0001-69"]
+    assert NasmarTemplateParser()._next_raw(cells, 4) is None
+
+
+def test_next_raw_ainda_acha_o_valor_perto_do_rotulo():
+    """O limite não pode comer o caso real: valor a +1 e a +2 (o mais longe que
+    aparece nos samples) continuam sendo capturados."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    p = NasmarTemplateParser()
+    assert p._next_raw(["CNPJ:", "52.671.393/0001-69"], 0) == "52.671.393/0001-69"
+    assert p._next_raw(["FANTASIA:", None, "AF198"], 0) == "AF198"
+    assert p._next_raw(["CNPJ:", "", None, "25.014.621/0001-55"], 0) == "25.014.621/0001-55"
+
+
+def test_ordem_de_compra_date_like_nao_vira_timestamp():
+    """`Ordem de compra` é campo de texto livre: o comprador digita `12/08` e o
+    Excel coage pra data, então o openpyxl devolve datetime. `str()` cru daria
+    '2026-08-12 00:00:00' — que o `mapper.py:64` trunca em 20 chars e manda pro
+    Fire como PEDIDO_CLIENTE. Espelha o `_coerce_date`."""
+    import datetime as dt
+
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    p = NasmarTemplateParser()
+    assert p._coerce_text(dt.datetime(2026, 8, 12)) == "12/08/2026"
+    assert p._coerce_text(dt.date(2026, 8, 12)) == "12/08/2026"
+    # não-regressão: o resto da coerção continua igual
+    assert p._coerce_text(4417.0) == "4417"
+    assert p._coerce_text("TS-4417") == "TS-4417"
+    assert p._coerce_text(None) is None
+
+
+def test_custo_float_nativo_com_tres_casas_nao_vira_milhar():
+    """O único input que distingue `_raw` de `_cell`: float NATIVO cujo `str()`
+    casa com a regra de milhar. `str(16.815)` == '16.815' -> _MILHAR_BR casa ->
+    16815.0, mil vezes maior. Passar o valor cru resolve.
+
+    Sem este teste, trocar `_raw` de volta por `_cell` nos campos numéricos passa
+    nos 1068 testes e reintroduz o erro de 1000x — os outros casos usam floats de
+    2 casas, cujo `str()` é inofensivo.
+    """
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    rows = [
+        [None, "REF.", "DESCRIÇÃO PRODUTO", "CUSTO", "TOTAL Kits", "TOTAL R$"],
+        [None, "K3ABCCIL1FTS", "KIT CANO CURTO", 16.815, 200, 3363.0],
+    ]
+    order = NasmarTemplateParser().parse({"rows": rows, "text": "", "tables": []})
+    item = order.items[0]
+    assert item.unit_price == 16.815
+    assert item.quantity * item.unit_price == pytest.approx(item.total_price, abs=0.01)
+
+
+def test_template_nao_rouba_o_desmembramento_magic_feet():
+    """Não-regressão do widening: o par do `test_authentic_fit_does_not_match_
+    desmembramento`, que só pinava o arquivo do Authentic Feet."""
+    order = _process("Desmembramento Magic Feet.xlsx")
+    assert order is not None
+    assert any(it.delivery_cnpj or it.delivery_name for it in order.items)
 
 
 def test_nba_item_count():
