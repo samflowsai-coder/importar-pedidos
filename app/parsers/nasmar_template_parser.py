@@ -17,8 +17,12 @@ _CNPJ_RE = re.compile(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}")
 _HEADER_TOKENS = ("REF.", "DESCRIÇÃO PRODUTO", "TOTAL KITS", "TOTAL R$")
 
 
-class AuthenticFeetParser(BaseParser):
-    """Parser para pedidos single-customer da rede Authentic Feet / Magic Feet (XLSX)."""
+class NasmarTemplateParser(BaseParser):
+    """Parser do template de pedido de kits do fornecedor (Nasmar/MM), em XLSX.
+
+    Um template, N clientes: Authentic Feet, Magic Feet e os pedidos "Pulmão" do
+    Grupo Afeet. A assinatura é o CABEÇALHO da tabela, nunca a marca.
+    """
 
     def can_parse(self, extracted: dict) -> bool:
         # O cabeçalho completo do template de kits é a assinatura confiável (não o

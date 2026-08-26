@@ -351,7 +351,7 @@ def test_authentic_feet_items():
         assert item.product_code is not None
 
 
-# ── AuthenticFeetParser (single-customer "Pedido") ──────────────────────────
+# ── NasmarTemplateParser (single-customer "Pedido") ──────────────────────────
 
 
 def test_authentic_fit_basic():
@@ -421,7 +421,7 @@ def test_afeet_blank_razao_social_not_next_label():
 
 def test_authentic_fit_does_not_match_desmembramento():
     """Não-regressão: o sample de desmembramento continua indo para
-    DesmembramentoXlsParser, mesmo com AuthenticFeetParser registrado antes."""
+    DesmembramentoXlsParser, mesmo com NasmarTemplateParser registrado antes."""
     order = _process("Desmembramento Authentic feet (1).xlsx")
     assert order is not None
     assert any(it.delivery_cnpj or it.delivery_name for it in order.items)

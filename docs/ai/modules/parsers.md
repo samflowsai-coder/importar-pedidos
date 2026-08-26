@@ -59,7 +59,7 @@ Ambos layouts compartilham `_parse_header()` (regex `Número (?:do )?Pedido:` co
 
 ## Authentic Feet / Magic Feet: a assinatura é o cabeçalho, não a marca
 
-`AuthenticFeetParser` cobre o template single-customer usado por Authentic Feet, Magic
+`NasmarTemplateParser` cobre o template single-customer usado por Authentic Feet, Magic
 Feet e pedidos "Pulmão" do Grupo Afeet — mesmo fornecedor, mesmo template.
 
 - **`can_parse` casa o conjunto de 4 colunas** `REF.`, `DESCRIÇÃO PRODUTO`,
