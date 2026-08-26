@@ -23,6 +23,12 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
+_(nada ainda)_
+
+---
+
+## 20260826-1925
+
 1) Pedidos da **Tennis Station** passam a ser lidos corretamente. O arquivo dela é o mesmo formulário do Authentic Feet e do Magic Feet, só com uma diferença de maiúsculas no cabeçalho — e por causa disso o portal estava lendo 12 unidades e R$ 0 no lugar de 8.100 kits e R$ 120.882. No primeiro pedido dela, confira quantidade, valor e o nome do cliente antes de confirmar.
 
 2) Atenção no formulário da Tennis Station: se o comprador deixar o campo **"Ordem de compra" em branco**, o pedido entra sem número, e sem número o portal não consegue casar o pedido com o Fire depois. Peça pro comprador preencher.
