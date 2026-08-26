@@ -4,7 +4,7 @@
 > sai daqui e vive no histórico do git. Cada item diz o que é, onde dói e o que
 > destrava.
 >
-> Último passe de verificação: **2026-08-24** (referências de código conferidas
+> Último passe de verificação: **2026-08-26** (referências de código conferidas
 > contra a `main`; o que depende de sistema externo está marcado como não verificado).
 
 ---
@@ -87,9 +87,20 @@ Authentic Feet, que lia a coluna de cor como quantidade — ver `modules/parsers
 O conserto, nos dois, foi escrever mais um parser dedicado. Enquanto isso não muda,
 **cada cliente novo custa um parser**, e o custo aparece só quando alguém confere.
 
+**Agravante confirmado em 2026-08-26 (Tennis Station):** não é preciso nem ser formato
+novo. O parser do template EXISTIA e cobria o arquivo; a compradora digitou `TOTAL Kits`
+em vez de `TOTAL KITS`, o `can_parse` era igualdade literal, e o genérico comeu o pedido
+— 8.100 kits / R$ 120.882 viraram 12 unidades / R$ 0, com o rótulo `'OBSERVAÇÃO'` de
+número de pedido. Uma letra de caixa diferente basta. O match do template virou
+normalizado (ver `modules/parsers.md`), mas o buraco estrutural continua: **qualquer**
+parser que erre o gate por um detalhe cai num genérico que devolve dado errado em vez
+de devolver `None`.
+
 `OrderValidator.validate` já detecta parte disso (número do pedido ausente,
 `quantity <= 0`), mas devolve um `bool` que `pipeline.process` **descarta** — só sobra
-warning no log, e o pedido segue para o preview como se estivesse bom.
+warning no log, e o pedido segue para o preview como se estivesse bom. No caso da TS os
+dois sinais estavam lá — número do pedido ausente **e** `'OBSERVAÇÃO'` como número —
+e ninguém foi avisado.
 
 Se o LLM chegar a ser chamado, ainda há duas limitações no caminho
 (`app/llm/fallback_parser.py`): manda só `extracted["text"]` cortado em
@@ -102,6 +113,23 @@ justamente o que identifica o formato — se perde antes de chegar ao modelo.
 → tenta LLM em vez de aceitar), mandar as linhas/tabela em vez do blob de texto, e
 sinalizar truncamento. Custo continua zero nos formatos que já têm parser — o LLM só
 entra onde hoje o dado sai errado de graça.
+
+### 2.9 Pedido sem número entra no Fire com `PEDIDO_CLIENTE = NULL`
+
+`app/erp/mapper.py:64` faz `pedido_cliente = (order.header.order_number or "")[:20] or None`.
+Sem número não há **chave de idempotência** (o Fire deduplica por
+`PEDIDO_CLIENTE` + `CLIENTE`) e a reconciliação não tem por onde casar. Não existe
+edição de número no preview: `CommitRequest` só carrega `preview_id`
+(`app/web/server.py:1564`), não há rota nem campo.
+
+Acontece hoje, em produção, nos pedidos "Pulmão" do Grupo Afeet — e agora também na
+Tennis Station quando o comprador não preenche `Ordem de compra`. No template antigo
+(AF/MF) o número sai da `FANTASIA`, apelido digitado livre: é daí que vem o `AF76` vs
+`AF076` que ficou aberto na reconciliação.
+
+**O que destrava:** campo editável de número no preview (`CommitRequest` +
+rota + UI), ou bloquear o commit de pedido sem número. Decisão do Samuel — hoje o
+comportamento é aceitar em silêncio, com warning só no log.
 
 ---
 
@@ -178,3 +206,15 @@ produção.
 O parser subiu em `20260824-1408` e passa em 21 testes contra o sample. **Ninguém subiu
 uma OC de verdade ainda.** Confirmar com a operação antes de considerar fechado —
 especialmente quantidade e preço, que é onde este repo já errou (Magic Feet, Sam's).
+
+### 5.3 O CNPJ da Tennis Station é escolha do comprador ou default?
+
+`samples/PEDIDO TENNIS STATION.xlsx` traz `52.671.393/0001-69` no campo `CNPJ:` — e ele
+é o **primeiro de uma lista escondida de 39 CNPJs** (11 raízes) nas colunas X+ da linha 6,
+que é a fonte de validação do dropdown de filiais do grupo. Com um sample só não dá
+para distinguir "o comprador escolheu" de "ficou o default". Se for default, o pedido
+vai para a filial errada no Fire.
+
+Todo o resto do cabeçalho veio em branco (razão social, ordem de compra, data), o que
+reforça a hipótese de formulário pouco preenchido.
+**O que destrava:** um segundo pedido real da TS, de preferência de outra filial.

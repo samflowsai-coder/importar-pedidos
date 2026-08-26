@@ -2,7 +2,7 @@
 
 > **Contrato de execução.** Detalhe técnico não mora aqui — mora em `docs/ai/`.
 > Se um fato aparecer nos dois lugares, `docs/ai/` ganha.
-> Números deste arquivo verificados contra o código em **2026-08-21**.
+> Números deste arquivo verificados contra o código em **2026-08-26**.
 
 ---
 
@@ -75,7 +75,7 @@ task → domínio → arquivos a carregar → testes a rodar. Não carregue o pr
 | Agendamento | **APScheduler** — `app/worker/` |
 | Log | **loguru** com rotação |
 | Lint/format | **ruff** |
-| Testes | **pytest** — **882 testes** em 84 arquivos |
+| Testes | **pytest** — **1068 testes** em 91 arquivos |
 
 ---
 
@@ -117,7 +117,7 @@ pip install -e ".[dev]"                  # instalar
 ruff check app/ tests/                   # lint
 ruff format app/ tests/                  # format
 
-.venv/bin/pytest tests/ -v               # suíte completa (882 testes)
+.venv/bin/pytest tests/ -v               # suíte completa (1068 testes)
 .venv/bin/pytest tests/<arquivo>.py -v   # direcionado (use este durante a task)
 
 python ui.py                             # web → http://127.0.0.1:3636
