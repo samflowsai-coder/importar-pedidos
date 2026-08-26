@@ -203,12 +203,7 @@ de-para segue embarcado.
 **Enquanto os dois campos estiverem vazios, a feature é inerte** — não muda nada em
 produção.
 
-### 5.2 A Daju funciona com OC real?
-O parser subiu em `20260824-1408` e passa em 21 testes contra o sample. **Ninguém subiu
-uma OC de verdade ainda.** Confirmar com a operação antes de considerar fechado —
-especialmente quantidade e preço, que é onde este repo já errou (Magic Feet, Sam's).
-
-### 5.3 O CNPJ da Tennis Station é escolha do comprador ou default?
+### 5.2 O CNPJ da Tennis Station é escolha do comprador ou default?
 
 `samples/PEDIDO TENNIS STATION.xlsx` traz `52.671.393/0001-69` no campo `CNPJ:` — e ele
 é o **primeiro de uma lista escondida de 39 CNPJs** (11 raízes) nas colunas X+ da linha 6,
