@@ -23,7 +23,13 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
-_(nada ainda)_
+1) Pedidos da **Kolosh** passam a entrar com o código de produto certo. O portal estava usando o código interno da Dakota (`04145.007/9`), que não existe no cadastro da Nasmar, então **todo item do Kolosh caía sem vínculo** e precisava ser ligado na mão. Agora ele usa a referência da Nasmar (`KL403G-0003`), que já está no Fire. O código da Dakota continua no pedido, na coluna de observação, porque ele é obrigatório na nota fiscal.
+
+2) A **data do pedido** do Kolosh estava errada. O portal gravava a data de entrega no lugar da data de emissão, então a OC 96277C entrava no Fire com 01/12/2026 em vez de 01/09/2026. A data de entrega segue normal, no item.
+
+3) A **descrição** dos itens do Kolosh vinha cortada no meio (`(1 PTA/1`), perdendo a cor e a numeração. Agora vem inteira.
+
+4) Pedidos do **Sam's Club** passam a mostrar o nome do centro de distribuição. Quando o Sam's manda para um CD novo, a tela mostrava só o CNPJ solto; agora aparece o nome (ex.: `CD SAM'S DF`) e o código do local vai junto na planilha.
 
 ---
 

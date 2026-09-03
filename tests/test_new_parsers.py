@@ -170,6 +170,91 @@ def test_kolosh_delivery_date():
     assert any("17/04" in d for d in dates)
 
 
+# ── KoloshParser: OC 96277C (pedido real 01/09/2026) ─────────────────────────
+
+KOLOSH_96277C = "PEDIDO KOLOSH 96277C.pdf"
+
+
+def test_kolosh_issue_date_e_a_emissao_nao_a_entrega():
+    """`Emissao : 01/09/26` vira DATA_PEDIDO no Fire (mapper.py:64).
+
+    Antes o parser gravava a `Entrega` (01/12/26) aqui: o pedido entrava no
+    ERP com data de emissão três meses no futuro.
+    """
+    order = _process(KOLOSH_96277C)
+    assert order.header.issue_date == "01/09/2026"
+
+
+def test_kolosh_delivery_date_segue_sendo_a_entrega():
+    order = _process(KOLOSH_96277C)
+    assert {i.delivery_date for i in order.items} == {"01/12/2026"}
+
+
+def test_kolosh_product_code_e_a_referencia_nasmar():
+    """O Fire casa por PRODUTOS.CODPROD_ALTERN, que guarda a ref da Nasmar.
+
+    `04145.007/9` é o COD.CLI. da Dakota e não existe no catálogo da Nasmar.
+    A referência real (KL403G-0003) só aparece dentro da DESCRICAO.
+    """
+    order = _process(KOLOSH_96277C)
+    assert [i.product_code for i in order.items] == [
+        "KL403G-0003",
+        "KL403G-0004",
+        "KL401P-0002",
+        "KL401G-0002",
+    ]
+
+
+def test_kolosh_cod_cliente_da_dakota_vai_para_obs():
+    """A OC exige o código do produto da Dakota na nota fiscal, então ele não
+    pode ser descartado ao trocar o product_code."""
+    order = _process(KOLOSH_96277C)
+    assert [i.obs for i in order.items] == [
+        "COD.CLI. 04145.007/9",
+        "COD.CLI. 04145.008/8",
+        "COD.CLI. 18613.002/1",
+        "COD.CLI. 18613.005/8",
+    ]
+
+
+def test_kolosh_descricao_completa_apesar_da_quebra_de_linha():
+    """O pdfplumber joga a cauda da descrição para depois dos números.
+
+    A versão antiga parava em `(1 PTA/1` e perdia a cor e a numeração.
+    """
+    order = _process(KOLOSH_96277C)
+    assert order.items[0].description == (
+        "KIT 3 PRS MEIA CANO LONGO KOLOSH KL403G-0003 (1 PTA/1 BCA/1 CZA) NR 39/44"
+    )
+
+
+def test_kolosh_ultimo_item_nao_engole_o_rodape_do_pdf():
+    """O bloco do último item vai até o fim do texto extraído.
+
+    Sem cortar na linha "N itens TOTAL:", a cauda da descrição arrastaria
+    TRANSPORTE / INFORMACOES ADICIONAIS para dentro da DESCRICAO do Fire.
+    """
+    order = _process(KOLOSH_96277C)
+    assert order.items[-1].description == (
+        "KIT 3 PRS MEIA SAPATILHA KOLOSH KL401G-0002 (3 PTA DET CZA) NR 39/44"
+    )
+
+
+def test_kolosh_96277c_quantidades_e_total():
+    order = _process(KOLOSH_96277C)
+    assert order.header.order_number == "96277C"
+    assert sum(i.quantity for i in order.items) == 8000.0
+    assert round(sum(i.total_price for i in order.items), 2) == 81240.00
+
+
+def test_kolosh_sample_antigo_mantem_a_referencia_nasmar():
+    """Regressão: o formato não mudou, o sample de fevereiro tem que seguir igual."""
+    order = _process("PEDIDO KOLOSH.pdf")
+    assert order.header.issue_date == "09/02/2026"
+    assert order.items[0].product_code == "KL402P-0003"
+    assert order.items[0].obs == "COD.CLI. 04032.003/6"
+
+
 # ── SamsClubParser ───────────────────────────────────────────────────────────
 
 
@@ -205,6 +290,43 @@ def test_sams_club_delivery_date():
     order = _process("PEDIDO SAMS CLUB.pdf")
     dates = {i.delivery_date for i in order.items if i.delivery_date}
     assert any("30/01/2026" in d for d in dates)
+
+
+# ── SamsClubParser: CD novo no layout consolidado ────────────────────────────
+
+SAMS_CD_DF = "PEDIDO SAMS CLUB CD DF.pdf"
+
+
+def test_sams_consolidado_captura_o_nome_do_cd():
+    """`CNPJ do Local de Entrega: 00.063.960 / 0587-94 CD SAM'S DF`.
+
+    Sem o nome, um CD novo chega no preview só como um CNPJ solto e o
+    operador não tem como saber para onde o pedido vai.
+    """
+    order = _process(SAMS_CD_DF)
+    assert {i.delivery_name for i in order.items} == {"CD SAM'S DF"}
+
+
+def test_sams_consolidado_captura_o_ean_do_local_de_entrega():
+    """O EAN do local de entrega é a chave inequívoca do CD e vai para a
+    coluna `ean_local_entrega` do XLSX."""
+    order = _process(SAMS_CD_DF)
+    assert {i.delivery_ean for i in order.items} == {"7891737676667"}
+
+
+def test_sams_cd_df_nao_muda_numero_cnpj_nem_valores():
+    order = _process(SAMS_CD_DF)
+    assert order.header.order_number == "06834549-0000"
+    assert order.header.customer_cnpj == "00.063.960/0044-30"
+    assert {i.delivery_cnpj for i in order.items} == {"00.063.960/0587-94"}
+    assert round(sum(i.total_price for i in order.items), 2) == 5983.17
+
+
+def test_sams_consolidado_antigo_tambem_ganha_nome_e_ean_do_cd():
+    """Regressão no sample de janeiro: mesmo layout, mesmos campos novos."""
+    order = _process("PEDIDO SAMS CLUB.pdf")
+    assert {i.delivery_ean for i in order.items} == {"7891737000745"}
+    assert {i.delivery_name for i in order.items} == {"CENTRO DIST MURIBECA SAMS"}
 
 
 # ── SamsClubParser GRADE (Cross Docking) ─────────────────────────────────────

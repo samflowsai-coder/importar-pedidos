@@ -22,6 +22,20 @@ _CD_DATA_RE = re.compile(r"^(\d{13})\s+(\d{13})\s+([\d,.]+)\s+(\d{2}\s*/\s*\d{2}
 _CD_CNPJ_HEAD_RE = re.compile(r"^(\d{2}\.\d{3}\.\d{3})\s*/")
 _CD_CNPJ_TAIL_RE = re.compile(r"^(\d{4}-\d{2})\b")
 
+# Consolidado: CNPJ e NOME do CD dividem a mesma linha.
+#   CNPJ do Local de Entrega: 00.063.960 / 0587-94 CD SAM'S DF
+_DELIVERY_LINE_RE = re.compile(
+    r"CNPJ do Local de Entrega:\s*(\d{2}\.\d{3}\.\d{3}\s*/\s*\d{4}-\d{2})[ \t]*([^\n]*)"
+)
+# Shape antiga, mantida como rede: só o CNPJ, sem exigir a máscara completa.
+_DELIVERY_CNPJ_FALLBACK_RE = re.compile(r"CNPJ do Local de Entrega:\s*([\d./ -]+)")
+# O EAN do CD fica sozinho numa linha, entre o rótulo quebrado em duas partes:
+#   Código EAN do Local de
+#   7891737676667
+#   Entrega:
+# O bloco de Cobrança tem o mesmo rótulo, por isso o âncora "Entrega:" no fim.
+_DELIVERY_EAN_RE = re.compile(r"C[oó]digo EAN do Local de\s*\n\s*(\d{13})\s*\n\s*Entrega:")
+
 
 class SamsClubParser(BaseParser):
     """Parser para PDFs de pedido Sam's Club / Walmart.
@@ -219,10 +233,9 @@ class SamsClubParser(BaseParser):
         section = self._items_section(text)
 
         delivery_date = self._extract_date(text, r"Data Inicial:\s*(\d{2}\s*/\s*\d{2}\s*/\s*\d{4})")
-        delivery_cnpj_m = re.search(r"CNPJ do Local de Entrega:\s*([\d./ -]+)", text)
-        delivery_cnpj = (
-            re.sub(r"\s+", "", delivery_cnpj_m.group(1)).strip() if delivery_cnpj_m else None
-        )
+        delivery_cnpj, delivery_name = self._parse_delivery_location(text)
+        ean_m = _DELIVERY_EAN_RE.search(text)
+        delivery_ean = ean_m.group(1) if ean_m else None
 
         items = []
         for m in _ITEM_RE.finditer(section):
@@ -253,9 +266,26 @@ class SamsClubParser(BaseParser):
                     total_price=total_price,
                     delivery_date=delivery_date,
                     delivery_cnpj=delivery_cnpj,
+                    delivery_name=delivery_name,
+                    delivery_ean=delivery_ean,
                 )
             )
         return items
+
+    def _parse_delivery_location(self, text: str) -> tuple[str | None, str | None]:
+        """CNPJ e nome do CD de entrega no layout consolidado.
+
+        O nome importa quando o Sam's abre um CD novo: sem ele o pedido chega
+        no preview como um CNPJ solto e o operador não sabe para onde vai.
+        """
+        m = _DELIVERY_LINE_RE.search(text)
+        if m:
+            return re.sub(r"\s+", "", m.group(1)), (m.group(2).strip() or None)
+
+        fallback = _DELIVERY_CNPJ_FALLBACK_RE.search(text)
+        if fallback:
+            return re.sub(r"\s+", "", fallback.group(1)).strip(), None
+        return None, None
 
     # ------------------------------------------------------------------
     # Helpers

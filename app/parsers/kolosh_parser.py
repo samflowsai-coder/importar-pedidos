@@ -9,6 +9,22 @@ _SIGNATURE = "DAKOTA NORDESTE"
 
 _ITEM_CODE_RE = re.compile(r"^(\d{5}\.\d{3}/\d)", re.MULTILINE)
 
+# Linha de rodapé da tabela ("4 itens TOTAL: 8,000.000 TOTAL R$.: 81,240.00").
+# Delimita o fim dos itens: sem isso a cauda da descrição do ÚLTIMO item
+# engoliria TRANSPORTE / INFORMACOES ADICIONAIS.
+_ITEMS_END_RE = re.compile(r"^\s*\d+\s+itens\b", re.MULTILINE)
+
+# Primeira linha de um item: COD.CLI. + início da descrição + números.
+# A cauda da descrição vem nas linhas seguintes (quebra visual do pdfplumber).
+_ITEM_HEAD_RE = re.compile(
+    r"^(\d{5}\.\d{3}/\d)\s+(.+?)\s+([\d,]+\.?\d*)\s+UN\s+([\d.]+)\s+[\d.]+\s+([\d,.]+)\s*$"
+)
+
+# Referência da Nasmar dentro da descrição ("... KOLOSH KL403G-0003 (1 PTA/1...").
+# É ela que o Fire guarda em PRODUTOS.CODPROD_ALTERN — o COD.CLI. da coluna
+# esquerda é o código interno da Dakota e não existe no catálogo da Nasmar.
+_NASMAR_REF_RE = re.compile(r"\bKOLOSH\s+([A-Z0-9]+(?:-[A-Z0-9]+)+)\b")
+
 
 class KoloshParser(BaseParser):
     """Parser para PDFs de pedido Kolosh / Dakota Nordeste."""
@@ -37,20 +53,29 @@ class KoloshParser(BaseParser):
         order_number = self._find(text, r"Numero\s*:\s*(\w+)")
         customer_cnpj = self._find(text, r"CNPJ:\s*([\d./-]+)")
         customer_name = self._find(text, r"Razao Social:\s*(.+?)\s+Numero")
-        delivery_date = self._extract_delivery_date(text)
         return OrderHeader(
             order_number=order_number,
-            issue_date=delivery_date,
+            issue_date=self._extract_issue_date(text),
             customer_name=customer_name,
             customer_cnpj=customer_cnpj,
         )
 
+    def _extract_issue_date(self, text: str) -> str | None:
+        """`Emissao`, não `Entrega`.
+
+        Vira `CAB_VENDAS.DATA_PEDIDO` no Fire (`app/erp/mapper.py`). Antes daqui
+        saía a data de entrega e o pedido entrava no ERP com emissão meses à frente.
+        """
+        return self._extract_date(text, "Emissao")
+
     def _extract_delivery_date(self, text: str) -> str | None:
-        m = re.search(r"Entrega\s*:\s*(\d{2}/\d{2}/(\d{2,4}))", text)
+        return self._extract_date(text, "Entrega")
+
+    def _extract_date(self, text: str, label: str) -> str | None:
+        m = re.search(rf"{label}\s*:\s*(\d{{2}}/\d{{2}}/(\d{{2,4}}))", text)
         if not m:
             return None
-        date_str = m.group(1)
-        year_part = m.group(2)
+        date_str, year_part = m.group(1), m.group(2)
         if len(year_part) == 2:
             date_str = date_str[:-2] + "20" + year_part
         return date_str
@@ -61,32 +86,36 @@ class KoloshParser(BaseParser):
 
     def _parse_items(self, text: str) -> list[OrderItem]:
         delivery_date = self._extract_delivery_date(text)
+
+        end = _ITEMS_END_RE.search(text)
+        section = text[: end.start()] if end else text
+
         items = []
-        matches = list(_ITEM_CODE_RE.finditer(text))
+        matches = list(_ITEM_CODE_RE.finditer(section))
         for i, match in enumerate(matches):
             start = match.start()
-            end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-            block = text[start:end]
-            item = self._parse_block(block, delivery_date)
+            stop = matches[i + 1].start() if i + 1 < len(matches) else len(section)
+            item = self._parse_block(section[start:stop], delivery_date)
             if item:
                 items.append(item)
         return items
 
     def _parse_block(self, block: str, delivery_date: str | None = None) -> OrderItem | None:
-        # Join lines to handle multi-line descriptions
-        joined = " ".join(block.splitlines())
-        # Format: CODE DESC QTY UN IPI% UNIT_PRICE TOTAL
-        # e.g.: 04032.003/6 KIT 3 PRS MEIA ... 500.000 UN 9.97 0.00 4,985.00
-        m = re.search(
-            r"(\d{5}\.\d{3}/\d)\s+(.+?)\s+([\d,]+\.?\d*)\s+UN\s+([\d.]+)\s+[\d.]+\s+([\d,.]+)",
-            joined,
-            re.DOTALL,
-        )
+        """Um item ocupa 1 linha de dados + N linhas de cauda da descrição.
+
+        04145.007/9 KIT 3 PRS ... KL403G-0003 (1 PTA/1 2,000.000 UN 11.23 0.00 22,460.00
+        BCA/1 CZA) NR 39/44
+        """
+        lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+        if not lines:
+            return None
+
+        m = _ITEM_HEAD_RE.match(lines[0])
         if not m:
             return None
 
-        product_code = m.group(1)
-        description = m.group(2).strip()
+        cod_cliente = m.group(1)
+        description = " ".join([m.group(2).strip(), *lines[1:]]).strip()
         qty = self._parse_us_number(m.group(3))
         unit_price = self._parse_us_number(m.group(4))
         total_price = self._parse_us_number(m.group(5))
@@ -94,12 +123,17 @@ class KoloshParser(BaseParser):
         if qty is None:
             return None
 
+        ref = _NASMAR_REF_RE.search(description)
+
         return OrderItem(
-            product_code=product_code,
+            product_code=ref.group(1) if ref else cod_cliente,
             description=description,
             quantity=qty,
             unit_price=unit_price,
             total_price=total_price,
+            # A OC exige o código da Dakota na nota fiscal, então ele não pode
+            # sumir quando o product_code passa a ser a referência da Nasmar.
+            obs=f"COD.CLI. {cod_cliente}",
             delivery_date=delivery_date,
         )
 
