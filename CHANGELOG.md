@@ -31,6 +31,8 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 4) Pedidos do **Sam's Club** passam a mostrar o nome do centro de distribuição. Quando o Sam's manda para um CD novo, a tela mostrava só o CNPJ solto; agora aparece o nome (ex.: `CD SAM'S DF`) e o código do local vai junto na planilha.
 
+5) O portal passa a **guardar uma cópia exata de todo arquivo que recebe**, antes de ler qualquer coisa dele — venha pela pasta de pedidos ou por upload na tela, tenha sido importado ou não. A cópia fica em `data\recebidos\<empresa>\<ano>\<mês>\`, com hora e nome original, e nunca é apagada nem sobrescrita. No pedido, o botão **Baixar arquivo original** entrega essa cópia. Motivo: no caso do AF127 (H2S4, 27/07) chegaram dois arquivos com o mesmo nome no mesmo dia, o segundo já com os produtos errados, e não havia como provar de onde veio. Pedidos anteriores a esta versão não têm a cópia.
+
 ---
 
 ## 20260826-1925

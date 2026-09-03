@@ -127,7 +127,7 @@
       background: var(--surface); color: var(--text-secondary);
       font-size: 13px; font-weight: 500; font-family: inherit;
       cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
-      white-space: nowrap;
+      white-space: nowrap; text-decoration: none;
       transition: background 120ms, color 120ms, border-color 120ms;
     }
     .btn:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-hover); }
@@ -2299,6 +2299,15 @@ function _blockReasonText(data) {
   return '';
 }
 
+function originalFileBtnHtml(data) {
+  // Cópia exata do arquivo recebido, guardada antes de qualquer leitura do portal
+  // (caso AF127: o segundo arquivo do dia já chegou errado e não existia cópia nossa).
+  const ao = data.arquivo_original;
+  if (!ao || !ao.disponivel) return '';
+  return `<a class="btn" href="/api/imported/${esc(data.preview_id)}/arquivo-original" download="${esc(ao.nome || '')}"
+            title="Cópia exata do arquivo recebido, antes de qualquer leitura do portal">Baixar arquivo original</a>`;
+}
+
 function renderPreviewFooter(data, itemsCount) {
   const items = data.items || [];
   if (typeof itemsCount !== 'number') itemsCount = items.length;
@@ -2325,6 +2334,7 @@ function renderPreviewFooter(data, itemsCount) {
     const disabledAttr = blocked ? 'disabled' : '';
     const titleAttr = blocked ? `title="${esc(reason)}"` : '';
     actions.innerHTML = `
+      ${originalFileBtnHtml(data)}
       <button class="btn" onclick="cancelImport('${esc(data.preview_id)}')" style="color:var(--error)">Cancelar pedido</button>
       <button class="btn" onclick="closePreviewModal()">Fechar</button>
       <button class="btn btn-primary" id="pvCommitBtn" data-primary-btn ${disabledAttr} ${titleAttr}
@@ -2335,15 +2345,15 @@ function renderPreviewFooter(data, itemsCount) {
     const badge = portalStatusBadgeHtml(ps, data.fire_status_last_seen);
     const verifique = data.fire_status_last_seen ? '' : ' Status ainda não verificado — confira diretamente no Fire.';
     note.innerHTML = `${badge} Pedido cadastrado no Fire${data.fire_codigo ? ` (CAB_VENDAS.CODIGO = ${esc(data.fire_codigo)})` : ''}.${verifique}`;
-    actions.innerHTML = `<button class="btn btn-primary" onclick="closePreviewModal()">Fechar</button>`;
+    actions.innerHTML = `${originalFileBtnHtml(data)}<button class="btn btn-primary" onclick="closePreviewModal()">Fechar</button>`;
   } else if (ps === 'found_in_fire') {
     const badge = portalStatusBadgeHtml(ps, data.fire_status_last_seen);
     const verifique = data.fire_status_last_seen ? '' : ' Status ainda não verificado — confira diretamente no Fire.';
     note.innerHTML = `${badge} Pedido já estava cadastrado no Fire — não foi o portal que enviou.${verifique}`;
-    actions.innerHTML = `<button class="btn btn-primary" onclick="closePreviewModal()">Fechar</button>`;
+    actions.innerHTML = `${originalFileBtnHtml(data)}<button class="btn btn-primary" onclick="closePreviewModal()">Fechar</button>`;
   } else if (ps === 'cancelled') {
     note.innerHTML = 'Pedido <strong>cancelado</strong>. Não foi enviado ao Fire.';
-    actions.innerHTML = `<button class="btn" onclick="closePreviewModal()">Fechar</button>`;
+    actions.innerHTML = `${originalFileBtnHtml(data)}<button class="btn" onclick="closePreviewModal()">Fechar</button>`;
   } else {
     actions.innerHTML = `<button class="btn" onclick="closePreviewModal()">Fechar</button>`;
   }
