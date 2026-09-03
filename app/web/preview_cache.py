@@ -18,6 +18,8 @@ class PreviewEntry:
     source_ext: str
     created_at: float
     source_path: str | None = None  # set when preview came from watch folder
+    original_path: str | None = None  # cópia imutável em <APP_DATA_DIR>/recebidos
+    file_sha256: str | None = None
     check: dict | None = None       # product-match report against Fire
     consumed: bool = False
 
@@ -53,6 +55,8 @@ class PreviewCache:
         source_ext: str,
         source_path: str | None = None,
         check: dict | None = None,
+        original_path: str | None = None,
+        file_sha256: str | None = None,
     ) -> PreviewEntry:
         preview_id = str(uuid.uuid4())
         entry = PreviewEntry(
@@ -64,6 +68,8 @@ class PreviewCache:
             created_at=time.time(),
             source_path=source_path,
             check=check,
+            original_path=original_path,
+            file_sha256=file_sha256,
         )
         with self._lock:
             self._evict_expired_locked()
