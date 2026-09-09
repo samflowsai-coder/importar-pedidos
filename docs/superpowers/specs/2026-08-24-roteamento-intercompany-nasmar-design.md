@@ -383,6 +383,17 @@ decisao_ambiente             memoria das escolhas do operador; NASCE VAZIA
     Perde para o documento E para o historico.
     Existe para AUDITORIA: "quem decidiu isso, quando" em uma linha.
 
+roteamento_modo              interruptor global do roteamento
+  valor ('desligado'|'observando'|'ligado'), default 'desligado',
+  alterado_por, alterado_em
+    'observando' calcula e grava sem agir. Ver "O interruptor".
+
+roteamento_sombra            o que o Portal TERIA decidido, em 'observando'
+  import_id, decidido_em, degrau, env_sugerido,
+  env_escolhido_pelo_operador, bateu (0|1)
+    Vira a taxa de acerto que autoriza ligar, e a lista de divergencias
+    que serve de material de treinamento do time.
+
 lote_config                  um por par origem -> espelho
   env_origem_slug, env_espelho_slug, cnpj_revenda, nome_revenda,
   janela ('semanal'|'quinzenal', default 'semanal'), dia_fechamento, hora_fechamento,
@@ -455,6 +466,12 @@ recusa a responder** e cai para o degrau seguinte. Medido: isso acontece com 1 c
 foi faturado". Para cliente genuinamente novo ele é mudo por construção — e é exatamente
 aí que o Portal pergunta.
 
+**E a resposta do operador vira histórico sozinha.** Assim que aquele primeiro pedido é
+cadastrado no Fire, o cliente passa a ter passado, e o degrau 2 responde por todos os
+seguintes. `decisao_ambiente` só precisa cobrir a janela entre *"o pedido foi importado"*
+e *"o pedido entrou no Fire"* — depois disso ela é redundante e fica só como registro de
+auditoria. A tabela não cresce com a carteira; cresce com clientes novos, e uma vez cada.
+
 **Cliente novo, sem documento e sem histórico: o Portal pergunta, e guarda.** No preview
 aparece uma escolha de ambiente obrigatória. A escolha vai para `decisao_ambiente` com
 **quem decidiu e quando**.
@@ -521,6 +538,59 @@ de filtro. Não é reescrita da camada de ambiente, é rebaixamento de um gate.
 Isso ganha fase própria (Fase 1b) porque **vale sozinho, sem nada do lote**: mesmo que o
 intercompany nunca saia, um operador que não precisa escolher empresa erra menos e
 trabalha mais rápido.
+
+### O interruptor: três estados, não dois
+
+Requisito do Samuel (09/09): *"preciso treinar o time da MM para deixar de usar o excel,
+e garantir a validação se o cadastro dos pedidos será de forma correta via portal"*.
+
+Isso é um problema de sequência, não de código: **ele não pode validar o que não está
+rodando, e não pode ligar o que não validou.** Um interruptor liga/desliga não resolve —
+obriga a escolher entre não ter dado e já estar em produção.
+
+Por isso o roteamento tem **três estados**, num parâmetro global em `app_shared.db`,
+ligado em `/admin` e alterável sem deploy (mesmo padrão de `flowpcp_enabled`, que já vive
+no cadastro do ambiente):
+
+```
+roteamento_modo    'desligado' | 'observando' | 'ligado'      default: 'desligado'
+```
+
+| estado | o que o Portal faz | o que o operador vê |
+|---|---|---|
+| **`desligado`** | nada. Comportamento de hoje, íntegro | escolhe a empresa no login, como sempre |
+| **`observando`** | calcula a decisão e **grava o que teria feito**; a escolha do operador continua valendo | escolhe como sempre; nada muda pra ele |
+| **`ligado`** | a decisão vale; a seleção de ambiente some do login | cai direto na caixa de entrada |
+
+**`observando` é o estado que resolve o problema dele.** O roteador é função pura sobre o
+`Order` e duas leituras — rodá-lo sem agir não custa nada e não pode quebrar nada. O que
+sai é a tabela que ele precisa para decidir se pode virar a chave:
+
+```
+roteamento_sombra    o que o Portal teria decidido, versus o que aconteceu
+  import_id, decidido_em, degrau ('documento'|'historico'|'memoria'|'perguntar'),
+  env_sugerido, env_escolhido_pelo_operador, bateu (0|1)
+```
+
+Uma tela mostra a taxa: *"nos últimos 30 dias, 214 pedidos: 209 bateram, 3 o Portal não
+soube responder, 2 divergiram"*. **As divergências são o material de treinamento** — são
+exatamente os casos que o time precisa entender antes de parar de usar o Excel. E os
+"não soube responder" dimensionam quanto trabalho manual sobra depois de ligado.
+
+A ordem de adoção que isso permite:
+
+1. `observando` entra junto com a Fase 1, sem risco nenhum, e começa a acumular evidência
+   no dia 1
+2. o Samuel treina o time com as divergências reais na mão
+3. `ligado` quando a taxa de acerto convencer **ele**, não quando o código ficar pronto
+4. volta pra `observando` a qualquer momento, sem deploy, se aparecer surpresa
+
+**O lote intercompany tem interruptor próprio e independente:** `lote_config.ativo`, que
+já está no modelo. Roteamento ligado com lote desligado é um estado válido e provavelmente
+o primeiro a ir pra produção — o roteamento sozinho já conserta o pedido da Nasmar caindo
+na MM, sem escrever nada de novo no Fire.
+
+**Quem vira a chave:** admin. Não é configuração de operador.
 
 ### Perna de origem: comportamento inalterado
 
@@ -701,6 +771,7 @@ projeto (`erp.md`, "Testes") continua valendo.
 | **1** | `supplier_cnpj` nos 11 parsers + `app/routing/ambiente.py` (documento → histórico → memória → perguntar) + escolha no preview | **sim** — acaba o pedido Nasmar caindo na MM |
 | **1a** | `customer_cnpj` no `DesmembramentoXlsParser` e no formato NBA — os 3 samples que hoje não têm nem cliente | **sim** — fecha os últimos 3 de 29 |
 | **1b** | Fim da seleção de ambiente no login; ambiente vira selo do pedido | **sim** — vale mesmo que o lote nunca saia |
+| **1c** | `roteamento_modo` + `roteamento_sombra` + tela da taxa de acerto | **pré-requisito de ligar** — sem ele não há como validar antes |
 | **2** | Consolidador + lote + perna espelho + `/lotes` | **sim** |
 | **3** | Perna de volta (Flow, reconciliação) pelo vínculo registrado | **sim** |
 
@@ -719,6 +790,7 @@ roteador**, não depois: sem ele a Fase 1 nasce perguntando 8 vezes em 29 em vez
 | Alvo | Arquivo | O que cobre |
 |---|---|---|
 | Roteamento | `tests/test_routing_ambiente.py` | fornecedor Nasmar → `nasmar`; fornecedor MM → `mm`; **documento vence histórico e memória**; **histórico vence memória**; cliente nos dois bancos na janela → `perguntar`, nunca o de maior volume; sem nada → `perguntar`, nunca um default; divergência é gravada em `divergiu_em`; CNPJ malformado |
+| Interruptor | `tests/test_routing_modo.py` | `'desligado'` → o roteador nem é chamado, comportamento de hoje intacto; `'observando'` → grava em `roteamento_sombra` e **a escolha do operador prevalece**; `'ligado'` → a decisão vale; default de instalação nova é `'desligado'` |
 | Histórico | `tests/test_routing_historico.py` | janela de 12 meses (caso Beira Rio: pedidos na MM até 05/2025 ficam fora e não geram ambiguidade); cliente só num banco resolve; cliente nos dois **recusa**; cliente sem histórico devolve `None` |
 | Fornecedor nos parsers | `tests/test_supplier_cnpj_samples.py` | os 21 samples que trazem CNPJ de fornecedor resolvem para o ambiente certo; **nenhum sample resolve para dois ambientes**; os 8 sem CNPJ devolvem `None`, não um palpite |
 | Watcher sem humano | `tests/test_scan_environments_retencao.py` | pedido sem fornecedor no watcher fica **retido**, não é importado em ambiente default |
@@ -727,6 +799,10 @@ roteador**, não depois: sem ele a Fase 1 nasce perguntando 8 vezes em 29 em vez
 | Fechamento | `tests/test_fechar_lotes.py` | janela semanal e quinzenal; **sem fator → `aguardando_fator`, não fecha**; pedido atrasado vai pro próximo lote |
 | Mapper | `tests/test_erp_mapper_colunas.py` | todas as colunas de 100%; `CODFIGFISCAL` por ambiente; `UNID` do cadastro |
 | Perna de volta | `tests/test_flowpcp_intercompany.py` (estender) | decisão do Flow resolve para a perna de origem via `lote_item`, não para o lote |
+
+O teste que protege a adoção: **"`desligado` não muda nada"**. Enquanto o Samuel não
+virar a chave, o Portal tem que se comportar exatamente como hoje, e isso é verificado,
+não presumido.
 
 Os quatro testes que travam regressão perigosa: **"sem fator não fecha"**, **"preços
 diferentes não fundem"**, **"sem fornecedor não roteia"** e **"documento vence memória"**.
