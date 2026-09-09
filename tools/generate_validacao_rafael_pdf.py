@@ -410,7 +410,7 @@ def build() -> Path:
         [
             ["Beira Rio", "5", "1.813.866,00", "1.728.764,69", "1.695.201,87", "+33.562,82"],
             [
-                "*Calcenter (Centauro)",
+                "*Calcenter / Studio Z",
                 "60",
                 "1.084.111,80",
                 "1.079.212,92",
@@ -444,10 +444,10 @@ def build() -> Path:
         "desviaram para mais ou para menos.",
     )
     pdf.item(
-        "O Centauro nunca teve o ajuste aplicado",
+        "A Calcenter / Studio Z nunca teve o ajuste aplicado",
         "Sessenta pedidos, R$ 1,08 milhão, todos faturados pelo valor cheio da nota. "
-        "Sozinho responde por R$ 66.024,32 dos R$ 101 mil de base inflada. Não é "
-        "regra diferente para ele — é o desconto que nunca foi feito.",
+        "Sozinha responde por R$ 66.024,32 dos R$ 101 mil de base inflada. Não é "
+        "regra diferente para ela — é o desconto que nunca foi feito.",
     )
 
     pdf.p(
@@ -466,7 +466,7 @@ def build() -> Path:
     )
     pdf.selo(
         "O percentual e o método valem para TODOS os clientes",
-        "Sem exceção cadastrada, inclusive Centauro. É o que corrige o desvio "
+        "Sem exceção cadastrada. É o que corrige o desvio "
         "mostrado acima: a mesma conta para todo mundo, feita pelo sistema, "
         "em todo pedido.",
     )

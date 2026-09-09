@@ -10,8 +10,8 @@
 
 O Portal importa todo pedido no **ambiente que o operador selecionou** — na prática,
 quase sempre a MM. Mas boa parte dos varejistas não compra da MM: compra da **Nasmar**,
-que é revenda. DAJU, Beira Rio, Dakota, Centauro, Authentic Feet, Art Walk faturam
-contra a Nasmar, não contra a MM.
+que é revenda. DAJU, Beira Rio, Dakota, Calcenter/Studio Z, Authentic Feet, Art Walk
+faturam contra a Nasmar, não contra a MM. **A Centauro não** — ver fato 13.
 
 A cadeia comercial real tem duas pernas:
 
@@ -49,9 +49,10 @@ Decisões que vieram do negócio e mandam sobre qualquer inferência dos dados:
 
 5. **A janela entra ligada em SEMANAL.** Continua parametrizável (quinzenal na tela,
    sem código), mas o default de produção é semanal.
-6. **O percentual e o método valem para TODOS os clientes, sem exceção cadastrada —
-   inclusive Centauro.** Não existe coluna de override por cliente. A uniformidade é o
-   ponto: é ela que corrige o desvio de R$ 101 mil medido em 2026.
+6. **O percentual e o método valem para TODOS os clientes da rota, sem exceção
+   cadastrada.** Não existe coluna de override por cliente. A uniformidade é o ponto: é
+   ela que corrige o desvio medido em 2026. (Até 2026-09-09 esta linha dizia "inclusive
+   Centauro" — errado, a Centauro nunca esteve na rota. Ver fato 13.)
 
 Esta revisão substitui o eixo de agrupamento por rede/marca da Revisão 1.
 
@@ -83,7 +84,7 @@ regra (`nota ÷ 1,07`) mandaria:
 | Cliente final | ped. | nota Nasmar | faturado MM | devido | desvio |
 |---|---:|---:|---:|---:|---:|
 | Calçados Beira Rio | 5 | 1.813.866,00 | 1.728.764,69 | 1.695.201,87 | **+33.562,82** |
-| **Calcenter (Centauro)** | **60** | 1.084.111,80 | 1.079.212,92 | 1.013.188,60 | **+66.024,32** |
+| **Calcenter / Studio Z** | **60** | 1.084.111,80 | 1.079.212,92 | 1.013.188,60 | **+66.024,32** |
 | Dakota Nordeste | 3 | 268.080,00 | 247.680,00 | 250.542,06 | **−2.862,06** |
 | DAJU | 1 | 76.932,00 | 71.899,08 | 71.899,07 | +0,01 |
 | Outros seis clientes | 6 | 23.774,30 | 23.774,30 | 22.218,97 | **+1.555,33** |
@@ -93,8 +94,8 @@ regra (`nota ÷ 1,07`) mandaria:
   mais.
 - **R$ 2.862,06 abaixo**, na Dakota — base a menor.
 - **1 pedido em 75 bateu a regra** (DAJU, desvio de R$ 0,01). Os outros 74 desviaram.
-- O Centauro nunca teve o ajuste aplicado: 60 pedidos pelo valor cheio da nota,
-  respondendo sozinho por R$ 66.024,32 da base inflada.
+- A Calcenter/Studio Z nunca teve o ajuste aplicado: 60 pedidos pelo valor cheio da
+  nota, respondendo sozinha por R$ 66.024,32 da base inflada.
 
 Este é o **argumento central da feature**, não um risco dela. A conta é feita à mão em
 centenas de pedidos por ano, cada um com dezenas de linhas — é exatamente o erro que some
@@ -181,6 +182,31 @@ fato 5) uma semana cheia vira ~170 linhas — grande, mas dentro do que o Fire j
 tem campo de observação — só `DESCRICAO VARCHAR(100)`, que é o nome do produto.
 `CAB_VENDAS.OBS` é BLOB (tipo 261); a maior já gravada tem 179 caracteres. A lista de 43
 pedidos de uma semana cheia cabe folgada.
+
+---
+
+**13. A Centauro não compra da Nasmar. Nunca comprou.** Corrigido em 2026-09-09 depois
+que o Rafael apontou o erro. Na Revisão 2 a linha da tabela do fato 3 estava rotulada
+"Calcenter (Centauro)" — glosa errada, não veio do dado. Medido nos dois bancos:
+
+| | `.4` NASMAR | `.7` MM AMERICANENSE |
+|---|---|---|
+| SBF/Centauro `06347409` | **nenhum cadastro**, nem por nome nem por CNPJ | `CADASTRO.CODIGO=498`, `/0296-51`, **245 pedidos e R$ 11.977.112,56 em 2026** |
+| Calcenter `15048754` | `CODIGO=29443`, `/0075-25`, 69 pedidos, R$ 1.270.207,44 | nenhum cadastro |
+
+A Centauro é **cliente direta da MM e o maior cliente dela** — fatura acima da própria
+Nasmar (R$ 9,3 mi em 2026). Cadastrá-la em `rota_intercompany` mandaria 245 pedidos e
+R$ 11,98 milhões por ano para o ambiente errado, e é justamente o caso que o radar de
+CNPJ fora de rota **não** detecta (ele só vê quem falta, não quem sobra).
+
+`CALCENTER CALÇADOS CENTRO OESTE LTDA` (`15.048.754/0075-25`, Palhoça/SC) **é o
+Studio Z** — provado, não inferido: as 7 pernas da Nasmar no `.7` gravadas com
+`PEDIDO_CLIENTE='STUDIO Z'` citam na `OBS` os números `10556 10557 10594 2600009023
+9014 9015 9018 9044 9045 9903`, e 12 dos 13 resolvem para a Calcenter no `.4`.
+
+Consequência de desenho: a lista de `rota_intercompany` **precisa de aprovação humana
+nominal, por CNPJ**, antes de qualquer roteamento entrar no ar. Nome comercial não é
+chave; CNPJ é.
 
 ---
 
