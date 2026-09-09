@@ -13,9 +13,10 @@ from app.erp.fiscal import perfil_para
 from app.erp.mapper import FireSistemasMapper
 from app.models.order import ERPRow, Order, OrderHeader
 
-# CODIGO, CODEMPRESA, DATA_PEDIDO, CLIENTE, STATUS, PEDIDO_CLIENTE, OBS,
-# DT_ENTREGA, ... (colunas 8-21 sao o perfil fiscal — ver test_erp_mapper_colunas.py),
-# ULT_INS_USER e a ultima posicao da tupla (23 elementos).
+# A ordem completa das 23 colunas (e o teste que amarra essa ordem ao SQL de
+# INSERT_CAB_VENDAS) esta em tests/test_erp_mapper_colunas.py. Aqui so o
+# comportamento herdado: STATUS, ref do cliente e fallback de data. Por isso
+# ULT_INS_USER e verificado por row[-1], nao por um indice fixo.
 
 
 def test_order_to_cabvendas_uses_status_pedido_and_retailer_ref() -> None:

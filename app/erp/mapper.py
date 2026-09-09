@@ -42,6 +42,19 @@ def _parse_date(value: str | None) -> date | None:
     return None
 
 
+def _item_total(item: ERPRow) -> float:
+    """Regra unica do total de um item: valor_total explicito quando presente,
+    senao qtd * preco_unitario (4 casas). Usada em CORPO_VENDAS.TOTAL aqui e
+    na soma de CAB_VENDAS.VALOR_TOTAL no exporter — cabecalho e itens tem que
+    nascer do MESMO numero por item, nunca de duas contas independentes.
+    """
+    if item.valor_total is not None:
+        return item.valor_total
+    qty = item.quantidade or 0.0
+    unit_price = item.preco_unitario or 0.0
+    return round(qty * unit_price, 4)
+
+
 class FireSistemasMapper:
     """Maps Order model to Fire Sistemas CAB_VENDAS + CORPO_VENDAS rows."""
 
@@ -111,7 +124,7 @@ class FireSistemasMapper:
         """Returns positional tuple for INSERT_CORPO_VENDAS parameters."""
         qty = item.quantidade or 0.0
         unit_price = item.preco_unitario or 0.0
-        total = item.valor_total if item.valor_total is not None else round(qty * unit_price, 4)
+        total = _item_total(item)
         desc = (item.descricao or "")[:100]
         delivery = _parse_date(item.data_entrega)
 

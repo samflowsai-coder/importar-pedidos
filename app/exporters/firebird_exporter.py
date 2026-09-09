@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import threading
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from app.erp import queries
@@ -12,7 +13,7 @@ from app.erp.exceptions import (
     FirebirdOrderAlreadyExistsError,
 )
 from app.erp.fiscal import perfil_para
-from app.erp.mapper import FireSistemasMapper
+from app.erp.mapper import FireSistemasMapper, _item_total, _parse_date
 from app.models.order import ERPRow, Order
 from app.utils.logger import logger
 
@@ -66,19 +67,25 @@ def _to_erp_rows(order: Order) -> list[ERPRow]:
 
 
 def _valor_total(rows: list[ERPRow]) -> Decimal:
-    """Soma dos itens em Decimal — nunca float (preco/qtd chegam float no
-    modelo). Mesma regra de item_to_corpovendas: usa valor_total quando
-    presente, senao qtd * preco_unitario.
+    """Soma dos MESMOS totais por item que vao pra CORPO_VENDAS.TOTAL
+    (_item_total, em app.erp.mapper) — o cabecalho bate com a soma dos
+    proprios itens em vez de recalcular a regra em paralelo. Converte pra
+    Decimal na borda via str() (nunca o float direto) e quantiza em 2 casas
+    (escala de CAB_VENDAS.VALOR_TOTAL); o item mantem as 4 casas dele.
     """
     total = Decimal("0")
     for row in rows:
-        if row.valor_total is not None:
-            total += Decimal(str(row.valor_total))
-        else:
-            qty = Decimal(str(row.quantidade or 0))
-            preco = Decimal(str(row.preco_unitario or 0))
-            total += qty * preco
+        total += Decimal(str(_item_total(row)))
     return total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _menor_dt_entrega(rows: list[ERPRow]) -> date | None:
+    """Menor data de entrega entre os itens do pedido, ignorando quem nao
+    tem data; None se nenhum item tiver. Mesma regra que o desenho do lote
+    intercompany usa pro pedido consolidado (regra da casa).
+    """
+    datas = [d for d in (_parse_date(row.data_entrega) for row in rows) if d is not None]
+    return min(datas) if datas else None
 
 
 class FirebirdExporter:
@@ -190,17 +197,22 @@ class FirebirdExporter:
         cur.execute(queries.GET_NEXT_CABVENDAS_CODIGO)
         header_pk: int = cur.fetchone()[0]
 
-        # 4. Insert header. valor_total soma os itens em Decimal (precisa dos
-        #    erp_rows antes do insert do cabecalho); perfil vem do ambiente
-        #    atual (CODFIGFISCAL difere MM x Nasmar), default medido se ausente.
+        # 4. Insert header. valor_total soma os itens em Decimal e dt_entrega
+        #    e a menor data de entrega entre eles (precisa dos erp_rows antes
+        #    do insert do cabecalho); perfil vem do ambiente atual
+        #    (CODFIGFISCAL difere MM x Nasmar), default medido se ausente.
+        #    OBS fica None aqui — carrega a lista de pedidos de origem do
+        #    lote intercompany, que e um call-site futuro.
         erp_rows = _to_erp_rows(order)
         valor_total = _valor_total(erp_rows)
+        dt_entrega = _menor_dt_entrega(erp_rows)
         header_params = self._mapper.order_to_cabvendas(
             order,
             header_pk,
             client_id,
             perfil=perfil_para(self._env),
             valor_total=valor_total,
+            dt_entrega=dt_entrega,
         )
         # ULT_ALT_USER repete ULT_INS_USER (ultimo elemento da tupla) — nao
         # entra no mapper pra um erro de ordem na tupla nao passar despercebido.

@@ -1,9 +1,11 @@
 # tests/test_erp_mapper_colunas.py
 from __future__ import annotations
 
+import re
 from datetime import date
 from decimal import Decimal
 
+from app.erp import queries
 from app.erp.fiscal import perfil_para
 from app.erp.mapper import FireSistemasMapper
 from app.models.order import Order, OrderHeader, OrderItem
@@ -111,3 +113,26 @@ def test_cabvendas_codped_pai_nao_esta_no_insert():
     """CODPED_PAI e auto-referencia (=CODIGO). Vai por UPDATE pos-insert,
     nao pela tupla — senao o valor teria que ser conhecido antes do PK."""
     assert "CODPED_PAI" not in CAB
+
+
+def _colunas_do_insert_cab_vendas() -> list[str]:
+    """Extrai a lista de colunas de INSERT_CAB_VENDAS do SQL de verdade —
+    nao de uma transcricao a mao. Se o SQL ganhar/perder uma coluna sem CAB
+    acompanhar, este teste quebra em vez dos quatro de cima continuarem
+    verdes enquanto todo bind depois daquele ponto desloca em silencio.
+    """
+    match = re.search(
+        r"INSERT INTO CAB_VENDAS\s*\((.*?)\)\s*VALUES",
+        queries.INSERT_CAB_VENDAS,
+        re.DOTALL,
+    )
+    assert match, "nao encontrei a lista de colunas em INSERT_CAB_VENDAS"
+    return [c.strip() for c in match.group(1).split(",")]
+
+
+def test_cab_bate_com_o_insert_cab_vendas_de_verdade():
+    """CAB amarrado ao SQL real, nao a uma copia que pode dessincronizar."""
+    cols = _colunas_do_insert_cab_vendas()
+    assert CAB == cols[:23]
+    # +1 = ULT_ALT_USER, que o exporter duplica fora do mapper (nao entra em CAB).
+    assert queries.INSERT_CAB_VENDAS.count("?") == len(CAB) + 1
