@@ -1,7 +1,8 @@
 # Roteamento intercompany Nasmar → MM — design
 
-**Data:** 2026-08-24 · **Revisão 2** (2026-08-25 — diretriz comercial do Rafael)
-**Status:** aguardando validação comercial do Rafael, depois implementação
+**Data:** 2026-08-24 · **Revisão 3** (2026-09-09 — validação comercial fechada)
+**Status:** regras confirmadas pelo Rafael. Falta só a aprovação nominal da lista de
+CNPJs da rota (fato 13). Fases 0 a 2 liberadas para implementação.
 **Domínios:** `environments`, `erp`, `persistence`, `web`, `worker`, `consolidators`
 
 ---
@@ -54,6 +55,23 @@ Decisões que vieram do negócio e mandam sobre qualquer inferência dos dados:
    ela que corrige o desvio medido em 2026. (Até 2026-09-09 esta linha dizia "inclusive
    Centauro" — errado, a Centauro nunca esteve na rota. Ver fato 13.)
 
+**Respondido pelo Rafael em 08 e 09/09/2026** (PDF de validação + formulário):
+
+7. **A conta é `preço × 0,93`** — "tirar 7% do valor", não `÷ 1,07`. Ele escolheu a
+   leitura literal sabendo que muda a base em relação à prática e sabendo do custo
+   (~R$ 15 mil/ano). Fecha o fato 3b. `modo_preco` entra em `'desconto'`.
+8. **O percentual é exatamente 7,00%.** Fecha o "aproximadamente" de 25/08 e destrava
+   a Fase 2 — era o único bloqueio real.
+9. **A semana fecha na segunda, às 8h** (hora fechada pelo Samuel; ele pediu "de
+   manhã"). A semana anterior é a que é montada.
+10. **O percentual congela na ABERTURA da semana**, não no fechamento. Palavras da
+    resposta: o novo "só vale da segunda seguinte em diante" — mudar o parâmetro numa
+    quarta não pode pegar a semana já aberta.
+11. **No Aponta continua tudo por pedido.** O lote existe só para o faturamento
+    MM→Nasmar; produção, status por solicitação e acompanhamento do representante
+    seguem por pedido individual, e a conciliação acontece no Flow. O consolidador
+    **não** tem perna no Aponta.
+
 Esta revisão substitui o eixo de agrupamento por rede/marca da Revisão 1.
 
 ---
@@ -79,21 +97,27 @@ fonte de preço utilizável — some com a ideia.
 
 **3. O histórico do fator NÃO é 7% uniforme — a operação erra nas duas direções.**
 Casei todos os pedidos de 2026 pelas duas pernas e comparei o faturado contra o que a
-regra (`nota ÷ 1,07`) mandaria:
+regra mandaria. A coluna **devido** usa `nota × 0,93`, a regra que o Rafael escolheu em
+08/09 (a Revisão 2 media contra `÷ 1,07`; os dois valores estão no rodapé):
 
-| Cliente final | ped. | nota Nasmar | faturado MM | devido | desvio |
+| Cliente final | ped. | nota Nasmar | faturado MM | devido (×0,93) | desvio |
 |---|---:|---:|---:|---:|---:|
-| Calçados Beira Rio | 5 | 1.813.866,00 | 1.728.764,69 | 1.695.201,87 | **+33.562,82** |
-| **Calcenter / Studio Z** | **60** | 1.084.111,80 | 1.079.212,92 | 1.013.188,60 | **+66.024,32** |
-| Dakota Nordeste | 3 | 268.080,00 | 247.680,00 | 250.542,06 | **−2.862,06** |
-| DAJU | 1 | 76.932,00 | 71.899,08 | 71.899,07 | +0,01 |
-| Outros seis clientes | 6 | 23.774,30 | 23.774,30 | 22.218,97 | **+1.555,33** |
-| **Total** | **75** | **3.266.764,10** | **3.151.330,99** | **3.053.050,56** | **+98.280,43** |
+| Calçados Beira Rio | 5 | 1.813.866,00 | 1.728.764,69 | 1.686.895,38 | **+41.869,31** |
+| **Calcenter / Studio Z** | **60** | 1.084.111,80 | 1.079.212,92 | 1.008.223,97 | **+70.988,95** |
+| Dakota Nordeste | 3 | 268.080,00 | 247.680,00 | 249.314,40 | **−1.634,40** |
+| DAJU | 1 | 76.932,00 | 71.899,08 | 71.546,76 | +352,32 |
+| Outros seis clientes | 6 | 23.774,30 | 23.774,30 | 22.110,10 | **+1.664,20** |
+| **Total** | **75** | **3.266.764,10** | **3.151.330,99** | **3.038.090,61** | **+113.240,38** |
 
-- **R$ 101.142,49 faturado ACIMA da regra** — base de cálculo inflada, imposto pago a
+- **R$ 114.874,78 faturado ACIMA da regra** — base de cálculo inflada, imposto pago a
   mais.
-- **R$ 2.862,06 abaixo**, na Dakota — base a menor.
-- **1 pedido em 75 bateu a regra** (DAJU, desvio de R$ 0,01). Os outros 74 desviaram.
+- **R$ 1.634,40 abaixo**, na Dakota — base a menor.
+- **Nenhum dos 75 pedidos bate a regra nova.** Sob `÷ 1,07` um batia (DAJU, R$ 0,01);
+  sob `× 0,93` ele desvia R$ 352,32. Isso facilita a comunicação: a regra vale a partir
+  da data em que entrar no ar, não é cobrança retroativa de nada.
+- Sob a regra antiga (`÷ 1,07`) o desvio líquido era **+R$ 98.280,43** (devido
+  R$ 3.053.050,56). A troca de método aumenta o desvio histórico em R$ 14.959,87 —
+  é a mesma diferença de 0,46% do fato 3b, agora sobre a carteira inteira.
 - A Calcenter/Studio Z nunca teve o ajuste aplicado: 60 pedidos pelo valor cheio da
   nota, respondendo sozinha por R$ 66.024,32 da base inflada.
 
@@ -116,8 +140,18 @@ Divergência de **0,46% do valor**. Sobre os R$ 3.266.764,10 casados em 2026, s�
 sobre a nota da Nasmar"*. As duas são leituras honestas de "7%", e só a primeira bate com
 o que a operação digita hoje.
 
-Consequência de desenho: o parâmetro guarda **modo + valor**, nunca só o percentual, e a
-tela mostra a conta feita num exemplo real antes de salvar. Ver "Fator de preço".
+**Respondido em 08/09: `× 0,93`.** O Rafael marcou "tirar 7% do valor" com os dois
+números na frente. Consequência: `modo_preco` entra em `'desconto'` e o markup implícito
+da Nasmar passa a ser 7,53%, não 7,00% — as duas opções foram apresentadas como leituras
+do mesmo "7%" e só a `÷ 1,07` dava 7% exatos. Decisão comercial dele, informada.
+
+Ganho técnico: `× 0,93` sobre preço de 2 casas é exato em 4 casas decimais. O `÷ 1,07`
+gerava dízima (15,0654205607477 gravado no Fire). A regra "Decimal, nunca float"
+continua valendo, mas a quantização deixa de ser risco.
+
+Consequência de desenho, inalterada: o parâmetro guarda **modo + valor**, nunca só o
+percentual, e a tela mostra a conta feita num exemplo real antes de salvar. Ver
+"Fator de preço".
 
 **4. O agrupamento já existe, hand-typed.** `CAB_VENDAS.OBS` (que o mapper deixa `NULL`,
 `app/erp/mapper.py:74`) está preenchido em 2.232 de 4.263 pedidos e guarda a **lista dos
@@ -244,12 +278,15 @@ rota_intercompany            quem compra da revenda
 
 lote_config                  um por par origem -> espelho
   env_origem_slug, env_espelho_slug, cnpj_revenda,
-  janela ('semanal'|'quinzenal', default 'semanal'), dia_fechamento,
-  modo_preco ('divisor'|'desconto'), fator_preco (NULLABLE), ativo
+  janela ('semanal'|'quinzenal', default 'semanal'), dia_fechamento, hora_fechamento,
+  modo_preco ('divisor'|'desconto', default 'desconto'), fator_preco (NULLABLE), ativo
     dia_fechamento  0=segunda .. 6=domingo; na quinzena, fecha dias 15 e ultimo
-    modo_preco      'divisor'  -> preco / (1 + fator)   [pratica atual]
-                    'desconto' -> preco * (1 - fator)   [leitura literal]
-    fator_preco     0.07 = 7%. NULL = nao fecha lote, pergunta ao operador
+    hora_fechamento 8 = 08:00 hora local do servidor (resposta do Rafael)
+    modo_preco      'divisor'  -> preco / (1 + fator)   [pratica ate 2026]
+                    'desconto' -> preco * (1 - fator)   [ESCOLHIDO em 08/09]
+    fator_preco     0.07 = 7%. NULL = nao fecha lote, pergunta ao operador.
+                    Confirmado 7,00% EXATO em 09/09 — mas continua sem default
+                    no schema: quem cadastra a rota digita, ninguem herda
 
 intercompany_lote
   id, chave_lote (UNIQUE), env_origem_slug, env_espelho_slug,
@@ -379,8 +416,14 @@ imposto recolhido a menos ou a mais, com prejuízo real. Um default "para não t
 falha silenciosa que a regra do projeto proíbe. O fato 3 mostra que o histórico varia de
 0% a 8,2% entre clientes; qualquer default seria um chute com consequência fiscal.
 
-O fator vigente é copiado para `fator_preco_aplicado` no fechamento. Mudar o parâmetro
-depois não reescreve lote já fechado.
+O fator vigente é copiado para `fator_preco_aplicado` **na abertura do lote** — na
+primeira perna anexada à janela —, não no fechamento. Mudar o parâmetro depois não
+reescreve lote nenhum, aberto ou fechado.
+
+Foi resposta do Rafael em 09/09: o percentual novo "só vale da segunda seguinte em
+diante". Congelar no fechamento faria uma mudança de quarta-feira pegar a semana já
+aberta, que ainda não fechou. Congelando na abertura, o preço de uma semana fica
+travado no dia em que ela começa.
 
 **A tela mostra a conta, não o parâmetro.** Por causa do fato 3b, salvar
 `modo_preco` + `fator_preco` exibe ao lado um exemplo real calculado:
@@ -395,8 +438,16 @@ errado, só que silencioso.
 
 ### Fechamento do lote
 
-Job `app/worker/jobs/fechar_lotes.py` no APScheduler existente. Fecha o lote cuja janela
-venceu: consolida, cria o `imports` da perna espelho no ambiente MM, enfileira o INSERT.
+Job `app/worker/jobs/fechar_lotes.py` no APScheduler existente, em
+`cron day_of_week='mon', hour=8` (hora local do servidor, mesma convenção do `retention`
+às 03:00). Fecha o lote cuja janela venceu: consolida, cria o `imports` da perna espelho
+no ambiente MM, e o pedido fica **esperando conferência humana** — o INSERT no Fire
+continua sendo o botão "Cadastrar no Fire", não sai sozinho.
+
+A hora foi escolhida para que o pedido da semana anterior esteja na tela quando a
+operação chega. Ela **não** decide quem entra na semana: isso é a data em que a perna de
+origem foi importada. Pedido importado na segunda de manhã, antes ou depois das 8h, entra
+na semana nova.
 
 Tela `/lotes`: lote aberto com as pernas dentro, total, quantidade de clientes, fator
 vigente, botão "fechar agora", e o campo de fator quando estiver `aguardando_fator`.
@@ -478,19 +529,20 @@ diferentes não fundem"**. Nenhum dos dois pode ser relaxado sem decisão comerc
 
 ---
 
-## Questões abertas para o Rafael
+## Questões abertas
 
-Vão no PDF de validação. Nenhuma bloqueia começar a Fase 0.
+**Todas as questões comerciais foram fechadas** — as três do PDF em 08/09, as cinco do
+formulário em 09/09. Estão na "Diretriz comercial", itens 5 a 11.
 
-1. **"Nota −7%" é `÷ 1,07` ou `× 0,93`?** (fato 3b) O Fire hoje tem `÷ 1,07`: uma nota de
-   R$ 16,12 virou R$ 15,07 para a MM. A leitura literal daria R$ 14,99. Diferença de
-   ~R$ 15 mil/ano na base de cálculo. É a pergunta mais cara das três.
-2. **Qual dia a semana fecha?** Sugestão: segunda de manhã, fechando a semana anterior.
-3. **Quando o percentual mudar, vale a partir de quando?** O desenho congela o fator no
-   fechamento do lote — lote já fechado não é reescrito. Confirma?
+Resta **uma**, e ela bloqueia a Fase 1 ir pro ar:
 
-Fechadas em 2026-08-25 e movidas para "Diretriz comercial": a janela entra semanal, e o
-percentual vale para todos os clientes sem exceção.
+**A lista nominal de CNPJs da `rota_intercompany` precisa de aprovação humana.** O Rafael
+chegou a marcar "a lista está completa", mas a lista que ele viu trazia a Centauro por
+erro de rótulo (fato 13). A aprovação tem que ser refeita sobre a lista corrigida, e por
+CNPJ — nome comercial não é chave. Faltam também os nomes dos seis clientes menores
+(6 pedidos, R$ 23.774,30 em 2026) que ainda estão agregados na tabela do fato 3.
+
+Nenhuma questão bloqueia a Fase 0.
 
 ---
 

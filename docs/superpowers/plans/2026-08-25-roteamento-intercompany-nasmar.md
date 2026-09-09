@@ -1233,6 +1233,11 @@ listar_configs_ativas(conn) -> list[dict]
 
 # lote
 lote_aberto(conn, env_origem_slug: str, janela_inicio: date, janela_fim: date) -> dict
+    Cria o lote se nao existir, COPIANDO fator_preco e modo_preco da config para
+    fator_preco_aplicado/modo_preco_aplicado do lote. Rafael respondeu em 09/09 que
+    percentual novo "so vale da segunda seguinte em diante": congelar no fechamento
+    faria uma mudanca de quarta pegar a semana ja aberta. Congela na abertura.
+    Config sem fator ainda deixa o lote sem fator -> aguardando_fator no fechamento.
 buscar_lote(conn, env_origem_slug: str, janela_inicio: date, janela_fim: date) -> dict | None
 get(conn, lote_id: int) -> dict | None
 marcar_aguardando_fator(conn, lote_id: int) -> None
@@ -1351,6 +1356,9 @@ Append to `TABLES_SQL` in `app/persistence/schema_shared.py`:
 -- modo_preco existe porque "nota -7%" e ambiguo: 'divisor' faz preco/1.07
 -- (o que o Fire tem hoje: 16,12 -> 15,0654) e 'desconto' faz preco*0.93
 -- (16,12 -> 14,9916). Diferenca medida: ~R$ 15 mil/ano.
+-- Rafael escolheu 'desconto' em 08/09/2026, entao e o default. 'divisor'
+-- fica porque lote fechado guarda o modo que usou e nao pode ser reescrito.
+-- hora_fechamento: ele pediu segunda de manha; 8h e a hora acordada.
 CREATE TABLE IF NOT EXISTS lote_config (
     env_origem_slug   TEXT PRIMARY KEY,
     env_espelho_slug  TEXT NOT NULL,
@@ -1358,7 +1366,8 @@ CREATE TABLE IF NOT EXISTS lote_config (
     nome_revenda      TEXT NOT NULL,
     janela            TEXT NOT NULL DEFAULT 'semanal',
     dia_fechamento    INTEGER NOT NULL DEFAULT 0,
-    modo_preco        TEXT NOT NULL DEFAULT 'divisor',
+    hora_fechamento   INTEGER NOT NULL DEFAULT 8,
+    modo_preco        TEXT NOT NULL DEFAULT 'desconto',
     fator_preco       TEXT,
     ativo             INTEGER NOT NULL DEFAULT 1,
     created_at        TEXT NOT NULL,
@@ -2190,10 +2199,17 @@ Expected: 6 passed
 
 - [ ] **Step 5: Register in the scheduler**
 
-In `app/worker/__init__.py`, register `fechar_lotes.run` alongside `drain_outbox`,
-`poll_fire`, `retention` and `scan_environments`. Run it hourly — the job is a no-op
-outside the closing window, and hourly keeps it from missing a day if the process
-restarts.
+In `app/worker/scheduler.py`, register `fechar_lotes.run` alongside `drain_outbox`,
+`poll_fire`, `retention` and `scan_environments`, as
+`scheduler.add_job(run_fechar_lotes, "cron", day_of_week="mon", hour=8, ...)` — local
+server time, same convention as `retention` at 03:00.
+
+Rafael pediu **segunda de manha** e o Samuel fechou em **8h**: o pedido da MM fica
+esperando conferencia na tela quando a operacao chega. De hora em hora fecharia as
+00:xx de segunda, de madrugada, sem ninguem para olhar.
+
+A hora **nao** muda quem entra na semana — isso e decidido pela data da importacao
+(`date.today()` no `_anexar_ao_lote`) — so decide quando o lote aparece na tela.
 
 - [ ] **Step 6: Lint, full suite, commit**
 
