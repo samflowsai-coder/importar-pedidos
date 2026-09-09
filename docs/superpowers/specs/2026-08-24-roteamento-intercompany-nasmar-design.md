@@ -292,9 +292,9 @@ samples sem CNPJ de fornecedor (fato 14), rodei o pipeline real, peguei o
 | `PEDIDO KALLAN K01.xlsx` | nenhum | 6 ped, 03/08/26 | → `mm` |
 | `PEDIDO TENNIS STATION.xlsx` | nenhum | 2 ped, 27/08/26 | → `mm` |
 | `PEDIDO BEIRA RIO.pdf` | 28 ped, 24/08/26 | 6 ped, **28/05/25** | → `nasmar` na janela de 12m |
-| `Desmembramento Authentic feet` | — | — | **o parser não extrai CNPJ do cliente** |
-| `Desmembramento Magic Feet` | — | — | idem |
-| `PEDIDO NBA 3.xlsx` | — | — | idem |
+| `Desmembramento Authentic feet` | — | — | **o arquivo não tem CNPJ nenhum** — vai para `perguntar` |
+| `Desmembramento Magic Feet` | — | — | resolvido na Fase 1a (raiz `05055599`) |
+| `PEDIDO NBA 3.xlsx` | — | — | **o arquivo não tem CNPJ nenhum** — vai para `perguntar` |
 
 **Quanto o histórico é ambíguo, na carteira inteira:**
 
@@ -307,9 +307,13 @@ Cliente que compra das duas empresas existe, mas é **1 em 277**. E a Beira Rio 
 que a janela importa: ela comprou da MM até maio de 2025 e migrou para a Nasmar, onde tem
 28 pedidos. Sem janela ela é ambígua; com 12 meses resolve limpo.
 
-**Somando os dois mecanismos: 26 dos 29 samples roteiam sozinhos.** Os 3 que sobram
-falham por um motivo diferente e consertável — `DesmembramentoXlsParser` e o formato NBA
-não extraem nem o CNPJ do cliente. É lacuna de parser, não limite do desenho.
+**Somando os dois mecanismos: 26 dos 29 samples roteiam sozinhos.** Os 3 que sobram não
+falham todos pelo mesmo motivo: só `Desmembramento Magic Feet` tinha lacuna de parser —
+fechada na Fase 1a, derivando `customer_cnpj` pela raiz majoritária das colunas de loja
+(raiz `05055599`, filial de menor sufixo como representante). `Desmembramento Authentic
+feet` e `PEDIDO NBA 3.xlsx` não têm lacuna nenhuma para fechar: o documento não traz CNPJ
+nenhum, em aba nenhuma. Caem em `perguntar`, e isso é o desenho respondendo à ausência do
+dado — não um bug.
 
 ⚠️ **A janela de 12 meses é uma escolha, não um fato.** A Beira Rio pode voltar a comprar
 da MM. Por isso o Portal mostra a divergência mesmo quando a janela resolve: *"pelo
