@@ -56,7 +56,12 @@ decide isso é a taxa de acerto que a Fase 1c mede.
 - **Charset do Firebird é `WIN1252`.** Flags booleanas são strings `'Sim'`/`'Nao'`. `STATUS` inicial é `'PEDIDO'`.
 - **Nunca rodar script de escrita contra `.fdb` de produção.** Validação de Firebird usa cópia.
 - **O default de instalação nova é `roteamento_modo = 'desligado'`**, e `'desligado'` tem que se comportar **exatamente** como o Portal de hoje. Isso é testado, não presumido.
-- **Lint antes de dar por pronto:** `ruff check app/ tests/` e `ruff format app/ tests/`.
+- **Lint antes de dar por pronto:** `ruff check app/ tests/` (o repo inteiro passa).
+  **`ruff format` SÓ nos arquivos que a task criou.** Medido em 2026-09-09: 112 dos 229
+  arquivos do repo não estão format-clean, então `ruff format app/ tests/` reformataria
+  112 arquivos alheios à task — exatamente a "reformatação oportunista" que o guard de
+  diff mínimo proíbe. Em arquivo que você MODIFICA, formate à mão só as linhas que
+  escreveu.
 - **Suíte completa antes do commit final:** `.venv/bin/pytest tests/ -v`.
 
 ---
@@ -548,7 +553,9 @@ Expected: PASS
 
 ```bash
 ruff check app/erp/ tests/test_erp_mapper_colunas.py
-ruff format app/erp/ tests/test_erp_mapper_colunas.py
+# `ruff format` SÓ no arquivo que esta task cria. mapper.py e queries.py são
+# MODIFICADOS: formate à mão as linhas que você escreveu, não o arquivo inteiro.
+ruff format tests/test_erp_mapper_colunas.py
 git add app/erp/queries.py app/erp/mapper.py app/exporters/firebird_exporter.py tests/test_erp_mapper_colunas.py
 git commit -m "feat(erp): CAB_VENDAS completo (23 colunas) + OBS e DT_ENTREGA"
 ```
@@ -719,7 +726,8 @@ Record the diff in the PR description. **Never run against production.**
 - [ ] **Step 8: Lint, full suite, commit**
 
 ```bash
-ruff check app/ tests/ && ruff format app/ tests/
+ruff check app/ tests/
+ruff format <somente os arquivos que ESTA task criou>
 .venv/bin/pytest tests/ -v
 git add app/erp/ app/exporters/firebird_exporter.py tests/test_erp_mapper_colunas.py
 git commit -m "feat(erp): CORPO_VENDAS completo + UNID do cadastro (era 'UN' cravado)"
@@ -906,7 +914,8 @@ Documentar no PR (não automatizar — é dado de produção, entra pela tela):
 - [ ] **Step 7: Lint e commit**
 
 ```bash
-ruff check app/ tests/ && ruff format app/ tests/
+ruff check app/ tests/
+ruff format <somente os arquivos que ESTA task criou>
 .venv/bin/pytest tests/test_environments_repo.py -v
 git add app/persistence/ app/web/routes_environments.py app/web/static/admin-ambiente-edit.html tests/test_environments_repo.py
 git commit -m "feat(environments): CNPJ da empresa no cadastro do ambiente"
@@ -1239,7 +1248,8 @@ existente muda de forma.
 - [ ] **Step 8: Lint e commit**
 
 ```bash
-ruff check app/ tests/ && ruff format app/ tests/
+ruff check app/ tests/
+ruff format <somente os arquivos que ESTA task criou>
 git add app/models/order.py app/routing/ app/pipeline.py tests/test_routing_documento.py tests/test_supplier_cnpj_samples.py
 git commit -m "feat(routing): o pedido passa a dizer de quem ele e (supplier_cnpj)"
 ```
@@ -1572,7 +1582,8 @@ query estar certa.
 - [ ] **Step 6: Lint e commit**
 
 ```bash
-ruff check app/ tests/ && ruff format app/ tests/
+ruff check app/ tests/
+ruff format <somente os arquivos que ESTA task criou>
 git add app/erp/queries.py app/routing/historico.py tests/test_routing_historico.py
 git commit -m "feat(routing): historico do Fire vira degrau — 12 meses, ambiguo nao responde"
 ```
@@ -1792,7 +1803,8 @@ Expected: PASS
 - [ ] **Step 5: Lint e commit**
 
 ```bash
-ruff check app/ tests/ && ruff format app/ tests/
+ruff check app/ tests/
+ruff format <somente os arquivos que ESTA task criou>
 git add app/persistence/ tests/test_decisao_ambiente_repo.py
 git commit -m "feat(routing): memoria das escolhas de ambiente (nasce vazia, e ok)"
 ```
@@ -2110,7 +2122,8 @@ Expected: PASS
 - [ ] **Step 5: Lint e commit**
 
 ```bash
-ruff check app/ tests/ && ruff format app/ tests/
+ruff check app/ tests/
+ruff format <somente os arquivos que ESTA task criou>
 git add app/persistence/ tests/test_roteamento_repo.py
 git commit -m "feat(routing): interruptor de tres estados, tabela sombra e fila de pendencias"
 ```
@@ -2462,7 +2475,8 @@ Expected: PASS
 - [ ] **Step 5: Lint e commit**
 
 ```bash
-ruff check app/ tests/ && ruff format app/ tests/
+ruff check app/ tests/
+ruff format <somente os arquivos que ESTA task criou>
 git add app/routing/ambiente.py tests/test_routing_ambiente.py
 git commit -m "feat(routing): a escada documento > historico > memoria > perguntar"
 ```
@@ -2856,7 +2870,8 @@ quando é automática.
 - [ ] **Step 7: Lint, suíte completa, commit**
 
 ```bash
-ruff check app/ tests/ && ruff format app/ tests/
+ruff check app/ tests/
+ruff format <somente os arquivos que ESTA task criou>
 .venv/bin/pytest tests/ -v
 git add app/web/ tests/test_routing_wiring.py
 git commit -m "feat(routing): o commit do preview roteia o pedido (atras do interruptor)"
@@ -3089,7 +3104,8 @@ Expected: PASS
 - [ ] **Step 6: Lint, suíte completa, commit**
 
 ```bash
-ruff check app/ tests/ && ruff format app/ tests/
+ruff check app/ tests/
+ruff format <somente os arquivos que ESTA task criou>
 .venv/bin/pytest tests/ -v
 git add app/worker/ tests/test_scan_environments_roteamento.py
 git commit -m "feat(routing): watcher roteia e RETEM o que nao sabe (nunca ambiente default)"
@@ -3285,7 +3301,8 @@ nos outros dois o documento é mudo, e o desenho já responde a isso.
 - [ ] **Step 7: Lint e commit**
 
 ```bash
-ruff check app/ tests/ && ruff format app/ tests/
+ruff check app/ tests/
+ruff format <somente os arquivos que ESTA task criou>
 git add app/parsers/desmembramento_xls_parser.py tests/test_desmembramento_customer_cnpj.py docs/superpowers/specs/
 git commit -m "feat(parsers): cliente do desmembramento pela raiz das lojas (Magic Feet)"
 ```
@@ -3507,7 +3524,8 @@ passar.
 - [ ] **Step 7: Lint, suíte completa, commit**
 
 ```bash
-ruff check app/ tests/ && ruff format app/ tests/
+ruff check app/ tests/
+ruff format <somente os arquivos que ESTA task criou>
 .venv/bin/pytest tests/ -v
 git add app/web/ tests/test_routing_modo.py
 git commit -m "feat(routing): tela do interruptor e da taxa de acerto"
@@ -3691,7 +3709,8 @@ Expected: PASS
 - [ ] **Step 5: Lint e commit**
 
 ```bash
-ruff check app/ tests/ && ruff format app/ tests/
+ruff check app/ tests/
+ruff format <somente os arquivos que ESTA task criou>
 git add app/persistence/repo.py tests/test_imports_cross_env.py
 git commit -m "feat(imports): listagem que soma os ambientes, com selo da empresa"
 ```
@@ -3843,7 +3862,8 @@ Expected: PASS
 - [ ] **Step 6: Lint, suíte completa, commit**
 
 ```bash
-ruff check app/ tests/ && ruff format app/ tests/
+ruff check app/ tests/
+ruff format <somente os arquivos que ESTA task criou>
 .venv/bin/pytest tests/ -v
 git add app/web/ tests/test_routing_modo.py
 git commit -m "feat(web): com o roteamento ligado, o ambiente e propriedade do pedido"
@@ -3856,7 +3876,7 @@ git commit -m "feat(web): com o roteamento ligado, o ambiente e propriedade do p
 - [ ] **Suíte completa verde**
 
 ```bash
-ruff check app/ tests/ && ruff format --check app/ tests/
+ruff check app/ tests/
 .venv/bin/pytest tests/ -v
 ```
 
