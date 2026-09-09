@@ -25,7 +25,7 @@ def test_ignora_numero_de_14_digitos_que_nao_e_cnpj():
     """Codigo de variante da Centauro tem 12 digitos; EAN tem 13. Nem um nem
     outro pode virar CNPJ por acidente."""
     achados = documento.cnpjs_no_texto("EAN 7891234567890 COD 986388014917")
-    assert MM not in achados and NASMAR not in achados
+    assert achados == set()
 
 
 def test_detecta_fornecedor_quando_so_um_ambiente_aparece():
@@ -48,3 +48,18 @@ def test_cnpj_repetido_no_mesmo_documento_ainda_resolve():
     """O CNPJ do fornecedor aparece no cabecalho e no rodape — e um so."""
     texto = f"{MM} ... corpo do pedido ... {MM}"
     assert documento.detectar_fornecedor(texto, CONHECIDOS) == MM
+
+
+def test_float_de_planilha_colado_nao_engole_o_cnpj_vizinho():
+    """Achado de revisao: '\\b' na regex antiga tratava '.'/',' como fronteira
+    de palavra, entao um float de planilha colado antes de um CNPJ (formato
+    real do Desmembramento) consumia os 2 primeiros digitos do CNPJ seguinte
+    e o fazia sumir dos achados. Com um dos dois CNPJs "engolido", um
+    documento ambiguo (MM e NASMAR presentes) parava de parecer ambiguo e
+    devolvia palpite em vez de None. Este e exatamente esse documento."""
+    texto = (
+        "Fornecedor M.M. TOTAL 406.439999999999 35.394.871/0001-11\n"
+        "Entrega NASMAR 34.513.679/0001-34"
+    )
+    assert documento.cnpjs_no_texto(texto) == {MM, NASMAR}
+    assert documento.detectar_fornecedor(texto, CONHECIDOS) is None

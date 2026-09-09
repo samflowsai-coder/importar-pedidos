@@ -18,8 +18,20 @@ from app.erp.cnpj import cnpj_digits
 # Aceita 12.345.678/0001-99, 12345678000199 e as variantes que o pdfplumber
 # devolve quando o PDF quebra a máscara com espaços. Os separadores são
 # opcionais e individualmente tolerantes a espaço em volta.
+#
+# `(?<![\d.,])` no lugar de `\b` no início, e `(?!\d)` no lugar de `\b` no
+# fim: `\b` marca fronteira entre "é dígito" e "não é dígito", mas um ponto
+# ou vírgula grudados num número (planilha com float tipo
+# "14255.400000000007" colado num CNPJ real logo depois) TAMBÉM conta como
+# fronteira pro `\b` — a casada engole os 2 primeiros dígitos do CNPJ
+# seguinte junto com o float vizinho, e o CNPJ verdadeiro desaparece dos
+# achados. Isso já aconteceu com um sample real (Desmembramento Magic
+# Feet.xlsx) e é grave: com um dos dois CNPJs "engolido", um documento
+# ambíguo (os dois ambientes presentes) deixa de parecer ambíguo e
+# `detectar_fornecedor` devolve palpite, não `None`. Os lookarounds proíbem
+# a casada de começar ou terminar colada em `.`, `,` ou outro dígito.
 _CNPJ_RE = re.compile(
-    r"\b\d{2}\s*[.\s]?\s*\d{3}\s*[.\s]?\s*\d{3}\s*[/\s]?\s*\d{4}\s*[-\s]?\s*\d{2}\b"
+    r"(?<![\d.,])\d{2}\s*[.\s]?\s*\d{3}\s*[.\s]?\s*\d{3}\s*[/\s]?\s*\d{4}\s*[-\s]?\s*\d{2}(?!\d)"
 )
 
 
@@ -37,6 +49,14 @@ def detectar_fornecedor(texto: str, conhecidos: dict[str, str]) -> str | None:
     `conhecidos` é `{cnpj_digits: env_slug}`. Devolve `None` em dois casos que
     são o mesmo caso: nenhum CNPJ conhecido no texto, ou mais de um. Nos dois,
     o documento não respondeu — quem responde é o degrau seguinte.
+
+    Detecta PRESENÇA, não POSIÇÃO: não distingue o CNPJ que aparece como
+    fornecedor do que aparece como cliente, transportadora etc. Isso é
+    seguro porque a regra de ambiguidade cobre o caso (dois CNPJs conhecidos
+    no mesmo documento, em qualquer papel, devolvem `None`), mas quem
+    consome `supplier_cnpj` rio abaixo não deve supor que o valor veio do
+    campo "fornecedor" do documento — veio de "único CNPJ conhecido
+    presente".
     """
     if not conhecidos:
         return None
@@ -55,4 +75,8 @@ def cnpjs_de_ambientes() -> dict[str, str]:
     """
     from app.persistence import environments_repo
 
-    return {e["cnpj"]: e["slug"] for e in environments_repo.list_active() if e.get("cnpj")}
+    return {
+        cnpj_digits(e["cnpj"]): e["slug"]
+        for e in environments_repo.list_active()
+        if cnpj_digits(e.get("cnpj"))
+    }

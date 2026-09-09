@@ -85,8 +85,9 @@ def test_samples_sem_cnpj_devolvem_none_e_nao_palpite():
         "Pedido Magic Feet MF048.xlsx",
         "PEDIDO TENNIS STATION.xlsx",
     ]
+    faltando = [nome for nome in sem_cnpj if not (SAMPLES / nome).exists()]
+    assert faltando == [], f"sample renomeado/removido, lista fechada furou: {faltando}"
+
     for nome in sem_cnpj:
         p = SAMPLES / nome
-        if not p.exists():
-            continue
         assert documento.detectar_fornecedor(_texto(p), CONHECIDOS) is None, nome
