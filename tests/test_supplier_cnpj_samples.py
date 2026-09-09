@@ -1,11 +1,10 @@
 """Trava a propriedade que torna o degrau do documento seguro.
 
 Spec, fato 14: dos 29 samples reais, 21 trazem o CNPJ de UMA das duas
-empresas e NENHUM traz os dois. Neste checkout (`feat/roteamento-
-intercompany-fases-0-1c`, 21 commits atrás de `main`) `samples/` tem só 26
-desses arquivos — os números medidos abaixo são os do que existe aqui, não
-os da spec. Se um parser ou um sample novo quebrar a propriedade central,
-este teste quebra antes da produção.
+empresas e NENHUM traz os dois. Confirmado com esta regex em 2026-09-09,
+depois do merge de `main` (`c9d8dac`) nesta branch: 29 arquivos, 21 resolvem,
+0 ambíguos, 8 sem CNPJ de fornecedor. Se um parser ou um sample novo quebrar
+a propriedade central, este teste quebra antes da produção.
 """
 
 from __future__ import annotations
@@ -53,35 +52,28 @@ def test_nenhum_sample_traz_os_dois_cnpjs():
 
 @pytest.mark.skipif(not SAMPLES.is_dir(), reason="samples/ não está no checkout")
 def test_cobertura_medida_nao_regride():
-    """19 dos 26 samples DESTE checkout resolvem pelo documento. Pode subir, nao descer.
+    """21 dos 29 samples resolvem pelo documento. Pode subir, nao descer.
 
-    O fato 14 da spec fala em 21 de 29, e o brief desta task em 20 de 27 —
-    ambos medidos num checkout com mais arquivos em samples/ do que este.
-    Este branch (`feat/roteamento-intercompany-fases-0-1c`) está 21 commits
-    atrás de `main` e não tem 3 dos arquivos de `main`: "PEDIDO KOLOSH
-    96277C.pdf", "PEDIDO SAMS CLUB CD DF.pdf" e "PEDIDO TENNIS STATION.xlsx".
-    Verificado manualmente contra o conteúdo desses 3 arquivos (via
-    `git show main:samples/...`): a regex acha e resolve o CNPJ certo nos
-    dois primeiros (Nasmar e MM, respectivamente) e devolve `None` no
-    terceiro (sem CNPJ conhecido) — ou seja, isto não é um regex fraco, é
-    inventário de sample ausente neste branch. Medido no que EXISTE aqui:
-    26 arquivos, 19 resolvem, 0 ambíguos, 7 sem CNPJ. O piso é o número do
-    repo, não o da spec nem o do brief — teste tem que rodar no que existe.
+    São os números do fato 14 da spec, confirmados com esta regex em
+    2026-09-09 depois do merge de `main` nesta branch: 29 arquivos, 21
+    resolvem, 0 ambíguos, 8 sem CNPJ. A spec estava certa desde sempre — a
+    medição anterior deste teste rodava numa branch 21 commits atrás de
+    `main`, sem 3 dos 29 samples.
     """
     resolvidos = [
         p.name
         for p in _arquivos()
         if documento.detectar_fornecedor(_texto(p), CONHECIDOS) is not None
     ]
-    assert len(resolvidos) >= 19, f"cobertura caiu para {len(resolvidos)}: {resolvidos}"
+    assert len(resolvidos) >= 21, f"cobertura caiu para {len(resolvidos)}: {resolvidos}"
 
 
 @pytest.mark.skipif(not SAMPLES.is_dir(), reason="samples/ não está no checkout")
 def test_samples_sem_cnpj_devolvem_none_e_nao_palpite():
-    """Os 7 sem CNPJ de fornecedor caem para o degrau seguinte, nao para um default.
+    """Os 8 sem CNPJ de fornecedor caem para o degrau seguinte, nao para um default.
 
-    Lista fechada e verificada no checkout em 2026-09-09 — sao exatamente estes
-    sete, nem um a mais.
+    Lista fechada e verificada no checkout em 2026-09-09 (pós-merge de
+    `main`) — sao exatamente estes oito, nem um a mais.
     """
     sem_cnpj = [
         "Desmembramento Authentic feet (1).xlsx",
@@ -91,6 +83,7 @@ def test_samples_sem_cnpj_devolvem_none_e_nao_palpite():
         "PEDIDO BEIRA RIO.pdf",
         "Pedido Authentic Fit.xlsx",
         "Pedido Magic Feet MF048.xlsx",
+        "PEDIDO TENNIS STATION.xlsx",
     ]
     for nome in sem_cnpj:
         p = SAMPLES / nome
