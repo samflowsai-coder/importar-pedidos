@@ -371,3 +371,24 @@ def FIND_ORDERS_BY_PEDIDO_CLIENTE(n: int) -> str:
     JOIN CADASTRO C ON C.CODIGO = V.CLIENTE
     WHERE TRIM(V.PEDIDO_CLIENTE) IN ({marcadores})
     """
+
+
+# ── Roteamento: histórico do cliente (degrau 2) ───────────────────────────────
+# "Este cliente já comprou desta empresa nos últimos N meses?" — a resposta
+# que decide o ambiente quando o documento não traz o CNPJ do fornecedor.
+# CPF_CNPJ é limpo do mesmo jeito que em FIND_CLIENT_BY_CNPJ; o bind chega em
+# dígitos. Aceita N CNPJs porque uma planilha de desmembramento identifica o
+# comprador pelas colunas de loja, não pelo cabeçalho.
+def count_pedidos_cliente_desde_sql(n: int) -> str:
+    """SQL com N placeholders de CNPJ. Bind: (desde, cnpj1, ..., cnpjN)."""
+    if n < 1:
+        raise ValueError("count_pedidos_cliente_desde_sql exige ao menos 1 CNPJ")
+    marks = ", ".join("?" for _ in range(n))
+    return f"""
+        SELECT COUNT(*), MAX(V.DATA_PEDIDO)
+        FROM CAB_VENDAS V
+        JOIN CADASTRO C ON C.CODIGO = V.CLIENTE
+        WHERE V.DATA_PEDIDO >= ?
+          AND REPLACE(REPLACE(REPLACE(REPLACE(
+                C.CPF_CNPJ, '.', ''), '/', ''), '-', ''), ' ', '') IN ({marks})
+    """
