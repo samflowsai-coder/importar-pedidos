@@ -113,6 +113,48 @@ CREATE TABLE IF NOT EXISTS decisao_ambiente (
     divergiu_em   TEXT,
     divergiu_de   TEXT
 );
+
+-- Interruptor global do roteamento. Linha única (id=1), alterável no admin
+-- sem deploy. Default 'desligado' é o que permite mergear e deployar a Fase 1
+-- sem mudar nada para o operador.
+--   desligado   o roteador nem é chamado; comportamento de hoje, íntegro
+--   observando  calcula e grava o que TERIA feito; a escolha do operador vale
+--   ligado      a decisão vale
+CREATE TABLE IF NOT EXISTS roteamento_modo (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    valor        TEXT NOT NULL DEFAULT 'desligado'
+                 CHECK (valor IN ('desligado', 'observando', 'ligado')),
+    alterado_por TEXT,
+    alterado_em  TEXT
+);
+
+-- O que o Portal TERIA decidido, versus o que aconteceu. Alimenta a taxa de
+-- acerto que autoriza virar a chave, e a lista de divergências que é o
+-- material de treinamento do time.
+CREATE TABLE IF NOT EXISTS roteamento_sombra (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    import_id                   TEXT NOT NULL,
+    decidido_em                 TEXT NOT NULL,
+    degrau                      TEXT NOT NULL,
+    env_sugerido                TEXT,
+    env_escolhido_pelo_operador TEXT,
+    bateu                       INTEGER NOT NULL
+);
+
+-- Arquivo que o watcher não soube rotear. NÃO é importado em ambiente
+-- nenhum: fica visível aqui e o arquivo continua na pasta de entrada, onde o
+-- operador pode abri-lo pelo preview e responder. Chave = sha do arquivo, para
+-- que a re-varredura a cada ciclo não infle a fila.
+CREATE TABLE IF NOT EXISTS roteamento_pendencia (
+    sha256        TEXT PRIMARY KEY,
+    source_path   TEXT NOT NULL,
+    env_scan_slug TEXT NOT NULL,
+    order_number  TEXT,
+    customer_cnpj TEXT,
+    customer_name TEXT,
+    visto_em      TEXT NOT NULL,
+    visto_vezes   INTEGER NOT NULL DEFAULT 1
+);
 """
 
 INDEXES_SQL = """
@@ -144,6 +186,9 @@ CREATE INDEX IF NOT EXISTS idx_inbound_received_at  ON inbound_idempotency(recei
 CREATE INDEX IF NOT EXISTS idx_inbound_import_id    ON inbound_idempotency(import_id);
 
 CREATE INDEX IF NOT EXISTS idx_decisao_ambiente_env ON decisao_ambiente(env_slug);
+
+CREATE INDEX IF NOT EXISTS idx_sombra_decidido_em ON roteamento_sombra(decidido_em DESC);
+CREATE INDEX IF NOT EXISTS idx_sombra_import_id   ON roteamento_sombra(import_id);
 """
 
 # Migrações de coluna para shared.db — aplicadas se a coluna ainda não existir.
