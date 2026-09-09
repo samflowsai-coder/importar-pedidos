@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS environments (
     -- Depende da marcação no Fire (Parte 2); default OFF preserva o hoje.
     flowpcp_catalogo_apenas_meias INTEGER NOT NULL DEFAULT 0,
     flowpcp_clientes_push     INTEGER NOT NULL DEFAULT 0,
+    fiscal_codfigfiscal       INTEGER,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -141,4 +142,8 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
      "ALTER TABLE environments ADD COLUMN intercompany_cnpj TEXT"),
     ("environments", "intercompany_env_slug",
      "ALTER TABLE environments ADD COLUMN intercompany_env_slug TEXT"),
+    # Figura fiscal do ambiente. Medido na Fire viva: 1 na MM Americanense,
+    # 5 na Nasmar. NULL = usa o default de app/erp/fiscal.py.
+    ("environments", "fiscal_codfigfiscal",
+     "ALTER TABLE environments ADD COLUMN fiscal_codfigfiscal INTEGER"),
 )
