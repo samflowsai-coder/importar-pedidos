@@ -106,13 +106,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_environments_slug ON environments(slug);
 CREATE INDEX IF NOT EXISTS idx_environments_active      ON environments(is_active);
 -- UNIQUE, não só INDEX: dois ambientes ATIVOS com o mesmo CNPJ fariam
 -- find_by_cnpj devolver o que o LIMIT 1 pegasse — pedido pra empresa errada,
--- em silêncio. O DROP antes é necessário porque `CREATE ... IF NOT EXISTS`
--- com o MESMO nome não substitui um índice já existente (mesmo que a
--- definição mude de INDEX pra UNIQUE INDEX) — sem o DROP, um banco que já
--- rodou a versão não-única deste índice nunca ganharia a garantia.
+-- em silêncio. Escopado a is_active=1 porque é exatamente o conjunto que
+-- find_by_cnpj enxerga (mesmo WHERE): a restrição existe só pra garantir que
+-- essa busca nunca tenha dois candidatos, nem mais nem menos — um ambiente
+-- desativado não pode segurar o CNPJ pra sempre, senão desativar e recadastrar
+-- (pasta errada, etc.) trava com 409 sem motivo real. O DROP antes é
+-- necessário porque `CREATE ... IF NOT EXISTS` com o MESMO nome não substitui
+-- um índice já existente (mesmo que a definição mude) — sem o DROP, um banco
+-- que já tivesse materializado uma versão anterior deste índice nunca
+-- ganharia a garantia atual.
 DROP INDEX IF EXISTS idx_environments_cnpj;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_environments_cnpj ON environments(cnpj)
-    WHERE cnpj IS NOT NULL;
+    WHERE cnpj IS NOT NULL AND is_active = 1;
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id    ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);

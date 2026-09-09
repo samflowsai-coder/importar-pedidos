@@ -91,15 +91,14 @@ class IntercompanyConfigRequest(BaseModel):
 def _cnpj_taken_message(cnpj: str | None) -> str:
     """Mensagem 409 útil: nomeia o ambiente que já usa o CNPJ.
 
-    Busca em `list_all()`, não em `find_by_cnpj` — o índice UNIQUE do banco
-    cobre TODO ambiente com aquele CNPJ, ativo ou não (um ambiente desativado
-    também bloqueia a reinserção do mesmo CNPJ), e o operador precisa saber
-    qual ambiente é, não só que "já existe em algum lugar".
+    `find_by_cnpj` basta: o índice UNIQUE é escopado a `is_active=1` (mesmo
+    WHERE de `find_by_cnpj`), então quem colide é sempre um ambiente ativo —
+    um desativado nunca dispara `CnpjTaken`, porque soltou o CNPJ ao sair do
+    roteamento.
     """
-    outro = next((e for e in environments_repo.list_all() if e.get("cnpj") == cnpj), None)
+    outro = environments_repo.find_by_cnpj(cnpj)
     if outro:
-        status = "" if outro["is_active"] else " (inativo)"
-        return f"CNPJ já usado pelo ambiente '{outro['name']}' ({outro['slug']}){status}."
+        return f"CNPJ já usado pelo ambiente '{outro['name']}' ({outro['slug']})."
     return "CNPJ já usado por outro ambiente."
 
 

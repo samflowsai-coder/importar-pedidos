@@ -500,3 +500,42 @@ def test_create_rejeita_cnpj_duplicado_com_formatacao_diferente(fresh_shared):
             watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
             cnpj="34513679000134",
         )
+
+
+def test_soft_delete_libera_cnpj_para_recadastro(fresh_shared):
+    """A restricao existe so pra garantir que find_by_cnpj nunca escolha entre
+    dois candidatos — e find_by_cnpj ja filtra is_active=1. Um ambiente
+    desativado nao pode segurar o CNPJ pra sempre: cadastrar com a pasta
+    errada, desativar e recadastrar tem que funcionar, nao travar com 409."""
+    antigo = environments_repo.create(
+        slug="nasmar-errado", name="Nasmar (pasta errada)",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="34513679000134",
+    )
+    environments_repo.soft_delete(antigo["id"])
+    novo = environments_repo.create(
+        slug="nasmar", name="Nasmar",
+        watch_dir="/x2", output_dir="/y2", fb_path="/z2.fdb",
+        cnpj="34513679000134",
+    )
+    assert novo["cnpj"] == "34513679000134"
+
+
+def test_find_by_cnpj_prefere_o_ambiente_novo_apos_recadastro(fresh_shared):
+    """A garantia que interessa, ponta a ponta: depois do recadastro so existe
+    UM ativo com aquele CNPJ, e find_by_cnpj acha ELE, nao o desativado."""
+    antigo = environments_repo.create(
+        slug="nasmar-errado", name="Nasmar (pasta errada)",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="34513679000134",
+    )
+    environments_repo.soft_delete(antigo["id"])
+    novo = environments_repo.create(
+        slug="nasmar", name="Nasmar",
+        watch_dir="/x2", output_dir="/y2", fb_path="/z2.fdb",
+        cnpj="34513679000134",
+    )
+    achado = environments_repo.find_by_cnpj("34513679000134")
+    assert achado is not None
+    assert achado["id"] == novo["id"]
+    assert achado["slug"] == "nasmar"
