@@ -140,6 +140,11 @@ from app.web import routes_update  # noqa: E402
 
 app.include_router(routes_update.router)
 
+# Roteamento intercompany: interruptor de 3 estados + taxa de acerto.
+from app.web.routes_roteamento import router as roteamento_router  # noqa: E402
+
+app.include_router(roteamento_router)
+
 
 @app.on_event("startup")
 def _iniciar_reconciliacao_periodica() -> None:
@@ -493,6 +498,15 @@ def admin_atualizacao_page(request: Request):
     if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
         return RedirectResponse(url="/login")
     return FileResponse(str(STATIC_DIR / "admin-atualizacao.html"))
+
+
+@app.get("/admin/roteamento")
+def admin_roteamento_page(request: Request):
+    """Interruptor do roteamento + taxa de acerto. Exige login (não admin —
+    leitura é `require_user`, só a troca do modo exige admin). API enforce o role."""
+    if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
+        return RedirectResponse(url="/login")
+    return FileResponse(str(STATIC_DIR / "admin-roteamento.html"))
 
 
 @app.get("/admin/usuarios")

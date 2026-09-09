@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portal de Pedidos — Roteamento</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=1">
+  <link rel="stylesheet" href="/static/css/shell.css?v=2">
+  <script src="/static/js/shell.js?v=2" defer></script>
+  <style>
+    .main { padding: 32px 32px 96px; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 780px; }
+
+    .breadcrumb {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+    .breadcrumb a { color: var(--text-muted); text-decoration: none; }
+    .breadcrumb a:hover { color: var(--text-secondary); }
+
+    .page-title { font-size: 24px; font-weight: 600; letter-spacing: -.02em; margin-bottom: 6px; }
+    .page-subtitle { font-size: 13.5px; color: var(--text-muted); margin-bottom: 28px; line-height: 1.6; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 24px 26px;
+      box-shadow: var(--shadow-md);
+    }
+    .card + .card { margin-top: 18px; }
+    .card-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .card-desc { font-size: 12.5px; color: var(--text-muted); margin-bottom: 18px; line-height: 1.55; }
+
+    .mono { font-family: var(--font-mono); font-size: 12px; }
+
+    .err-banner {
+      font-size: 13px; color: var(--error); background: var(--error-bg);
+      border: 1px solid rgba(220,38,38,.18); border-radius: var(--radius);
+      padding: 10px 12px; margin-bottom: 16px;
+    }
+
+    /* ── Interruptor ── */
+    .switch-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    @media (max-width: 640px) { .switch-row { grid-template-columns: 1fr; } }
+    .switch-opt {
+      display: flex; flex-direction: column; gap: 6px;
+      text-align: left; padding: 14px 15px;
+      border: 1.5px solid var(--border); border-radius: var(--radius);
+      background: var(--bg); cursor: pointer; font: inherit; color: inherit;
+      transition: border-color 120ms, background 120ms;
+    }
+    .switch-opt:hover:not(:disabled) { border-color: var(--border-hover); }
+    .switch-opt:disabled { cursor: default; }
+    .switch-opt.active {
+      border-color: var(--accent); background: var(--accent-bg);
+    }
+    .switch-opt-head { display: flex; align-items: center; gap: 8px; }
+    .switch-dot {
+      width: 15px; height: 15px; border-radius: 50%; flex-shrink: 0;
+      border: 1.5px solid var(--border-hover); background: var(--bg);
+      position: relative;
+    }
+    .switch-opt.active .switch-dot { border-color: var(--accent); }
+    .switch-opt.active .switch-dot::after {
+      content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--accent);
+    }
+    .switch-opt-label { font-size: 13.5px; font-weight: 600; text-transform: capitalize; }
+    .switch-opt.active .switch-opt-label { color: var(--accent-hover); }
+    .switch-opt-phrase { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+    .switch-meta { margin-top: 12px; font-size: 12px; color: var(--text-muted); }
+
+    /* ── Taxa ── */
+    .rate-sentence { font-size: 14px; color: var(--text); line-height: 1.6; margin-bottom: 4px; }
+    .rate-sentence b { font-weight: 600; }
+    .rate-sentence .n-bateu    { color: var(--success-strong); font-weight: 600; }
+    .rate-sentence .n-perguntar{ color: var(--text-secondary); font-weight: 600; }
+    .rate-sentence .n-divergiu { color: var(--error); font-weight: 600; }
+    .rate-period { font-size: 12px; color: var(--text-muted); margin-bottom: 18px; }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: .65rem .5rem; text-align: left; border-bottom: 1px solid var(--border-subtle); font-size: 12.5px; }
+    th {
+      font-weight: 600; color: var(--text-muted); font-size: 10.5px;
+      text-transform: uppercase; letter-spacing: .04em;
+    }
+    td.mono, th.mono { font-family: var(--font-mono); }
+    .table-wrap { overflow-x: auto; }
+
+    .empty-state {
+      font-size: 13px; color: var(--text-muted); line-height: 1.6;
+      padding: 6px 0;
+    }
+
+    .pend-item {
+      display: flex; justify-content: space-between; gap: 16px;
+      padding: 12px 0; border-bottom: 1px solid var(--border-subtle);
+    }
+    .pend-item:last-child { border-bottom: none; }
+    .pend-main { min-width: 0; }
+    .pend-file { font-size: 13px; font-weight: 500; word-break: break-all; }
+    .pend-motivo { font-size: 12px; color: var(--warn); margin-top: 2px; }
+    .pend-folder { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+    .pend-when { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; text-align: right; }
+
+    .spin-dark {
+      width: 14px; height: 14px; margin: 8px auto;
+      border: 2px solid var(--border);
+      border-top-color: var(--text-muted); border-radius: 50%;
+      animation: spin .65s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+
+<div id="app-shell"></div>
+
+<main class="main">
+  <div class="container">
+    <div class="breadcrumb">
+      <a href="/">Pedidos</a>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      <span>Configurações</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      <span>Roteamento</span>
+    </div>
+
+    <h1 class="page-title">Roteamento intercompany</h1>
+    <p class="page-subtitle">
+      Decide sozinho em qual empresa cada pedido entra. Em <code class="mono">observando</code>,
+      o Portal calcula e registra o que teria feito, sem agir — é o que autoriza treinar a
+      equipe antes de ligar de vez.
+    </p>
+
+    <div id="err-banner" class="err-banner" hidden></div>
+
+    <!-- 1. Interruptor -->
+    <div class="card">
+      <div class="card-title">Interruptor</div>
+      <div class="card-desc">Voltar para trás (observando ou desligado) é imediato. Avançar para ligado pede confirmação.</div>
+      <div class="switch-row" id="switch-row"></div>
+      <div class="switch-meta" id="switch-meta"></div>
+    </div>
+
+    <!-- 2. Taxa -->
+    <div class="card">
+      <div class="card-title">Taxa de acerto</div>
+      <div id="rate-loading" class="spin-dark"></div>
+      <div id="rate-content" hidden>
+        <p class="rate-sentence" id="rate-sentence"></p>
+        <p class="rate-period" id="rate-period"></p>
+        <div id="diverg-wrap">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Quando</th><th>Pedido</th><th>Degrau</th><th>Sugerido</th><th>Escolhido</th></tr>
+              </thead>
+              <tbody id="diverg-rows"></tbody>
+            </table>
+          </div>
+        </div>
+        <p class="empty-state" id="diverg-empty" hidden>Nenhuma divergência no período — todo pedido em que o Portal teve uma sugestão bateu com a escolha do operador.</p>
+      </div>
+    </div>
+
+    <!-- 3. Pendências -->
+    <div class="card">
+      <div class="card-title">Pendências do watcher</div>
+      <div class="card-desc">Arquivos que o Portal recebeu mas não soube rotear sozinho.</div>
+      <p class="empty-state" id="pend-empty" hidden>Nenhum arquivo retido — este é o estado normal.</p>
+      <div id="pend-list"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+  const API = '/api/roteamento';
+  const MODO_PHRASES = {
+    desligado:  'nada muda. O operador escolhe a empresa no login, como sempre.',
+    observando: 'o Portal calcula a decisão e registra o que teria feito. A escolha do operador continua valendo.',
+    ligado:     'a decisão do Portal vale. A seleção de ambiente some do login.',
+  };
+  const MODO_ORDEM = ['desligado', 'observando', 'ligado'];
+
+  function $(id) { return document.getElementById(id); }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function showError(msg) {
+    const b = $('err-banner');
+    b.textContent = msg;
+    b.hidden = false;
+  }
+  function clearError() { $('err-banner').hidden = true; }
+
+  function fmtDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function timeAgo(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const secs = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+    if (secs < 60) return 'agora';
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `há ${mins} min`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `há ${hours} h`;
+    const days = Math.floor(hours / 24);
+    return `há ${days} d`;
+  }
+
+  // ── Interruptor ──────────────────────────────────────────────────
+  let currentModo = null;
+  let isAdmin = false;
+
+  function renderSwitch() {
+    const row = $('switch-row');
+    row.innerHTML = MODO_ORDEM.map((m) => `
+      <button type="button" class="switch-opt ${m === currentModo ? 'active' : ''}" data-modo="${m}" ${isAdmin ? '' : 'disabled'}>
+        <div class="switch-opt-head">
+          <span class="switch-dot"></span>
+          <span class="switch-opt-label">${m}</span>
+        </div>
+        <span class="switch-opt-phrase">${esc(MODO_PHRASES[m])}</span>
+      </button>`).join('');
+    row.querySelectorAll('.switch-opt').forEach((btn) => {
+      btn.addEventListener('click', () => onSwitchClick(btn.dataset.modo));
+    });
+    $('switch-meta').textContent = isAdmin ? '' : 'Apenas administradores podem trocar o modo.';
+  }
+
+  async function onSwitchClick(modo) {
+    if (modo === currentModo) return;
+    if (modo === 'ligado') {
+      const ok = confirm('A decisão do Portal passa a valer e a seleção de ambiente some do login. Confirmar?');
+      if (!ok) return;
+    }
+    clearError();
+    try {
+      const r = await fetch(`${API}/modo`, {
+        method: 'PUT', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modo }),
+      });
+      if (r.status === 401) { location.href = '/login'; return; }
+      if (r.status === 403) { showError('Apenas administradores podem trocar o modo.'); return; }
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { showError(data.detail || `Falha ao trocar o modo (${r.status}).`); return; }
+      currentModo = data.modo;
+      renderSwitch();
+      if (window.appShell) window.appShell.showSuccess(`Modo alterado para "${currentModo}".`);
+    } catch (e) {
+      showError('Falha de rede ao trocar o modo.');
+    }
+  }
+
+  async function loadModo() {
+    const r = await fetch(`${API}/modo`, { credentials: 'same-origin' });
+    if (r.status === 401) { location.href = '/login'; return; }
+    if (!r.ok) { showError(`Falha ao carregar o modo atual (${r.status}).`); return; }
+    const data = await r.json();
+    currentModo = data.modo;
+    renderSwitch();
+  }
+
+  // ── Taxa ─────────────────────────────────────────────────────────
+  function renderRateSentence(t) {
+    if (t.total === 0) {
+      $('rate-sentence').textContent = 'Nenhum pedido roteado no período.';
+    } else {
+      $('rate-sentence').innerHTML =
+        `nos últimos 30 dias, <b>${t.total}</b> pedidos: ` +
+        `<span class="n-bateu">${t.bateu} bateram</span>, ` +
+        `<span class="n-perguntar">${t.perguntar} o Portal não soube responder</span>, ` +
+        `<span class="n-divergiu">${t.divergiu} divergiram</span>.`;
+    }
+    $('rate-period').textContent = t.desde ? `desde ${fmtDate(t.desde)}` : '';
+  }
+
+  function renderDivergencias(rows) {
+    const empty = !rows || rows.length === 0;
+    $('diverg-wrap').hidden = empty;
+    $('diverg-empty').hidden = !empty;
+    if (empty) return;
+    $('diverg-rows').innerHTML = rows.map((d) => `
+      <tr>
+        <td>${esc(timeAgo(d.decidido_em))}</td>
+        <td class="mono">${esc(d.import_id)}</td>
+        <td>${esc(d.degrau)}</td>
+        <td class="mono">${esc(d.env_sugerido || '—')}</td>
+        <td class="mono">${esc(d.env_escolhido || '—')}</td>
+      </tr>`).join('');
+  }
+
+  async function loadTaxa() {
+    try {
+      const r = await fetch(`${API}/taxa?dias=30`, { credentials: 'same-origin' });
+      if (r.status === 401) { location.href = '/login'; return; }
+      if (!r.ok) { showError(`Falha ao carregar a taxa de acerto (${r.status}).`); return; }
+      const t = await r.json();
+      $('rate-loading').hidden = true;
+      $('rate-content').hidden = false;
+      renderRateSentence(t);
+      renderDivergencias(t.divergencias || []);
+      renderPendencias(t.pendencias || []);
+    } catch (e) {
+      showError('Falha de rede ao carregar a taxa de acerto.');
+    }
+  }
+
+  // ── Pendências ───────────────────────────────────────────────────
+  function renderPendencias(items) {
+    const empty = !items || items.length === 0;
+    $('pend-empty').hidden = !empty;
+    $('pend-list').hidden = empty;
+    if (empty) { $('pend-list').innerHTML = ''; return; }
+    $('pend-list').innerHTML = items.map((p) => `
+      <div class="pend-item">
+        <div class="pend-main">
+          <div class="pend-file">${esc(p.order_number || p.source_path)}</div>
+          <div class="pend-motivo">${esc(p.motivo || 'motivo não registrado')}</div>
+          <div class="pend-folder">${esc(p.source_path)} · ${esc(p.env_scan_slug || '—')}</div>
+        </div>
+        <div class="pend-when">${esc(timeAgo(p.visto_em))}</div>
+      </div>`).join('');
+  }
+
+  // ── Boot ─────────────────────────────────────────────────────────
+  // Leitura (modo/taxa/pendências) vale para qualquer usuário logado — é
+  // material de treinamento do time, não só do admin. Só a troca do modo
+  // (PUT) exige admin; o switch fica desabilitado para quem não é.
+  async function boot() {
+    try {
+      const r = await fetch('/api/auth/me', { credentials: 'same-origin' });
+      if (r.status === 401) { location.href = '/login'; return; }
+      const data = await r.json();
+      isAdmin = !!(data.user && data.user.role === 'admin');
+    } catch (e) {
+      isAdmin = false;
+    }
+
+    await loadModo();
+    await loadTaxa();
+  }
+
+  boot();
+</script>
+</body>
+</html>

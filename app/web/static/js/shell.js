@@ -30,6 +30,7 @@
     chevron: '<svg class="app-nav-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>',
     logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
     update: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>',
+    routing: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="5"/><circle cx="8" cy="12" r="3"/></svg>',
   };
 
   const NAV_DEF = {
@@ -40,6 +41,7 @@
         { label: 'Diretórios',     href: '/configuracoes/diretorios', icon: ICONS.folder, route: 'config-diretorios' },
         { label: 'Usuários',       href: '/configuracoes/usuarios',   icon: ICONS.users, route: 'config-usuarios' },
         { label: 'Atualização',    href: '/admin/atualizacao',       icon: ICONS.update, route: 'admin-atualizacao' },
+        { label: 'Roteamento',     href: '/admin/roteamento',        icon: ICONS.routing, route: 'admin-roteamento' },
       ],
     },
   };
@@ -51,6 +53,7 @@
     '/configuracoes/diretorios':  'config-diretorios',
     '/configuracoes/usuarios':    'config-usuarios',
     '/admin/atualizacao':         'admin-atualizacao',
+    '/admin/roteamento':          'admin-roteamento',
   };
 
   function el(html) {
@@ -105,7 +108,7 @@
       </a>`);
 
     if (showConfig) {
-      const expanded = ['admin-ambientes', 'config-diretorios', 'config-usuarios', 'admin-atualizacao'].includes(active);
+      const expanded = ['admin-ambientes', 'config-diretorios', 'config-usuarios', 'admin-atualizacao', 'admin-roteamento'].includes(active);
       const childLinks = NAV_DEF.config.children.map((c) => `
         <a class="app-nav-link ${active === c.route ? 'active' : ''}"
            href="${c.href}" data-route="${c.route}">
