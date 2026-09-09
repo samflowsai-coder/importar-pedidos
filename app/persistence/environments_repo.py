@@ -13,6 +13,7 @@ Funções públicas:
 - `soft_delete(env_id)`: marca `is_active=0` (preserva histórico de pedidos)
 - `to_fb_config(env)`: materializa dict pronto para `app/erp/connection`
 """
+
 from __future__ import annotations
 
 import re
@@ -26,16 +27,35 @@ from app.security import secret_store
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
 _PUBLIC_FIELDS = (
-    "id", "slug", "name", "watch_dir", "output_dir",
-    "fb_path", "fb_host", "fb_port", "fb_user", "fb_charset",
-    "is_active", "created_at", "updated_at",
+    "id",
+    "slug",
+    "name",
+    "watch_dir",
+    "output_dir",
+    "fb_path",
+    "fb_host",
+    "fb_port",
+    "fb_user",
+    "fb_charset",
+    "is_active",
+    "created_at",
+    "updated_at",
     # FlowPCP (não-secreto). O token cifrado fica fora do public view.
-    "flowpcp_enabled", "flowpcp_base_url", "flowpcp_tenant_id",
-    "flowpcp_timezone", "flowpcp_dry_run", "flowpcp_poll_interval_s",
-    "flowpcp_request_timeout_s", "flowpcp_catalogo_push",
-    "flowpcp_catalogo_apenas_meias", "flowpcp_clientes_push",
+    "flowpcp_enabled",
+    "flowpcp_base_url",
+    "flowpcp_tenant_id",
+    "flowpcp_timezone",
+    "flowpcp_dry_run",
+    "flowpcp_poll_interval_s",
+    "flowpcp_request_timeout_s",
+    "flowpcp_catalogo_push",
+    "flowpcp_catalogo_apenas_meias",
+    "flowpcp_clientes_push",
     # De-para de cliente intercompany (não-secreto).
-    "intercompany_cnpj", "intercompany_env_slug",
+    "intercompany_cnpj",
+    "intercompany_env_slug",
+    # Perfil fiscal do ambiente (CODFIGFISCAL).
+    "fiscal_codfigfiscal",
 )
 
 
@@ -82,9 +102,7 @@ def create(
     if isinstance(slug, str):
         slug = slug.strip().lower()
     if not isinstance(slug, str) or not SLUG_RE.match(slug):
-        raise ValueError(
-            f"slug inválido: {slug!r} — use [a-z0-9-], 1-31 chars, começa com alfanum"
-        )
+        raise ValueError(f"slug inválido: {slug!r} — use [a-z0-9-], 1-31 chars, começa com alfanum")
     if not name or not name.strip():
         raise ValueError("name é obrigatório")
     env_id = str(uuid.uuid4())
@@ -99,9 +117,21 @@ def create(
                    (id, slug, name, watch_dir, output_dir, fb_path, fb_host, fb_port,
                     fb_user, fb_charset, fb_password_enc, is_active, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
-                (env_id, slug, name.strip(), watch_dir, output_dir, fb_path_clean,
-                 fb_host or None, fb_port or None, fb_user, fb_charset,
-                 pw_enc, now, now),
+                (
+                    env_id,
+                    slug,
+                    name.strip(),
+                    watch_dir,
+                    output_dir,
+                    fb_path_clean,
+                    fb_host or None,
+                    fb_port or None,
+                    fb_user,
+                    fb_charset,
+                    pw_enc,
+                    now,
+                    now,
+                ),
             )
     except sqlite3.IntegrityError as exc:
         msg = str(exc).lower()
@@ -113,17 +143,13 @@ def create(
 
 def get(env_id: str) -> dict[str, Any] | None:
     with router.shared_connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM environments WHERE id = ?", (env_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM environments WHERE id = ?", (env_id,)).fetchone()
     return _row_to_dict(row) if row else None
 
 
 def get_by_slug(slug: str) -> dict[str, Any] | None:
     with router.shared_connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM environments WHERE slug = ?", (slug,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM environments WHERE slug = ?", (slug,)).fetchone()
     return _row_to_dict(row) if row else None
 
 
@@ -155,6 +181,7 @@ def update(
     fb_user: str | None = None,
     fb_charset: str | None = None,
     fb_password: str | None = None,
+    fiscal_codfigfiscal: int | None = None,
 ) -> dict[str, Any] | None:
     """Atualiza campos editáveis. `slug` propositalmente ausente — imutável.
 
@@ -178,6 +205,8 @@ def update(
             fields[k] = v
     if fb_password is not None:
         fields["fb_password_enc"] = secret_store.encrypt(fb_password) if fb_password else None
+    if fiscal_codfigfiscal is not None:
+        fields["fiscal_codfigfiscal"] = fiscal_codfigfiscal
     if not fields:
         return get(env_id)
     fields["updated_at"] = _now()
@@ -277,9 +306,7 @@ def set_intercompany_config(
     }
     sets = ", ".join(f"{k} = ?" for k in fields)
     with router.shared_connect() as conn:
-        conn.execute(
-            f"UPDATE environments SET {sets} WHERE id = ?", [*fields.values(), env_id]
-        )
+        conn.execute(f"UPDATE environments SET {sets} WHERE id = ?", [*fields.values(), env_id])
     limpar_cache()
     return get(env_id)
 

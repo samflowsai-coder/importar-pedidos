@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
+
 from app.erp.fiscal import perfil_para
 
 
@@ -35,5 +37,5 @@ def test_perfil_ignora_campo_vazio():
 
 def test_perfil_e_imutavel():
     p = perfil_para(None)
-    with __import__("pytest").raises(Exception):
+    with pytest.raises(Exception):
         p.codfigfiscal = 9

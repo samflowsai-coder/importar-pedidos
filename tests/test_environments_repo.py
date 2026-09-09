@@ -1,8 +1,10 @@
 """CRUD da tabela `environments` em app_shared.db."""
+
 from __future__ import annotations
 
 import pytest
 
+from app.erp.fiscal import perfil_para
 from app.persistence import environments_repo, router
 
 
@@ -42,14 +44,18 @@ def test_create_rejects_invalid_slug(fresh_shared):
         environments_repo.create(
             slug="mm prod",
             name="MM",
-            watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+            watch_dir="/x",
+            output_dir="/y",
+            fb_path="/z.fdb",
         )
     # Caracteres especiais
     with pytest.raises(ValueError):
         environments_repo.create(
             slug="mm@prod",
             name="MM",
-            watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+            watch_dir="/x",
+            output_dir="/y",
+            fb_path="/z.fdb",
         )
 
 
@@ -58,13 +64,17 @@ def test_create_normalizes_uppercase_slug_to_lowercase(fresh_shared):
     env = environments_repo.create(
         slug="MM",
         name="MM",
-        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        watch_dir="/x",
+        output_dir="/y",
+        fb_path="/z.fdb",
     )
     assert env["slug"] == "mm"
     env2 = environments_repo.create(
         slug="  Nasmar  ",
         name="Nasmar",
-        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        watch_dir="/x",
+        output_dir="/y",
+        fb_path="/z.fdb",
     )
     assert env2["slug"] == "nasmar"
 
@@ -72,19 +82,28 @@ def test_create_normalizes_uppercase_slug_to_lowercase(fresh_shared):
 def test_create_requires_name(fresh_shared):
     with pytest.raises(ValueError):
         environments_repo.create(
-            slug="mm", name="   ",
-            watch_dir="/a", output_dir="/b", fb_path="/c.fdb",
+            slug="mm",
+            name="   ",
+            watch_dir="/a",
+            output_dir="/b",
+            fb_path="/c.fdb",
         )
 
 
 def test_create_rejects_duplicate_slug(fresh_shared):
-    environments_repo.create(slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+    environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
     with pytest.raises(environments_repo.SlugTaken):
-        environments_repo.create(slug="mm", name="MM2", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+        environments_repo.create(
+            slug="mm", name="MM2", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+        )
 
 
 def test_update_does_not_change_slug(fresh_shared):
-    env = environments_repo.create(slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
     updated = environments_repo.update(
         env["id"],
         name="MM Renomeado",
@@ -97,8 +116,11 @@ def test_update_does_not_change_slug(fresh_shared):
 
 def test_password_round_trip(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b", fb_path="/c.fdb",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/c.fdb",
         fb_password="masterkey",
     )
     pw = environments_repo.get_password(env["id"])
@@ -106,14 +128,19 @@ def test_password_round_trip(fresh_shared):
 
 
 def test_password_none_when_absent(fresh_shared):
-    env = environments_repo.create(slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
     assert environments_repo.get_password(env["id"]) is None
 
 
 def test_update_password_keeps_existing_when_none(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b", fb_path="/c.fdb",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/c.fdb",
         fb_password="orig",
     )
     environments_repo.update(env["id"], name="MM2", fb_password=None)
@@ -122,8 +149,11 @@ def test_update_password_keeps_existing_when_none(fresh_shared):
 
 def test_update_password_clears_with_empty_string(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b", fb_path="/c.fdb",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/c.fdb",
         fb_password="orig",
     )
     environments_repo.update(env["id"], fb_password="")
@@ -132,8 +162,11 @@ def test_update_password_clears_with_empty_string(fresh_shared):
 
 def test_update_password_replaces(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b", fb_path="/c.fdb",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/c.fdb",
         fb_password="old",
     )
     environments_repo.update(env["id"], fb_password="new")
@@ -141,7 +174,9 @@ def test_update_password_replaces(fresh_shared):
 
 
 def test_soft_delete(fresh_shared):
-    env = environments_repo.create(slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
     environments_repo.soft_delete(env["id"])
     after = environments_repo.get(env["id"])
     assert after["is_active"] == 0
@@ -150,15 +185,23 @@ def test_soft_delete(fresh_shared):
 
 
 def test_list_active_orders_by_name(fresh_shared):
-    environments_repo.create(slug="nasmar", name="Nasmar", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
-    environments_repo.create(slug="mm",     name="MM Calçados", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+    environments_repo.create(
+        slug="nasmar", name="Nasmar", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
+    environments_repo.create(
+        slug="mm", name="MM Calçados", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
     rows = environments_repo.list_active()
     assert [e["slug"] for e in rows] == ["mm", "nasmar"]  # MM (M) < Nasmar (N) por nome
 
 
 def test_list_all_includes_inactive(fresh_shared):
-    a = environments_repo.create(slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
-    environments_repo.create(slug="nasmar", name="Nasmar", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+    a = environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
+    environments_repo.create(
+        slug="nasmar", name="Nasmar", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
     environments_repo.soft_delete(a["id"])
     rows = environments_repo.list_all()
     slugs = {e["slug"] for e in rows}
@@ -166,7 +209,9 @@ def test_list_all_includes_inactive(fresh_shared):
 
 
 def test_get_by_slug(fresh_shared):
-    env = environments_repo.create(slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
     found = environments_repo.get_by_slug("mm")
     assert found["id"] == env["id"]
     assert environments_repo.get_by_slug("inexistente") is None
@@ -174,9 +219,13 @@ def test_get_by_slug(fresh_shared):
 
 def test_to_fb_config_extracts_password(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b", fb_path="/c.fdb",
-        fb_host="192.168.1.10", fb_port="3050",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/c.fdb",
+        fb_host="192.168.1.10",
+        fb_port="3050",
         fb_password="masterkey",
     )
     cfg = environments_repo.to_fb_config(env)
@@ -266,10 +315,13 @@ def test_flowpcp_disable_keeps_token(fresh_shared):
 # Finder "Copy as Pathname" e cmd do Windows costumam embrulhar paths em
 # aspas. Salvar bruto quebra a conexão Firebird com "io error: file not found".
 
+
 def test_create_strips_wrapping_quotes_from_fb_path(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
         fb_path="'/Users/me/db.fdb'",
     )
     assert env["fb_path"] == "/Users/me/db.fdb"
@@ -277,8 +329,10 @@ def test_create_strips_wrapping_quotes_from_fb_path(fresh_shared):
 
 def test_create_strips_wrapping_double_quotes_and_whitespace(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
         fb_path='  "/Users/me/db.fdb"  ',
     )
     assert env["fb_path"] == "/Users/me/db.fdb"
@@ -286,8 +340,11 @@ def test_create_strips_wrapping_double_quotes_and_whitespace(fresh_shared):
 
 def test_update_strips_wrapping_quotes_from_fb_path(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b", fb_path="/clean.fdb",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/clean.fdb",
     )
     updated = environments_repo.update(env["id"], fb_path="'/new/path.fdb'")
     assert updated["fb_path"] == "/new/path.fdb"
@@ -297,8 +354,11 @@ def test_to_fb_config_strips_legacy_quoted_path(fresh_shared):
     """Dados legados na DB (gravados antes do fix) ainda podem ter aspas —
     `to_fb_config` normaliza na leitura."""
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b", fb_path="/clean.fdb",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/clean.fdb",
     )
     # Simula linha legada com aspas literais na DB (bypassa o sanitizer do update).
     with router.shared_connect() as conn:
@@ -309,3 +369,26 @@ def test_to_fb_config_strips_legacy_quoted_path(fresh_shared):
     env_legacy = environments_repo.get(env["id"])
     cfg = environments_repo.to_fb_config(env_legacy)
     assert cfg["path"] == "/legacy/path.fdb"
+
+
+def test_fiscal_codfigfiscal_round_trip(fresh_shared):
+    """Perfil fiscal via environments_repo + perfil_para: caminho ponta a ponta."""
+    # Cria ambiente (default MM)
+    env = environments_repo.create(
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/c.fdb",
+    )
+    # Verify default (MM=1)
+    env_mm = environments_repo.get(env["id"])
+    assert env_mm["fiscal_codfigfiscal"] is None
+    perfil_mm = perfil_para(env_mm)
+    assert perfil_mm.codfigfiscal == 1
+
+    # Update para Nasmar=5
+    env_nasmar = environments_repo.update(env["id"], fiscal_codfigfiscal=5)
+    assert env_nasmar["fiscal_codfigfiscal"] == 5
+    perfil_nasmar = perfil_para(env_nasmar)
+    assert perfil_nasmar.codfigfiscal == 5
