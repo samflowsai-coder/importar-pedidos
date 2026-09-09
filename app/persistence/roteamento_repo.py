@@ -26,6 +26,7 @@ _PEND_FIELDS = (
     "order_number",
     "customer_cnpj",
     "customer_name",
+    "motivo",
     "visto_em",
     "visto_vezes",
 )
@@ -139,17 +140,25 @@ def registrar_pendencia(
     order_number: str | None,
     customer_cnpj: str | None,
     customer_name: str | None,
+    motivo: str | None = None,
 ) -> None:
-    """Marca um arquivo que o watcher não soube rotear. Idempotente por sha."""
+    """Marca um arquivo que o watcher não soube rotear. Idempotente por sha.
+
+    Também serve de "toque": chamar de novo com o mesmo `sha256` só atualiza
+    `visto_em`/`source_path`/`motivo` e incrementa `visto_vezes` — não cria
+    linha nova nem sobrescreve `order_number`/`customer_cnpj`/`customer_name`
+    (atributos do pedido, não deveriam mudar pro mesmo arquivo).
+    """
     with router.shared_connect() as conn:
         conn.execute(
             """INSERT INTO roteamento_pendencia
                    (sha256, source_path, env_scan_slug, order_number,
-                    customer_cnpj, customer_name, visto_em, visto_vezes)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                    customer_cnpj, customer_name, motivo, visto_em, visto_vezes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
                ON CONFLICT(sha256) DO UPDATE SET
                    visto_em = excluded.visto_em,
                    source_path = excluded.source_path,
+                   motivo = excluded.motivo,
                    visto_vezes = roteamento_pendencia.visto_vezes + 1""",
             (
                 sha256,
@@ -158,9 +167,24 @@ def registrar_pendencia(
                 order_number,
                 customer_cnpj,
                 customer_name,
+                motivo,
                 _now(),
             ),
         )
+
+
+def buscar_pendencia(sha256: str) -> dict[str, Any] | None:
+    """Pendência já registrada para este sha, ou `None`.
+
+    Usado pra saber se um arquivo retido foi visto recentemente — ver
+    `_pendencia_ainda_recente` em `app/worker/jobs/scan_environments.py`,
+    que reavalia (reparseia + reroteia) no máximo uma vez por hora.
+    """
+    with router.shared_connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM roteamento_pendencia WHERE sha256 = ?", (sha256,)
+        ).fetchone()
+    return {k: row[k] for k in _PEND_FIELDS} if row else None
 
 
 def listar_pendencias(limit: int = 200) -> list[dict[str, Any]]:

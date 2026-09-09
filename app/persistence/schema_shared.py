@@ -152,6 +152,11 @@ CREATE TABLE IF NOT EXISTS roteamento_pendencia (
     order_number  TEXT,
     customer_cnpj TEXT,
     customer_name TEXT,
+    -- Por que ficou retido: cliente novo, Firebird mudo, histórico ambíguo,
+    -- ambiente resolvido que não existe mais... ver
+    -- `_motivo_historico_nao_resolveu` em app/routing/ambiente.py. Sem isto o
+    -- operador tem que abrir cada arquivo pra descobrir o motivo.
+    motivo        TEXT,
     visto_em      TEXT NOT NULL,
     visto_vezes   INTEGER NOT NULL DEFAULT 1
 );
@@ -228,4 +233,8 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # CNPJ da empresa do ambiente, só dígitos — chave de `find_by_cnpj`.
     ("environments", "cnpj",
      "ALTER TABLE environments ADD COLUMN cnpj TEXT"),
+    # Motivo da retenção — ver comentário no CREATE TABLE acima. Migração
+    # porque `roteamento_pendencia` já existia sem esta coluna antes do fix.
+    ("roteamento_pendencia", "motivo",
+     "ALTER TABLE roteamento_pendencia ADD COLUMN motivo TEXT"),
 )

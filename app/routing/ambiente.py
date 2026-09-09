@@ -220,6 +220,52 @@ def ambiente_para(order: Order, deps: Deps) -> Decisao:
     )
 
 
+def decidir(order: Order, *, origem: str) -> tuple[str, Decisao | None]:
+    """(modo, Decisao|None) — o wiring padrão de `ambiente_para` pros dois
+    lugares que hoje ligam o roteamento: `app/web/server.py` (commit do
+    preview, um humano na tela) e `app/worker/jobs/scan_environments.py`
+    (watcher, sem humano nenhum). Extraído pra cá porque as duas cópias
+    eram idênticas exceto pelo prefixo do log — e os dois chamadores já
+    importam este módulo, que é o domínio comum dos dois.
+
+    Em `'desligado'` o roteador nem é chamado. Fora disso, uma exceção
+    vinda da escada (`ambiente_para`/`deps_padrao` — Firebird ou SQLite fora
+    do ar) NUNCA propaga daqui pra fora; blindar é decisão desta função, não
+    do módulo puro acima:
+
+    - `'observando'`: vira log e `decisao=None` — do ponto de vista de quem
+      chama é como se o modo fosse `'desligado'` PARA ESTE PEDIDO. Evidência
+      é importante, o pedido é mais.
+    - `'ligado'`: vira um degrau `'perguntar'` com a falha explicada. Nunca
+      cai de volta pro ambiente "de sempre" (cookie ou pasta varrida) em
+      silêncio — cada chamador já trata `decisao.resolveu is False` como
+      "preciso de uma resposta" (o web pergunta ao operador; o worker retém
+      o arquivo). Por este contrato, quando `modo == LIGADO` o retorno
+      NUNCA é `(modo, None)` — só varia entre uma `Decisao` resolvida e uma
+      não resolvida.
+
+    `origem` é só o prefixo do evento de log (`"web"`/`"scan"`), pra achar
+    de onde veio a falha no log agregado.
+    """
+    from app.persistence import roteamento_repo
+    from app.utils.logger import logger
+
+    modo = roteamento_repo.modo()
+    if modo == roteamento_repo.DESLIGADO:
+        return modo, None
+    try:
+        return modo, ambiente_para(order, deps_padrao())
+    except Exception as exc:  # noqa: BLE001 — roteador não pode derrubar o chamador nem decidir errado em silêncio
+        logger.warning("{}.decidir_falhou modo={} erro={!r}", origem, modo, exc)
+        if modo == roteamento_repo.LIGADO:
+            return modo, Decisao(
+                env_slug=None,
+                degrau="perguntar",
+                explicacao=f"Ambiente não resolvido: falha ao consultar o roteador ({exc})",
+            )
+        return modo, None
+
+
 def deps_padrao() -> Deps:
     """As três leituras reais. Import local: mantém o módulo puro para teste."""
     from app.persistence import decisao_ambiente_repo, environments_repo

@@ -8,11 +8,13 @@ Para cada ambiente ativo:
       `Pedidos importados/`).
    b. Roda pipeline (parse → normalize → validate). Falha vira import
       com status='error' e o arquivo vai pra `Pedidos importados/com_erro/`.
-   c. Roteamento (`app/routing/ambiente.py`, atrás do interruptor de
-      `roteamento_repo.modo()`): em 'ligado', o ambiente que grava pode
-      divergir do ambiente varrido — ver `_decidir_ambiente`. Sem humano
-      pra perguntar, um pedido que cai em 'perguntar' NÃO é importado: fica
-      retido na pasta e vira uma linha em `roteamento_pendencia`.
+   c. Roteamento (`app/routing/ambiente.py::decidir`, atrás do interruptor
+      de `roteamento_repo.modo()`): em 'ligado', o ambiente que grava pode
+      divergir do ambiente varrido. Sem humano pra perguntar, um pedido que
+      não resolve (degrau 'perguntar', ou ambiente resolvido que não
+      existe mais) NÃO é importado: fica retido na pasta e vira uma linha
+      em `roteamento_pendencia` — reavaliada no máximo 1x/hora (ver
+      `_PENDENCIA_REAVALIACAO_S`), nunca a cada ciclo de 30s.
    d. Insere em `imports` via `repo.insert_import`, dentro de
       `env_context.active_env()` do ambiente DECIDIDO (que é o varrido em
       'desligado'/'observando') com status='success' e portal_status='parsed'
@@ -30,9 +32,8 @@ from __future__ import annotations
 import hashlib
 import shutil
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from app.ingestion.file_loader import LoadedFile
 from app.observability.trace import new_trace_id, with_trace_id
@@ -41,11 +42,18 @@ from app.persistence import environments_repo, repo, roteamento_repo, router
 from app.pipeline import process as pipeline_process
 from app.utils.logger import logger
 
-if TYPE_CHECKING:
-    from app.models.order import Order
-    from app.routing.ambiente import Decisao
-
 VALID_EXTS = (".pdf", ".xls", ".xlsx")
+
+# Um arquivo retido (roteamento em 'ligado' sem resposta) NÃO some do disco
+# nem de `roteamento_pendencia` — a cada ciclo de scan (30s) ele reaparece
+# na varredura. Sem este limite, ele seria reparseado (pipeline inteiro) e
+# reroteado (uma query Firebird por ambiente ativo, no degrau 2) a cada
+# ciclo: 2.880 vezes por dia, para sempre — e arquivo retido é o estado
+# ESPERADO em produção (a spec já prevê Authentic Feet e NBA caindo aqui).
+# Uma hora corta isso para 24 reavaliações/dia e ainda garante que o
+# arquivo "sai sozinho" da fila se uma resposta do operador em OUTRO pedido
+# do mesmo cliente fizer a memória passar a resolvê-lo.
+_PENDENCIA_REAVALIACAO_S = 3600
 
 
 def _sha256(path: Path) -> str:
@@ -93,36 +101,18 @@ def _move_to_imported(p: Path, watch_dir: Path, *, errored: bool = False) -> Pat
     return dst
 
 
-def _decidir_ambiente(order: Order) -> tuple[str, Decisao | None]:
-    """(modo, Decisao|None). Em 'desligado' o roteador nem é chamado.
-
-    Mesma regra de `app/web/server.py::_decidir_ambiente`, adaptada pro
-    watcher: exceção do roteador NUNCA propaga daqui pra fora — blindar é
-    decisão de quem chama, não do módulo puro (`app/routing/ambiente.py`).
-
-    - 'observando': vira log e `decisao=None` — o arquivo é importado
-      normalmente na pasta varrida, sem sombra. Evidência é importante, o
-      pedido é mais.
-    - 'ligado': vira um degrau 'perguntar' com a falha explicada. Sem humano
-      para responder, `_process_file` trata isso como retenção — nunca cai
-      de volta pro ambiente varrido em silêncio.
-    """
-    from app.routing import ambiente as routing
-
-    modo = roteamento_repo.modo()
-    if modo == roteamento_repo.DESLIGADO:
-        return modo, None
+def _pendencia_ainda_recente(visto_em: str) -> bool:
+    """`visto_em` é ISO 8601 (UTC) gravado por `roteamento_repo._now()`.
+    `True` = viu esse arquivo há menos de `_PENDENCIA_REAVALIACAO_S` — não
+    reavalia de novo agora. Formato inesperado nunca trava o scan: conta
+    como "não recente" (reavalia), o lado seguro."""
     try:
-        return modo, routing.ambiente_para(order, routing.deps_padrao())
-    except Exception as exc:  # noqa: BLE001 — roteador não pode derrubar o scan nem decidir errado em silêncio
-        logger.warning("scan.roteamento_falhou modo={} erro={!r}", modo, exc)
-        if modo == roteamento_repo.LIGADO:
-            return modo, routing.Decisao(
-                env_slug=None,
-                degrau="perguntar",
-                explicacao=f"Ambiente não resolvido: falha ao consultar o roteador ({exc})",
-            )
-        return modo, None
+        quando = datetime.fromisoformat(visto_em)
+    except (TypeError, ValueError):
+        return False
+    if quando.tzinfo is None:
+        quando = quando.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - quando) < timedelta(seconds=_PENDENCIA_REAVALIACAO_S)
 
 
 def _process_file(env: dict, p: Path) -> None:
@@ -130,11 +120,34 @@ def _process_file(env: dict, p: Path) -> None:
     sha = _sha256(p)
     watch_dir = Path(env["watch_dir"])
     if _already_imported(sha):
+        # Ciclo fecha pro arquivo: se ele tinha uma pendência (ex.: o
+        # operador resolveu pelo preview em vez de esperar o watcher), ela
+        # deixou de descrever a realidade — sem isto a fila só cresce.
+        roteamento_repo.limpar_pendencia(sha)
         logger.info(
             "scan.skip_duplicate sha={} env={} file={}",
             sha[:12], env["slug"], p.name,
         )
         _move_to_imported(p, watch_dir)
+        return
+
+    pendencia = roteamento_repo.buscar_pendencia(sha)
+    if pendencia is not None and _pendencia_ainda_recente(pendencia["visto_em"]):
+        # Retido há menos de uma hora: só toca o carimbo (visto_em/visto_vezes)
+        # — nada de reparsear nem requeimar Firebird a cada ciclo de 30s.
+        roteamento_repo.registrar_pendencia(
+            sha256=sha,
+            source_path=str(p),
+            env_scan_slug=env["slug"],
+            order_number=pendencia["order_number"],
+            customer_cnpj=pendencia["customer_cnpj"],
+            customer_name=pendencia["customer_name"],
+            motivo=pendencia["motivo"],
+        )
+        logger.info(
+            "scan.pendencia_ainda_recente sha={} file={} visto_vezes={}",
+            sha[:12], p.name, pendencia["visto_vezes"] + 1,
+        )
         return
 
     raw = p.read_bytes()
@@ -169,15 +182,38 @@ def _process_file(env: dict, p: Path) -> None:
             _move_to_imported(p, watch_dir, errored=True)
             return
 
-        modo, decisao = _decidir_ambiente(order)
+        from app.routing import ambiente as routing
+
+        modo, decisao = routing.decidir(order, origem="scan")
         env_alvo = env
         if modo == roteamento_repo.LIGADO:
-            if decisao.resolveu:
-                env_alvo = environments_repo.get_by_slug(decisao.env_slug) or env
-            else:
+            # Invariante de `decidir()`: em 'ligado' o retorno nunca é
+            # `(modo, None)` — só varia entre Decisao resolvida e não
+            # resolvida. Estreita o tipo explicitamente em vez de confiar
+            # nisso por acaso.
+            assert decisao is not None, "decidir() com modo=ligado nunca devolve Decisao=None"
+
+            env_alvo = environments_repo.get_by_slug(decisao.env_slug) if decisao.resolveu else None
+            if env_alvo is None:
                 # Sem humano para perguntar: retém. O arquivo NÃO se move e
                 # NÃO é importado — fica na pasta, onde o operador pode
                 # abri-lo pelo preview e responder.
+                #
+                # `decisao.resolveu` e `env_alvo is None` juntos só acontecem
+                # se o slug decidido não corresponder a ambiente nenhum —
+                # inalcançável hoje (nenhum degrau devolve slug fantasma, e
+                # não há hard-delete de `environments`), mas não é garantido
+                # pelo TIPO: um `Deps` customizado, um rename de slug futuro
+                # ou uma tool de exclusão quebrariam essa invariante em
+                # silêncio se este branch não existisse.
+                if decisao.resolveu:
+                    motivo = (
+                        f"Ambiente '{decisao.env_slug}' resolvido pelo roteador, mas "
+                        f"não existe (ou foi removido) — retido em vez de importar na "
+                        f"pasta varrida."
+                    )
+                else:
+                    motivo = decisao.explicacao
                 roteamento_repo.registrar_pendencia(
                     sha256=sha,
                     source_path=str(p),
@@ -185,10 +221,11 @@ def _process_file(env: dict, p: Path) -> None:
                     order_number=order.header.order_number,
                     customer_cnpj=order.header.customer_cnpj,
                     customer_name=order.header.customer_name,
+                    motivo=motivo,
                 )
                 logger.info(
                     "scan.retido_sem_ambiente env={} file={} motivo={}",
-                    env["slug"], p.name, decisao.explicacao,
+                    env["slug"], p.name, motivo,
                 )
                 return
 
@@ -215,6 +252,13 @@ def _process_file(env: dict, p: Path) -> None:
         try:
             with env_context.active_env(env_alvo["id"], env_alvo["slug"]):
                 repo.insert_import(entry)
+                # Fecha o ciclo também quando é a PRÓPRIA reavaliação do
+                # watcher que resolve (ex.: a memória aprendeu por outro
+                # pedido do mesmo cliente) — não só quando o operador
+                # importa manualmente pelo preview (ramo skip_duplicate,
+                # acima). Sem isto, um arquivo que já foi importado ficaria
+                # "pendente" pra sempre na fila. No-op se não havia linha.
+                roteamento_repo.limpar_pendencia(sha)
                 if modo == roteamento_repo.OBSERVANDO and decisao is not None:
                     roteamento_repo.registrar_sombra(
                         import_id=import_id,

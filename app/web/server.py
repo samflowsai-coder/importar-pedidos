@@ -244,40 +244,14 @@ def _make_log_entry(
 
 
 def _decidir_ambiente(order) -> tuple[str, Decisao | None]:
-    """(modo, Decisao|None). Em 'desligado' o roteador nem é chamado.
-
-    Exceção vinda do roteador (Firebird/SQLite fora do ar no meio de uma
-    leitura que decide — ver contrato em `app/routing/ambiente.py`) NUNCA
-    propaga daqui pra fora: blindar é decisão de quem chama, não do módulo
-    puro. A regra:
-
-    - 'observando': vira log e `decisao=None` — do ponto de vista de quem
-      consome isto é como se o modo fosse 'desligado' PARA ESTE PEDIDO: o
-      commit segue com a escolha do operador, sem gravar sombra. Evidência
-      é importante, o pedido é mais.
-    - 'ligado': vira um degrau 'perguntar' com a falha explicada. Cair de
-      volta pro cookie em silêncio seria rotear errado com confiança — o
-      chamador (`commit_preview`) já sabe pedir a escolha ao operador
-      quando `decisao.resolveu` é falso.
-    """
-    from app.persistence import roteamento_repo
+    """(modo, Decisao|None) pro commit do preview. Contrato completo (modos,
+    blindagem de exceção) mora em `app/routing/ambiente.py::decidir` — o
+    scan_environments (watcher) usa a mesma função, com `origem="scan"`; só
+    o prefixo do log muda. Este wrapper existe porque testes já importam
+    `_decidir_ambiente` daqui (`tests/test_routing_wiring.py`)."""
     from app.routing import ambiente as routing
-    from app.utils.logger import logger
 
-    modo = roteamento_repo.modo()
-    if modo == roteamento_repo.DESLIGADO:
-        return modo, None
-    try:
-        return modo, routing.ambiente_para(order, routing.deps_padrao())
-    except Exception as exc:  # noqa: BLE001 — roteador não pode derrubar o pedido nem decidir errado em silêncio
-        logger.warning("roteamento.ambiente_para_falhou modo={} erro={!r}", modo, exc)
-        if modo == roteamento_repo.LIGADO:
-            return modo, routing.Decisao(
-                env_slug=None,
-                degrau="perguntar",
-                explicacao=f"Ambiente não resolvido: falha ao consultar o roteador ({exc})",
-            )
-        return modo, None
+    return routing.decidir(order, origem="web")
 
 
 def _roteamento_para_preview(order) -> dict | None:
