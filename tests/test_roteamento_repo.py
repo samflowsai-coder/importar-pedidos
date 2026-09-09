@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from app.persistence import roteamento_repo as rot
@@ -52,13 +54,64 @@ def test_sombra_conta_acerto_divergencia_e_silencio(fresh_shared):
     assert t["perguntar"] == 1
 
 
-def test_taxa_nao_fica_negativa_se_perguntar_bater(fresh_shared):
-    """Convencao: degrau='perguntar' vem com env_sugerido=None (sem sugestao,
-    nao ha o que bater). Se essa convencao for violada, divergiu nao pode
-    virar negativo por causa disso."""
+def test_perguntar_nunca_bate_mesmo_se_sugerido_coincide(fresh_shared):
+    """E' registrar_sombra quem grava o campo bateu, entao e' ela quem decide
+    o que ele significa - nao e' contrato para o chamador respeitar sozinho.
+    degrau='perguntar' nunca conta como acerto, mesmo se por engano vier um
+    env_sugerido igual ao escolhido."""
     rot.registrar_sombra(
         import_id="a", degrau="perguntar", env_sugerido="nasmar", env_escolhido="nasmar"
     )
+    t = rot.taxa(dias=30)
+    assert t["bateu"] == 0
+    assert t["perguntar"] == 1
+    assert t["bateu"] + t["perguntar"] + t["divergiu"] == t["total"]
+
+
+def test_taxa_particiona_o_total_sempre(fresh_shared):
+    """Guarda geral, independente da mistura de degraus: bateu + perguntar +
+    divergiu tem que fechar com total. Este teste morre se alguem mexer na
+    formula de novo sem pensar."""
+    rot.registrar_sombra(
+        import_id="a", degrau="documento", env_sugerido="nasmar", env_escolhido="nasmar"
+    )
+    rot.registrar_sombra(
+        import_id="b", degrau="historico", env_sugerido="nasmar", env_escolhido="americanense"
+    )
+    rot.registrar_sombra(
+        import_id="c", degrau="memoria", env_sugerido="americanense", env_escolhido="americanense"
+    )
+    rot.registrar_sombra(
+        import_id="d", degrau="perguntar", env_sugerido=None, env_escolhido="americanense"
+    )
+    rot.registrar_sombra(
+        import_id="e", degrau="perguntar", env_sugerido="nasmar", env_escolhido="nasmar"
+    )
+    t = rot.taxa(dias=30)
+    assert t["total"] == 5
+    assert t["bateu"] + t["perguntar"] + t["divergiu"] == t["total"]
+
+
+def test_taxa_nao_fica_negativa_se_perguntar_bater(fresh_shared):
+    """Defesa em profundidade: a API publica (registrar_sombra) nao produz
+    mais bateu=1 com degrau='perguntar' (ver teste acima), mas se uma linha
+    chegar assim por fora dela - SQL cru, migracao futura - taxa() ainda nao
+    pode deixar divergiu negativo."""
+    with router.shared_connect() as conn:
+        conn.execute(
+            """INSERT INTO roteamento_sombra
+                   (import_id, decidido_em, degrau, env_sugerido,
+                    env_escolhido_pelo_operador, bateu)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                "a",
+                datetime.now(UTC).isoformat(timespec="seconds"),
+                "perguntar",
+                "nasmar",
+                "nasmar",
+                1,
+            ),
+        )
     t = rot.taxa(dias=30)
     assert t["total"] == 1
     assert t["bateu"] == 1

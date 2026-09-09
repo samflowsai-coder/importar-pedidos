@@ -70,8 +70,19 @@ def registrar_sombra(
     Em `observando` isto roda no caminho do commit. Falhar aqui não pode
     impedir a importação de um pedido — a evidência é importante, o pedido é
     mais. `KeyboardInterrupt` continua propagando: só `Exception` é engolida.
+
+    `bateu` exige `degrau != "perguntar"` além de sugerido == escolhido: um
+    degrau 'perguntar' é, por definição, "não tive sugestão" — não existe
+    acerto para contar ali, mesmo que o chamador (por engano) mande um
+    `env_sugerido` que coincida com o escolhido. É esta função que grava o
+    campo, então é aqui que o significado dele é decidido — não é contrato
+    para o chamador respeitar sozinho.
     """
-    bateu = 1 if (env_sugerido is not None and env_sugerido == env_escolhido) else 0
+    bateu = (
+        1
+        if (degrau != "perguntar" and env_sugerido is not None and env_sugerido == env_escolhido)
+        else 0
+    )
     try:
         with router.shared_connect() as conn:
             conn.execute(
@@ -91,12 +102,13 @@ def taxa(dias: int = 30) -> dict[str, Any]:
     """Taxa de acerto da janela: total, bateu, divergiu, não soube responder.
 
     `divergiu` é contado direto (degrau que não é 'perguntar' e não bateu),
-    não por subtração de `total`. Subtração assumiria que 'perguntar' nunca
-    carrega `bateu=1` — verdade hoje porque quem chama `registrar_sombra` só
-    manda `env_sugerido=None` quando o degrau é 'perguntar' (sem sugestão, não
-    tem o que bater), mas essa é uma convenção do chamador, não uma restrição
-    que este módulo garante. Contar direto no SQL faz `divergiu` nunca ficar
-    negativo mesmo se essa convenção for violada.
+    não por subtração de `total`. `registrar_sombra` já garante que `bateu=1`
+    nunca acontece com `degrau='perguntar'` (ver docstring de lá), então
+    `bateu`, `perguntar` e `divergiu` particionam `total` exatamente —
+    `bateu + perguntar + divergiu == total` sempre, por construção. Contar
+    direto (em vez de por subtração) é redundância deliberada: mesmo que essa
+    garantia se perca no futuro (linha inserida fora de `registrar_sombra`,
+    por exemplo), `divergiu` nunca fica negativo.
     """
     desde = (datetime.now(UTC) - timedelta(days=int(dias))).isoformat(timespec="seconds")
     with router.shared_connect() as conn:
