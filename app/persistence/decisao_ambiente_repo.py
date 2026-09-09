@@ -72,6 +72,12 @@ def marcar_divergencia(*, cnpj_cliente: str, de: str) -> None:
 
     Reescrever esconderia que houve conflito; o valor lembrado continua sendo o
     julgamento humano registrado, e a marca é o que faz alguém ir olhar.
+
+    Chamar de novo sobre uma divergência já marcada substitui `divergiu_em`/
+    `divergiu_de` pelos novos valores — só a mais recente fica guardada. Esta
+    linha é estado atual, não histórico de conflitos; quem precisa do
+    histórico de contradições olha o log e a auditoria do pedido, não esta
+    tabela.
     """
     digits = cnpj_digits(cnpj_cliente)
     if not digits:

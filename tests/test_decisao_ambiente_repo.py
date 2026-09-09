@@ -57,3 +57,33 @@ def test_marcar_divergencia_em_cnpj_desconhecido_nao_levanta(fresh_shared):
 def test_cnpj_e_normalizado_na_escrita_e_na_leitura(fresh_shared):
     memoria.lembrar(cnpj_cliente="11222333000181", env_slug="nasmar", por="x")
     assert memoria.lembrada("11.222.333/0001-81") is not None
+
+
+@pytest.mark.parametrize(
+    "acao",
+    [
+        lambda: memoria.lembrada(""),
+        lambda: memoria.lembrada(None),
+        lambda: memoria.lembrar(cnpj_cliente="", env_slug="nasmar", por="x"),
+        lambda: memoria.lembrar(cnpj_cliente=None, env_slug="nasmar", por="x"),
+        lambda: memoria.marcar_divergencia(cnpj_cliente="99999999000199", de="mm"),
+        lambda: memoria.listar(),
+    ],
+    ids=[
+        "lembrada-vazio",
+        "lembrada-none",
+        "lembrar-cnpj-vazio",
+        "lembrar-cnpj-none",
+        "marcar_divergencia-cnpj-desconhecido",
+        "listar-tabela-vazia",
+    ],
+)
+def test_entrada_de_borda_nao_explode_e_nao_cria_linha(fresh_shared, acao):
+    """CNPJ vazio/None e CNPJ desconhecido nao levantam, e a tabela segue vazia.
+
+    Esta e a propriedade central que separa a memoria do cadastro curado que
+    a Revisao 4 matou: nasce vazia, e vazia continua sendo estado valido em
+    toda entrada de borda, nao so no caminho feliz.
+    """
+    acao()
+    assert memoria.listar() == []
