@@ -48,6 +48,9 @@ API pública para páginas-filho:
 - `POST /api/imported/{id}/export-xlsx` → gera XLSX do pedido `parsed` **sem** tocar Firebird (`require_user`). Mantém `portal_status='parsed'`. Retorna `{entry_id, output_files, portal_status}`. Usado quando `EXPORT_MODE='xlsx'`. **Também dispara `push_new_order` pro FlowPCP** (gated por `flowpcp_enabled` do ambiente; best-effort; o Flow deduplica por `externalId` — re-export não duplica; audita `flowpcp_push {ok}`).
 - `POST /api/batch/export-xlsx` → versão lote do anterior (mesmo limite 1..100).
 - `GET /api/download?path=` → download xlsx (whitelisted, path traversal bloqueado).
+- `GET /api/imported/{id}/arquivo-original` → cópia exata do arquivo recebido, antes do
+  parse (`require_user`). Serve só de dentro de `<APP_DATA_DIR>/recebidos/` (403 fora);
+  404 amigável em pedido anterior à guarda. Nome do download = `source_filename`.
 - `GET /api/fs?path=` → listagem de pastas (usado pelo browser de `/configuracoes/diretorios`).
 - `GET /api/clientes/search?q=&limit=` → busca em `CADASTRO` (razão social ou
   CNPJ). Min 2 chars; clamp `limit` em [1, 50]. 503 se Fire não configurado.
@@ -132,6 +135,26 @@ label/handler **sem reload** via `BroadcastChannel('app-config')` com payload
 `{type:'config-changed', exportMode}`. Fallback p/ navegadores sem
 BroadcastChannel: chave `app:config:bumped` em `localStorage` + `storage`
 event listener.
+
+## Arquivo original: guarda de 100% do que entra
+
+Todo recebimento — `POST /api/preview` (upload), `POST /api/preview-pending` (pasta
+vigiada), `POST /api/import` (lote) e o legado `POST /api/process` — chama
+`_guardar_original(raw, nome)` **antes do parse**. A cópia vai para
+`<APP_DATA_DIR>/recebidos/<slug>/<AAAA>/<MM>/<AAAAMMDD-HHMMSS>_<sha12>_<nome>.<ext>`
+(`app/ingestion/arquivo_recebido.py`), nunca é sobrescrita e a retenção não a toca.
+Parse que falha (422), preview descartado ou expirado: a cópia já existe.
+
+- **Falha na gravação bloqueia a operação** (HTTP 500 com mensagem clara). A garantia
+  pedida é 100%; best-effort silencioso viraria 97% sem ninguém saber.
+- O caminho + sha viajam no `PreviewEntry` (`original_path`, `file_sha256`) e o
+  `commit` grava em `imports.original_path` / `imports.file_sha256`.
+- O `move` para `<watch_dir>/Pedidos importados` continua igual — é a cópia do cliente;
+  a nossa é a segunda, imutável.
+- `GET /api/imported/{id}/preview` devolve `arquivo_original: {disponivel, nome}`; o
+  modal mostra **Baixar arquivo original** quando disponível.
+- Motivação: caso AF127/AF017 (H2S4, 27/07/2026) — dois arquivos com o mesmo nome no
+  mesmo dia, o segundo já errado, e nenhuma cópia nossa pra provar de onde veio.
 
 ## Armadilhas
 - Não cachear bytes do arquivo original (vazamento de memória); só o `Order` parseado.

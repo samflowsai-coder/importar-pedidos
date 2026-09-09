@@ -61,7 +61,7 @@
 | web | `tests/test_web_server.py`, `tests/test_preview_cache.py` | `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py -v` |
 | Suite completa (antes de commit) | todos | `.venv/bin/pytest tests/ -v` |
 
-> **Suíte completa: 1021 testes em 91 arquivos (conferido 2026-08-24).** `erp`, `exporters` e `pipeline` hoje TÊM
+> **Suíte completa: 1111 testes em 92 arquivos (conferido 2026-09-03).** `erp`, `exporters` e `pipeline` hoje TÊM
 > teste (ver linhas acima), mas nenhum toca Firebird de verdade — mudança em SQL/mapper
 > ainda pede validação manual com `.fdb` de **cópia** e sample real.
 

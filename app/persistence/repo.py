@@ -150,6 +150,8 @@ def _row_to_entry(row) -> dict:
         ),
         "fire_status_last_seen": _get("fire_status_last_seen"),
         "fire_status_polled_at": _get("fire_status_polled_at"),
+        "file_sha256": _get("file_sha256"),
+        "original_path": _get("original_path"),
         "output_files": json.loads(row["output_files_json"]) if row["output_files_json"] else [],
         "db_result": json.loads(row["db_result_json"]) if row["db_result_json"] else None,
         "snapshot": json.loads(row["snapshot_json"]) if row["snapshot_json"] else None,
@@ -303,6 +305,7 @@ def get_import(import_id: str) -> dict | None:
                    trace_id, state_version, gestor_order_id, apontae_order_id,
                    cliente_override_codigo, cliente_override_razao,
                    cliente_override_at, cliente_override_by,
+                   file_sha256, original_path,
                    sem_preco_ack_by, sem_preco_ack_at, sem_preco_ack_items,
                    fire_status_last_seen, fire_status_polled_at
             FROM imports WHERE id = ?

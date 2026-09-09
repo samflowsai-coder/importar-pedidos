@@ -212,6 +212,8 @@ def _make_log_entry(
     fire_codigo: int | None = None,
     db_result: dict | None = None,
     trace_id: str | None = None,
+    file_sha256: str | None = None,
+    original_path: str | None = None,
 ) -> dict:
     return {
         "id": str(uuid.uuid4()),
@@ -226,6 +228,8 @@ def _make_log_entry(
         "fire_codigo": fire_codigo,
         "db_result": db_result,
         "trace_id": trace_id or current_trace_id() or new_trace_id(),
+        "file_sha256": file_sha256,
+        "original_path": original_path,
     }
 
 
@@ -336,6 +340,35 @@ def _run_exporters(order, output_path: Path, *, env: dict | None = None) -> dict
         "db_result": db_result_dict,
         "fire_codigo": fire_codigo,
     }
+
+
+def _guardar_original(raw: bytes, nome: str):
+    """Cópia imutável do arquivo recebido, ANTES do parse (ver
+    `app/ingestion/arquivo_recebido.py`). Falha vira HTTP 500 e nada segue:
+    a garantia é 100% dos arquivos, não best-effort."""
+    from app.ingestion import arquivo_recebido
+    from app.utils.logger import logger
+
+    env = env_context.current()
+    try:
+        return arquivo_recebido.guardar(
+            raw,
+            nome,
+            raiz=arquivo_recebido.raiz_recebidos(),
+            ambiente=env["slug"] if env else None,
+        )
+    except OSError as exc:
+        logger.error(f"Falha ao guardar o arquivo original {nome!r}: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Não foi possível guardar o arquivo original ({exc}). Nada foi importado.",
+        ) from exc
+
+
+def _arquivo_original_info(entry: dict) -> dict:
+    original = entry.get("original_path")
+    disponivel = bool(original) and Path(original).is_file()
+    return {"disponivel": disponivel, "nome": entry.get("source_filename") if disponivel else None}
 
 
 def _process_file(file_path: Path, output_path: Path, *, env: dict | None = None) -> dict:
@@ -1171,6 +1204,7 @@ def import_files(
             continue
 
         try:
+            recebido = _guardar_original(src.read_bytes(), name)
             result = _process_file(src, output_path, env=request_env)
 
             dest = imp / name
@@ -1188,6 +1222,8 @@ def import_files(
                 snapshot=result.get("snapshot"),
                 fire_codigo=result.get("fire_codigo"),
                 db_result=result.get("db_result"),
+                file_sha256=recebido.sha256,
+                original_path=str(recebido.path),
             )
             _append_log(cfg, entry)
 
@@ -1285,6 +1321,38 @@ def get_imported(import_id: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Importação não encontrada")
     audit = repo.list_audit(import_id)
     return JSONResponse({"entry": entry, "audit": audit})
+
+
+@app.get("/api/imported/{import_id}/arquivo-original")
+def baixar_arquivo_original(import_id: str, _user: User = Depends(require_user)) -> FileResponse:
+    """Cópia exata do arquivo recebido, antes do parse. Só serve de dentro de
+    `recebidos/`: `original_path` vem do banco, mas defesa em profundidade
+    custa duas linhas."""
+    import mimetypes
+
+    from app.ingestion.arquivo_recebido import raiz_recebidos
+    from app.persistence import repo
+
+    entry = repo.get_import(import_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    original = entry.get("original_path")
+    if not original:
+        raise HTTPException(
+            status_code=404,
+            detail="Pedido anterior à guarda de arquivos: não existe cópia do original",
+        )
+    caminho = Path(original).resolve()
+    if raiz_recebidos().resolve() not in caminho.parents:
+        raise HTTPException(status_code=403, detail="Caminho fora da pasta de arquivos recebidos")
+    if not caminho.is_file():
+        raise HTTPException(status_code=404, detail="Cópia do original não está mais no disco")
+    nome = entry.get("source_filename") or caminho.name
+    return FileResponse(
+        str(caminho),
+        filename=nome,
+        media_type=mimetypes.guess_type(nome)[0] or "application/octet-stream",
+    )
 
 
 @app.post("/api/imported/reconciliar-fire")
@@ -1480,6 +1548,8 @@ async def preview_file(
             detail=f"Arquivo excede o limite de {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
         )
 
+    recebido = _guardar_original(raw, filename)
+
     tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
@@ -1507,6 +1577,8 @@ async def preview_file(
         source_bytes=raw,
         source_ext=ext,
         check=check,
+        original_path=str(recebido.path),
+        file_sha256=recebido.sha256,
     )
     payload = _build_preview_payload(entry.preview_id, filename, order, check)
     return JSONResponse(payload)
@@ -1540,6 +1612,7 @@ def preview_pending(
         raise HTTPException(status_code=413, detail="Arquivo excede o limite")
 
     raw = src.read_bytes()
+    recebido = _guardar_original(raw, name)
     loaded = LoadedFile(path=src, extension=ext, raw=raw)
     order = process(loaded)
 
@@ -1556,6 +1629,8 @@ def preview_pending(
         source_ext=ext,
         source_path=str(src),
         check=check,
+        original_path=str(recebido.path),
+        file_sha256=recebido.sha256,
     )
     payload = _build_preview_payload(entry.preview_id, name, order, check)
     return JSONResponse(payload)
@@ -1594,6 +1669,8 @@ def commit_preview(
             status="success",
             snapshot=order.model_dump(),
             trace_id=trace_id,
+            file_sha256=entry.file_sha256,
+            original_path=entry.original_path,
         )
         log_entry["portal_status"] = "parsed"
         log_entry["check"] = entry.check
@@ -2756,6 +2833,7 @@ def rehydrate_preview(import_id: str, request: Request) -> JSONResponse:
     payload["portal_status"] = entry.get("portal_status")
     payload["fire_codigo"] = entry.get("fire_codigo")
     payload["fire_status_last_seen"] = entry.get("fire_status_last_seen")
+    payload["arquivo_original"] = _arquivo_original_info(entry)
 
     # Surface the manual cliente override into the check banner so the UI shows
     # it in green instead of the original "✗ Cliente não encontrado" red flag.
@@ -2855,6 +2933,11 @@ async def process_files(
             )
             continue
 
+        try:
+            _guardar_original(raw, filename)
+        except HTTPException as exc:
+            errors.append({"source": filename, "error": exc.detail})
+            continue
         tmp_path: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:

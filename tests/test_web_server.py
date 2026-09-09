@@ -2269,3 +2269,231 @@ def test_delete_depara_desfaz():
 
     with db.connect() as conn:
         assert produto_depara_repo.list_for_client(conn, ckey) == []
+
+
+# ── Arquivo original: cópia imutável de tudo que entra ───────────────────────
+# Caso AF127/AF017 (H2S4, 27/07/2026): dois arquivos com o mesmo nome no mesmo
+# dia, o segundo já errado, e nenhuma cópia nossa pra provar. Agora todo
+# recebimento (upload, pasta vigiada, lote) guarda antes do parse.
+
+
+def _recebidos_root() -> Path:
+    import os
+
+    return Path(os.environ["APP_DATA_DIR"]) / "recebidos"
+
+
+def _arquivos_recebidos() -> list[Path]:
+    root = _recebidos_root()
+    if not root.exists():
+        return []
+    return sorted(p for p in root.rglob("*") if p.is_file())
+
+
+def _sample_pdf() -> Path:
+    pdf = SAMPLES / "2600009562-2026-02-25.pdf"
+    if not pdf.exists():
+        pytest.skip("Sample PDF not available")
+    return pdf
+
+
+def _config_em_tmp(monkeypatch, tmp_path: Path, watch: Path | None = None) -> Path:
+    from app import config as app_config
+
+    imp = tmp_path / "imported"
+    imp.mkdir(exist_ok=True)
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {
+            "watch_dir": str(watch or tmp_path),
+            "output_dir": str(tmp_path),
+            "export_mode": "xlsx",
+        },
+    )
+    monkeypatch.setattr(app_config, "imported_dir", lambda _cfg: imp)
+    return imp
+
+
+def _insert_import_minimo(**extra) -> str:
+    import uuid
+    from datetime import datetime
+
+    from app.persistence import repo
+
+    entry = {
+        "id": str(uuid.uuid4()),
+        "source_filename": extra.pop("source_filename", "velho.pdf"),
+        "imported_at": datetime.now().isoformat(timespec="seconds"),
+        "order_number": "X1",
+        "customer": "Cliente",
+        "output_files": [],
+        "status": "success",
+        "snapshot": None,
+        **extra,
+    }
+    repo.insert_import(entry)
+    return entry["id"]
+
+
+def test_preview_por_upload_guarda_copia_do_original_antes_do_parse():
+    pdf = _sample_pdf()
+
+    r = client.post(
+        "/api/preview", files=[("file", (pdf.name, pdf.read_bytes(), "application/pdf"))]
+    )
+
+    assert r.status_code == 200, r.text
+    copias = _arquivos_recebidos()
+    assert len(copias) == 1
+    assert copias[0].read_bytes() == pdf.read_bytes()
+    assert copias[0].name.endswith(f"_{pdf.name}")
+    # pasta = <ambiente>/<AAAA>/<MM> — em teste o ambiente ativo tem slug "test"
+    assert copias[0].parent.parent.parent == _recebidos_root() / "test"
+
+
+def test_commit_grava_sha256_e_caminho_da_copia_no_import(tmp_path, monkeypatch):
+    import hashlib
+
+    _config_em_tmp(monkeypatch, tmp_path)
+    pdf = _sample_pdf()
+    r = client.post(
+        "/api/preview", files=[("file", (pdf.name, pdf.read_bytes(), "application/pdf"))]
+    )
+    preview_id = r.json()["preview_id"]
+
+    r2 = client.post("/api/commit", json={"preview_id": preview_id})
+
+    assert r2.status_code == 200, r2.text
+    entry = client.get(f"/api/imported/{r2.json()['entry_id']}").json()["entry"]
+    assert entry["file_sha256"] == hashlib.sha256(pdf.read_bytes()).hexdigest()
+    assert Path(entry["original_path"]) == _arquivos_recebidos()[0]
+
+
+def test_preview_da_pasta_guarda_copia_e_o_move_para_importados_continua(tmp_path, monkeypatch):
+    pdf = _sample_pdf()
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    seeded = watch / pdf.name
+    seeded.write_bytes(pdf.read_bytes())
+    imp = _config_em_tmp(monkeypatch, tmp_path, watch=watch)
+
+    r = client.post("/api/preview-pending", json={"filename": pdf.name})
+    assert r.status_code == 200, r.text
+    assert len(_arquivos_recebidos()) == 1  # guardou no recebimento, antes do commit
+
+    r2 = client.post("/api/commit", json={"preview_id": r.json()["preview_id"]})
+
+    assert r2.status_code == 200, r2.text
+    assert not seeded.exists() and (imp / pdf.name).exists()  # comportamento antigo intacto
+    entry = client.get(f"/api/imported/{r2.json()['entry_id']}").json()["entry"]
+    assert Path(entry["original_path"]) == _arquivos_recebidos()[0]  # aponta pra NOSSA cópia
+    assert _arquivos_recebidos()[0].read_bytes() == pdf.read_bytes()
+
+
+def test_arquivo_que_o_parser_nao_reconhece_ainda_e_guardado(monkeypatch):
+    import app.pipeline
+
+    monkeypatch.setattr(app.pipeline, "process", lambda _loaded: None)
+
+    r = client.post(
+        "/api/preview", files=[("file", ("misterio.pdf", b"%PDF-1.4 lixo", "application/pdf"))]
+    )
+
+    assert r.status_code == 422
+    copias = _arquivos_recebidos()
+    assert len(copias) == 1
+    assert copias[0].read_bytes() == b"%PDF-1.4 lixo"
+
+
+def test_falha_ao_guardar_original_bloqueia_o_preview_com_erro_claro(monkeypatch):
+    from app.ingestion import arquivo_recebido
+
+    def _explode(*_a, **_k):
+        raise OSError("disco cheio")
+
+    monkeypatch.setattr(arquivo_recebido, "guardar", _explode)
+    pdf = _sample_pdf()
+
+    r = client.post(
+        "/api/preview", files=[("file", (pdf.name, pdf.read_bytes(), "application/pdf"))]
+    )
+
+    assert r.status_code == 500
+    assert "guardar o arquivo original" in r.json()["detail"]
+
+
+def test_import_em_lote_da_pasta_guarda_copia_e_grava_sha(tmp_path, monkeypatch):
+    import hashlib
+
+    pdf = _sample_pdf()
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    (watch / pdf.name).write_bytes(pdf.read_bytes())
+    _config_em_tmp(monkeypatch, tmp_path, watch=watch)
+
+    r = client.post("/api/import", json={"files": [pdf.name]})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["results"], r.text
+    assert len(_arquivos_recebidos()) == 1
+    entries = client.get("/api/imported?limit=5").json()["entries"]
+    entry = client.get(f"/api/imported/{entries[0]['id']}").json()["entry"]
+    assert entry["file_sha256"] == hashlib.sha256(pdf.read_bytes()).hexdigest()
+    assert Path(entry["original_path"]) == _arquivos_recebidos()[0]
+
+
+def test_download_do_arquivo_original_devolve_a_copia_guardada(tmp_path, monkeypatch):
+    _config_em_tmp(monkeypatch, tmp_path)
+    pdf = _sample_pdf()
+    r = client.post(
+        "/api/preview", files=[("file", (pdf.name, pdf.read_bytes(), "application/pdf"))]
+    )
+    entry_id = client.post("/api/commit", json={"preview_id": r.json()["preview_id"]}).json()[
+        "entry_id"
+    ]
+
+    r2 = client.get(f"/api/imported/{entry_id}/arquivo-original")
+
+    assert r2.status_code == 200, r2.text
+    assert r2.content == pdf.read_bytes()
+    assert pdf.name in r2.headers["content-disposition"]
+    assert r2.headers["content-type"].startswith("application/pdf")
+
+
+def test_download_do_arquivo_original_404_para_pedido_sem_copia():
+    entry_id = _insert_import_minimo()
+
+    r = client.get(f"/api/imported/{entry_id}/arquivo-original")
+
+    assert r.status_code == 404
+    assert "anterior" in r.json()["detail"]  # pedido anterior à guarda, mensagem amigável
+
+
+def test_download_do_arquivo_original_recusa_caminho_fora_da_pasta_recebidos(tmp_path):
+    fora = tmp_path / "fora.pdf"
+    fora.write_bytes(b"segredo")
+    entry_id = _insert_import_minimo(original_path=str(fora), file_sha256="x")
+
+    r = client.get(f"/api/imported/{entry_id}/arquivo-original")
+
+    assert r.status_code == 403
+
+
+def test_rehydrate_preview_informa_se_ha_arquivo_original(tmp_path, monkeypatch):
+    _config_em_tmp(monkeypatch, tmp_path)
+    pdf = _sample_pdf()
+    r = client.post(
+        "/api/preview", files=[("file", (pdf.name, pdf.read_bytes(), "application/pdf"))]
+    )
+    entry_id = client.post("/api/commit", json={"preview_id": r.json()["preview_id"]}).json()[
+        "entry_id"
+    ]
+    antigo = _insert_import_minimo(source_filename="antigo.pdf")
+
+    com = client.get(f"/api/imported/{entry_id}/preview").json()["arquivo_original"]
+    sem = client.get(f"/api/imported/{antigo}/preview")
+
+    assert com == {"disponivel": True, "nome": pdf.name}
+    # pedido antigo sem snapshot dá 422 no rehydrate; o que importa é o contrato do campo
+    assert sem.status_code == 422

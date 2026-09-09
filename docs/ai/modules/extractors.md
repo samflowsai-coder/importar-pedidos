@@ -6,6 +6,17 @@ Arquivos:
 
 Saída: `dict` com `text`, `tables`, `metadata`, consumido pelos parsers.
 
+## Ingestão: guarda do arquivo recebido
+
+- `app/ingestion/file_loader.py` — `LoadedFile(path, extension, raw)`.
+- `app/ingestion/arquivo_recebido.py` — `guardar(raw, nome, *, raiz, ambiente, agora)`
+  grava a cópia imutável de todo arquivo recebido **antes do parse** e devolve
+  `Recebido(path, sha256)`. Nome seguro (`nome_seguro`): só o nome-base, sem os
+  caracteres que o Windows rejeita, sem `..`, stem ≤ 80. Nunca sobrescreve (`open(..., 'xb')`;
+  colisão ganha `-2`, `-3`…). Falha de escrita **levanta** `OSError` — quem chama
+  decide (a web bloqueia com 500). Raiz: `raiz_recebidos()` = `<APP_DATA_DIR>/recebidos`.
+  Testes: `tests/test_arquivo_recebido.py`.
+
 ## Páginas com posicionamento inconsistente
 
 Alguns geradores declaram uma fonte mais larga do que a usada para calcular o

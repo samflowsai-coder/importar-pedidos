@@ -41,6 +41,12 @@ def _data_dir() -> Path:
     return base
 
 
+def data_dir() -> Path:
+    """Raiz de dados do portal (`APP_DATA_DIR`). Pública pra quem guarda
+    arquivo ao lado dos SQLite (ver `app/ingestion/arquivo_recebido.py`)."""
+    return _data_dir()
+
+
 def shared_db_path() -> Path:
     return _data_dir() / "app_shared.db"
 

@@ -63,6 +63,11 @@ log humano de auditoria (`audit_log`) e log append-only do ciclo de vida
 - `imports.cliente_override_razao TEXT` — razão social denormalizada
   (evita re-query ao Fire só para mostrar na UI).
 - `imports.cliente_override_at TEXT` — ISO timestamp da seleção.
+- `imports.file_sha256 TEXT` / `imports.original_path TEXT` — hash e caminho da cópia
+  imutável do arquivo recebido (`<APP_DATA_DIR>/recebidos/...`, ver `web.md`, seção
+  "Arquivo original"). Preenchidos em todo import desde 2026-09-03; linhas anteriores
+  ficam `NULL` (o download responde 404 amigável). `get_import` devolve os dois;
+  `list_imports` não (não precisa na listagem).
 - `imports.cliente_override_by TEXT` — email do usuário autenticado que
   aplicou (vem de `User.email` via `require_user`). NULL apenas em rows
   legadas anteriores ao auth.
