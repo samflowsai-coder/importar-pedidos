@@ -1,5 +1,17 @@
 # Roteamento intercompany Nasmar → MM — Implementation Plan
 
+> ⚠️ **SUBSTITUÍDO em 2026-09-09.** Este plano foi escrito contra a **Revisão 2** da spec.
+> A Revisão 4 mudou o eixo do roteamento de *cadastro de cliente* para *fornecedor no
+> documento*, e com isso as Tasks 4, 5 e 6 (a tabela `rota_intercompany`) deixaram de
+> existir. O plano em vigor é
+> [`2026-09-09-roteamento-intercompany-fases-0-1c.md`](2026-09-09-roteamento-intercompany-fases-0-1c.md),
+> que traz as Tasks 1 a 3 (Fase 0) daqui inalteradas.
+>
+> **O que ainda vale neste arquivo:** as Tasks 7 a 12 — lote, consolidador, janela, perna
+> espelho e `/lotes`. Elas não dependem do eixo do roteamento e serão a base do plano da
+> Fase 2, quando a pergunta comercial em aberto for respondida.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Pedido de cliente que compra da Nasmar nasce no ambiente Nasmar com o cliente
