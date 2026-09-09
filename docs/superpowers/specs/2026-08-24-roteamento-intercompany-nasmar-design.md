@@ -1,8 +1,9 @@
 # Roteamento intercompany Nasmar → MM — design
 
-**Data:** 2026-08-24 · **Revisão 3** (2026-09-09 — validação comercial fechada)
-**Status:** regras confirmadas pelo Rafael. Falta só a aprovação nominal da lista de
-CNPJs da rota (fato 13). Fases 0 a 2 liberadas para implementação.
+**Data:** 2026-08-24 · **Revisão 4** (2026-09-09 — o roteamento sai do documento)
+**Status:** regras comerciais confirmadas. O eixo do roteamento mudou de *cadastro de
+cliente* para *fornecedor impresso no pedido*, o que dissolve a última questão aberta da
+Revisão 3. Fases 0 a 2 liberadas.
 **Domínios:** `environments`, `erp`, `persistence`, `web`, `worker`, `consolidators`
 
 ---
@@ -238,89 +239,133 @@ Studio Z** — provado, não inferido: as 7 pernas da Nasmar no `.7` gravadas co
 `PEDIDO_CLIENTE='STUDIO Z'` citam na `OBS` os números `10556 10557 10594 2600009023
 9014 9015 9018 9044 9045 9903`, e 12 dos 13 resolvem para a Calcenter no `.4`.
 
-Consequência de desenho: a lista de `rota_intercompany` **precisa de aprovação humana
-nominal, por CNPJ**, antes de qualquer roteamento entrar no ar. Nome comercial não é
-chave; CNPJ é.
+Consequência de desenho, na Revisão 3: a lista precisaria de aprovação humana nominal
+por CNPJ antes de qualquer roteamento entrar no ar.
+
+**A Revisão 4 dissolveu a consequência atacando a causa.** Este erro só foi possível
+porque o roteamento dependia de alguém manter uma lista de clientes correta. Roteando
+pelo fornecedor impresso no pedido, um pedido da Centauro traz o CNPJ da MM e vai para a
+MM — não existe cadastro para errar. O fato 13 deixa de ser um alerta operacional e passa
+a ser a evidência de por que o eixo mudou. Ver fato 14.
+
+---
+
+**14. O pedido diz de quem ele é. Medido nos 29 samples reais.** Todo pedido de compra
+identifica o **fornecedor**, e fornecedor é exatamente a empresa que vai faturar. Rodei
+a extração de texto nos 29 arquivos de `samples/` procurando os dois CNPJs:
+
+| | arquivos | veredito |
+|---|---:|---|
+| CNPJ da **Nasmar** `34.513.679` | 7 | ambiente `nasmar` |
+| CNPJ da **MM** `35.394.871` | 14 | ambiente `mm` |
+| **os dois no mesmo arquivo** | **0** | — |
+| nenhum dos dois | 8 | precisa de outra fonte |
+
+**Resolve sozinho em 21 de 29, e a ambiguidade é zero.** Essa é a propriedade que
+importa: quando o CNPJ do fornecedor está no documento, a resposta **nunca é errada,
+só pode estar ausente**. É o oposto do cadastro por cliente, que erra em silêncio — foi
+assim que a Centauro quase entrou na rota (fato 13).
+
+Os 8 sem CNPJ têm padrão: **7 são planilhas internas** (`Desmembramento Authentic feet`,
+`Desmembramento Magic Feet`, `PEDIDO KALLAN K01`, `PEDIDO NBA 3`, `PEDIDO TENNIS
+STATION`, `Pedido Authentic Fit`, `Pedido Magic Feet MF048`) e a oitava é o
+`PEDIDO BEIRA RIO.pdf`, que traz o rótulo `FORNECEDOR` mas não o CNPJ. Os que **têm**
+são as OCs formais de varejista grande: Sam's Club, Centauro, Riachuelo, Kolosh,
+Studio Z, Mercado Eletrônico.
+
+⚠️ **Nada disso é lido hoje.** Não existe campo de fornecedor em `app/models/order.py`,
+e nenhum dos 11 parsers extrai o CNPJ do fornecedor. O único que olha para a palavra é
+`app/parsers/daju_parser.py:72`, e mesmo assim só para **pular** o bloco — "tudo a partir
+da linha FORNECEDOR descreve a Nasmar, não o cliente". A informação está no documento e é
+descartada na porta de entrada. Fechar isso é a Fase 1.
 
 ---
 
 ## Escopo
 
-**Dentro:** cadastro de rota intercompany por CNPJ; roteamento do pedido para o ambiente
-de origem; consolidação em lote por janela (semanal/quinzenal); criação da perna espelho
-no ambiente MM; registro explícito do vínculo entre as pernas; fechamento da lacuna de
-colunas do mapper; correção da perna de volta (Flow) para o vínculo registrado.
+**Dentro:** extração do CNPJ do fornecedor nos parsers; roteamento do pedido pelo
+fornecedor do documento; fim da seleção de ambiente no login; consolidação em lote por
+janela (semanal/quinzenal); criação da perna espelho no ambiente MM; registro explícito
+do vínculo entre as pernas; fechamento da lacuna de colunas do mapper; correção da perna
+de volta (Flow) para o vínculo registrado.
 
 **Fora:** ressuscitar a tabela de preço do Fire (fato 2); reabertura de lote fechado;
-estorno automático da perna espelho; consolidar pedidos que não caem numa rota
-cadastrada; percentual ou método por cliente.
+estorno automático da perna espelho; percentual ou método por cliente; **cadastro curado
+de quais clientes compram da revenda** — morreu na Revisão 4, o documento resolve.
 
 ---
 
 ## Arquitetura
 
-### Decisão central: o vínculo passa a ser registrado, não inferido
+### Decisão central: quem decide o ambiente é o documento, não um cadastro
 
-Hoje `app/erp/depara_cliente.py` deduz quem é o cliente real por **coincidência de
-`PEDIDO_CLIENTE`** nos dois bancos. Isso funciona porque as duas pernas são digitadas com
-o mesmo número. Com lote, essa coincidência deixa de existir por construção: o lote tem
-chave própria e junta N pedidos de N clientes.
+A Revisão 3 roteava por **cadastro de cliente**: uma tabela `rota_intercompany` dizia
+quais CNPJs compram da revenda. Esse desenho tem um defeito estrutural que o fato 13
+expôs antes de qualquer linha ser escrita: **a tabela é uma opinião sobre o mundo, e
+opinião envelhece em silêncio.** Cliente novo que ninguém cadastrar cai no ambiente
+errado; cliente cadastrado por engano leva um pedido inteiro para a empresa errada. Foi
+esse segundo caso que quase mandou R$ 11,98 milhões/ano da Centauro para a Nasmar.
 
-Como o Portal passa a criar as duas pernas, ele **sabe** o vínculo. Grava. O
-`depara_cliente.py` continua existindo como fallback para pedidos legados e para os que a
-operadora cadastrar à mão — não é removido, é rebaixado de fonte da verdade para plano B.
+O pedido de compra **já carrega a resposta**. Todo documento identifica o fornecedor, e
+fornecedor é, por definição, quem vai faturar. Medido em 29 samples reais: 21 trazem o
+CNPJ do fornecedor e **nenhum traz os dois** (fato 14).
 
-### Modelo de dados (`app_shared.db`, transversal — `db.connect_shared()`)
+Então o roteamento passa a ser **derivado do documento**, não consultado num cadastro:
 
 ```
-rota_intercompany            quem compra da revenda
-  id, cnpj_cliente (UNIQUE), env_origem_slug, rotulo, ativo, created_at
-
-lote_config                  um por par origem -> espelho
-  env_origem_slug, env_espelho_slug, cnpj_revenda,
-  janela ('semanal'|'quinzenal', default 'semanal'), dia_fechamento, hora_fechamento,
-  modo_preco ('divisor'|'desconto', default 'desconto'), fator_preco (NULLABLE), ativo
-    dia_fechamento  0=segunda .. 6=domingo; na quinzena, fecha dias 15 e ultimo
-    hora_fechamento 8 = 08:00 hora local do servidor (resposta do Rafael)
-    modo_preco      'divisor'  -> preco / (1 + fator)   [pratica ate 2026]
-                    'desconto' -> preco * (1 - fator)   [ESCOLHIDO em 08/09]
-    fator_preco     0.07 = 7%. NULL = nao fecha lote, pergunta ao operador.
-                    Confirmado 7,00% EXATO em 09/09 — mas continua sem default
-                    no schema: quem cadastra a rota digita, ninguem herda
-
-intercompany_lote
-  id, chave_lote (UNIQUE), env_origem_slug, env_espelho_slug,
-  janela_inicio, janela_fim,
-  status ('aberto'|'aguardando_fator'|'fechado'|'enviado'|'erro'),
-  fator_preco_aplicado, fator_informado_por, fator_informado_em,
-  import_id_espelho, fire_codigo_espelho,
-  created_at, closed_at, closed_by
-
-intercompany_lote_item
-  lote_id, import_id, env_origem_slug, fire_codigo_origem,
-  pedido_cliente, cnpj_cliente_final, razao_cliente_final
+CNPJ do fornecedor no pedido  ->  environments.cnpj  ->  ambiente
 ```
 
-`rota_intercompany` e `lote_config` são transversais: a decisão de roteamento acontece
-**antes** de existir ambiente ativo. Vão no shared, ao lado de `environments` — mesma
-regra de `environments.md`.
+Isso não é uma otimização. Muda a natureza do erro possível:
 
-`fator_preco` é **NULLABLE de propósito**. Ver abaixo.
+| | cadastro por cliente (Rev. 3) | fornecedor no documento (Rev. 4) |
+|---|---|---|
+| erro possível | **rota errada**, silenciosa | **sem resposta**, visível |
+| cliente novo | cai no ambiente errado | resolve sozinho |
+| manutenção | lista curada, aprovada, revisada | nenhuma |
+| caso Centauro | acontece | impossível |
 
-### Roteamento da perna de origem
+Um sistema que erra por omissão, e mostra a omissão, é categoricamente melhor do que um
+que erra por afirmação e não avisa. É a mesma regra do fator de preço: **sem resposta, o
+Portal pergunta; ele não chuta.**
 
-Novo módulo `app/routing/intercompany.py`:
+`rota_intercompany` **sai do desenho.** Não existe mais lista de clientes para curar,
+aprovar ou manter — e com ela sai a única questão que ainda bloqueava a Fase 1.
+
+`app/erp/depara_cliente.py` continua como está, atendendo os pedidos legados já
+importados. Não é fonte de roteamento em nenhuma hipótese.
+
+### Roteamento: o fornecedor entra no modelo
+
+**Novo campo:** `OrderHeader.supplier_cnpj: str | None`. Hoje ele não existe, e nenhum
+parser o extrai (fato 14). A Fase 1 é exatamente fechar essa lacuna.
+
+**Novo módulo** `app/routing/ambiente.py`:
 
 ```python
-def rota_para(order: Order) -> Rota | None:
-    """Normaliza o CNPJ do cliente e busca em rota_intercompany.
+def ambiente_para(order: Order) -> Decisao:
+    """Resolve o ambiente do pedido. Nunca chuta.
 
-    Achou    -> Rota(env_origem_slug, env_espelho_slug)
-    Nao achou -> None (comportamento de hoje, ambiente selecionado)
+    1. supplier_cnpj do documento casa com environments.cnpj  -> Decisao.resolvido
+    2. decisao_lembrada para este remetente/formato            -> Decisao.lembrado
+    3. nada resolveu                                           -> Decisao.perguntar
     """
 ```
 
 Reusa `app/erp/cnpj.py::cnpj_digits` — não duplica normalização.
+
+**A precedência importa e é estrita:** documento > memória > perguntar. Uma decisão
+lembrada **nunca** sobrepõe o CNPJ impresso no pedido. Se o documento diz MM e a memória
+diz Nasmar, vale MM e a memória é corrigida. Memória é conveniência, documento é fato.
+
+**Os 8 sem fornecedor: o Portal pergunta, e aprende.** No preview aparece uma escolha de
+ambiente obrigatória, com o botão *"lembrar para os próximos pedidos deste cliente"*. A
+escolha vai para `decisao_ambiente` com quem decidiu e quando.
+
+A diferença em relação à `rota_intercompany` é o que torna isso aceitável: a tabela
+**não é pré-requisito de nada**. Ela nasce vazia, se preenche sozinha conforme a operação
+trabalha, e cada linha registra uma decisão humana datada em vez de uma curadoria que
+alguém precisa lembrar de revisar. O Portal funciona 100% no dia 1 com ela vazia.
 
 **Onde é chamado:** no boundary de criação da linha em `imports`, **antes** do
 `repo.insert_import`. `environment_id` é bind imutável (`environments.md`, "Bind
@@ -329,9 +374,47 @@ imutável") — não dá pra corrigir depois. Dois call-sites:
 - `app/web/server.py` — o commit do preview
 - `app/worker/jobs/scan_environments.py` — o watcher de pasta
 
-A UI mostra o desvio explicitamente no preview: *"Este pedido vai para o ambiente
-NASMAR"*. Roteamento silencioso é como o bug de hoje nasceu; não vamos trocar um silêncio
-por outro.
+No watcher não há humano para perguntar: pedido que cair em `Decisao.perguntar` fica
+**retido**, aparece na fila de pendências e não é importado. Nunca vai para um ambiente
+default.
+
+A UI mostra a decisão sempre, mesmo quando ela é automática: *"Fornecedor NASMAR
+(34.513.679/0001-34) → este pedido entra no ambiente NASMAR"*. Roteamento silencioso é
+como o bug de hoje nasceu; não trocamos um silêncio por outro.
+
+### Login sem seleção de ambiente
+
+Hoje o operador loga, cai em `/selecionar-ambiente`, escolhe uma empresa, e o cookie
+`portal_env` amarra toda a navegação dele àquela empresa até ele trocar
+(`environments.md`). Isso existia porque **alguém precisava dizer em que empresa o pedido
+entrava** — e a única pessoa disponível era o operador.
+
+Com o fornecedor decidindo, essa pergunta deixa de existir. O passo perde a razão de ser.
+
+**O ambiente deixa de ser um modo em que o usuário está e passa a ser uma propriedade de
+cada pedido.**
+
+| | hoje | depois |
+|---|---|---|
+| login | → escolher empresa → trabalhar | → trabalhar |
+| caixa de entrada | os pedidos de uma empresa | todos, com selo da empresa em cada um |
+| `portal_env` | **gate** de toda navegação | **filtro** opcional da listagem |
+| ambiente do pedido | o que estava selecionado no commit | derivado do documento |
+
+**O que não muda:** `environment_id` continua bind imutável em `imports`; cada empresa
+continua com seu SQLite (`app_state_<slug>.db`) e seu Firebird; `active_env()` continua
+envolvendo todo caminho de escrita — só que o `env` vem **do pedido**, não da sessão.
+Isolamento entre empresas é o mesmo. Admin (`/admin/ambientes`) continua por empresa.
+
+**Tamanho real:** `portal_env` e `/selecionar-ambiente` aparecem em 15 pontos de 6
+arquivos — `app/web/server.py`, `auth.py`, `routes_env_select.py`,
+`middleware/environment.py`, `dependencies/environment.py`, `app/persistence/context.py`.
+O middleware deixa de exigir e passa a resolver por pedido; a rota de seleção vira tela
+de filtro. Não é reescrita da camada de ambiente, é rebaixamento de um gate.
+
+Isso ganha fase própria (Fase 1b) porque **vale sozinho, sem nada do lote**: mesmo que o
+intercompany nunca saia, um operador que não precisa escolher empresa erra menos e
+trabalha mais rápido.
 
 ### Perna de origem: comportamento inalterado
 
@@ -451,8 +534,10 @@ na semana nova.
 
 Tela `/lotes`: lote aberto com as pernas dentro, total, quantidade de clientes, fator
 vigente, botão "fechar agora", e o campo de fator quando estiver `aguardando_fator`.
-Mostra também os CNPJs vistos na janela que **não** estão em `rota_intercompany` — é o
-radar de cliente novo não cadastrado.
+Mostra também a fila de **pedidos retidos**: os que chegaram pelo watcher sem CNPJ de
+fornecedor no documento e sem decisão lembrada. Eles não foram importados em ambiente
+nenhum e estão esperando alguém escolher. É o único ponto onde a ausência de resposta
+fica visível, e é de propósito que ela fique.
 
 Pedido que chega depois do fechamento entra no **próximo** lote. Lote fechado nunca
 reabre. Isso acontece de verdade — o `#1189` de 11/08 entrou no lote de 14/08 junto com
@@ -507,9 +592,15 @@ projeto (`erp.md`, "Testes") continua valendo.
 | Fase | Entrega | Vale sozinha? |
 |---|---|---|
 | **0** | Mapper completo + `UNID` do cadastro + `CODFIGFISCAL` por ambiente | pré-requisito |
-| **1** | `rota_intercompany` + `/admin/rotas` + roteamento da perna de origem | **sim** — acaba o pedido Nasmar caindo na MM |
+| **1** | `supplier_cnpj` nos 11 parsers + `app/routing/ambiente.py` + escolha no preview quando o documento não diz | **sim** — acaba o pedido Nasmar caindo na MM |
+| **1b** | Fim da seleção de ambiente no login; ambiente vira selo do pedido | **sim** — vale mesmo que o lote nunca saia |
 | **2** | Consolidador + lote + perna espelho + `/lotes` | **sim** |
 | **3** | Perna de volta (Flow, reconciliação) pelo vínculo registrado | **sim** |
+
+A Fase 1 tem uma ordem interna que importa: **o campo e o roteador primeiro, os 11
+parsers depois, um a um.** Cada parser que passa a extrair o fornecedor tira um formato
+da fila do "perguntar" — a feature funciona desde o primeiro, com os outros caindo no
+fluxo de escolha manual. Não é big bang.
 
 ---
 
@@ -517,15 +608,19 @@ projeto (`erp.md`, "Testes") continua valendo.
 
 | Alvo | Arquivo | O que cobre |
 |---|---|---|
-| Roteamento | `tests/test_routing_intercompany.py` | CNPJ na rota → ambiente de origem; fora → `None`; CNPJ malformado; CNPJ duplicado no cadastro |
+| Roteamento | `tests/test_routing_ambiente.py` | fornecedor Nasmar → ambiente `nasmar`; fornecedor MM → `mm`; **documento vence memória quando divergem**; sem fornecedor e sem memória → `perguntar`, nunca um default; CNPJ malformado |
+| Fornecedor nos parsers | `tests/test_supplier_cnpj_samples.py` | os 21 samples que trazem CNPJ de fornecedor resolvem para o ambiente certo; **nenhum sample resolve para dois ambientes**; os 8 sem CNPJ devolvem `None`, não um palpite |
+| Watcher sem humano | `tests/test_scan_environments_retencao.py` | pedido sem fornecedor no watcher fica **retido**, não é importado em ambiente default |
 | Consolidador (puro) | `tests/test_consolidador_lote.py` | soma por `(produto, data, preço)`; **preços diferentes não fundem** (caso Nacional Lojas); fator aplicado; `DT_ENTREGA` = menor; `DT_ENTREGA_ITEM` por item; `OBS` formatada |
-| Repos | `tests/test_rotas_repo.py`, `tests/test_lotes_repo.py` | CRUD; `cnpj` único; lote fechado é imutável |
-| Fechamento | `tests/test_fechar_lotes.py` | janela semanal e quinzenal; **sem fator → `aguardando_fator`, não fecha**; pedido atrasado vai pro próximo lote; CNPJ fora de rota aparece no radar |
+| Repos | `tests/test_decisao_ambiente_repo.py`, `tests/test_lotes_repo.py` | CRUD; chave única; lote fechado é imutável; **memória vazia é estado válido, não erro** |
+| Fechamento | `tests/test_fechar_lotes.py` | janela semanal e quinzenal; **sem fator → `aguardando_fator`, não fecha**; pedido atrasado vai pro próximo lote |
 | Mapper | `tests/test_erp_mapper_colunas.py` | todas as colunas de 100%; `CODFIGFISCAL` por ambiente; `UNID` do cadastro |
 | Perna de volta | `tests/test_flowpcp_intercompany.py` (estender) | decisão do Flow resolve para a perna de origem via `lote_item`, não para o lote |
 
-Os dois testes que travam regressão perigosa: **"sem fator não fecha"** e **"preços
-diferentes não fundem"**. Nenhum dos dois pode ser relaxado sem decisão comercial.
+Os quatro testes que travam regressão perigosa: **"sem fator não fecha"**, **"preços
+diferentes não fundem"**, **"sem fornecedor não roteia"** e **"documento vence memória"**.
+Nenhum pode ser relaxado sem decisão comercial — os dois últimos são o que torna o caso
+Centauro impossível por construção.
 
 ---
 
@@ -534,15 +629,19 @@ diferentes não fundem"**. Nenhum dos dois pode ser relaxado sem decisão comerc
 **Todas as questões comerciais foram fechadas** — as três do PDF em 08/09, as cinco do
 formulário em 09/09. Estão na "Diretriz comercial", itens 5 a 11.
 
-Resta **uma**, e ela bloqueia a Fase 1 ir pro ar:
+**A questão da lista de clientes morreu na Revisão 4.** Ela existia porque o roteamento
+dependia de um cadastro curado. Com o fornecedor decidindo, não há lista para aprovar,
+e a aprovação nominal que a Revisão 3 exigia deixou de ser pré-requisito de qualquer
+fase. Não precisa mais perguntar ao Rafael quem compra da Nasmar.
 
-**A lista nominal de CNPJs da `rota_intercompany` precisa de aprovação humana.** O Rafael
-chegou a marcar "a lista está completa", mas a lista que ele viu trazia a Centauro por
-erro de rótulo (fato 13). A aprovação tem que ser refeita sobre a lista corrigida, e por
-CNPJ — nome comercial não é chave. Faltam também os nomes dos seis clientes menores
-(6 pedidos, R$ 23.774,30 em 2026) que ainda estão agregados na tabela do fato 3.
+Resta **uma**, e é bem mais barata de responder:
 
-Nenhuma questão bloqueia a Fase 0.
+**A Nasmar vende alguma coisa que ela não compra da MM?** O lote consolida *tudo* que
+entra no ambiente `nasmar`, porque toda venda da Nasmar implica uma compra dela na MM. Se
+existir linha de produto que a Nasmar compra de outro fornecedor e revende, esses pedidos
+não podem entrar no lote. É pergunta de sim ou não, e só afeta a Fase 2.
+
+Nenhuma questão bloqueia a Fase 0 nem a Fase 1.
 
 ---
 
@@ -556,9 +655,16 @@ de faturar.
 identificado, mas não valida se está certa. Mitigação futura: alerta quando o fator
 informado divergir do último aplicado.
 
-**Cadastro de rota desatualizado é falha silenciosa.** Cliente novo que ninguém cadastrar
-volta a cair no ambiente selecionado — o bug de hoje. Mitigação: o radar de CNPJs fora de
-rota na tela de lotes.
+**Documento sem fornecedor é 8 de 29 hoje** (fato 14) — e nesses o Portal depende da
+escolha do operador, que pode errar. Mitigações: a escolha é explícita e registrada com
+autor e data; ela **perde** para o CNPJ do documento sempre que ele aparecer; e cada
+parser que passa a extrair o fornecedor reduz a superfície. O risco encolhe com o tempo
+em vez de crescer, que é o oposto do cadastro curado da Revisão 3.
+
+**Parser que extrai o fornecedor errado rotearia errado com confiança.** É o único jeito
+de o novo desenho reproduzir a classe de erro do fato 13. Por isso
+`tests/test_supplier_cnpj_samples.py` roda contra os 29 samples reais e trava a
+propriedade medida: nenhum documento resolve para dois ambientes.
 
 **Lote grande concentra risco.** Uma semana cheia vira um pedido de ~170 linhas
 (fato 11). Se ele nascer errado, erra tudo de uma vez, ao contrário do 1:1 de hoje que
@@ -577,7 +683,7 @@ derivada da nova ou aposentada.
 - Ressuscitar `TABELA_PRECO_PRODS` (fato 2 — 603 de 640 clientes sem vínculo)
 - Reabertura de lote fechado
 - Estorno ou cancelamento automático da perna espelho
-- Consolidar pedidos que não caem numa rota cadastrada
+- Cadastro curado de quais clientes compram da revenda (morreu na Revisão 4)
 - **Percentual ou método por cliente.** Decidido em 2026-08-25: o parâmetro é global e
   não existe override. A uniformidade é o que corrige o desvio do fato 3 — uma exceção
   cadastrada reabriria exatamente o buraco que a feature fecha.
