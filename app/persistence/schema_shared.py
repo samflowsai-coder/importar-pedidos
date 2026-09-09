@@ -99,6 +99,20 @@ CREATE TABLE IF NOT EXISTS rate_limit_buckets (
     tokens         REAL NOT NULL,
     last_refill_at REAL NOT NULL
 );
+
+-- Memória das escolhas de ambiente feitas pelo operador. NASCE VAZIA e isso é
+-- um estado válido: o Portal funciona sem uma linha aqui. Perde para o
+-- documento E para o histórico — é o degrau 3, não a verdade.
+-- `divergiu_*` é preenchido quando um degrau mais forte contradiz a escolha
+-- depois: erro que aparece é erro que se conserta.
+CREATE TABLE IF NOT EXISTS decisao_ambiente (
+    cnpj_cliente  TEXT PRIMARY KEY,
+    env_slug      TEXT NOT NULL,
+    decidido_por  TEXT NOT NULL,
+    decidido_em   TEXT NOT NULL,
+    divergiu_em   TEXT,
+    divergiu_de   TEXT
+);
 """
 
 INDEXES_SQL = """
@@ -128,6 +142,8 @@ CREATE INDEX IF NOT EXISTS idx_invites_expires_at    ON user_invites(expires_at)
 
 CREATE INDEX IF NOT EXISTS idx_inbound_received_at  ON inbound_idempotency(received_at DESC);
 CREATE INDEX IF NOT EXISTS idx_inbound_import_id    ON inbound_idempotency(import_id);
+
+CREATE INDEX IF NOT EXISTS idx_decisao_ambiente_env ON decisao_ambiente(env_slug);
 """
 
 # Migrações de coluna para shared.db — aplicadas se a coluna ainda não existir.
