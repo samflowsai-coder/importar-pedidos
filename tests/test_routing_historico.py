@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
+from app.erp import queries
 from app.routing import historico
 from app.routing.historico import HistoricoAmbiente
 
@@ -96,8 +99,9 @@ def test_cnpj_vazio_nao_consulta_nada():
 
 
 def test_erro_de_conexao_num_ambiente_nao_derruba_o_outro():
-    """VPN cai no meio da consulta: o ambiente que respondeu continua valendo,
-    e o que falhou conta como 'nao sei', nao como 'nao tem'."""
+    """VPN cai no meio da consulta: o ambiente que respondeu continua na tupla
+    com seus dados, e o que falhou entra marcado 'indisponivel' — nao some,
+    e o historico se recusa a responder com o que sobrou."""
 
     def contar(env, cnpjs, desde):  # noqa: ARG001
         if env["slug"] == "americanense":
@@ -105,9 +109,41 @@ def test_erro_de_conexao_num_ambiente_nao_derruba_o_outro():
         return (5, "2026-08-01")
 
     hist = historico.consultar(["11222333000181"], envs=ENVS, contar=contar)
-    slugs = {h.env_slug for h in hist}
-    assert slugs == {"nasmar"}
-    assert historico.resolver(hist) == "nasmar"
+    por_slug = {h.env_slug: h for h in hist}
+    assert por_slug.keys() == {"nasmar", "americanense"}
+    assert por_slug["nasmar"] == HistoricoAmbiente("nasmar", "Nasmar", 5, "2026-08-01")
+    assert por_slug["americanense"].indisponivel is True
+    assert por_slug["americanense"].pedidos == 0
+    assert por_slug["americanense"].ultimo_em is None
+    assert historico.resolver(hist) is None
+
+
+def test_ambiente_indisponivel_recusa_mesmo_quando_o_outro_tem_pedidos():
+    """O caso que o achado 1 aponta: cliente tem pedido nos DOIS ambientes de
+    verdade (ambiguo), a VPN de um cai, o outro responde. O historico nao
+    pode aproveitar a resposta que sobrou como se fosse resposta unica."""
+
+    def contar(env, cnpjs, desde):  # noqa: ARG001
+        if env["slug"] == "nasmar":
+            raise OSError("vpn down")
+        return (5, "2026-08-01")
+
+    hist = historico.consultar(["11222333000181"], envs=ENVS, contar=contar)
+    assert historico.resolver(hist) is None
+
+
+def test_todos_os_ambientes_indisponiveis_ainda_recusa():
+    """Os dois Firebird caem: resolver continua None, mas agora com dois
+    ambientes marcados na tupla, nao com tupla vazia."""
+
+    def contar(env, cnpjs, desde):  # noqa: ARG001
+        raise OSError("vpn down")
+
+    hist = historico.consultar(["11222333000181"], envs=ENVS, contar=contar)
+    assert len(hist) == 2
+    assert all(h.indisponivel for h in hist)
+    assert all(h.pedidos == 0 and h.ultimo_em is None for h in hist)
+    assert historico.resolver(hist) is None
 
 
 def test_resolver_ignora_ambiente_com_zero_pedidos():
@@ -116,3 +152,31 @@ def test_resolver_ignora_ambiente_com_zero_pedidos():
         HistoricoAmbiente("americanense", "MM", 0, None),
     )
     assert historico.resolver(hist) == "nasmar"
+
+
+def test_janela_31_05_menos_3_meses_cai_em_fevereiro_sem_levantar():
+    """31/03 menos 12 meses cai em 31/03, mas 31/05 menos 3 meses cairia em
+    31/02 e date() levantaria — o clamp via monthrange evita isso."""
+    desde = historico._janela_desde(3, date(2026, 5, 31))
+    assert desde == "2026-02-28"
+
+
+def test_janela_29_02_bissexto_menos_12_meses_nao_levanta():
+    desde = historico._janela_desde(12, date(2024, 2, 29))
+    assert desde == "2023-02-28"
+
+
+def test_janela_meses_negativo_levanta_valueerror():
+    with pytest.raises(ValueError):
+        historico._janela_desde(-1, date(2026, 9, 9))
+
+
+def test_count_pedidos_cliente_desde_sql_zero_cnpjs_levanta_valueerror():
+    with pytest.raises(ValueError):
+        queries.count_pedidos_cliente_desde_sql(0)
+
+
+def test_count_pedidos_cliente_desde_sql_n_placeholders_de_cnpj():
+    """n=3 CNPJs + o bind de `desde` = 4 '?' na query inteira."""
+    sql = queries.count_pedidos_cliente_desde_sql(3)
+    assert sql.count("?") == 4
