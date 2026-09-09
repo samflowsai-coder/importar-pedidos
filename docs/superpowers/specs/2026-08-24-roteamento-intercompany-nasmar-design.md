@@ -281,6 +281,43 @@ descartada na porta de entrada. Fechar isso é a Fase 1.
 
 ---
 
+**15. O histórico do Fire resolve quase todo o resto. Medido em 09/09.** Para os 8
+samples sem CNPJ de fornecedor (fato 14), rodei o pipeline real, peguei o
+`customer_cnpj` de cada e perguntei aos dois bancos onde aquele cliente já teve pedido:
+
+| sample | Nasmar | MM | veredito |
+|---|---|---|---|
+| `Pedido Authentic Fit.xlsx` | 4 ped, 07/05/26 | nenhum | → `nasmar` |
+| `Pedido Magic Feet MF048.xlsx` | 1 ped, 09/06/26 | nenhum | → `nasmar` |
+| `PEDIDO KALLAN K01.xlsx` | nenhum | 6 ped, 03/08/26 | → `mm` |
+| `PEDIDO TENNIS STATION.xlsx` | nenhum | 2 ped, 27/08/26 | → `mm` |
+| `PEDIDO BEIRA RIO.pdf` | 28 ped, 24/08/26 | 6 ped, **28/05/25** | → `nasmar` na janela de 12m |
+| `Desmembramento Authentic feet` | — | — | **o parser não extrai CNPJ do cliente** |
+| `Desmembramento Magic Feet` | — | — | idem |
+| `PEDIDO NBA 3.xlsx` | — | — | idem |
+
+**Quanto o histórico é ambíguo, na carteira inteira:**
+
+| janela | só Nasmar | só MM | **ambos** |
+|---|---:|---:|---:|
+| 24 meses | 72 | 256 | **2** (0,6% de 330) |
+| 12 meses | 73 | 203 | **1** (0,4% de 277) |
+
+Cliente que compra das duas empresas existe, mas é **1 em 277**. E a Beira Rio mostra por
+que a janela importa: ela comprou da MM até maio de 2025 e migrou para a Nasmar, onde tem
+28 pedidos. Sem janela ela é ambígua; com 12 meses resolve limpo.
+
+**Somando os dois mecanismos: 26 dos 29 samples roteiam sozinhos.** Os 3 que sobram
+falham por um motivo diferente e consertável — `DesmembramentoXlsParser` e o formato NBA
+não extraem nem o CNPJ do cliente. É lacuna de parser, não limite do desenho.
+
+⚠️ **A janela de 12 meses é uma escolha, não um fato.** A Beira Rio pode voltar a comprar
+da MM. Por isso o Portal mostra a divergência mesmo quando a janela resolve: *"pelo
+histórico vai para NASMAR (28 pedidos); atenção, este cliente também já comprou da MM,
+6 pedidos até 05/2025"*. Resolver em silêncio é o que não se faz.
+
+---
+
 ## Escopo
 
 **Dentro:** extração do CNPJ do fornecedor nos parsers; roteamento do pedido pelo
@@ -335,6 +372,51 @@ aprovar ou manter — e com ela sai a única questão que ainda bloqueava a Fase
 `app/erp/depara_cliente.py` continua como está, atendendo os pedidos legados já
 importados. Não é fonte de roteamento em nenhuma hipótese.
 
+### Modelo de dados (`app_shared.db`, transversal — `db.connect_shared()`)
+
+```
+decisao_ambiente             memoria das escolhas do operador; NASCE VAZIA
+  id, cnpj_cliente (UNIQUE), env_slug, decidido_por, decidido_em,
+  divergiu_em, divergiu_de     <- preenchidos quando documento ou historico
+                                  contradizem a escolha depois
+    Nao e pre-requisito de nada: o Portal funciona no dia 1 com ela vazia.
+    Perde para o documento E para o historico.
+    Existe para AUDITORIA: "quem decidiu isso, quando" em uma linha.
+
+lote_config                  um por par origem -> espelho
+  env_origem_slug, env_espelho_slug, cnpj_revenda, nome_revenda,
+  janela ('semanal'|'quinzenal', default 'semanal'), dia_fechamento, hora_fechamento,
+  modo_preco ('divisor'|'desconto', default 'desconto'), fator_preco (NULLABLE), ativo
+    dia_fechamento  0=segunda .. 6=domingo; na quinzena, fecha dias 15 e ultimo
+    hora_fechamento 8 = 08:00 hora local do servidor (resposta do Rafael)
+    modo_preco      'divisor'  -> preco / (1 + fator)   [pratica ate 2026]
+                    'desconto' -> preco * (1 - fator)   [ESCOLHIDO em 08/09]
+    fator_preco     0.07 = 7%. NULL = nao fecha lote, pergunta ao operador.
+                    Confirmado 7,00% EXATO em 09/09 — mas continua sem default
+                    no schema: quem cadastra a rota digita, ninguem herda
+
+intercompany_lote
+  id, chave_lote (UNIQUE), env_origem_slug, env_espelho_slug,
+  janela_inicio, janela_fim,
+  status ('aberto'|'aguardando_fator'|'fechado'|'enviado'|'erro'),
+  modo_preco_aplicado, fator_preco_aplicado,
+  fator_informado_por, fator_informado_em,
+  import_id_espelho, fire_codigo_espelho,
+  created_at, closed_at, closed_by
+    modo e fator sao copiados da config na ABERTURA do lote, nao no
+    fechamento — resposta do Rafael em 09/09. Ver "Fator de preco".
+
+intercompany_lote_item
+  lote_id, import_id, env_origem_slug, fire_codigo_origem,
+  pedido_cliente, cnpj_cliente_final, razao_cliente_final
+```
+
+`decisao_ambiente` e `lote_config` são transversais: a decisão de roteamento acontece
+**antes** de existir ambiente ativo. Vão no shared, ao lado de `environments` — mesma
+regra de `environments.md`.
+
+`fator_preco` é **NULLABLE de propósito**. Ver abaixo.
+
 ### Roteamento: o fornecedor entra no modelo
 
 **Novo campo:** `OrderHeader.supplier_cnpj: str | None`. Hoje ele não existe, e nenhum
@@ -346,21 +428,45 @@ parser o extrai (fato 14). A Fase 1 é exatamente fechar essa lacuna.
 def ambiente_para(order: Order) -> Decisao:
     """Resolve o ambiente do pedido. Nunca chuta.
 
-    1. supplier_cnpj do documento casa com environments.cnpj  -> Decisao.resolvido
-    2. decisao_lembrada para este remetente/formato            -> Decisao.lembrado
-    3. nada resolveu                                           -> Decisao.perguntar
+    1. supplier_cnpj do documento casa com environments.cnpj  -> Decisao.documento
+    2. historico do cliente no Fire, 12 meses, SE inequivoco  -> Decisao.historico
+    3. decisao lembrada para este cliente                     -> Decisao.lembrado
+    4. nada resolveu, ou historico ambiguo                    -> Decisao.perguntar
     """
 ```
 
+Cada degrau é mais fraco que o de cima, e a `Decisao` carrega **qual degrau respondeu** —
+a UI mostra isso, sempre. Cobertura medida nos 29 samples: 21 pelo documento, mais 5 pelo
+histórico, **26 automáticos**; 3 vão para o operador.
+
 Reusa `app/erp/cnpj.py::cnpj_digits` — não duplica normalização.
 
-**A precedência importa e é estrita:** documento > memória > perguntar. Uma decisão
-lembrada **nunca** sobrepõe o CNPJ impresso no pedido. Se o documento diz MM e a memória
-diz Nasmar, vale MM e a memória é corrigida. Memória é conveniência, documento é fato.
+**A precedência importa e é estrita:** documento > histórico > memória > perguntar. Cada
+degrau perde para o de cima, sem exceção. Se o documento diz MM e a memória diz Nasmar,
+vale MM **e a divergência é registrada** — não sobrescrita em silêncio. Documento é fato
+sobre este pedido; histórico é fato sobre o passado; memória é julgamento humano.
 
-**Os 8 sem fornecedor: o Portal pergunta, e aprende.** No preview aparece uma escolha de
-ambiente obrigatória, com o botão *"lembrar para os próximos pedidos deste cliente"*. A
-escolha vai para `decisao_ambiente` com quem decidiu e quando.
+**O histórico é um degrau de fato, não de palpite** — mas só quando é inequívoco. Se o
+cliente tem pedido nos dois bancos dentro da janela de 12 meses, o histórico **se
+recusa a responder** e cai para o degrau seguinte. Medido: isso acontece com 1 cliente em
+277 (fato 15). Não é o caso comum, é o caso que não pode ser chutado.
+
+**O histórico é bootstrap, não mecanismo permanente.** Ele responde "onde este cliente já
+foi faturado". Para cliente genuinamente novo ele é mudo por construção — e é exatamente
+aí que o Portal pergunta.
+
+**Cliente novo, sem documento e sem histórico: o Portal pergunta, e guarda.** No preview
+aparece uma escolha de ambiente obrigatória. A escolha vai para `decisao_ambiente` com
+**quem decidiu e quando**.
+
+O registro não existe só para poupar a próxima pergunta. Ele existe para **quando der
+errado**: se um pedido acabar na empresa errada, a pergunta "quem decidiu isso, quando, e
+com base em quê" tem resposta em uma linha de tabela em vez de uma reconstrução no
+WhatsApp. É a mesma razão de `fator_informado_por` existir no lote.
+
+E por isso a divergência é registrada em vez de silenciada: no dia em que o documento
+finalmente trouxer o CNPJ do fornecedor, ou o histórico virar, o Portal marca que a
+decisão lembrada era outra. Erro que aparece é erro que se conserta.
 
 A diferença em relação à `rota_intercompany` é o que torna isso aceitável: a tabela
 **não é pré-requisito de nada**. Ela nasce vazia, se preenche sozinha conforme a operação
@@ -592,7 +698,8 @@ projeto (`erp.md`, "Testes") continua valendo.
 | Fase | Entrega | Vale sozinha? |
 |---|---|---|
 | **0** | Mapper completo + `UNID` do cadastro + `CODFIGFISCAL` por ambiente | pré-requisito |
-| **1** | `supplier_cnpj` nos 11 parsers + `app/routing/ambiente.py` + escolha no preview quando o documento não diz | **sim** — acaba o pedido Nasmar caindo na MM |
+| **1** | `supplier_cnpj` nos 11 parsers + `app/routing/ambiente.py` (documento → histórico → memória → perguntar) + escolha no preview | **sim** — acaba o pedido Nasmar caindo na MM |
+| **1a** | `customer_cnpj` no `DesmembramentoXlsParser` e no formato NBA — os 3 samples que hoje não têm nem cliente | **sim** — fecha os últimos 3 de 29 |
 | **1b** | Fim da seleção de ambiente no login; ambiente vira selo do pedido | **sim** — vale mesmo que o lote nunca saia |
 | **2** | Consolidador + lote + perna espelho + `/lotes` | **sim** |
 | **3** | Perna de volta (Flow, reconciliação) pelo vínculo registrado | **sim** |
@@ -602,13 +709,17 @@ parsers depois, um a um.** Cada parser que passa a extrair o fornecedor tira um 
 da fila do "perguntar" — a feature funciona desde o primeiro, com os outros caindo no
 fluxo de escolha manual. Não é big bang.
 
+O degrau do histórico é uma consulta de leitura aos dois Firebird e **entra junto com o
+roteador**, não depois: sem ele a Fase 1 nasce perguntando 8 vezes em 29 em vez de 3.
+
 ---
 
 ## Testes
 
 | Alvo | Arquivo | O que cobre |
 |---|---|---|
-| Roteamento | `tests/test_routing_ambiente.py` | fornecedor Nasmar → ambiente `nasmar`; fornecedor MM → `mm`; **documento vence memória quando divergem**; sem fornecedor e sem memória → `perguntar`, nunca um default; CNPJ malformado |
+| Roteamento | `tests/test_routing_ambiente.py` | fornecedor Nasmar → `nasmar`; fornecedor MM → `mm`; **documento vence histórico e memória**; **histórico vence memória**; cliente nos dois bancos na janela → `perguntar`, nunca o de maior volume; sem nada → `perguntar`, nunca um default; divergência é gravada em `divergiu_em`; CNPJ malformado |
+| Histórico | `tests/test_routing_historico.py` | janela de 12 meses (caso Beira Rio: pedidos na MM até 05/2025 ficam fora e não geram ambiguidade); cliente só num banco resolve; cliente nos dois **recusa**; cliente sem histórico devolve `None` |
 | Fornecedor nos parsers | `tests/test_supplier_cnpj_samples.py` | os 21 samples que trazem CNPJ de fornecedor resolvem para o ambiente certo; **nenhum sample resolve para dois ambientes**; os 8 sem CNPJ devolvem `None`, não um palpite |
 | Watcher sem humano | `tests/test_scan_environments_retencao.py` | pedido sem fornecedor no watcher fica **retido**, não é importado em ambiente default |
 | Consolidador (puro) | `tests/test_consolidador_lote.py` | soma por `(produto, data, preço)`; **preços diferentes não fundem** (caso Nacional Lojas); fator aplicado; `DT_ENTREGA` = menor; `DT_ENTREGA_ITEM` por item; `OBS` formatada |
@@ -655,11 +766,17 @@ de faturar.
 identificado, mas não valida se está certa. Mitigação futura: alerta quando o fator
 informado divergir do último aplicado.
 
-**Documento sem fornecedor é 8 de 29 hoje** (fato 14) — e nesses o Portal depende da
-escolha do operador, que pode errar. Mitigações: a escolha é explícita e registrada com
+**Sem documento e sem histórico é 3 de 29 hoje** (fatos 14 e 15) — e nesses o Portal
+depende da escolha do operador, que pode errar. Mitigações: a escolha é explícita e registrada com
 autor e data; ela **perde** para o CNPJ do documento sempre que ele aparecer; e cada
 parser que passa a extrair o fornecedor reduz a superfície. O risco encolhe com o tempo
 em vez de crescer, que é o oposto do cadastro curado da Revisão 3.
+
+**A janela de 12 meses do histórico é uma escolha, não um fato** (fato 15). Cliente que
+migrou de empresa há mais de um ano some da janela e some da ambiguidade — foi o que
+resolveu a Beira Rio. Se ele voltar, a janela responde com a informação velha. Mitigação:
+o Portal mostra o histórico completo mesmo quando a janela resolve, e a decisão nunca é
+silenciosa.
 
 **Parser que extrai o fornecedor errado rotearia errado com confiança.** É o único jeito
 de o novo desenho reproduzir a classe de erro do fato 13. Por isso
