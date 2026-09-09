@@ -939,10 +939,18 @@ git commit -m "feat(environments): CNPJ da empresa no cadastro do ambiente"
   `documento.cnpjs_de_ambientes() -> dict[str, str]` (mapa `{cnpj_digits: env_slug}`).
 
 **Contexto:** o fato 14 da spec mediu 29 arquivos — 7 com o CNPJ da Nasmar, 14 com o da
-MM, **0 com os dois**, 8 sem nenhum. Dois daqueles arquivos nunca foram commitados;
-**medido neste checkout em 2026-09-09 com a regex desta task: 27 arquivos, 20 resolvem,
-0 ambíguos, 7 sem CNPJ.** A ausência de ambiguidade — a propriedade que torna o degrau
-seguro — se confirma nos dois recortes, e é ela que o teste tranca.
+MM, **0 com os dois**, 8 sem nenhum. **Confirmado com a regex desta task depois do merge
+da `main` em 2026-09-09: 29 arquivos, 21 resolvem, 0 ambíguos, 8 sem CNPJ — os números da
+spec, exatos.**
+
+> Nota de processo, porque ela custou duas correções: a primeira medição deste plano deu
+> 27/20/0/7 e eu "corrigi" a spec. Estava errado nas duas pontas — a branch estava 21
+> commits atrás da `main` e não tinha 3 samples, e a minha varredura usou `rglob`, que
+> desce em `samples/Erro Magic Feet/`, enquanto o teste usa `iterdir`. Número medido em
+> base velha é palpite com cara de fato.
+
+A ausência de ambiguidade — a propriedade que torna o degrau seguro — se confirma, e é
+ela que o teste tranca.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1194,27 +1202,25 @@ def test_nenhum_sample_traz_os_dois_cnpjs():
 
 @pytest.mark.skipif(not SAMPLES.is_dir(), reason="samples/ não está no checkout")
 def test_cobertura_medida_nao_regride():
-    """20 dos 27 samples DO REPO resolvem pelo documento. Pode subir, nao descer.
+    """21 dos 29 samples resolvem pelo documento. Pode subir, nao descer.
 
-    O fato 14 da spec fala em 21 de 29 porque foi medido com dois arquivos que
-    nunca foram commitados em samples/ (um deles o PEDIDO TENNIS STATION).
-    Medido neste checkout em 2026-09-09: 27 arquivos, 20 resolvem, 0 ambiguos.
-    O piso e o numero do repo, nao o da spec — teste tem que rodar no que
-    existe.
+    Sao os numeros do fato 14 da spec, confirmados com esta regex em
+    2026-09-09 depois do merge da main: 29 arquivos, 21 resolvem, 0 ambiguos,
+    8 sem CNPJ de fornecedor.
     """
     resolvidos = [
         p.name for p in _arquivos()
         if documento.detectar_fornecedor(_texto(p), CONHECIDOS) is not None
     ]
-    assert len(resolvidos) >= 20, f"cobertura caiu para {len(resolvidos)}: {resolvidos}"
+    assert len(resolvidos) >= 21, f"cobertura caiu para {len(resolvidos)}: {resolvidos}"
 
 
 @pytest.mark.skipif(not SAMPLES.is_dir(), reason="samples/ não está no checkout")
 def test_samples_sem_cnpj_devolvem_none_e_nao_palpite():
-    """Os 7 sem CNPJ de fornecedor caem para o degrau seguinte, nao para um default.
+    """Os 8 sem CNPJ de fornecedor caem para o degrau seguinte, nao para um default.
 
-    Lista fechada e verificada no checkout em 2026-09-09 — sao exatamente estes
-    sete, nem um a mais.
+    Lista fechada e verificada em 2026-09-09 depois do merge da main — sao
+    exatamente estes oito, nem um a mais.
     """
     sem_cnpj = [
         "Desmembramento Authentic feet (1).xlsx",
@@ -1222,6 +1228,7 @@ def test_samples_sem_cnpj_devolvem_none_e_nao_palpite():
         "PEDIDO KALLAN K01.xlsx",
         "PEDIDO NBA 3.xlsx",
         "PEDIDO BEIRA RIO.pdf",
+        "PEDIDO TENNIS STATION.xlsx",
         "Pedido Authentic Fit.xlsx",
         "Pedido Magic Feet MF048.xlsx",
     ]
