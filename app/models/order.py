@@ -8,6 +8,10 @@ class OrderHeader(BaseModel):
     issue_date: str | None = None
     customer_name: str | None = None
     customer_cnpj: str | None = None
+    # CNPJ do FORNECEDOR impresso no documento, em dígitos. Preenchido pelo
+    # pipeline (varredura) ou por um parser que saiba ler o rótulo. É a chave
+    # do degrau 1 do roteamento — ver app/routing/documento.py.
+    supplier_cnpj: str | None = None
 
 
 class OrderItem(BaseModel):
