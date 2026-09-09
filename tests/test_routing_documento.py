@@ -63,3 +63,20 @@ def test_float_de_planilha_colado_nao_engole_o_cnpj_vizinho():
     )
     assert documento.cnpjs_no_texto(texto) == {MM, NASMAR}
     assert documento.detectar_fornecedor(texto, CONHECIDOS) is None
+
+
+def test_pontuacao_de_texto_colada_nao_bloqueia_o_cnpj():
+    """Achado de revisao (efeito colateral do fix do Critical): o primeiro
+    lookbehind (`(?<![\\d.,])`) proibia comecar a casada logo apos QUALQUER
+    ponto ou virgula, nao so os que fazem parte de um numero. Isso derrubava
+    CNPJ colado em pontuacao de texto — fim de frase, abreviacao — que o
+    pdf_extractor produz quando o espacamento do PDF colapsa
+    (`_chars_are_stacked`). O lookbehind certo so proibe comecar DENTRO de um
+    numero: rejeita digito imediatamente antes, ou digito seguido de
+    '.'/','; ponto final de frase nao e nenhum dos dois."""
+    for texto in (
+        "total,35.394.871/0001-11",
+        "Fim da frase.35.394.871/0001-11",
+        "n.35.394.871/0001-11",
+    ):
+        assert documento.cnpjs_no_texto(texto) == {MM}, texto
