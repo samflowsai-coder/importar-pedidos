@@ -22,6 +22,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from app.erp.cnpj import cnpj_digits
 from app.persistence import router
 from app.security import secret_store
 
@@ -37,6 +38,8 @@ _PUBLIC_FIELDS = (
     "fb_port",
     "fb_user",
     "fb_charset",
+    # CNPJ da empresa do ambiente (só dígitos) — chave do roteamento pelo documento.
+    "cnpj",
     "is_active",
     "created_at",
     "updated_at",
@@ -97,6 +100,7 @@ def create(
     fb_user: str = "SYSDBA",
     fb_charset: str = "WIN1252",
     fb_password: str | None = None,
+    cnpj: str | None = None,
 ) -> dict[str, Any]:
     # Normaliza slug para lowercase antes de validar — UX permissiva.
     if isinstance(slug, str):
@@ -109,14 +113,15 @@ def create(
     now = _now()
     pw_enc = secret_store.encrypt(fb_password) if fb_password else None
     fb_path_clean = _clean_path(fb_path) or ""
+    cnpj_clean = cnpj_digits(cnpj) or None
 
     try:
         with router.shared_connect() as conn:
             conn.execute(
                 """INSERT INTO environments
                    (id, slug, name, watch_dir, output_dir, fb_path, fb_host, fb_port,
-                    fb_user, fb_charset, fb_password_enc, is_active, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+                    fb_user, fb_charset, fb_password_enc, cnpj, is_active, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
                 (
                     env_id,
                     slug,
@@ -129,6 +134,7 @@ def create(
                     fb_user,
                     fb_charset,
                     pw_enc,
+                    cnpj_clean,
                     now,
                     now,
                 ),
@@ -150,6 +156,24 @@ def get(env_id: str) -> dict[str, Any] | None:
 def get_by_slug(slug: str) -> dict[str, Any] | None:
     with router.shared_connect() as conn:
         row = conn.execute("SELECT * FROM environments WHERE slug = ?", (slug,)).fetchone()
+    return _row_to_dict(row) if row else None
+
+
+def find_by_cnpj(cnpj: str | None) -> dict[str, Any] | None:
+    """Ambiente ATIVO cujo CNPJ casa. Chave do roteamento pelo documento.
+
+    Aceita formatado ou em dígitos — normaliza antes de comparar, porque a
+    coluna guarda só dígitos. Ambiente inativo nunca casa: desativar um
+    ambiente tem que tirá-lo do roteamento, não só da UI.
+    """
+    digits = cnpj_digits(cnpj)
+    if not digits:
+        return None
+    with router.shared_connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM environments WHERE cnpj = ? AND is_active = 1 LIMIT 1",
+            (digits,),
+        ).fetchone()
     return _row_to_dict(row) if row else None
 
 
@@ -182,6 +206,7 @@ def update(
     fb_charset: str | None = None,
     fb_password: str | None = None,
     fiscal_codfigfiscal: int | None = None,
+    cnpj: str | None = None,
 ) -> dict[str, Any] | None:
     """Atualiza campos editáveis. `slug` propositalmente ausente — imutável.
 
@@ -189,6 +214,9 @@ def update(
     - `fb_password=None`  → mantém valor atual (típico em edits parciais)
     - `fb_password=""`    → limpa (define NULL)
     - `fb_password="..."` → substitui (re-encrypt)
+
+    `cnpj` segue a mesma semântica de três estados: `None` mantém, `""` limpa
+    (NULL), valor substitui — sempre gravado só em dígitos.
     """
     fields: dict[str, Any] = {}
     for k, v in {
@@ -207,6 +235,8 @@ def update(
         fields["fb_password_enc"] = secret_store.encrypt(fb_password) if fb_password else None
     if fiscal_codfigfiscal is not None:
         fields["fiscal_codfigfiscal"] = fiscal_codfigfiscal
+    if cnpj is not None:
+        fields["cnpj"] = cnpj_digits(cnpj) or None
     if not fields:
         return get(env_id)
     fields["updated_at"] = _now()

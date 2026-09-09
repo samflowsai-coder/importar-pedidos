@@ -392,3 +392,52 @@ def test_fiscal_codfigfiscal_round_trip(fresh_shared):
     assert env_nasmar["fiscal_codfigfiscal"] == 5
     perfil_nasmar = perfil_para(env_nasmar)
     assert perfil_nasmar.codfigfiscal == 5
+
+
+# ── CNPJ do ambiente (chave do roteamento pelo documento) ─────────────────────
+
+
+def test_cnpj_e_gravado_em_digitos(fresh_shared):
+    """Admin digita formatado; o banco guarda so os digitos."""
+    env = environments_repo.create(
+        slug="nasmar", name="Nasmar",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="34.513.679/0001-34",
+    )
+    assert env["cnpj"] == "34513679000134"
+
+
+def test_find_by_cnpj_casa_formatado_ou_nao(fresh_shared):
+    environments_repo.create(
+        slug="mm", name="MM Americanense",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="35394871000111",
+    )
+    achado = environments_repo.find_by_cnpj("35.394.871/0001-11")
+    assert achado is not None
+    assert achado["slug"] == "mm"
+    assert environments_repo.find_by_cnpj("00000000000000") is None
+    assert environments_repo.find_by_cnpj("") is None
+    assert environments_repo.find_by_cnpj(None) is None
+
+
+def test_find_by_cnpj_ignora_ambiente_inativo(fresh_shared):
+    """Ambiente desativado nao roteia nada — some do lookup."""
+    env = environments_repo.create(
+        slug="velho", name="Empresa antiga",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="11222333000144",
+    )
+    environments_repo.soft_delete(env["id"])
+    assert environments_repo.find_by_cnpj("11222333000144") is None
+
+
+def test_update_limpa_cnpj_com_string_vazia(fresh_shared):
+    """None mantem, "" limpa — mesma semantica de fb_password."""
+    env = environments_repo.create(
+        slug="mm2", name="MM",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="35394871000111",
+    )
+    assert environments_repo.update(env["id"], name="MM 2")["cnpj"] == "35394871000111"
+    assert environments_repo.update(env["id"], cnpj="")["cnpj"] is None

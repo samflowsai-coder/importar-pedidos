@@ -36,6 +36,8 @@ class CreateEnvRequest(BaseModel):
     fb_user: str = "SYSDBA"
     fb_charset: str = "WIN1252"
     fb_password: str | None = None
+    # CNPJ da empresa do ambiente — chave do roteamento pelo documento.
+    cnpj: str | None = None
 
 
 class UpdateEnvRequest(BaseModel):
@@ -51,6 +53,11 @@ class UpdateEnvRequest(BaseModel):
     fb_charset: str | None = None
     # None = mantém senha atual; "" = limpa; valor = substitui
     fb_password: str | None = None
+    # None = mantém CNPJ atual; "" = limpa; valor = substitui (sempre em dígitos)
+    cnpj: str | None = None
+    # Figura fiscal (CODFIGFISCAL). None = mantém o valor atual (sem forma de
+    # limpar por aqui hoje — mesma limitação de app/persistence/environments_repo.update).
+    fiscal_codfigfiscal: int | None = None
 
 
 class FlowPCPConfigRequest(BaseModel):

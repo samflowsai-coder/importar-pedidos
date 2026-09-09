@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS environments (
     fb_user         TEXT NOT NULL DEFAULT 'SYSDBA',
     fb_charset      TEXT NOT NULL DEFAULT 'WIN1252',
     fb_password_enc TEXT,
+    -- CNPJ da empresa que este ambiente representa, SO DIGITOS. E a chave do
+    -- roteamento pelo documento: o CNPJ do fornecedor impresso no pedido casa
+    -- aqui. NULL = ambiente nao participa do roteamento automatico.
+    cnpj            TEXT,
     is_active       INTEGER NOT NULL DEFAULT 1,
     -- Ponte FlowPCP (Modelo B/OVERLAY) por ambiente. Token cifrado via
     -- secret_store (Fernet), como fb_password_enc. Só MM liga.
@@ -100,6 +104,8 @@ CREATE TABLE IF NOT EXISTS rate_limit_buckets (
 INDEXES_SQL = """
 CREATE UNIQUE INDEX IF NOT EXISTS idx_environments_slug ON environments(slug);
 CREATE INDEX IF NOT EXISTS idx_environments_active      ON environments(is_active);
+CREATE INDEX IF NOT EXISTS idx_environments_cnpj ON environments(cnpj)
+    WHERE cnpj IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id    ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
@@ -146,4 +152,7 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # 5 na Nasmar. NULL = usa o default de app/erp/fiscal.py.
     ("environments", "fiscal_codfigfiscal",
      "ALTER TABLE environments ADD COLUMN fiscal_codfigfiscal INTEGER"),
+    # CNPJ da empresa do ambiente, só dígitos — chave de `find_by_cnpj`.
+    ("environments", "cnpj",
+     "ALTER TABLE environments ADD COLUMN cnpj TEXT"),
 )
