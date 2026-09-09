@@ -783,3 +783,47 @@ def mark_found_in_fire(
             occurred_at=at,
         )
     return True
+
+
+def _envs_para_listagem() -> list[dict]:
+    from app.persistence import environments_repo
+
+    return environments_repo.list_active()
+
+
+def list_imports_all_envs(limit: int = 100, offset: int = 0, **filtros) -> list[dict]:
+    """`list_imports` somando todos os ambientes ativos, com selo da empresa.
+
+    Merge em Python, não em SQL: são bancos SQLite separados (um arquivo por
+    empresa) e não há JOIN sem `ATTACH`. Cada ambiente é consultado com
+    `limit + offset` linhas — o suficiente para a página pedida, sem varrer
+    tudo. Volume real: ~108 pedidos em produção.
+    """
+    teto = max(1, min(int(limit) + int(offset), _MAX_PAGE_SIZE))
+    juntas: list[dict] = []
+    for env in _envs_para_listagem():
+        with env_context.active_env(env["id"], env["slug"]):
+            for linha in list_imports(limit=teto, offset=0, **filtros):
+                linha["env_slug"] = env["slug"]
+                linha["env_name"] = env["name"]
+                juntas.append(linha)
+    juntas.sort(key=lambda r: (r.get("imported_at") or "", r.get("id") or ""), reverse=True)
+    return juntas[int(offset) : int(offset) + int(limit)]
+
+
+def count_imports_all_envs(**filtros) -> int:
+    total = 0
+    for env in _envs_para_listagem():
+        with env_context.active_env(env["id"], env["slug"]):
+            total += count_imports(**filtros)
+    return total
+
+
+def count_by_portal_status_all_envs(**filtros) -> dict[str, int]:
+    """Contadores dos chips somando os ambientes. Anda junto da listagem."""
+    total: dict[str, int] = {}
+    for env in _envs_para_listagem():
+        with env_context.active_env(env["id"], env["slug"]):
+            for estado, n in count_by_portal_status(**filtros).items():
+                total[estado] = total.get(estado, 0) + n
+    return total
