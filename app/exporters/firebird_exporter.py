@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import threading
+from decimal import ROUND_HALF_UP, Decimal
 
 from app.erp import queries
 from app.erp.connection import FirebirdConnection
@@ -10,6 +11,7 @@ from app.erp.exceptions import (
     FirebirdError,
     FirebirdOrderAlreadyExistsError,
 )
+from app.erp.fiscal import perfil_para
 from app.erp.mapper import FireSistemasMapper
 from app.models.order import ERPRow, Order
 from app.utils.logger import logger
@@ -61,6 +63,22 @@ def _to_erp_rows(order: Order) -> list[ERPRow]:
     for bucket in exporter._group_by_delivery(order).values():
         all_rows.extend(exporter._to_erp_rows(order, bucket))
     return all_rows
+
+
+def _valor_total(rows: list[ERPRow]) -> Decimal:
+    """Soma dos itens em Decimal — nunca float (preco/qtd chegam float no
+    modelo). Mesma regra de item_to_corpovendas: usa valor_total quando
+    presente, senao qtd * preco_unitario.
+    """
+    total = Decimal("0")
+    for row in rows:
+        if row.valor_total is not None:
+            total += Decimal(str(row.valor_total))
+        else:
+            qty = Decimal(str(row.quantidade or 0))
+            preco = Decimal(str(row.preco_unitario or 0))
+            total += qty * preco
+    return total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 class FirebirdExporter:
@@ -172,16 +190,28 @@ class FirebirdExporter:
         cur.execute(queries.GET_NEXT_CABVENDAS_CODIGO)
         header_pk: int = cur.fetchone()[0]
 
-        # 4. Insert header
-        header_params = self._mapper.order_to_cabvendas(order, header_pk, client_id)
-        cur.execute(queries.INSERT_CAB_VENDAS, header_params)
+        # 4. Insert header. valor_total soma os itens em Decimal (precisa dos
+        #    erp_rows antes do insert do cabecalho); perfil vem do ambiente
+        #    atual (CODFIGFISCAL difere MM x Nasmar), default medido se ausente.
+        erp_rows = _to_erp_rows(order)
+        valor_total = _valor_total(erp_rows)
+        header_params = self._mapper.order_to_cabvendas(
+            order,
+            header_pk,
+            client_id,
+            perfil=perfil_para(self._env),
+            valor_total=valor_total,
+        )
+        # ULT_ALT_USER repete ULT_INS_USER (ultimo elemento da tupla) — nao
+        # entra no mapper pra um erro de ordem na tupla nao passar despercebido.
+        cur.execute(queries.INSERT_CAB_VENDAS, (*header_params, header_params[-1]))
+        cur.execute(queries.UPDATE_CODPED_PAI, (header_pk,))
         logger.debug(
             f"CAB_VENDAS inserido: CODIGO={header_pk} "
             f"PEDIDO_CLIENTE={pedido_cliente!r} CLIENTE={client_id}"
         )
 
         # 5. Insert items
-        erp_rows = _to_erp_rows(order)
         items_inserted = 0
         for row in erp_rows:
             product_seq = self._find_product(cur, row)

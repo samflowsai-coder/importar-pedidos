@@ -195,23 +195,41 @@ def find_products_by_seqs_sql(n: int) -> str:
 
 # Insert sales order header (CAB_VENDAS).
 #
-# Production data pattern (verified against Americanense 2026-04-21 backup):
-#   - STATUS = 'PEDIDO' for new orders (NOT 'Aberto')
-#   - DOCUMENTO is usually NULL (retailer ref goes to PEDIDO_CLIENTE)
-#   - CLINAOCAD is never used in practice (always NULL) — CLIENTE FK required
-#   - DTHORA_PEDIDO holds the creation timestamp alongside ULT_INS_DTHR
+# Colunas e valores conferidos contra 373 pedidos do .7 e 90 do .4 na Fire
+# viva (2026-08-24, todos de 2026-06-01 em diante). As 14 primeiras estao
+# preenchidas em 100% dos pedidos digitados pela operacao; CLASSIF_FAT,
+# CODFIGFISCAL, DT_BASE_FAT e MECANICO em 82% a 100%.
+#
+# CODPED_PAI (auto-referencia = CODIGO) NAO entra aqui: o valor so existe
+# depois do INSERT. Vai por UPDATE_CODPED_PAI logo em seguida, na mesma
+# transacao.
 INSERT_CAB_VENDAS = """
     INSERT INTO CAB_VENDAS (
         CODIGO, CODEMPRESA, DATA_PEDIDO,
         CLIENTE, STATUS, PEDIDO_CLIENTE,
-        OBS, DT_ENTREGA,
-        ULT_INS_USER, ULT_INS_DTHR, DTHORA_PEDIDO
+        OBS, DT_ENTREGA, DT_BASE_FAT,
+        VALOR_TOTAL, TOTAL_PRODUTO, DESCONTO,
+        TIPO_COB, COD_CLASS_FINAN, DESC_CLASS_FINAN,
+        CLASSIF_FAT, CODFIGFISCAL, MECANICO,
+        SEM_IMP, PED_ZF, EH_VENDACONSUMIDOR, VENDEDOR_COMI,
+        ULT_INS_USER, ULT_ALT_USER,
+        ULT_INS_DTHR, ULT_ALT_DTHR, DTHORA_PEDIDO
     ) VALUES (
         ?, ?, ?,
         ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?, ?,
         ?, ?,
-        ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
     )
+"""
+
+# CODPED_PAI aponta pro proprio pedido em 100% dos pedidos medidos.
+UPDATE_CODPED_PAI = """
+    UPDATE CAB_VENDAS SET CODPED_PAI = CODIGO WHERE CODIGO = ?
 """
 
 # ── Poll Worker (Fase 5) ──────────────────────────────────────────────────────

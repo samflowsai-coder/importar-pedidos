@@ -7,9 +7,15 @@ the production schema (CAB_VENDAS / CORPO_VENDAS).
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
+from app.erp.fiscal import perfil_para
 from app.erp.mapper import FireSistemasMapper
 from app.models.order import ERPRow, Order, OrderHeader
+
+# CODIGO, CODEMPRESA, DATA_PEDIDO, CLIENTE, STATUS, PEDIDO_CLIENTE, OBS,
+# DT_ENTREGA, ... (colunas 8-21 sao o perfil fiscal — ver test_erp_mapper_colunas.py),
+# ULT_INS_USER e a ultima posicao da tupla (23 elementos).
 
 
 def test_order_to_cabvendas_uses_status_pedido_and_retailer_ref() -> None:
@@ -23,7 +29,10 @@ def test_order_to_cabvendas_uses_status_pedido_and_retailer_ref() -> None:
         items=[],
     )
 
-    row = FireSistemasMapper().order_to_cabvendas(order, header_pk=42, client_id=7)
+    row = FireSistemasMapper().order_to_cabvendas(
+        order, header_pk=42, client_id=7,
+        perfil=perfil_para(None), valor_total=Decimal("0"),
+    )
 
     assert row[0] == 42  # CODIGO
     assert row[2] == date(2026, 4, 15)  # DATA_PEDIDO
@@ -32,7 +41,7 @@ def test_order_to_cabvendas_uses_status_pedido_and_retailer_ref() -> None:
     assert row[5] == "AW097", "PEDIDO_CLIENTE carries the retailer's reference"
     assert row[6] is None  # OBS
     assert row[7] is None  # DT_ENTREGA on header (item-level only)
-    assert row[8] == "IMPORTADOR"  # ULT_INS_USER
+    assert row[-1] == "IMPORTADOR"  # ULT_INS_USER
 
 
 def test_order_to_cabvendas_falls_back_to_today_when_no_date() -> None:
@@ -40,7 +49,10 @@ def test_order_to_cabvendas_falls_back_to_today_when_no_date() -> None:
         header=OrderHeader(order_number="X", customer_name="X", customer_cnpj="1"),
         items=[],
     )
-    row = FireSistemasMapper().order_to_cabvendas(order, header_pk=1, client_id=1)
+    row = FireSistemasMapper().order_to_cabvendas(
+        order, header_pk=1, client_id=1,
+        perfil=perfil_para(None), valor_total=Decimal("0"),
+    )
     assert row[2] == date.today()
 
 

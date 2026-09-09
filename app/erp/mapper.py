@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
+from decimal import Decimal
 
+from app.erp.fiscal import PerfilFiscal
 from app.models.order import ERPRow, Order
 
 
@@ -52,28 +54,51 @@ class FireSistemasMapper:
         order: Order,
         header_pk: int,
         client_id: int,
+        *,
+        perfil: PerfilFiscal,
+        valor_total: Decimal,
+        obs: str | None = None,
+        dt_entrega: date | None = None,
     ) -> tuple:
-        """Returns positional tuple for INSERT_CAB_VENDAS parameters.
+        """Tupla posicional para INSERT_CAB_VENDAS (23 elementos).
 
-        client_id is required (NOT Optional) — callers must resolve the CNPJ
-        before reaching this point.
+        `valor_total` vem calculado de fora (soma dos itens) porque o mapper
+        nao conhece o resultado do de-para de produto nem do fator de preco.
+
+        `obs` e `dt_entrega` eram cravados em None ate 2026-08. O lote
+        intercompany depende dos dois: OBS carrega a lista de pedidos de
+        origem, DT_ENTREGA a menor data das pernas.
         """
         import os
-        empresa = int(os.environ.get("FB_CODEMPRESA", self.EMPRESA_CODIGO))
 
+        empresa = int(os.environ.get("FB_CODEMPRESA", self.EMPRESA_CODIGO))
         pedido_cliente = (order.header.order_number or "")[:20] or None
         data_pedido = _parse_date(order.header.issue_date) or date.today()
 
         return (
-            header_pk,              # CODIGO
-            empresa,                # CODEMPRESA
-            data_pedido,            # DATA_PEDIDO
-            client_id,              # CLIENTE
-            self.STATUS_INICIAL,    # STATUS = 'PEDIDO'
-            pedido_cliente,         # PEDIDO_CLIENTE (retailer ref)
-            None,                   # OBS
-            None,                   # DT_ENTREGA (header; items carry DT_ENTREGA_ITEM)
-            self.USUARIO_SISTEMA,   # ULT_INS_USER
+            header_pk,                    # CODIGO
+            empresa,                      # CODEMPRESA
+            data_pedido,                  # DATA_PEDIDO
+            client_id,                    # CLIENTE
+            self.STATUS_INICIAL,          # STATUS = 'PEDIDO'
+            pedido_cliente,               # PEDIDO_CLIENTE
+            obs,                          # OBS
+            dt_entrega,                   # DT_ENTREGA
+            dt_entrega,                   # DT_BASE_FAT (= DT_ENTREGA em 100% dos medidos)
+            valor_total,                  # VALOR_TOTAL
+            valor_total,                  # TOTAL_PRODUTO
+            Decimal("0"),                 # DESCONTO
+            perfil.tipo_cob,              # TIPO_COB
+            perfil.cod_class_finan,       # COD_CLASS_FINAN
+            perfil.desc_class_finan,      # DESC_CLASS_FINAN
+            perfil.classif_fat,           # CLASSIF_FAT
+            perfil.codfigfiscal,          # CODFIGFISCAL
+            perfil.mecanico,              # MECANICO
+            "Nao",                        # SEM_IMP
+            "Nao",                        # PED_ZF
+            "Nao",                        # EH_VENDACONSUMIDOR
+            Decimal("0"),                 # VENDEDOR_COMI
+            self.USUARIO_SISTEMA,         # ULT_INS_USER
         )
 
     def item_to_corpovendas(
