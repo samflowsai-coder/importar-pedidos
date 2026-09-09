@@ -63,3 +63,6 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "firebird_stub_proprio: teste injeta o proprio dublê no lugar do driver fdb (ex.: sys.modules['fdb']) e por isso precisa que FirebirdConnection._connect_with rode de verdade ate' o import — opt-out da cerca tests/conftest.py::_no_real_firebird",
+]

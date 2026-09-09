@@ -10,15 +10,42 @@ documento é fato sobre este pedido, histórico é fato sobre o passado, memóri
 julgamento humano. Quando um degrau mais forte contradiz um mais fraco, a
 divergência viaja na `Decisao` — não é sobrescrita em silêncio.
 
-Este módulo é **puro**: recebe `Deps` com as três leituras e não abre conexão
-nenhuma. É o que permite testar a escada inteira sem banco, e é o que torna o
-modo `observando` barato — rodar sem agir não custa quase nada.
+Este módulo é **puro**: toda leitura passa por `Deps`, e nenhum import de
+persistência aparece no topo do arquivo — só dentro de `deps_padrao()`. É o
+que permite testar a escada inteira sem banco, e é o que torna o modo
+`observando` barato — rodar sem agir não custa quase nada.
 
-A única exceção deliberada é `_historico_janela_ampla`: uma segunda consulta,
-numa janela de 24 meses, que só enriquece a `explicacao` do degrau 2 com uma
-divergência fora da janela de decisão (o caso Beira Rio — comprou da MM até
-05/2025, migrou para a Nasmar). Ela roda só quando o degrau 2 já resolveu,
-nunca influencia `env_slug`, e um erro nela nunca derruba o pedido.
+`Deps.historico_amplo` é opcional (default `None`) e cobre só um
+enriquecimento: uma segunda consulta, numa janela de 24 meses, usada apenas
+para anexar na explicação do degrau 2 uma divergência que a janela de 12
+meses (a de decisão) já não vê mais — o caso Beira Rio, que comprou da MM até
+05/2025 e migrou para a Nasmar. Sem esse campo (`None`), a explicação some a
+parte extra e **nenhum I/O adicional acontece** — é o que mantém o modo
+`observando` barato mesmo com o degrau 2 resolvendo toda hora. Essa segunda
+consulta nunca influencia `env_slug` (que já está fixado pela janela de 12
+meses antes dela ser chamada), e um erro nela vira `logger.warning` e some —
+nunca derruba o pedido.
+
+Contratos que quem monta `Deps` e renderiza a `Decisao` (o wiring — hoje as
+Tasks 10/11) precisa conhecer, porque não dá pra descobrir sozinho em
+produção:
+
+- **Exceção de `env_por_cnpj`, `historico` ou `memoria` propaga.** Este
+  módulo não blinda essas três leituras — só `historico_amplo`, que é
+  enriquecimento, não decisão. Se o Firebird ou o SQLite caírem no meio de
+  uma leitura que decide, a exceção sobe crua pra fora de `ambiente_para`;
+  virar 5xx, retry ou "perguntar" é decisão de quem chama, não deste módulo.
+- **A memória é lida pela chave `cnpjs_do_pedido(order)[0]`.** Num
+  desmembramento sem CNPJ no cabeçalho, essa chave é o CNPJ da PRIMEIRA
+  loja do pedido, não um "CNPJ do cliente" canônico. Quem GRAVA a decisão
+  lembrada tem que usar exatamente essa mesma chave, ou a decisão nunca
+  mais é reencontrada.
+- **`explicacao` mistura slug e nome legível.** Os degraus documento e
+  memória só têm o SLUG à mão (`env_por_cnpj`/`memoria` devolvem
+  `str | None`, sem nome); o degrau histórico mostra o NOME porque
+  `HistoricoAmbiente` já carrega os dois. Resolver slug → nome de forma
+  consistente pro operador (ex.: via `environments_repo`) é trabalho da
+  camada que renderiza a `Decisao`, não deste módulo.
 
 Ele NUNCA devolve um ambiente default. `env_slug is None` com
 `degrau == 'perguntar'` é uma resposta legítima e é a que o chamador tem que
@@ -39,7 +66,7 @@ from app.utils.logger import logger
 DEGRAUS: tuple[str, ...] = ("documento", "historico", "memoria", "perguntar")
 
 # Janela mais larga que a do degrau 2 (12 meses), usada só para a divergência
-# extra na explicação — ver `_historico_janela_ampla`.
+# extra na explicação — ver `Deps.historico_amplo` e `deps_padrao()`.
 _MESES_JANELA_AMPLA = 24
 
 
@@ -61,6 +88,10 @@ class Deps:
     env_por_cnpj: Callable[[str], str | None]
     historico: Callable[[Sequence[str | None]], tuple[HistoricoAmbiente, ...]]
     memoria: Callable[[str], str | None]
+    # Opcional. `None` (default) = enriquecimento desligado, zero I/O extra —
+    # ver docstring do módulo. Quando presente, é chamado só depois que o
+    # degrau 2 já decidiu, nunca para decidir.
+    historico_amplo: Callable[[Sequence[str | None]], tuple[HistoricoAmbiente, ...]] | None = None
 
 
 def _fmt(cnpj: str) -> str:
@@ -75,6 +106,9 @@ def cnpjs_do_pedido(order: Order) -> list[str]:
     Ordem preservada e sem repetição. As lojas entram porque numa planilha de
     desmembramento a identidade do comprador está nas colunas, não no
     cabeçalho — ver `DesmembramentoXlsParser`.
+
+    `resultado[0]`, quando existe, é a chave usada por `deps.memoria` em
+    `ambiente_para` — ver contrato no docstring do módulo.
     """
     vistos: list[str] = []
     for bruto in [order.header.customer_cnpj, *(i.delivery_cnpj for i in order.items)]:
@@ -84,27 +118,21 @@ def cnpjs_do_pedido(order: Order) -> list[str]:
     return vistos
 
 
-def _historico_janela_ampla(cnpjs: Sequence[str]) -> tuple[HistoricoAmbiente, ...]:
-    """A mesma consulta do degrau 2, numa janela de 24 meses.
-
-    Só existe para enriquecer a explicação do degrau 2 já resolvido — nunca
-    é chamada para decidir. Fala com o Firebird de verdade em produção
-    (mesmo caminho de `historico.consultar`); import local para manter o
-    módulo puro para import, e nome de módulo separado para que o teste
-    troque só esta função (`monkeypatch.setattr`) sem tocar banco nenhum.
-    """
-    from app.routing import historico as hist_mod
-
-    return hist_mod.consultar(cnpjs, meses=_MESES_JANELA_AMPLA)
-
-
-def _explicar_fora_da_janela(cnpjs: Sequence[str], hist_12: Sequence[HistoricoAmbiente]) -> str:
-    """Trecho "atenção, ..." quando a janela de 24 meses revela compra em
-    outro ambiente que a janela de 12 meses (a de decisão) não via mais — ou
-    "" se não houver nada, ou a consulta falhar. Nunca levanta."""
+def _explicar_fora_da_janela(
+    cnpjs: Sequence[str],
+    hist_12: Sequence[HistoricoAmbiente],
+    historico_amplo: Callable[[Sequence[str | None]], tuple[HistoricoAmbiente, ...]] | None,
+) -> str:
+    """Trecho "atenção, ..." quando a janela ampla (`historico_amplo`) revela
+    compra em outro ambiente que a janela de 12 meses (a de decisão) já não
+    via mais. Devolve "" — sem chamar `historico_amplo` — quando ele é
+    `None`; e devolve "" também se não houver nada a mostrar ou se a
+    consulta falhar. Nunca levanta."""
+    if historico_amplo is None:
+        return ""
     vistos = {h.env_slug for h in hist_12 if h.pedidos > 0}
     try:
-        ampla = _historico_janela_ampla(cnpjs)
+        ampla = historico_amplo(cnpjs)
     except Exception as exc:  # noqa: BLE001 — enriquecimento não pode derrubar o pedido
         logger.warning("routing.ambiente.janela_ampla_falhou erro={!r}", exc)
         return ""
@@ -115,10 +143,13 @@ def _explicar_fora_da_janela(cnpjs: Sequence[str], hist_12: Sequence[HistoricoAm
     return f"; atenção, este cliente também já comprou de {partes}"
 
 
-def _motivo_historico_nao_resolveu(hist: Sequence[HistoricoAmbiente]) -> str:
-    """Distingue, pro operador que vai ter que escolher a empresa, "cliente
-    novo" de "Firebird mudo" — são situações que pedem ações diferentes
-    (nada vs. chamar o suporte / esperar a VPN)."""
+def _motivo_historico_nao_resolveu(cnpjs: Sequence[str], hist: Sequence[HistoricoAmbiente]) -> str:
+    """Distingue, pro operador que vai ter que escolher a empresa, três
+    situações que pedem ações diferentes: pedido sem CNPJ nenhum (não há o
+    que consultar), Firebird mudo (chamar o suporte / esperar a VPN
+    voltar), e cliente novo sem histórico (nada a fazer, é esperado)."""
+    if not cnpjs:
+        return "o pedido não traz CNPJ de cliente nem de fornecedor"
     indisponiveis = [h.env_nome for h in hist if h.indisponivel]
     if indisponiveis:
         verbo = "não respondeu" if len(indisponiveis) == 1 else "não responderam"
@@ -140,6 +171,12 @@ def ambiente_para(order: Order, deps: Deps) -> Decisao:
     if fornecedor:
         env = deps.env_por_cnpj(fornecedor)
         if env:
+            # `env` é o SLUG — `env_por_cnpj` (Callable[[str], str | None]) não
+            # carrega o nome legível. O degrau 2 mostra `env_nome` porque
+            # `HistoricoAmbiente` já traz os dois; aqui e no degrau 3 (memória)
+            # só o slug está à mão. Resolver slug → nome pro operador é
+            # responsabilidade de quem renderiza a `Decisao` (o wiring), não
+            # deste módulo — ver docstring do módulo.
             return Decisao(
                 env_slug=env,
                 degrau="documento",
@@ -152,19 +189,20 @@ def ambiente_para(order: Order, deps: Deps) -> Decisao:
     do_historico = _resolver_historico(hist)
     if do_historico:
         h = next(x for x in hist if x.env_slug == do_historico)
-        extra = _explicar_fora_da_janela(cnpjs, hist)
+        extra = _explicar_fora_da_janela(cnpjs, hist, deps.historico_amplo)
+        ultimo = f", último em {h.ultimo_em}" if h.ultimo_em else ""
         return Decisao(
             env_slug=do_historico,
             degrau="historico",
-            explicacao=(
-                f"Histórico: {h.pedidos} pedido(s) em {h.env_nome}, último em {h.ultimo_em}{extra}"
-            ),
+            explicacao=f"Histórico: {h.pedidos} pedido(s) em {h.env_nome}{ultimo}{extra}",
             divergiu_de=lembrado if lembrado and lembrado != do_historico else None,
             historico=tuple(hist),
         )
 
     # Degrau 3 — a memória.
     if lembrado:
+        # `lembrado` também é slug, pelo mesmo motivo do degrau 1 — ver
+        # comentário lá.
         return Decisao(
             env_slug=lembrado,
             degrau="memoria",
@@ -173,7 +211,7 @@ def ambiente_para(order: Order, deps: Deps) -> Decisao:
         )
 
     # Degrau 4 — sem resposta. É um resultado, não uma falha.
-    motivo = _motivo_historico_nao_resolveu(hist)
+    motivo = _motivo_historico_nao_resolveu(cnpjs, hist)
     return Decisao(
         env_slug=None,
         degrau="perguntar",
@@ -199,4 +237,5 @@ def deps_padrao() -> Deps:
         env_por_cnpj=env_por_cnpj,
         historico=lambda cnpjs: hist_mod.consultar(cnpjs),
         memoria=memoria,
+        historico_amplo=lambda cnpjs: hist_mod.consultar(cnpjs, meses=_MESES_JANELA_AMPLA),
     )
