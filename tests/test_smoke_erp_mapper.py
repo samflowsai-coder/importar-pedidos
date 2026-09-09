@@ -67,7 +67,7 @@ def test_item_to_corpovendas_computes_total_when_missing() -> None:
     )
 
     row = FireSistemasMapper().item_to_corpovendas(
-        item=item, item_pk=10, header_pk=42, product_seq=999,
+        item=item, item_pk=10, header_pk=42, product_seq=999, perfil=perfil_para(None),
     )
 
     assert row[0] == 10
@@ -83,6 +83,8 @@ def test_item_to_corpovendas_computes_total_when_missing() -> None:
 def test_item_to_corpovendas_truncates_description_to_100_chars() -> None:
     long_desc = "A" * 200
     item = ERPRow(pedido="P1", descricao=long_desc, quantidade=1)
-    row = FireSistemasMapper().item_to_corpovendas(item, item_pk=1, header_pk=1, product_seq=None)
+    row = FireSistemasMapper().item_to_corpovendas(
+        item, item_pk=1, header_pk=1, product_seq=None, perfil=perfil_para(None)
+    )
     assert len(row[3]) == 100
     assert row[2] is None  # CODPRODUTO may be NULL

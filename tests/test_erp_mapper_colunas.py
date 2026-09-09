@@ -136,3 +136,69 @@ def test_cab_bate_com_o_insert_cab_vendas_de_verdade():
     assert CAB == cols[:23]
     # +1 = ULT_ALT_USER, que o exporter duplica fora do mapper (nao entra em CAB).
     assert queries.INSERT_CAB_VENDAS.count("?") == len(CAB) + 1
+
+
+# Ordem posicional de INSERT_CORPO_VENDAS apos esta task. CFOP_PRINCIPAL fica
+# de fora — e o 16o valor, anexado pelo exporter junto com o perfil fiscal,
+# nao pela tupla do mapper (que tem 15 elementos).
+CORPO = [
+    "CODIGO", "CODVENDA", "CODPRODUTO", "DESCRICAO", "QTD", "PRECO_UNITARIO",
+    "TOTAL", "UNID", "DT_ENTREGA_ITEM", "ICMS_PORC", "ICMS_BASE", "REDUCAO",
+    "DESC_SOBRE_TOTAL", "PESO_BRUTO", "PESO_LIQUIDO",
+]
+
+
+def _item_campos(t):
+    assert len(t) == len(CORPO), f"esperado {len(CORPO)} colunas, veio {len(t)}"
+    return dict(zip(CORPO, t))
+
+
+def test_corpovendas_preenche_colunas_fiscais():
+    from app.models.order import ERPRow
+
+    row = ERPRow(pedido="OC-70610", descricao="KIT C/3", quantidade=300.0,
+                 preco_unitario=15.0654, data_entrega="08/10/2026")
+    t = FireSistemasMapper().item_to_corpovendas(
+        row, item_pk=1, header_pk=4676, product_seq=3905, perfil=perfil_para(None)
+    )
+    c = _item_campos(t)
+    assert c["ICMS_PORC"] == Decimal("18")
+    assert c["REDUCAO"] == Decimal("61.11")
+    assert c["ICMS_BASE"] == Decimal("0")
+    assert c["DESC_SOBRE_TOTAL"] == Decimal("0")
+    assert c["PESO_BRUTO"] == Decimal("0")
+    assert c["PESO_LIQUIDO"] == Decimal("0")
+
+
+def test_corpovendas_unid_vem_do_cadastro_nao_cravado():
+    """mapper.py:101 cravava 'UN'. A producao usa 'KIT' nos kits."""
+    from app.models.order import ERPRow
+
+    row = ERPRow(pedido="X", descricao="KIT C/3", quantidade=1.0, preco_unitario=1.0)
+    m = FireSistemasMapper()
+    assert _item_campos(m.item_to_corpovendas(
+        row, 1, 1, None, perfil=perfil_para(None), unid="KIT"))["UNID"] == "KIT"
+    assert _item_campos(m.item_to_corpovendas(
+        row, 1, 1, None, perfil=perfil_para(None)))["UNID"] == "UN"
+
+
+def _colunas_do_insert_corpo_vendas() -> list[str]:
+    """Extrai a lista de colunas de INSERT_CORPO_VENDAS do SQL de verdade —
+    mesmo motivo do equivalente em CAB_VENDAS: uma lista transcrita a mao
+    fica verde mesmo com todo bind deslocado depois de uma coluna nova.
+    """
+    match = re.search(
+        r"INSERT INTO CORPO_VENDAS\s*\((.*?)\)\s*VALUES",
+        queries.INSERT_CORPO_VENDAS,
+        re.DOTALL,
+    )
+    assert match, "nao encontrei a lista de colunas em INSERT_CORPO_VENDAS"
+    return [c.strip() for c in match.group(1).split(",")]
+
+
+def test_corpo_bate_com_o_insert_corpo_vendas_de_verdade():
+    """CORPO amarrado ao SQL real, nao a uma copia que pode dessincronizar."""
+    cols = _colunas_do_insert_corpo_vendas()
+    assert CORPO == cols[:15]
+    # +1 = CFOP_PRINCIPAL, que o exporter anexa fora do mapper (nao entra em CORPO).
+    assert queries.INSERT_CORPO_VENDAS.count("?") == len(CORPO) + 1

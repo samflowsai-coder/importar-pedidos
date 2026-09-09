@@ -107,7 +107,7 @@ def test_export_uses_override_when_provided(monkeypatch):
         (4242, "ACME LTDA", "11222333000144"),  # FIND_CLIENT_BY_CODIGO
         (0,),                                    # CHECK_ORDER_EXISTS
         (100,),                                  # GET_NEXT_CABVENDAS_CODIGO
-        (777, "TENIS A", 99.9),                  # FIND_PRODUCT_BY_EAN
+        (777, "TENIS A", 99.9, "UN"),            # FIND_PRODUCT_BY_EAN
         (200,),                                  # GET_NEXT_CORPOVENDAS_CODIGO
     ]
 
@@ -144,7 +144,7 @@ def test_export_no_override_uses_cnpj_lookup(monkeypatch):
         (4242, "ACME LTDA"),               # FIND_CLIENT_BY_CNPJ
         (0,),                               # CHECK_ORDER_EXISTS
         (100,),                             # GET_NEXT_CABVENDAS_CODIGO
-        (777, "TENIS A", 99.9),             # FIND_PRODUCT_BY_EAN
+        (777, "TENIS A", 99.9, "UN"),       # FIND_PRODUCT_BY_EAN
         (200,),                             # GET_NEXT_CORPOVENDAS_CODIGO
     ]
 
@@ -172,9 +172,9 @@ def test_export_grava_header_com_24_binds_valor_total_decimal_e_atualiza_codped_
         (4242, "ACME LTDA", "11222333000144"),  # FIND_CLIENT_BY_CODIGO
         (0,),  # CHECK_ORDER_EXISTS
         (100,),  # GET_NEXT_CABVENDAS_CODIGO
-        (777, "TENIS A", 99.9),  # FIND_PRODUCT_BY_EAN (item 1)
+        (777, "TENIS A", 99.9, "UN"),  # FIND_PRODUCT_BY_EAN (item 1)
         (200,),  # GET_NEXT_CORPOVENDAS_CODIGO (item 1)
-        (778, "TENIS B", 49.9),  # FIND_PRODUCT_BY_EAN (item 2)
+        (778, "TENIS B", 49.9, "KIT"),  # FIND_PRODUCT_BY_EAN (item 2)
         (201,),  # GET_NEXT_CORPOVENDAS_CODIGO (item 2)
     ]
 
@@ -196,6 +196,18 @@ def test_export_grava_header_com_24_binds_valor_total_decimal_e_atualiza_codped_
     update_calls = [c for c in cur.execute.call_args_list if c.args[0] == queries.UPDATE_CODPED_PAI]
     assert len(update_calls) == 1
     assert update_calls[0].args[1] == (100,)
+
+    # CORPO_VENDAS: UNID vem do cadastro (FIND_PRODUCT_BY_EAN), nao cravado —
+    # item 1 = "UN", item 2 = "KIT". CFOP_PRINCIPAL e o 16o valor, anexado
+    # pelo exporter (perfil), fora da tupla de 15 elementos do mapper.
+    item_calls = [c for c in cur.execute.call_args_list if c.args[0] == queries.INSERT_CORPO_VENDAS]
+    assert len(item_calls) == 2
+    item1, item2 = (c.args[1] for c in item_calls)
+    assert len(item1) == 16
+    assert item1[7] == "UN"
+    assert item1[-1] == "5.101", "CFOP_PRINCIPAL do perfil default"
+    assert item2[7] == "KIT"
+    assert item2[-1] == "5.101"
 
 
 def test_export_skipped_when_fb_not_configured(monkeypatch):

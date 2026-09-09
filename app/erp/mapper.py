@@ -120,8 +120,18 @@ class FireSistemasMapper:
         item_pk: int,
         header_pk: int,
         product_seq: int | None,
+        *,
+        perfil: PerfilFiscal,
+        unid: str = "UN",
     ) -> tuple:
-        """Returns positional tuple for INSERT_CORPO_VENDAS parameters."""
+        """Tupla posicional para INSERT_CORPO_VENDAS (15 elementos).
+
+        `unid` vem do cadastro do produto no Fire. Ate 2026-08 era cravado
+        "UN" aqui, o que estava errado para kits ("KIT" na producao).
+        CFOP_PRINCIPAL (16o valor do INSERT) e anexado pelo exporter junto
+        com o perfil, fora desta tupla — e constante por ambiente, nao por
+        item.
+        """
         qty = item.quantidade or 0.0
         unit_price = item.preco_unitario or 0.0
         total = _item_total(item)
@@ -129,13 +139,19 @@ class FireSistemasMapper:
         delivery = _parse_date(item.data_entrega)
 
         return (
-            item_pk,            # CODIGO
-            header_pk,          # CODVENDA
-            product_seq,        # CODPRODUTO (FK or NULL if not found)
-            desc,               # DESCRICAO
-            qty,                # QTD
-            unit_price,         # PRECO_UNITARIO
-            total,              # TOTAL
-            "UN",               # UNID
-            delivery,           # DT_ENTREGA_ITEM
+            item_pk,               # CODIGO
+            header_pk,             # CODVENDA
+            product_seq,           # CODPRODUTO (FK or NULL if not found)
+            desc,                  # DESCRICAO
+            qty,                   # QTD
+            unit_price,            # PRECO_UNITARIO
+            total,                 # TOTAL
+            unid,                  # UNID
+            delivery,              # DT_ENTREGA_ITEM
+            perfil.icms_porc,      # ICMS_PORC
+            Decimal("0"),          # ICMS_BASE
+            perfil.reducao,        # REDUCAO
+            Decimal("0"),          # DESC_SOBRE_TOTAL
+            Decimal("0"),          # PESO_BRUTO
+            Decimal("0"),          # PESO_LIQUIDO
         )

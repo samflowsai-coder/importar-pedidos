@@ -137,16 +137,17 @@ SEARCH_CLIENTS = """
     ORDER BY RAZAO_SOCIAL
 """
 
-# Product lookup by EAN-13
+# Product lookup by EAN-13. UNIDADE alimenta CORPO_VENDAS.UNID no insert
+# (cadastro do produto, nao mais cravado "UN" — ver app/erp/mapper.py).
 FIND_PRODUCT_BY_EAN = """
-    SELECT SEQ, DESCRICAO, PRECO_VENDA FROM PRODUTOS
+    SELECT SEQ, DESCRICAO, PRECO_VENDA, UNIDADE FROM PRODUTOS
     WHERE CODIGO_EAN13 = ?
     ROWS 1
 """
 
-# Product lookup by alternative code (CODPROD_ALTERN)
+# Product lookup by alternative code (CODPROD_ALTERN). UNIDADE — ver acima.
 FIND_PRODUCT_BY_CODE = """
-    SELECT SEQ, DESCRICAO, PRECO_VENDA FROM PRODUTOS
+    SELECT SEQ, DESCRICAO, PRECO_VENDA, UNIDADE FROM PRODUTOS
     WHERE TRIM(CODPROD_ALTERN) = ?
     ROWS 1
 """
@@ -244,16 +245,26 @@ GET_ORDER_STATUS_BY_CODE = """
     ROWS 1
 """
 
-# Insert order item (CORPO_VENDAS)
+# Insert order item (CORPO_VENDAS).
+#
+# Conferido contra 1.285 linhas de item no .7 (2026-08). ICMS_PORC, ICMS_BASE,
+# REDUCAO, DESC_SOBRE_TOTAL, PESO_BRUTO e PESO_LIQUIDO estao em 100% das linhas;
+# CFOP_PRINCIPAL em 96%.
 INSERT_CORPO_VENDAS = """
     INSERT INTO CORPO_VENDAS (
         CODIGO, CODVENDA, CODPRODUTO,
         DESCRICAO, QTD, PRECO_UNITARIO, TOTAL,
-        UNID, DT_ENTREGA_ITEM
+        UNID, DT_ENTREGA_ITEM,
+        ICMS_PORC, ICMS_BASE, REDUCAO,
+        DESC_SOBRE_TOTAL, PESO_BRUTO, PESO_LIQUIDO,
+        CFOP_PRINCIPAL
     ) VALUES (
         ?, ?, ?,
         ?, ?, ?, ?,
-        ?, ?
+        ?, ?,
+        ?, ?, ?,
+        ?, ?, ?,
+        ?
     )
 """
 

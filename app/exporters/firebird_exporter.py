@@ -206,11 +206,12 @@ class FirebirdExporter:
         erp_rows = _to_erp_rows(order)
         valor_total = _valor_total(erp_rows)
         dt_entrega = _menor_dt_entrega(erp_rows)
+        perfil = perfil_para(self._env)
         header_params = self._mapper.order_to_cabvendas(
             order,
             header_pk,
             client_id,
-            perfil=perfil_para(self._env),
+            perfil=perfil,
             valor_total=valor_total,
             dt_entrega=dt_entrega,
         )
@@ -223,14 +224,19 @@ class FirebirdExporter:
             f"PEDIDO_CLIENTE={pedido_cliente!r} CLIENTE={client_id}"
         )
 
-        # 5. Insert items
+        # 5. Insert items. Mesmo `perfil` do cabecalho (ICMS_PORC, REDUCAO,
+        #    CFOP_PRINCIPAL sao por ambiente, nao por item). CFOP_PRINCIPAL
+        #    e o 16o valor do INSERT — anexado aqui, fora da tupla do mapper
+        #    (que tem 15 elementos).
         items_inserted = 0
         for row in erp_rows:
-            product_seq = self._find_product(cur, row)
+            product_seq, unid = self._find_product(cur, row)
             cur.execute(queries.GET_NEXT_CORPOVENDAS_CODIGO)
             item_pk: int = cur.fetchone()[0]
-            item_params = self._mapper.item_to_corpovendas(row, item_pk, header_pk, product_seq)
-            cur.execute(queries.INSERT_CORPO_VENDAS, item_params)
+            item_params = self._mapper.item_to_corpovendas(
+                row, item_pk, header_pk, product_seq, perfil=perfil, unid=unid
+            )
+            cur.execute(queries.INSERT_CORPO_VENDAS, (*item_params, perfil.cfop_principal))
             items_inserted += 1
 
         cur.close()
@@ -260,22 +266,32 @@ class FirebirdExporter:
         row = cur.fetchone()
         return row[0] if row else None
 
-    def _find_product(self, cur, row: ERPRow) -> int | None:
+    def _find_product(self, cur, row: ERPRow) -> tuple[int | None, str]:
+        """Retorna (product_seq, unid). `unid` vem de PRODUTOS.UNIDADE no
+        cadastro do Fire — "UN" quando o produto nao e encontrado ou a
+        coluna vem vazia/NULL (kits cadastrados usam 'KIT').
+        """
         # Try EAN first, then alternative code
         if row.ean:
             cur.execute(queries.FIND_PRODUCT_BY_EAN, (row.ean,))
             result = cur.fetchone()
             if result:
-                return result[0]
+                return result[0], self._unid_from_row(result)
 
         if row.codigo_produto:
             cur.execute(queries.FIND_PRODUCT_BY_CODE, (row.codigo_produto,))
             result = cur.fetchone()
             if result:
-                return result[0]
+                return result[0], self._unid_from_row(result)
 
         logger.warning(
             f"Produto não encontrado no ERP — EAN={row.ean!r} "
             f"código={row.codigo_produto!r}. Inserindo sem FK."
         )
-        return None
+        return None, "UN"
+
+    @staticmethod
+    def _unid_from_row(result: tuple) -> str:
+        """result = (SEQ, DESCRICAO, PRECO_VENDA, UNIDADE)."""
+        unid = (result[3] or "").strip()
+        return unid or "UN"
