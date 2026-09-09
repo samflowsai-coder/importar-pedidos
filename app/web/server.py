@@ -236,6 +236,70 @@ def _make_log_entry(
 # ── Preview helpers ───────────────────────────────────────────────────────
 
 
+def _decidir_ambiente(order) -> tuple[str, object | None]:
+    """(modo, Decisao|None). Em 'desligado' o roteador nem é chamado.
+
+    Exceção vinda do roteador (Firebird/SQLite fora do ar no meio de uma
+    leitura que decide — ver contrato em `app/routing/ambiente.py`) NUNCA
+    propaga daqui pra fora: blindar é decisão de quem chama, não do módulo
+    puro. A regra:
+
+    - 'observando': vira log e `decisao=None` — do ponto de vista de quem
+      consome isto é como se o modo fosse 'desligado' PARA ESTE PEDIDO: o
+      commit segue com a escolha do operador, sem gravar sombra. Evidência
+      é importante, o pedido é mais.
+    - 'ligado': vira um degrau 'perguntar' com a falha explicada. Cair de
+      volta pro cookie em silêncio seria rotear errado com confiança — o
+      chamador (`commit_preview`) já sabe pedir a escolha ao operador
+      quando `decisao.resolveu` é falso.
+    """
+    from app.persistence import roteamento_repo
+    from app.routing import ambiente as routing
+    from app.utils.logger import logger
+
+    modo = roteamento_repo.modo()
+    if modo == roteamento_repo.DESLIGADO:
+        return modo, None
+    try:
+        return modo, routing.ambiente_para(order, routing.deps_padrao())
+    except Exception as exc:  # noqa: BLE001 — roteador não pode derrubar o pedido nem decidir errado em silêncio
+        logger.warning("roteamento.ambiente_para_falhou modo={} erro={!r}", modo, exc)
+        if modo == roteamento_repo.LIGADO:
+            return modo, routing.Decisao(
+                env_slug=None,
+                degrau="perguntar",
+                explicacao=f"Ambiente não resolvido: falha ao consultar o roteador ({exc})",
+            )
+        return modo, None
+
+
+def _roteamento_para_preview(order) -> dict | None:
+    """Bloco `roteamento` do payload do preview. `None` em 'desligado'.
+
+    A UI nunca roteia em silêncio: mesmo quando a decisão é automática, o
+    bloco viaja no preview para a faixa acima dos itens mostrar o ambiente
+    de destino e o degrau que decidiu.
+    """
+    from app.persistence import environments_repo, roteamento_repo
+
+    modo, decisao = _decidir_ambiente(order)
+    if decisao is None:
+        return None
+    env = environments_repo.get_by_slug(decisao.env_slug) if decisao.env_slug else None
+    return {
+        "modo": modo,
+        "degrau": decisao.degrau,
+        "env_slug": decisao.env_slug,
+        "env_nome": env["name"] if env else None,
+        "explicacao": decisao.explicacao,
+        "divergiu_de": decisao.divergiu_de,
+        "precisa_escolher": modo == roteamento_repo.LIGADO and not decisao.resolveu,
+        "opcoes": [
+            {"slug": e["slug"], "name": e["name"]} for e in environments_repo.list_active()
+        ],
+    }
+
+
 def _build_preview_payload(
     preview_id: str, source_filename: str, order, check: dict | None = None
 ) -> dict:
@@ -304,6 +368,7 @@ def _build_preview_payload(
         "groups": sorted(groups.values(), key=lambda g: g["label"] or ""),
         "totals": totals,
         "check": check,
+        "roteamento": _roteamento_para_preview(order),
     }
 
 
@@ -1638,16 +1703,37 @@ def preview_pending(
 
 class CommitRequest(BaseModel):
     preview_id: str
+    # Resposta do operador quando o roteamento (modo 'ligado') não soube
+    # decidir sozinho. Ignorado nos outros modos — lá o ambiente é sempre o
+    # do cookie, como sempre foi.
+    environment_slug: str | None = None
 
 
 @app.post("/api/commit")
 def commit_preview(
     body: CommitRequest,
     request: Request,
-    _user: User = Depends(require_user),
+    user: User = Depends(require_user),
 ) -> JSONResponse:
     """Salva o pedido no portal como 'em revisão'. NÃO grava no Fire.
     O usuário revisa o match na aba Pedidos e só depois clica em 'Cadastrar no Fire'.
+
+    Roteamento intercompany (`app/routing/ambiente.py`, modos 'observando' e
+    'ligado'): o ambiente onde o pedido é gravado pode divergir do ambiente
+    do cookie (`env_alvo`). Duas pegadinhas resolvidas neste handler:
+
+    1. `imports` mora em `app_state_<slug>.db`, e `db.connect()` resolve o
+       arquivo pelo CONTEXTVAR de `env_context`, não por um campo no dict —
+       por isso todo o bloco de persistência roda dentro de
+       `env_context.active_env(env_alvo["id"], env_alvo["slug"])`.
+    2. O arquivo original segue o pedido: o `shutil.move` do fim usa as
+       pastas do ambiente ROTEADO (via `cfg` sobrescrito abaixo), não as do
+       cookie — senão o arquivo da Nasmar iria parar em `Pedidos importados`
+       da MM.
+
+    Em modo 'desligado' (default) `env_alvo` é sempre o ambiente do cookie —
+    idêntico ao comportamento anterior a esta feature — e nenhuma sombra ou
+    memória é gravada.
     """
     cfg = _get_cfg_for_request(request)
     try:
@@ -1659,71 +1745,142 @@ def commit_preview(
 
     order = entry.order
 
-    # Trace_id is minted at this boundary and travels with the pedido for life.
-    with with_trace_id() as trace_id:
-        log_entry = _make_log_entry(
-            source_filename=entry.source_filename,
-            order_number=order.header.order_number,
-            customer=order.header.customer_name,
-            output_files=[],
-            status="success",
-            snapshot=order.model_dump(),
-            trace_id=trace_id,
-            file_sha256=entry.file_sha256,
-            original_path=entry.original_path,
-        )
-        log_entry["portal_status"] = "parsed"
-        log_entry["check"] = entry.check
+    from contextlib import nullcontext
 
-        # DB first — if this fails, the file stays in the watch folder and user
-        # can retry without losing the original document.
-        from app.persistence import repo
+    from app.persistence import decisao_ambiente_repo as memoria
+    from app.persistence import environments_repo, roteamento_repo
+    from app.routing.ambiente import cnpjs_do_pedido
 
-        repo.insert_import(log_entry)
-        repo.append_audit(
-            log_entry["id"],
-            "imported_to_portal",
-            {
-                "source": "preview_commit",
-                "items": len(order.items),
-                "from_watch": entry.source_path is not None,
-                "check": entry.check.get("summary") if entry.check else None,
-            },
-        )
-        transition(
-            log_entry["id"],
-            LifecycleEvent.IMPORTED,
-            source=EventSource.PORTAL,
-            payload={
-                "items": len(order.items),
-                "from_watch": entry.source_path is not None,
-                "check_summary": entry.check.get("summary") if entry.check else None,
-            },
-        )
+    modo, decisao = _decidir_ambiente(order)
+    env_alvo = _request_environment(request)
 
-        # Only move the source after persistence succeeded.
-        if entry.source_path:
-            from app import config as app_config
+    if modo == roteamento_repo.LIGADO:
+        if decisao.resolveu:
+            env_alvo = environments_repo.get_by_slug(decisao.env_slug)
+        elif body.environment_slug:
+            env_alvo = environments_repo.get_by_slug(body.environment_slug)
+        else:
+            # Sem resposta NÃO vira ambiente default. Pergunta.
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "precisa_escolher": True,
+                    "explicacao": decisao.explicacao,
+                    "degrau": decisao.degrau,
+                    "opcoes": [
+                        {"slug": e["slug"], "name": e["name"]}
+                        for e in environments_repo.list_active()
+                    ],
+                },
+            )
+        if env_alvo is None or not env_alvo.get("is_active"):
+            raise HTTPException(status_code=412, detail="Selecione um ambiente para continuar.")
 
-            src = Path(entry.source_path)
-            if src.exists():
-                imp = app_config.imported_dir(cfg)
-                imp.mkdir(parents=True, exist_ok=True)
-                dest = imp / src.name
-                if dest.exists():
-                    stem, suffix = src.stem, src.suffix
-                    dest = imp / f"{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}"
-                shutil.move(str(src), str(dest))
+    cnpj_cliente = (cnpjs_do_pedido(order) or [""])[0]
 
-        return JSONResponse(
-            {
-                "entry_id": log_entry["id"],
-                "order": order.header.order_number or "—",
-                "customer": order.header.customer_name or "—",
-                "portal_status": "parsed",
-                "trace_id": trace_id,
-            }
-        )
+    # Armadilha 2: as pastas seguem o pedido roteado, não o cookie. Quando
+    # não há ambiente nenhum resolvido (deploy single-tenant legado, sem
+    # cookie de ambiente) `cfg` fica como `_get_cfg_for_request` já devolveu.
+    if env_alvo is not None:
+        cfg = dict(cfg)
+        cfg["watch_dir"] = env_alvo["watch_dir"]
+        cfg["output_dir"] = env_alvo["output_dir"]
+
+    # Armadilha 1: o bind do ambiente é o contextvar, não `log_entry["environment_id"]`
+    # sozinho. Sem ambiente resolvido, o bloco roda sob o contexto que já
+    # estava ativo (cookie via middleware, ou nenhum — igual sempre foi).
+    persist_ctx = (
+        env_context.active_env(env_alvo["id"], env_alvo["slug"])
+        if env_alvo is not None
+        else nullcontext()
+    )
+
+    with persist_ctx:
+        # Trace_id is minted at this boundary and travels with the pedido for life.
+        with with_trace_id() as trace_id:
+            log_entry = _make_log_entry(
+                source_filename=entry.source_filename,
+                order_number=order.header.order_number,
+                customer=order.header.customer_name,
+                output_files=[],
+                status="success",
+                snapshot=order.model_dump(),
+                trace_id=trace_id,
+                file_sha256=entry.file_sha256,
+                original_path=entry.original_path,
+            )
+            log_entry["portal_status"] = "parsed"
+            log_entry["check"] = entry.check
+            if env_alvo is not None:
+                log_entry["environment_id"] = env_alvo["id"]
+
+            # DB first — if this fails, the file stays in the watch folder and user
+            # can retry without losing the original document.
+            from app.persistence import repo
+
+            repo.insert_import(log_entry)
+            repo.append_audit(
+                log_entry["id"],
+                "imported_to_portal",
+                {
+                    "source": "preview_commit",
+                    "items": len(order.items),
+                    "from_watch": entry.source_path is not None,
+                    "check": entry.check.get("summary") if entry.check else None,
+                },
+            )
+            transition(
+                log_entry["id"],
+                LifecycleEvent.IMPORTED,
+                source=EventSource.PORTAL,
+                payload={
+                    "items": len(order.items),
+                    "from_watch": entry.source_path is not None,
+                    "check_summary": entry.check.get("summary") if entry.check else None,
+                },
+            )
+
+            if decisao is not None:
+                if modo == roteamento_repo.OBSERVANDO and env_alvo is not None:
+                    roteamento_repo.registrar_sombra(
+                        import_id=log_entry["id"],
+                        degrau=decisao.degrau,
+                        env_sugerido=decisao.env_slug,
+                        env_escolhido=env_alvo["slug"],
+                    )
+                if decisao.divergiu_de and cnpj_cliente:
+                    memoria.marcar_divergencia(cnpj_cliente=cnpj_cliente, de=decisao.divergiu_de)
+                if modo == roteamento_repo.LIGADO and not decisao.resolveu and cnpj_cliente:
+                    memoria.lembrar(
+                        cnpj_cliente=cnpj_cliente,
+                        env_slug=env_alvo["slug"],
+                        por=user.email,
+                    )
+
+            # Only move the source after persistence succeeded. `cfg` já
+            # aponta pras pastas do ambiente roteado (armadilha 2, acima).
+            if entry.source_path:
+                from app import config as app_config
+
+                src = Path(entry.source_path)
+                if src.exists():
+                    imp = app_config.imported_dir(cfg)
+                    imp.mkdir(parents=True, exist_ok=True)
+                    dest = imp / src.name
+                    if dest.exists():
+                        stem, suffix = src.stem, src.suffix
+                        dest = imp / f"{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}"
+                    shutil.move(str(src), str(dest))
+
+            return JSONResponse(
+                {
+                    "entry_id": log_entry["id"],
+                    "order": order.header.order_number or "—",
+                    "customer": order.header.customer_name or "—",
+                    "portal_status": "parsed",
+                    "trace_id": trace_id,
+                }
+            )
 
 
 # ── Per-order actions ───────────────────────────────────────────────────

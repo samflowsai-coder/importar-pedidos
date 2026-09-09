@@ -849,6 +849,10 @@
 
       <div class="preview-groups hidden" id="pvGroups"></div>
 
+      <!-- Roteamento intercompany: em que ambiente este pedido entra. Nunca
+           silencioso — aparece mesmo quando a decisão é automática. -->
+      <div id="pvRoutingBanner" class="hidden" style="padding:10px 20px;border-bottom:1px solid var(--border-subtle);font-size:12px;background:var(--surface)"></div>
+
       <!-- Product check banner -->
       <div id="pvCheckBanner" class="hidden" style="padding:10px 20px;border-bottom:1px solid var(--border-subtle);font-size:12px;display:flex;align-items:center;gap:12px;background:var(--surface)"></div>
 
@@ -1095,6 +1099,7 @@ function showPendingEmpty(msg) {
 /* ── Preview from watch folder ── */
 async function previewPending(filename) {
   currentPreview = null;
+  routingChoice = null;
   showPreviewModal();
   setPreviewLoading(true, 'Analisando arquivo…', esc(filename));
   hidePreviewError();
@@ -1475,6 +1480,7 @@ function renderImported(entries) {
 
 async function openImportDetail(importId) {
   currentPreview = null;
+  routingChoice = null;
   showPreviewModal();
   setPreviewLoading(true, 'Carregando pedido…', '');
   hidePreviewError();
@@ -1948,6 +1954,9 @@ function fmtDatetime(iso) {
 
 /* ── Preview → Commit ── */
 let currentPreview = null;
+// Ambiente escolhido pelo operador quando o roteamento não soube decidir
+// sozinho (payload.roteamento.precisa_escolher) — ver renderRoutingBanner().
+let routingChoice = null;
 
 function openPreviewPicker() {
   const input = document.getElementById('previewFileInput');
@@ -1963,6 +1972,7 @@ function handlePreviewFileInput(ev) {
 
 async function runPreview(file) {
   currentPreview = null;
+  routingChoice = null;
   showPreviewModal();
   setPreviewLoading(true, 'Analisando arquivo…', 'Isso pode levar alguns segundos.');
   hidePreviewError();
@@ -1994,6 +2004,7 @@ function showPreviewModal() {
 function closePreviewModal() {
   document.getElementById('previewOverlay').classList.remove('open');
   currentPreview = null;
+  routingChoice = null;
 }
 
 function setPreviewLoading(on, title, sub) {
@@ -2026,6 +2037,71 @@ function fmtQty(v) {
   return Number.isInteger(n) ? n.toLocaleString('pt-BR') : n.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
 }
 
+// Degrau -> rótulo curto exibido junto do ambiente resolvido.
+const ROUTING_DEGRAU_LABEL = {
+  documento: 'pelo documento',
+  historico: 'pelo histórico',
+  memoria: 'escolha registrada',
+};
+
+function renderRoutingBanner(data) {
+  const el = document.getElementById('pvRoutingBanner');
+  if (!el) return;
+  const rot = data.roteamento;
+  const isCommitted = !!data.portal_status;
+  // Pedido já commitado: o ambiente é definitivo, não uma escolha em
+  // aberto — não repete o roteamento na tela de revisão.
+  if (!rot || isCommitted) {
+    el.classList.add('hidden');
+    el.innerHTML = '';
+    routingChoice = null;
+    return;
+  }
+
+  const opcoes = rot.opcoes || [];
+  const nomeDoAmbiente = (slug) => (opcoes.find(o => o.slug === slug) || {}).name || slug;
+
+  if (rot.precisa_escolher) {
+    // Preserva a escolha do operador se o mesmo preview for re-renderizado.
+    if (!opcoes.some(o => o.slug === routingChoice)) routingChoice = null;
+    const options = opcoes.map(o =>
+      `<option value="${esc(o.slug)}" ${routingChoice === o.slug ? 'selected' : ''}>${esc(o.name)}</option>`
+    ).join('');
+    el.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:6px;width:100%">
+        <div style="color:var(--warn);font-weight:600">⚠ Não foi possível determinar o ambiente deste pedido automaticamente</div>
+        <div style="color:var(--text-muted)">${esc(rot.explicacao || '')}</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
+          <label for="pvRoutingSelect" style="font-weight:600">Ambiente de destino:</label>
+          <select id="pvRoutingSelect" onchange="onRoutingChoiceChange(this.value)" style="min-width:220px">
+            <option value="">Selecione…</option>
+            ${options}
+          </select>
+        </div>
+      </div>`;
+  } else {
+    routingChoice = null;
+    const label = ROUTING_DEGRAU_LABEL[rot.degrau] || rot.degrau || '';
+    const aviso = rot.divergiu_de
+      ? `<div style="color:var(--warn);margin-top:2px">⚠ A escolha registrada para este cliente era outra: <strong>${esc(nomeDoAmbiente(rot.divergiu_de))}</strong>.</div>`
+      : '';
+    el.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:2px;width:100%">
+        <div>Este pedido entra no ambiente
+          <strong title="${esc(rot.explicacao || '')}">${esc(rot.env_nome || rot.env_slug || '—')}</strong>
+          <span style="color:var(--text-muted);font-size:11px;margin-left:6px">${esc(label)}</span>
+        </div>
+        ${aviso}
+      </div>`;
+  }
+  el.classList.remove('hidden');
+}
+
+function onRoutingChoiceChange(slug) {
+  routingChoice = slug || null;
+  if (currentPreview) renderPreviewFooter(currentPreview, (currentPreview.items || []).length);
+}
+
 function renderPreview(data) {
   setPreviewLoading(false);
   hidePreviewError();
@@ -2040,6 +2116,8 @@ function renderPreview(data) {
   nameEl.textContent = name;
   nameEl.title = name;
   document.getElementById('pvCustomerCnpj').textContent = h.customer_cnpj || '—';
+
+  renderRoutingBanner(data);
 
   // Selo do de-para de cliente intercompany (o Flow recebe o cliente real).
   const dp = data.depara_cliente;
@@ -2317,10 +2395,14 @@ function renderPreviewFooter(data, itemsCount) {
   if (!actions || !note) return;
   if (!ps) {
     // Fresh preview from file — save for review
-    note.innerHTML = 'Clique em <strong>Importar para revisão</strong>. O pedido não vai para o Fire ainda — você confere o match e envia depois.';
+    const precisaEscolher = !!(data.roteamento && data.roteamento.precisa_escolher);
+    const bloqueado = !itemsCount || (precisaEscolher && !routingChoice);
+    note.innerHTML = precisaEscolher && !routingChoice
+      ? 'Selecione o <strong>ambiente de destino</strong> acima antes de importar.'
+      : 'Clique em <strong>Importar para revisão</strong>. O pedido não vai para o Fire ainda — você confere o match e envia depois.';
     actions.innerHTML = `
       <button class="btn" onclick="closePreviewModal()">Cancelar</button>
-      <button class="btn btn-primary" id="pvCommitBtn" onclick="commitPreview()" ${itemsCount ? '' : 'disabled'}>
+      <button class="btn btn-primary" id="pvCommitBtn" onclick="commitPreview()" ${bloqueado ? 'disabled' : ''}>
         Importar para revisão
       </button>`;
   } else if (ps === 'parsed') {
@@ -2368,10 +2450,14 @@ async function commitPreview() {
   hidePreviewError();
 
   try {
+    const body = { preview_id: currentPreview.preview_id };
+    // Só viaja quando o roteamento pediu escolha (payload.roteamento.
+    // precisa_escolher) — nos outros modos o ambiente é sempre o do cookie.
+    if (routingChoice) body.environment_slug = routingChoice;
     await api('/api/commit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ preview_id: currentPreview.preview_id }),
+      body: JSON.stringify(body),
     });
     closePreviewModal();
     await Promise.all([loadPending(), loadImported()]);
