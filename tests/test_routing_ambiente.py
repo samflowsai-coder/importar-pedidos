@@ -318,3 +318,52 @@ def test_deps_padrao_monta_as_quatro_leituras_reais():
     assert callable(deps.historico)
     assert callable(deps.memoria)
     assert callable(deps.historico_amplo)
+
+
+# --- Fix round 1, Minor 5: memoria() de deps_padrao() ignora ambiente morto -
+
+
+def test_deps_padrao_memoria_ignora_ambiente_desativado(tmp_path, monkeypatch):
+    """Decisão que aponta pra ambiente desativado não é decisão usável — sem
+    este filtro o degrau 3 resolvia pra um ambiente que ninguém mais pode
+    escolher, e o commit em 'ligado' travava num 412 sem seletor na tela
+    (achado da revisão do fix round 1 da Task 10)."""
+    from app.persistence import decisao_ambiente_repo, environments_repo, router
+
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    router.reset_init_cache()
+    with router.shared_connect():
+        pass
+    env = environments_repo.create(
+        slug="nasmar",
+        name="Nasmar",
+        watch_dir=str(tmp_path / "in"),
+        output_dir=str(tmp_path / "out"),
+        fb_path=str(tmp_path / "n.fdb"),
+    )
+    decisao_ambiente_repo.lembrar(cnpj_cliente="11222333000181", env_slug="nasmar", por="t")
+    environments_repo.soft_delete(env["id"])
+
+    deps = ambiente.deps_padrao()
+    assert deps.memoria("11222333000181") is None
+
+
+def test_deps_padrao_memoria_devolve_ambiente_ativo(tmp_path, monkeypatch):
+    """Controle do teste acima: ambiente ativo continua resolvendo normal."""
+    from app.persistence import decisao_ambiente_repo, environments_repo, router
+
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    router.reset_init_cache()
+    with router.shared_connect():
+        pass
+    environments_repo.create(
+        slug="nasmar",
+        name="Nasmar",
+        watch_dir=str(tmp_path / "in"),
+        output_dir=str(tmp_path / "out"),
+        fb_path=str(tmp_path / "n.fdb"),
+    )
+    decisao_ambiente_repo.lembrar(cnpj_cliente="11222333000181", env_slug="nasmar", por="t")
+
+    deps = ambiente.deps_padrao()
+    assert deps.memoria("11222333000181") == "nasmar"

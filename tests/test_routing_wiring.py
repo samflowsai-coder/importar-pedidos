@@ -199,9 +199,14 @@ def test_arquivo_original_segue_o_ambiente_roteado_nao_o_cookie(portal, tmp_path
 def test_bloco_de_roteamento_do_preview(portal):
     """O payload do preview carrega a decisao — a UI nunca roteia em silencio.
 
-    Testado na funcao, nao numa rota: o payload so e montado dentro de
-    POST /api/preview (upload) e POST /api/preview-pending (arquivo na pasta).
-    Nao existe GET de preview por id que precise deste bloco.
+    Testado na funcao, nao numa rota: o bloco `roteamento` e adicionado ao
+    payload explicitamente pelos dois handlers de preview FRESCO (POST
+    /api/preview e POST /api/preview-pending) — nao dentro de
+    `_build_preview_payload`, que tambem alimenta `GET
+    /api/imported/{id}/preview` (revisao de pedido JA commitado). Naquele
+    terceiro caso o ambiente ja e definitivo e nao ha decisao a tomar, entao
+    o bloco so custaria I/O a toa contra o Firebird quando o modo nao for
+    'desligado' (fix round 1, Achado 4).
     """
     from app.web.server import _roteamento_para_preview
 
@@ -275,3 +280,74 @@ def test_decidir_ambiente_em_ligado_pede_escolha_quando_o_roteador_falha(portal,
     assert r.status_code == 409
     assert r.json()["detail"]["precisa_escolher"] is True
     assert _import_do_ambiente("mm") == []
+
+
+def test_preview_nao_e_queimado_quando_o_commit_falha_e_a_escolha_do_commit_vale(
+    portal, monkeypatch
+):
+    """Cenario B do fix round 1 (Achado 1, revisao): o roteador resolve no
+    PREVIEW (documento -> nasmar) e falha bem no COMMIT (Firebird caiu no
+    meio). Antes do fix, `get_cache().consume()` rodava ANTES da decisao de
+    ambiente — o 409 que pede escolha de novo queimava o preview, e a
+    segunda tentativa do operador batia em "Preview ja foi importado" com as
+    duas DBs vazias (a mentira que a revisao reproduziu por HTTP real).
+
+    Prova tambem o contrato mais geral que a propria revisao usou pra achar
+    o bug: a decisao que vale e a do MOMENTO DO COMMIT, nunca a que o
+    preview mostrou antes — aqui o operador escolhe "mm", ambiente
+    DIFERENTE do "nasmar" que o preview tinha sugerido, e essa escolha e a
+    que entra.
+    """
+    roteamento_repo.set_modo("ligado", por="t")
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid = _preview_com_fornecedor(portal, NASMAR)
+
+    # O preview veria o degrau documento resolvendo pra nasmar...
+    from app.web.server import _roteamento_para_preview
+
+    rot = _roteamento_para_preview(_order(NASMAR))
+    assert rot["env_slug"] == "nasmar"
+
+    # ...mas o roteador falha bem no momento do commit.
+    def _explode():
+        raise RuntimeError("Firebird fora do ar")
+
+    monkeypatch.setattr(routing, "deps_padrao", _explode)
+
+    r1 = c.post("/api/commit", json={"preview_id": pid})
+    assert r1.status_code == 409
+    assert r1.json()["detail"]["precisa_escolher"] is True
+
+    # O preview NAO foi queimado: a segunda tentativa, com uma escolha
+    # DIFERENTE da que o preview tinha sugerido, funciona de verdade.
+    r2 = c.post("/api/commit", json={"preview_id": pid, "environment_slug": "mm"})
+    assert r2.status_code == 200
+    assert len(_import_do_ambiente("mm")) == 1
+    assert _import_do_ambiente("nasmar") == []
+
+
+def test_divergencia_contra_a_memoria_e_gravada_no_commit(portal):
+    """A memoria registrada pra este cliente era 'nasmar'; o documento deste
+    pedido aponta pra 'mm' — um degrau mais forte contradisse o julgamento
+    humano anterior, e isso tem que ficar marcado
+    (`decisao_ambiente_repo.marcar_divergencia`), nao sobrescrito em
+    silencio. Sem este teste, o ramo `if decisao.divergiu_de and
+    cnpj_cliente: memoria.marcar_divergencia(...)` de `commit_preview` nunca
+    era exercitado (Minor 8 do fix round 1)."""
+    from app.persistence import decisao_ambiente_repo as memoria
+
+    roteamento_repo.set_modo("ligado", por="t")
+    memoria.lembrar(cnpj_cliente="11222333000181", env_slug="nasmar", por="alguem")
+
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid = _preview_com_fornecedor(portal, MM)
+    assert c.post("/api/commit", json={"preview_id": pid}).status_code == 200
+
+    assert len(_import_do_ambiente("mm")) == 1
+    assert _import_do_ambiente("nasmar") == []
+    d = memoria.lembrada("11222333000181")
+    assert d["env_slug"] == "nasmar"  # a memoria em si nao muda
+    assert d["divergiu_de"] == "nasmar"  # mas a divergencia fica marcada
+    assert d["divergiu_em"]

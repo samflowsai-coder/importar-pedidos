@@ -231,7 +231,14 @@ def deps_padrao() -> Deps:
 
     def memoria(cnpj: str) -> str | None:
         d = decisao_ambiente_repo.lembrada(cnpj)
-        return d["env_slug"] if d else None
+        if not d:
+            return None
+        # Decisão que aponta pra ambiente desativado não é decisão usável —
+        # sem este filtro o degrau 3 "resolvia" pra um ambiente que ninguém
+        # pode mais escolher, e o commit em 'ligado' travava num 412 sem
+        # seletor na tela. Cai pra 'perguntar' em vez disso.
+        env = environments_repo.get_by_slug(d["env_slug"])
+        return d["env_slug"] if env and env.get("is_active") else None
 
     return Deps(
         env_por_cnpj=env_por_cnpj,

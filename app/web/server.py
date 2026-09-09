@@ -8,6 +8,7 @@ import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
@@ -43,6 +44,12 @@ from app.web.auth import (
     set_session_cookie,
 )
 from app.web.middleware.rate_limit import check_and_consume
+
+if TYPE_CHECKING:
+    # Só para anotação de tipo — `app.routing.ambiente` fica fora do import
+    # top-level do resto do módulo por convenção (imports pesados/roteamento
+    # são locais nas funções que os usam).
+    from app.routing.ambiente import Decisao
 
 
 def _is_test_bypass() -> bool:
@@ -236,7 +243,7 @@ def _make_log_entry(
 # ── Preview helpers ───────────────────────────────────────────────────────
 
 
-def _decidir_ambiente(order) -> tuple[str, object | None]:
+def _decidir_ambiente(order) -> tuple[str, Decisao | None]:
     """(modo, Decisao|None). Em 'desligado' o roteador nem é chamado.
 
     Exceção vinda do roteador (Firebird/SQLite fora do ar no meio de uma
@@ -294,9 +301,7 @@ def _roteamento_para_preview(order) -> dict | None:
         "explicacao": decisao.explicacao,
         "divergiu_de": decisao.divergiu_de,
         "precisa_escolher": modo == roteamento_repo.LIGADO and not decisao.resolveu,
-        "opcoes": [
-            {"slug": e["slug"], "name": e["name"]} for e in environments_repo.list_active()
-        ],
+        "opcoes": [{"slug": e["slug"], "name": e["name"]} for e in environments_repo.list_active()],
     }
 
 
@@ -368,7 +373,6 @@ def _build_preview_payload(
         "groups": sorted(groups.values(), key=lambda g: g["label"] or ""),
         "totals": totals,
         "check": check,
-        "roteamento": _roteamento_para_preview(order),
     }
 
 
@@ -1646,6 +1650,11 @@ async def preview_file(
         file_sha256=recebido.sha256,
     )
     payload = _build_preview_payload(entry.preview_id, filename, order, check)
+    # Bloco `roteamento`: só nos dois montadores de preview FRESCO (aqui e em
+    # `preview_pending`) — não em `_build_preview_payload`, que também
+    # alimenta `rehydrate_preview` (pedido já commitado, ambiente definitivo,
+    # nada a decidir ali — ver Achado 4 do fix round 1).
+    payload["roteamento"] = _roteamento_para_preview(order)
     return JSONResponse(payload)
 
 
@@ -1698,6 +1707,8 @@ def preview_pending(
         file_sha256=recebido.sha256,
     )
     payload = _build_preview_payload(entry.preview_id, name, order, check)
+    # Ver comentário equivalente em `preview_upload` (Achado 4, fix round 1).
+    payload["roteamento"] = _roteamento_para_preview(order)
     return JSONResponse(payload)
 
 
@@ -1707,6 +1718,46 @@ class CommitRequest(BaseModel):
     # decidir sozinho. Ignorado nos outros modos — lá o ambiente é sempre o
     # do cookie, como sempre foi.
     environment_slug: str | None = None
+
+
+def _resolver_env_alvo(
+    request: Request, body: CommitRequest, modo: str, decisao: Decisao | None
+) -> dict | None:
+    """O ambiente onde ESTE commit vai gravar. Nunca chuta em 'ligado'.
+
+    Fora de `'ligado'` é sempre o ambiente do cookie (`None` se não houver
+    nenhum) — idêntico ao que já era antes desta feature. Em `'ligado'`
+    segue a escada: decisão resolvida > escolha do operador
+    (`body.environment_slug`) > pergunta (409). Os 409/412 daqui rodam ANTES
+    de `get_cache().consume()` no chamador — não queimam o preview (ver
+    docstring de `commit_preview`, ponto 3).
+    """
+    from app.persistence import environments_repo, roteamento_repo
+
+    env_alvo = _request_environment(request)
+    if modo != roteamento_repo.LIGADO:
+        return env_alvo
+
+    if decisao.resolveu:
+        env_alvo = environments_repo.get_by_slug(decisao.env_slug)
+    elif body.environment_slug:
+        env_alvo = environments_repo.get_by_slug(body.environment_slug)
+    else:
+        # Sem resposta NÃO vira ambiente default. Pergunta.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "precisa_escolher": True,
+                "explicacao": decisao.explicacao,
+                "degrau": decisao.degrau,
+                "opcoes": [
+                    {"slug": e["slug"], "name": e["name"]} for e in environments_repo.list_active()
+                ],
+            },
+        )
+    if env_alvo is None or not env_alvo.get("is_active"):
+        raise HTTPException(status_code=412, detail="Selecione um ambiente para continuar.")
+    return env_alvo
 
 
 @app.post("/api/commit")
@@ -1720,7 +1771,8 @@ def commit_preview(
 
     Roteamento intercompany (`app/routing/ambiente.py`, modos 'observando' e
     'ligado'): o ambiente onde o pedido é gravado pode divergir do ambiente
-    do cookie (`env_alvo`). Duas pegadinhas resolvidas neste handler:
+    do cookie (`env_alvo`, resolvido por `_resolver_env_alvo`). Três cuidados
+    resolvidos neste handler:
 
     1. `imports` mora em `app_state_<slug>.db`, e `db.connect()` resolve o
        arquivo pelo CONTEXTVAR de `env_context`, não por um campo no dict —
@@ -1730,17 +1782,26 @@ def commit_preview(
        pastas do ambiente ROTEADO (via `cfg` sobrescrito abaixo), não as do
        cookie — senão o arquivo da Nasmar iria parar em `Pedidos importados`
        da MM.
+    3. O preview só é CONSUMIDO depois que o ambiente já foi decidido sem
+       erro. Em `'ligado'`, o roteador pode ter resolvido no preview e
+       falhar bem no commit (ex.: Firebird caiu no meio) — se `consume()`
+       rodasse antes da decisão, o 409 que pede escolha de novo queimaria o
+       preview, e a segunda tentativa do operador bateria em "Preview já foi
+       importado" sem nada ter sido importado (as duas DBs continuariam
+       vazias). `consume()` continua atômico sob lock e roda antes de
+       qualquer escrita, então a proteção contra clique duplo não se perde —
+       só um request vence a corrida por `consume()`.
 
     Em modo 'desligado' (default) `env_alvo` é sempre o ambiente do cookie —
     idêntico ao comportamento anterior a esta feature — e nenhuma sombra ou
     memória é gravada.
     """
     cfg = _get_cfg_for_request(request)
-    try:
-        entry = get_cache().consume(body.preview_id)
-    except PreviewNotFoundError:
+
+    entry = get_cache().get(body.preview_id)
+    if entry is None:
         raise HTTPException(status_code=404, detail="Preview expirado ou inexistente")
-    except PreviewConsumedError:
+    if entry.consumed:
         raise HTTPException(status_code=409, detail="Preview já foi importado")
 
     order = entry.order
@@ -1748,33 +1809,11 @@ def commit_preview(
     from contextlib import nullcontext
 
     from app.persistence import decisao_ambiente_repo as memoria
-    from app.persistence import environments_repo, roteamento_repo
+    from app.persistence import roteamento_repo
     from app.routing.ambiente import cnpjs_do_pedido
 
     modo, decisao = _decidir_ambiente(order)
-    env_alvo = _request_environment(request)
-
-    if modo == roteamento_repo.LIGADO:
-        if decisao.resolveu:
-            env_alvo = environments_repo.get_by_slug(decisao.env_slug)
-        elif body.environment_slug:
-            env_alvo = environments_repo.get_by_slug(body.environment_slug)
-        else:
-            # Sem resposta NÃO vira ambiente default. Pergunta.
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "precisa_escolher": True,
-                    "explicacao": decisao.explicacao,
-                    "degrau": decisao.degrau,
-                    "opcoes": [
-                        {"slug": e["slug"], "name": e["name"]}
-                        for e in environments_repo.list_active()
-                    ],
-                },
-            )
-        if env_alvo is None or not env_alvo.get("is_active"):
-            raise HTTPException(status_code=412, detail="Selecione um ambiente para continuar.")
+    env_alvo = _resolver_env_alvo(request, body, modo, decisao)
 
     cnpj_cliente = (cnpjs_do_pedido(order) or [""])[0]
 
@@ -1794,6 +1833,16 @@ def commit_preview(
         if env_alvo is not None
         else nullcontext()
     )
+
+    # Só consome depois que `_resolver_env_alvo` não levantou — ver ponto 3
+    # do docstring acima. `consume()` segue atômico sob lock: só um request
+    # vence em caso de clique duplo / corrida.
+    try:
+        get_cache().consume(body.preview_id)
+    except PreviewNotFoundError:
+        raise HTTPException(status_code=404, detail="Preview expirado ou inexistente")
+    except PreviewConsumedError:
+        raise HTTPException(status_code=409, detail="Preview já foi importado")
 
     with persist_ctx:
         # Trace_id is minted at this boundary and travels with the pedido for life.

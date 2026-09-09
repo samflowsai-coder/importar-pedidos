@@ -2085,12 +2085,28 @@ function renderRoutingBanner(data) {
     const aviso = rot.divergiu_de
       ? `<div style="color:var(--warn);margin-top:2px">⚠ A escolha registrada para este cliente era outra: <strong>${esc(nomeDoAmbiente(rot.divergiu_de))}</strong>.</div>`
       : '';
+    let headline;
+    if (rot.modo === 'observando') {
+      // 'observando' só REGISTRA o que o roteador teria feito — o pedido
+      // sempre entra no ambiente que o operador já tem selecionado, nunca
+      // no que o roteador sugere. Dizer o destino errado é pior que não
+      // dizer nada (fix round 1, Achado 3): a UI tem que ser honesta sobre
+      // pra onde o pedido REALMENTE vai neste modo.
+      const atual = (cfg.environment && cfg.environment.name) || 'o ambiente selecionado';
+      headline = rot.env_slug
+        ? `O roteamento sugeriria <strong title="${esc(rot.explicacao || '')}">${esc(rot.env_nome || rot.env_slug)}</strong>
+           <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${esc(label)}</span>.
+           Este pedido entra em <strong>${esc(atual)}</strong>, o ambiente selecionado.`
+        : `O roteamento não soube sugerir um ambiente (${esc(rot.explicacao || '')}).
+           Este pedido entra em <strong>${esc(atual)}</strong>, o ambiente selecionado.`;
+    } else {
+      headline = `Este pedido entra no ambiente
+        <strong title="${esc(rot.explicacao || '')}">${esc(rot.env_nome || rot.env_slug || '—')}</strong>
+        <span style="color:var(--text-muted);font-size:11px;margin-left:6px">${esc(label)}</span>`;
+    }
     el.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:2px;width:100%">
-        <div>Este pedido entra no ambiente
-          <strong title="${esc(rot.explicacao || '')}">${esc(rot.env_nome || rot.env_slug || '—')}</strong>
-          <span style="color:var(--text-muted);font-size:11px;margin-left:6px">${esc(label)}</span>
-        </div>
+        <div>${headline}</div>
         ${aviso}
       </div>`;
   }
@@ -2454,11 +2470,32 @@ async function commitPreview() {
     // Só viaja quando o roteamento pediu escolha (payload.roteamento.
     // precisa_escolher) — nos outros modos o ambiente é sempre o do cookie.
     if (routingChoice) body.environment_slug = routingChoice;
-    await api('/api/commit', {
+    // fetch cru (não api()): o 409 de "precisa escolher" carrega um OBJETO
+    // em `detail`, não uma string — api() faria `new Error(detail)` virar
+    // "[object Object]" na tela. Esse 409 é uma resposta válida (o
+    // roteador pode ter resolvido no preview e falhado bem no commit — ver
+    // docstring de commit_preview em server.py), não um erro a reportar.
+    const res = await fetch('/api/commit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      if (res.status === 409 && errBody.detail && errBody.detail.precisa_escolher) {
+        // O preview NÃO foi consumido (server.py só consome depois de
+        // decidir o ambiente) — atualiza o bloco de roteamento com o motivo
+        // fresco e deixa o operador escolher de novo, no MESMO preview.
+        currentPreview.roteamento = errBody.detail;
+        renderRoutingBanner(currentPreview);
+        renderPreviewFooter(currentPreview, (currentPreview.items || []).length);
+        btn.disabled = false;
+        btn.innerHTML = prev;
+        return;
+      }
+      const msg = typeof errBody.detail === 'string' ? errBody.detail : `HTTP ${res.status}`;
+      throw new Error(msg);
+    }
     closePreviewModal();
     await Promise.all([loadPending(), loadImported()]);
     setPortalFilter('parsed');
