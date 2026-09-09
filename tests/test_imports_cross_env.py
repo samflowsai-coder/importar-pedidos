@@ -82,3 +82,107 @@ def test_sem_ambiente_nenhum_devolve_lista_vazia(tmp_path, monkeypatch):
         pass
     assert repo.list_imports_all_envs() == []
     assert repo.count_imports_all_envs() == 0
+
+
+def test_ambiente_inativo_fica_fora_da_lista_do_total_e_dos_chips(dois_ambientes_com_pedidos):
+    """Os três nascem juntos: desativar um ambiente não pode fazer só a lista
+
+    (ou só o total, ou só os chips) esquecer dele — os três têm que concordar.
+    """
+    mm = environments_repo.get_by_slug("mm")
+    environments_repo.soft_delete(mm["id"])
+
+    linhas = repo.list_imports_all_envs(limit=10)
+    assert [r["id"] for r in linhas] == ["N2", "N1"]
+    assert repo.count_imports_all_envs() == 2
+    assert repo.count_by_portal_status_all_envs() == {"parsed": 2}
+
+
+def test_paginacao_e_estavel_com_imported_at_empatado(tmp_path, monkeypatch):
+    """`imported_at` tem precisão de segundo — pedidos do mesmo instante empatam
+
+    o tempo todo (varredura do watcher, commits em sequência). Sem desempate por
+    `id`, o subconjunto trazido de cada ambiente muda entre chamadas com `LIMIT`
+    diferente e a paginação pula ou repete linha.
+    """
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    router.reset_init_cache()
+    with router.shared_connect():
+        pass
+    for slug, nome in (("nasmar", "Nasmar"), ("mm", "MM Americanense")):
+        environments_repo.create(
+            slug=slug,
+            name=nome,
+            watch_dir=str(tmp_path / slug),
+            output_dir=str(tmp_path / slug),
+            fb_path=str(tmp_path / f"{slug}.fdb"),
+        )
+
+    mesmo_instante = "2026-09-05T12:00:00"
+    ids_por_ambiente = {"nasmar": ["N-A", "N-B", "N-C"], "mm": ["M-A", "M-B", "M-C"]}
+    for slug, ids in ids_por_ambiente.items():
+        env = environments_repo.get_by_slug(slug)
+        with env_context.active_env(env["id"], env["slug"]):
+            for ident in ids:
+                repo.insert_import(
+                    {
+                        "id": ident,
+                        "source_filename": f"{ident}.pdf",
+                        "imported_at": mesmo_instante,
+                        "order_number": ident,
+                        "customer_name": "CLIENTE",
+                        "status": "success",
+                        "portal_status": "parsed",
+                    }
+                )
+
+    todos_ids = sorted(ids_por_ambiente["nasmar"] + ids_por_ambiente["mm"], reverse=True)
+
+    paginas: list[list[str]] = []
+    offset = 0
+    while True:
+        pagina = repo.list_imports_all_envs(limit=2, offset=offset)
+        if not pagina:
+            break
+        paginas.append([r["id"] for r in pagina])
+        offset += 2
+
+    concatenado = [ident for pagina in paginas for ident in pagina]
+    assert concatenado == todos_ids
+    assert len(concatenado) == len(set(concatenado)) == 6
+
+
+def test_tamanho_final_respeita_max_page_size(tmp_path, monkeypatch):
+    """`teto` por ambiente já era clampado; a fatia final tinha que ser também —
+
+    senão `N_ambientes` ambientes devolvem até `N_ambientes x _MAX_PAGE_SIZE` linhas.
+    """
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    router.reset_init_cache()
+    with router.shared_connect():
+        pass
+    for slug, nome in (("nasmar", "Nasmar"), ("mm", "MM Americanense")):
+        environments_repo.create(
+            slug=slug,
+            name=nome,
+            watch_dir=str(tmp_path / slug),
+            output_dir=str(tmp_path / slug),
+            fb_path=str(tmp_path / f"{slug}.fdb"),
+        )
+        env = environments_repo.get_by_slug(slug)
+        with env_context.active_env(env["id"], env["slug"]):
+            for i in range(300):
+                repo.insert_import(
+                    {
+                        "id": f"{slug}-{i:04d}",
+                        "source_filename": f"{slug}-{i}.pdf",
+                        "imported_at": f"2026-09-{(i % 28) + 1:02d}T10:00:00",
+                        "order_number": f"{slug}-{i}",
+                        "customer_name": "CLIENTE",
+                        "status": "success",
+                        "portal_status": "parsed",
+                    }
+                )
+
+    linhas = repo.list_imports_all_envs(limit=10_000_000)
+    assert len(linhas) == repo._MAX_PAGE_SIZE
