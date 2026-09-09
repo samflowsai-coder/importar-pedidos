@@ -5,10 +5,12 @@ slug é imutável após `create()` — vira parte do nome do arquivo
 `app_state_<slug>.db` e não pode mudar sem migração de dados.
 
 Funções públicas:
-- `create(...)`: insere; falha com `SlugTaken` se UNIQUE violado
+- `create(...)`: insere; falha com `SlugTaken`/`CnpjTaken` se UNIQUE violado
 - `get(env_id)` / `get_by_slug(slug)`: leitura pontual (public view, sem senha)
+- `find_by_cnpj(cnpj)`: ambiente ATIVO cujo CNPJ casa — chave do roteamento
 - `list_active()` / `list_all()`: listagens
-- `update(env_id, ...)`: atualiza campos editáveis (slug é ignorado se passado)
+- `update(env_id, ...)`: atualiza campos editáveis (slug é ignorado se passado);
+  falha com `CnpjTaken` se o novo CNPJ já pertencer a outro ambiente
 - `get_password(env_id)`: retorna senha em claro (decrypt) ou None
 - `soft_delete(env_id)`: marca `is_active=0` (preserva histórico de pedidos)
 - `to_fb_config(env)`: materializa dict pronto para `app/erp/connection`
@@ -64,6 +66,10 @@ _PUBLIC_FIELDS = (
 
 class SlugTaken(Exception):
     """Slug já existe (violação de UNIQUE)."""
+
+
+class CnpjTaken(Exception):
+    """CNPJ já usado por outro ambiente (violação de UNIQUE parcial)."""
 
 
 def _now() -> str:
@@ -143,6 +149,8 @@ def create(
         msg = str(exc).lower()
         if "unique" in msg and "slug" in msg:
             raise SlugTaken(slug) from exc
+        if "unique" in msg and "cnpj" in msg:
+            raise CnpjTaken(cnpj_clean) from exc
         raise
     return get(env_id)
 
@@ -242,8 +250,14 @@ def update(
     fields["updated_at"] = _now()
     sets = ", ".join(f"{k} = ?" for k in fields)
     values = list(fields.values()) + [env_id]
-    with router.shared_connect() as conn:
-        conn.execute(f"UPDATE environments SET {sets} WHERE id = ?", values)
+    try:
+        with router.shared_connect() as conn:
+            conn.execute(f"UPDATE environments SET {sets} WHERE id = ?", values)
+    except sqlite3.IntegrityError as exc:
+        msg = str(exc).lower()
+        if "unique" in msg and "cnpj" in msg:
+            raise CnpjTaken(fields.get("cnpj")) from exc
+        raise
     return get(env_id)
 
 

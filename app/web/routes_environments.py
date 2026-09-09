@@ -88,6 +88,21 @@ class IntercompanyConfigRequest(BaseModel):
     revenda_slug: str | None = None
 
 
+def _cnpj_taken_message(cnpj: str | None) -> str:
+    """Mensagem 409 útil: nomeia o ambiente que já usa o CNPJ.
+
+    Busca em `list_all()`, não em `find_by_cnpj` — o índice UNIQUE do banco
+    cobre TODO ambiente com aquele CNPJ, ativo ou não (um ambiente desativado
+    também bloqueia a reinserção do mesmo CNPJ), e o operador precisa saber
+    qual ambiente é, não só que "já existe em algum lugar".
+    """
+    outro = next((e for e in environments_repo.list_all() if e.get("cnpj") == cnpj), None)
+    if outro:
+        status = "" if outro["is_active"] else " (inativo)"
+        return f"CNPJ já usado pelo ambiente '{outro['name']}' ({outro['slug']}){status}."
+    return "CNPJ já usado por outro ambiente."
+
+
 @router.get("")
 def list_environments(_=Depends(require_admin)):
     return environments_repo.list_all()
@@ -99,6 +114,8 @@ def create_environment(payload: CreateEnvRequest, _=Depends(require_admin)):
         return environments_repo.create(**payload.model_dump())
     except environments_repo.SlugTaken:
         raise HTTPException(409, "Slug já existe — escolha outro.") from None
+    except environments_repo.CnpjTaken as exc:
+        raise HTTPException(409, _cnpj_taken_message(str(exc))) from None
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
 
@@ -115,7 +132,10 @@ def get_environment(env_id: str, _=Depends(require_admin)):
 def update_environment(env_id: str, payload: UpdateEnvRequest, _=Depends(require_admin)):
     if not environments_repo.get(env_id):
         raise HTTPException(404, "Ambiente não encontrado")
-    return environments_repo.update(env_id, **payload.model_dump())
+    try:
+        return environments_repo.update(env_id, **payload.model_dump())
+    except environments_repo.CnpjTaken as exc:
+        raise HTTPException(409, _cnpj_taken_message(str(exc))) from None
 
 
 @router.put("/{env_id}/flowpcp")

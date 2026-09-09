@@ -441,3 +441,62 @@ def test_update_limpa_cnpj_com_string_vazia(fresh_shared):
     )
     assert environments_repo.update(env["id"], name="MM 2")["cnpj"] == "35394871000111"
     assert environments_repo.update(env["id"], cnpj="")["cnpj"] is None
+
+
+# ── Unicidade de CNPJ entre ambientes (índice único parcial) ──────────────────
+# Sem UNIQUE, dois ambientes ATIVOS com o mesmo CNPJ fariam find_by_cnpj devolver
+# o que o LIMIT 1 pegar — o pedido vai pra empresa errada sem ninguém perceber.
+
+
+def test_create_rejeita_cnpj_duplicado(fresh_shared):
+    environments_repo.create(
+        slug="mm", name="MM",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="35394871000111",
+    )
+    with pytest.raises(environments_repo.CnpjTaken):
+        environments_repo.create(
+            slug="mm-duplicado", name="MM Duplicado",
+            watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+            cnpj="35394871000111",
+        )
+
+
+def test_update_rejeita_cnpj_ja_usado_por_outro_ambiente(fresh_shared):
+    environments_repo.create(
+        slug="nasmar", name="Nasmar",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="34513679000134",
+    )
+    mm = environments_repo.create(
+        slug="mm", name="MM",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="35394871000111",
+    )
+    with pytest.raises(environments_repo.CnpjTaken):
+        environments_repo.update(mm["id"], cnpj="34513679000134")
+
+
+def test_multiplos_ambientes_com_cnpj_null_convivem(fresh_shared):
+    """NULL nao e valor — e o estado de todo ambiente hoje. O indice parcial
+    (WHERE cnpj IS NOT NULL) tem que deixar N ambientes sem CNPJ conviverem."""
+    environments_repo.create(slug="a", name="A", watch_dir="/x", output_dir="/y", fb_path="/z.fdb")
+    environments_repo.create(slug="b", name="B", watch_dir="/x", output_dir="/y", fb_path="/z.fdb")
+    environments_repo.create(slug="c", name="C", watch_dir="/x", output_dir="/y", fb_path="/z.fdb")
+    slugs = {e["slug"] for e in environments_repo.list_all()}
+    assert slugs == {"a", "b", "c"}
+
+
+def test_create_rejeita_cnpj_duplicado_com_formatacao_diferente(fresh_shared):
+    """O indice e sobre a coluna normalizada — formatado ou nao colide igual."""
+    environments_repo.create(
+        slug="nasmar", name="Nasmar",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="34.513.679/0001-34",
+    )
+    with pytest.raises(environments_repo.CnpjTaken):
+        environments_repo.create(
+            slug="nasmar-2", name="Nasmar 2",
+            watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+            cnpj="34513679000134",
+        )

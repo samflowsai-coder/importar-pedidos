@@ -104,7 +104,14 @@ CREATE TABLE IF NOT EXISTS rate_limit_buckets (
 INDEXES_SQL = """
 CREATE UNIQUE INDEX IF NOT EXISTS idx_environments_slug ON environments(slug);
 CREATE INDEX IF NOT EXISTS idx_environments_active      ON environments(is_active);
-CREATE INDEX IF NOT EXISTS idx_environments_cnpj ON environments(cnpj)
+-- UNIQUE, não só INDEX: dois ambientes ATIVOS com o mesmo CNPJ fariam
+-- find_by_cnpj devolver o que o LIMIT 1 pegasse — pedido pra empresa errada,
+-- em silêncio. O DROP antes é necessário porque `CREATE ... IF NOT EXISTS`
+-- com o MESMO nome não substitui um índice já existente (mesmo que a
+-- definição mude de INDEX pra UNIQUE INDEX) — sem o DROP, um banco que já
+-- rodou a versão não-única deste índice nunca ganharia a garantia.
+DROP INDEX IF EXISTS idx_environments_cnpj;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_environments_cnpj ON environments(cnpj)
     WHERE cnpj IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id    ON sessions(user_id);
