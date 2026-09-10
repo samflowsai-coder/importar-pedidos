@@ -300,6 +300,13 @@ def _process_file(env: dict, p: Path) -> None:
                 # `environment_id` (o resultado), nunca a razão. `roteamento`
                 # vem `None` em 'desligado' (decisao is None) — audit sem
                 # bloco de roteamento é o sinal de "roteador nem rodou".
+                #
+                # Achado (minor) da re-review: `env_slug` sozinho é ambíguo
+                # em 'observando' — é a SUGESTÃO do roteador, não o destino
+                # (que é `env["slug"]`, a pasta varrida); só em 'ligado' os
+                # dois coincidem. `modo` viaja junto pra quem ler este
+                # registro daqui a meses não concluir o oposto do que
+                # aconteceu.
                 repo.append_audit(
                     import_id,
                     "imported_to_portal",
@@ -308,6 +315,7 @@ def _process_file(env: dict, p: Path) -> None:
                         "from_watch": True,
                         "roteamento": (
                             {
+                                "modo": modo,
                                 "degrau": decisao.degrau,
                                 "env_slug": decisao.env_slug,
                                 "explicacao": decisao.explicacao,

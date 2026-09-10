@@ -419,7 +419,9 @@ def test_ligado_audit_carrega_degrau_e_explicacao(dois_ambientes, monkeypatch):
     """ACHADO 3 (Important). Em 'ligado', sem humano na tela, o audit trail
     do watcher é a ÚNICA evidência de POR QUE o pedido foi pra esta empresa
     — o `environment_id` sozinho é o resultado, não a razão. O evento
-    `imported_to_portal` tem que carregar {degrau, env_slug, explicacao}."""
+    `imported_to_portal` tem que carregar {modo, degrau, env_slug,
+    explicacao}. Em 'ligado' `env_slug` É o destino (documento resolveu e o
+    roteador vale) — `modo` confirma isso pra quem lê o registro."""
     roteamento_repo.set_modo("ligado", por="t")
     monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
     _arquivo(dois_ambientes)
@@ -433,9 +435,35 @@ def test_ligado_audit_carrega_degrau_e_explicacao(dois_ambientes, monkeypatch):
     imported = [e for e in eventos if e["event_type"] == "imported_to_portal"]
     assert len(imported) == 1
     rot = imported[0]["detail"]["roteamento"]
+    assert rot["modo"] == "ligado"
     assert rot["degrau"] == "documento"
     assert rot["env_slug"] == "nasmar"
     assert rot["explicacao"]
+
+
+def test_observando_audit_env_slug_e_a_sugestao_nao_o_destino(dois_ambientes, monkeypatch):
+    """Achado (minor) da re-review do watcher: em 'observando' o pedido entra
+    na pasta VARRIDA (mm), não onde o roteador sugeriu (nasmar) — o roteador
+    só observa. `roteamento.env_slug` continua sendo a SUGESTÃO (nasmar),
+    não o destino real (mm) — por isso `modo` tem que viajar junto no audit,
+    senão quem lê `env_slug` sozinho daqui a meses concluiria que o pedido
+    foi pra nasmar, o oposto do que aconteceu."""
+    roteamento_repo.set_modo("observando", por="t")
+    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    _arquivo(dois_ambientes)
+    scan_environments.run_scan()
+
+    imports_mm = _imports("mm")
+    assert len(imports_mm) == 1, "observando importa na pasta varrida, nao na sugestao"
+    import_id = imports_mm[0]["id"]
+
+    eventos = _audit("mm", import_id)
+    imported = [e for e in eventos if e["event_type"] == "imported_to_portal"]
+    assert len(imported) == 1
+    rot = imported[0]["detail"]["roteamento"]
+    assert rot["modo"] == "observando"
+    assert rot["degrau"] == "documento"
+    assert rot["env_slug"] == "nasmar", "env_slug e a sugestao do roteador, nao o destino"
 
 
 def test_desligado_audit_nao_carrega_roteamento(dois_ambientes, monkeypatch):

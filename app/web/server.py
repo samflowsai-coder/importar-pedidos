@@ -1902,8 +1902,16 @@ def commit_preview(
                     # esta empresa — só `environment_id` (o resultado), nunca
                     # a razão. `None` em 'desligado' (decisao is None) — sinal
                     # de "roteador nem rodou", não "não sabemos por quê".
+                    #
+                    # Achado (minor) da re-review: `env_slug` sozinho é
+                    # ambíguo em 'observando' — é a SUGESTÃO do roteador, não
+                    # o destino (que é a escolha do operador/cookie); só em
+                    # 'ligado' os dois coincidem. `modo` viaja junto pra quem
+                    # ler este registro daqui a meses não concluir o oposto
+                    # do que aconteceu.
                     "roteamento": (
                         {
+                            "modo": modo,
                             "degrau": decisao.degrau,
                             "env_slug": decisao.env_slug,
                             "explicacao": decisao.explicacao,
