@@ -274,5 +274,8 @@ select.app-shell-env option { text-transform: none; background: var(--surface-ra
 
 @media (prefers-reduced-motion: reduce) {
   .spin-dark { animation: none; border-top-color: var(--accent); opacity: .6; }
-  .switch-opt { transition: none; }
+  /* A guarda de .switch-opt mora em admin-roteamento.html, não aqui: a
+     página redeclara `.switch-opt { transition }` no próprio <style>, que
+     carrega depois deste link e vence por ordem no cascade — uma guarda
+     aqui nunca seria aplicada (ver comentário lá). */
 }

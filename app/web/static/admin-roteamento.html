@@ -7,9 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/tokens.css?v=1">
-  <link rel="stylesheet" href="/static/css/shell.css?v=2">
-  <script src="/static/js/shell.js?v=2" defer></script>
+  <link rel="stylesheet" href="/static/css/tokens.css?v=2">
+  <link rel="stylesheet" href="/static/css/shell.css?v=3">
+  <script src="/static/js/shell.js?v=3" defer></script>
   <style>
     .main { padding: 32px 32px 96px; display: flex; justify-content: center; }
     .container { width: 100%; max-width: 780px; }
@@ -49,9 +49,11 @@
     }
     .link-btn {
       background: none; border: none; padding: 0; margin-left: 2px;
-      color: var(--accent); font: inherit; font-weight: 600; cursor: pointer;
+      /* --accent sobre --surface mede 4.28:1 — mesma magnitude do --error
+         que classificamos crítico. --accent-hover mede 6.02:1 aqui. */
+      color: var(--accent-hover); font: inherit; font-weight: 600; cursor: pointer;
     }
-    .link-btn:hover { color: var(--accent-hover); text-decoration: underline; }
+    .link-btn:hover { text-decoration: underline; }
 
     /* ── Interruptor ── */
     .switch-meta { margin-bottom: 12px; font-size: 12px; color: var(--text-secondary); }
@@ -67,7 +69,11 @@
       background: var(--bg); cursor: pointer; font: inherit; color: inherit;
       transition: border-color 120ms, background 120ms, transform 80ms;
     }
-    .switch-opt:hover:not(:disabled) { border-color: var(--border-control); }
+    /* --text-secondary sobre #FFFFFF/--surface mede 7.73:1/7.41:1 (bem acima
+       do 3:1 de componente) e ainda contrasta visivelmente com o
+       --border-control da base (2.38:1 entre os dois) — hover deixa de ser
+       idêntico ao estado parado. */
+    .switch-opt:hover:not(:disabled) { border-color: var(--text-secondary); }
     .switch-opt:not(:disabled):active { transform: scale(.995); background: var(--surface-hover); }
     .switch-opt:disabled { cursor: default; opacity: .55; }
     .switch-opt:disabled .switch-opt-label { color: var(--text-muted); }
@@ -91,6 +97,15 @@
        --surface do .card por trás, mede 4.20:1 — abaixo do mínimo AA de
        4.5:1. --text-secondary mede 6.71:1 na mesma combinação. */
     .switch-opt.active .switch-opt-phrase { color: var(--text-secondary); }
+
+    /* A guarda equivalente em shell.css nunca vencia aqui: esta página
+       redeclara `.switch-opt { transition: ... }` no próprio <style>, que
+       carrega DEPOIS do <link> de shell.css — mesma especificidade, ganha
+       por ordem no cascade, inclusive quando a media query bate. A guarda
+       precisa morar onde a regra que ela anula realmente vence. */
+    @media (prefers-reduced-motion: reduce) {
+      .switch-opt { transition: none; }
+    }
 
     /* ── Taxa ── */
     .rate-figure {
@@ -171,6 +186,7 @@
     <div class="card">
       <div class="card-title">Interruptor</div>
       <div class="card-desc">Voltar para trás (observando ou desligado) é imediato. Avançar para ligado pede confirmação.</div>
+      <p class="card-error" id="switch-error" hidden>Não foi possível carregar o modo atual. <button type="button" class="link-btn" onclick="loadModo()">Tentar de novo</button></p>
       <div class="switch-meta" id="switch-meta"></div>
       <div class="switch-row" id="switch-row" role="radiogroup" aria-label="Modo do roteamento"></div>
     </div>
@@ -336,15 +352,19 @@
   }
 
   async function loadModo() {
+    $('switch-error').hidden = true;
     try {
       const r = await fetch(`${API}/modo`, { credentials: 'same-origin' });
       if (r.status === 401) { location.href = '/login'; return; }
-      if (!r.ok) { showError(`Falha ao carregar o modo atual (${r.status}).`); return; }
+      if (!r.ok) throw new Error(`http_${r.status}`);
       const data = await r.json();
       currentModo = data.modo;
       buildSwitch();
     } catch (e) {
-      showError('Falha de rede ao carregar o modo atual.');
+      // Slot de erro do próprio card, igual aos outros dois (taxa/pendências)
+      // — antes, uma falha aqui deixava o switch-row vazio sem nenhuma pista
+      // de por quê, e o banner global some sozinho na próxima ação bem-sucedida.
+      $('switch-error').hidden = false;
     }
   }
 
