@@ -27,6 +27,20 @@ _(nada ainda)_
 
 ---
 
+## 20260910-1400
+
+1) Pedidos do **Sam's Club** passam a entrar no **cliente certo**. O portal vinha usando o CNPJ do clube que emite a ordem (`00.063.960/0223-31`), que muda a cada pedido e não existe no cadastro do Fire — nenhum pedido do Sam's casava com cliente. Agora ele usa o CNPJ do **local de entrega**, o centro de distribuição que recebe a mercadoria (`00.063.960/0587-94`, CD SAM'S DF), que é o que está cadastrado.
+
+2) Junto com isso, o **nome do CD** passa a aparecer na coluna de cliente da planilha e no nome do arquivo. Antes o arquivo saía como `SEM_CLIENTE_...`, porque esse formato do Sam's não traz o nome em lugar nenhum.
+
+3) Como o cliente agora é o próprio local de entrega, a coluna **CNPJ_LOCAL_ENTREGA** fica **em branco** nos pedidos do Sam's. Não é erro: o CNPJ está na coluna do cliente, e o código do local (EAN) continua na planilha como antes.
+
+4) A **quantidade dos kits** do Sam's estava multiplicada pelo conteúdo do kit. Quando o pedido diz "22 por embalagem" e pede 1, o portal lançava 22 — o pedido 06839396 entraria com 22 kits no lugar de 1. Agora entra a quantidade que o Sam's realmente pediu. No formato com grade por loja o erro chegava a 36x.
+
+5) **Atenção:** pedidos do Sam's importados antes desta versão não são corrigidos sozinhos. Se algum entrou no Fire com quantidade multiplicada ou no clube errado, precisa ser ajustado lá na mão.
+
+---
+
 ## 20260903-1500
 
 1) Pedidos da **Kolosh** passam a entrar com o código de produto certo. O portal estava usando o código interno da Dakota (`04145.007/9`), que não existe no cadastro da Nasmar, então **todo item do Kolosh caía sem vínculo** e precisava ser ligado na mão. Agora ele usa a referência da Nasmar (`KL403G-0003`), que já está no Fire. O código da Dakota continua no pedido, na coluna de observação, porque ele é obrigatório na nota fiscal.
