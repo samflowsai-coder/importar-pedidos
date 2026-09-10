@@ -1010,8 +1010,6 @@ def invite_accept_page(token: str) -> FileResponse:  # noqa: ARG001 — token us
 
 @app.get("/api/config")
 def get_config(request: Request) -> JSONResponse:
-    from app.persistence import roteamento_repo
-
     cfg = _get_cfg_for_request(request)
     env = _request_environment(request)
     if env is not None:
@@ -1035,11 +1033,6 @@ def get_config(request: Request) -> JSONResponse:
             "exportMode": cfg.get("export_mode", "xlsx"),
             "firebirdConfigured": firebird_configured,
             "environment": environment,
-            # O shell (topbar) precisa disto pra saber se o seletor de
-            # empresa é filtro (`ligado`) ou só-leitura — /api/config já é
-            # buscado em todo carregamento de página, então o modo pega
-            # carona aqui em vez de abrir uma segunda requisição.
-            "roteamentoModo": roteamento_repo.modo(),
         }
     )
 

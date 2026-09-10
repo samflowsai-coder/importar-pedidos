@@ -230,13 +230,10 @@ def test_ligado_home_sem_ambiente_nao_redireciona_de_verdade(real_client, real_a
     assert r.status_code == 200
 
 
-# MINOR 6 — shell.js buscava `/api/roteamento/modo` numa requisição própria
-# em TODO carregamento de página, mesmo nos modos onde a resposta era
-# descartada. `/api/config` já vai ao servidor no mesmo tick; o modo pega
-# carona nele.
-
-
-def test_api_config_expoe_roteamento_modo(client):
-    assert client.get("/api/config").json()["roteamentoModo"] == "desligado"
-    roteamento_repo.set_modo("ligado", por="t")
-    assert client.get("/api/config").json()["roteamentoModo"] == "ligado"
+# Fix round 2 desfez a carona do modo em `/api/config` (`roteamentoModo`
+# tinha entrado no payload desautenticado de `/api/config` pra economizar
+# uma requisição — mas `/api/roteamento/modo` exige sessão de propósito, e
+# ter o mesmo valor saindo pelos dois, um gated e outro não, é a assimetria
+# real). `shell.js` volta a buscar o modo por `/api/roteamento/modo`, cujo
+# 401 sem sessão já está coberto por `test_get_modo_sem_auth_401` no topo
+# deste arquivo.

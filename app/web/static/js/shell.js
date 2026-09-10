@@ -96,6 +96,19 @@
     } catch (_) { return []; }
   }
 
+  // Rota própria, não uma carona em `/api/config`: `/api/config` é
+  // desautenticado por desenho, e `/api/roteamento/modo` exige sessão de
+  // propósito (com teste garantindo o 401). Fazer o modo sair pelos dois —
+  // um gated, outro não — cria uma assimetria que convida alguém a "corrigir"
+  // o lado errado depois. Custa uma requisição a mais por página; aceito.
+  async function fetchRoteamentoModo() {
+    try {
+      const r = await fetch('/api/roteamento/modo', { credentials: 'same-origin' });
+      if (!r.ok) return null;
+      return (await r.json()).modo || null;
+    } catch (_) { return null; }
+  }
+
   function activeRoute() {
     const path = location.pathname;
     if (ACTIVE_BY_PATH[path]) return ACTIVE_BY_PATH[path];
@@ -237,12 +250,9 @@
   // usa `/api/env/clear`, que só existe porque o cookie é HttpOnly — o JS
   // não tem como apagá-lo sozinho.
   //
-  // `modo` chega de fora (o `roteamentoModo` que `/api/config` já devolve —
-  // ver `mount`) em vez de uma busca própria a `/api/roteamento/modo`:
-  // `/api/config` já vai ao servidor no mesmo tick do carregamento da
-  // página, então o modo pega carona nele em vez de abrir uma segunda
-  // requisição em TODO carregamento (inclusive nos modos onde a resposta
-  // seria descartada).
+  // `modo` chega de fora (`fetchRoteamentoModo()`, chamado por `mount` antes
+  // de aguardar esta função) em vez de buscado aqui dentro — só pra deixar
+  // explícito, no ponto de chamada, de onde o valor vem.
   async function renderEnvFilter(host, modo) {
     if (modo !== 'ligado') return;
 
@@ -342,13 +352,14 @@
     slot.innerHTML = renderSidebar(user) + renderTopbar(user);
     bindEvents(slot);
 
-    // Uma busca só a `/api/config` alimenta o status do Firebird E decide
-    // se o selo de empresa vira filtro (`roteamentoModo`) — aguardada antes
-    // de `data-shell-ready` pra não pintar o pill read-only e trocar pelo
-    // <select> duas requisições depois, visível pro usuário.
-    const cfg = await fetchConfig();
+    // Duas buscas independentes, em paralelo (não uma carona da outra —
+    // `/api/config` é desautenticado por desenho, `/api/roteamento/modo`
+    // exige sessão de propósito; ver `fetchRoteamentoModo`). Ambas
+    // aguardadas antes de `data-shell-ready` pra não pintar o pill
+    // read-only e trocar pelo <select> depois, visível pro usuário.
+    const [cfg, modo] = await Promise.all([fetchConfig(), fetchRoteamentoModo()]);
     applyFbStatus(slot, cfg);
-    await renderEnvFilter(slot, cfg && cfg.roteamentoModo);
+    await renderEnvFilter(slot, modo);
     setInterval(() => refreshFbStatus(slot), 30000);
 
     document.documentElement.setAttribute('data-shell-ready', '1');
