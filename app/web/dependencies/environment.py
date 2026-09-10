@@ -24,14 +24,16 @@ from app.persistence import router
 def current_environment(request: Request) -> dict:
     """Retorna o ambiente ativo da request (hidratado pelo middleware).
 
-    Levanta 412 se ambiente não selecionado/inválido — cliente deve
-    redirecionar para `/selecionar-ambiente`.
+    Levanta 412 se ambiente não selecionado/inválido. Com o roteamento
+    `ligado` não existe mais tela de seleção — o ambiente é propriedade do
+    pedido, não da sessão — então a mensagem não manda "selecionar": diz a
+    verdade, que é a ação em si que exige uma empresa específica.
     """
     env = getattr(request.state, "environment", None)
     if env is None:
         raise HTTPException(
             status_code=412,
-            detail="Selecione um ambiente para continuar.",
+            detail="Esta ação é de uma empresa específica — abra o pedido para agir nele.",
         )
     return env
 

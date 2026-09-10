@@ -142,6 +142,25 @@ body.has-app-shell {
 }
 .app-shell-env[hidden] { display: none; }
 
+/* Roteamento `ligado`: o selo de leitura vira filtro — mesmo pill, agora um
+ * <select> nativo. `appearance: none` tira a seta do SO; a nossa entra via
+ * background-image na cor de `--text-muted` (#71717A, hardcoded — SVG em
+ * data URI não lê custom property). */
+select.app-shell-env {
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  font: inherit; text-transform: uppercase;
+  cursor: pointer;
+  padding-right: 22px;
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 9px 6px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 9 6' fill='none'%3E%3Cpath d='M1 1l3.5 3.5L8 1' stroke='%2371717A' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+select.app-shell-env:hover { border-color: var(--border-hover); color: var(--text); }
+select.app-shell-env:focus-visible { border-color: var(--accent); }
+select.app-shell-env:disabled { opacity: .6; cursor: progress; }
+select.app-shell-env option { text-transform: none; background: var(--surface-raised); color: var(--text); }
+
 .app-shell-user {
   display: flex; align-items: center; gap: 8px;
   padding: 4px 10px 4px 4px;

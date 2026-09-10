@@ -116,3 +116,45 @@ def test_get_modo_operador_nao_admin_200(real_client, real_auth):
     """Leitura usa require_user, não require_admin — operador pode ver o modo."""
     _bootstrap_operator_session(real_client)
     assert real_client.get("/api/roteamento/modo").status_code == 200
+
+
+# ── Task 15: login sem seleção de ambiente ──────────────────────────────
+
+
+def test_ligado_a_home_nao_manda_escolher_ambiente(client):
+    roteamento_repo.set_modo("ligado", por="t")
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 200
+
+
+def test_desligado_a_home_continua_mandando_escolher(client):
+    roteamento_repo.set_modo("desligado", por="t")
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code in (200, 307)
+    if r.status_code == 307:
+        assert r.headers["location"] == "/selecionar-ambiente"
+
+
+def test_ligado_a_caixa_de_entrada_soma_os_ambientes(client, tmp_path):
+    """Sem empresa escolhida e com o roteamento valendo, a lista traz as duas."""
+    from app.persistence import context as env_context
+    from app.persistence import environments_repo, repo
+
+    for slug, nome in (("nasmar", "Nasmar"), ("mm", "MM Americanense")):
+        environments_repo.create(
+            slug=slug, name=nome, watch_dir=str(tmp_path / slug),
+            output_dir=str(tmp_path / slug), fb_path=str(tmp_path / f"{slug}.fdb"),
+        )
+        env = environments_repo.get_by_slug(slug)
+        with env_context.active_env(env["id"], env["slug"]):
+            repo.insert_import({
+                "id": f"{slug}-1", "source_filename": "p.pdf",
+                "imported_at": "2026-09-05T10:00:00", "order_number": slug.upper(),
+                "customer_name": nome, "status": "success", "portal_status": "parsed",
+            })
+
+    roteamento_repo.set_modo("ligado", por="t")
+    body = client.get("/api/imported").json()
+    assert {e["env_name"] for e in body["entries"]} == {"Nasmar", "MM Americanense"}
+    assert body["total"] == 2
+    assert body["counts"]["parsed"] == 2

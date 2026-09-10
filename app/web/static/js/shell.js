@@ -72,8 +72,10 @@
       const r = await fetch('/api/auth/me', { credentials: 'same-origin' });
       const data = await r.json();
       window.__shellUser = data.user || null;
+      window.__shellEnv = data.environment || null;
     } catch (_) {
       window.__shellUser = null;
+      window.__shellEnv = null;
     }
     return window.__shellUser;
   }
@@ -84,6 +86,26 @@
       if (!r.ok) return null;
       return await r.json();
     } catch (_) { return null; }
+  }
+
+  // Com o roteamento `ligado` o cookie `portal_env` vira filtro opcional da
+  // caixa de entrada, não gate de login — ver `renderEnvFilter`. Modo é lido
+  // uma vez por carregamento de página: não é algo que muda no meio de uma
+  // sessão aberta.
+  async function fetchRoteamentoModo() {
+    try {
+      const r = await fetch('/api/roteamento/modo', { credentials: 'same-origin' });
+      if (!r.ok) return null;
+      return (await r.json()).modo || null;
+    } catch (_) { return null; }
+  }
+
+  async function fetchEnvList() {
+    try {
+      const r = await fetch('/api/env/list', { credentials: 'same-origin' });
+      if (!r.ok) return [];
+      return await r.json();
+    } catch (_) { return []; }
   }
 
   function activeRoute() {
@@ -195,6 +217,9 @@
     if (label) label.textContent = ok ? 'Conectado' : 'Sem banco';
     // Mostra a empresa (ambiente) ativa ao lado do status, pra deixar claro
     // em qual empresa você está operando e de qual banco é o status acima.
+    // Some quando o filtro (`renderEnvFilter`) já substituiu este nó por um
+    // <select> — o elemento com `data-env-name` deixa de existir e este
+    // bloco vira no-op, sem disputar o DOM com o filtro.
     const envNode = host.querySelector('[data-env-name]');
     if (envNode) {
       const name = cfg && cfg.environment && cfg.environment.name;
@@ -206,6 +231,66 @@
         envNode.hidden = true;
       }
     }
+  }
+
+  // Com o roteamento `desligado`/`observando`, o selo de empresa no topo é
+  // só leitura (mantido por `refreshFbStatus`) — o cookie ainda é o gate que
+  // o login exige. Com `ligado`, o ambiente do PEDIDO vem do documento, e o
+  // cookie vira filtro opcional da caixa de entrada: o mesmo selo troca, uma
+  // única vez por carregamento, para um <select> com "Todas as empresas" +
+  // uma opção por ambiente. Escolher uma reusa `/api/env/select` (o mesmo
+  // POST que a tela `/selecionar-ambiente` sempre usou); voltar para "Todas"
+  // usa `/api/env/clear`, que só existe porque o cookie é HttpOnly — o JS
+  // não tem como apagá-lo sozinho.
+  async function renderEnvFilter(host) {
+    const modo = await fetchRoteamentoModo();
+    if (modo !== 'ligado') return;
+
+    const node = host.querySelector('[data-env-name]');
+    if (!node) return;
+
+    const envs = await fetchEnvList();
+    const current = window.__shellEnv;
+
+    const select = document.createElement('select');
+    select.className = 'app-shell-env';
+    select.setAttribute('data-env-filter', '');
+    select.title = 'Filtrar pedidos por empresa';
+    select.setAttribute('aria-label', 'Filtrar pedidos por empresa');
+
+    const allOpt = document.createElement('option');
+    allOpt.value = '';
+    allOpt.textContent = 'Todas as empresas';
+    select.appendChild(allOpt);
+
+    envs.forEach((env) => {
+      const opt = document.createElement('option');
+      opt.value = env.id;
+      opt.textContent = env.name;
+      select.appendChild(opt);
+    });
+    select.value = (current && current.id) || '';
+
+    select.addEventListener('change', async () => {
+      select.disabled = true;
+      try {
+        if (select.value) {
+          await fetch('/api/env/select', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ environment_id: select.value }),
+          });
+        } else {
+          await fetch('/api/env/clear', { method: 'POST', credentials: 'same-origin' });
+        }
+      } catch (_) {
+        // segue pro reload mesmo assim — a página em si revalida o estado
+      }
+      location.reload();
+    });
+
+    node.replaceWith(select);
   }
 
   function ensureToastHost() {
@@ -258,6 +343,7 @@
     bindEvents(slot);
     refreshFbStatus(slot);
     setInterval(() => refreshFbStatus(slot), 30000);
+    renderEnvFilter(slot);
 
     document.documentElement.setAttribute('data-shell-ready', '1');
   }

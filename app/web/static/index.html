@@ -351,6 +351,18 @@
       font-variant-numeric: tabular-nums;
     }
     .log-sub span { display: flex; align-items: center; gap: 4px; }
+    /* Selo de empresa na caixa de entrada somada (roteamento ligado, sem
+       filtro escolhido). Contexto, não manchete: borda + fundo discretos,
+       nunca uma cor sólida que competisse com os selos de status
+       (statusPill / fireBadge) acima. Texto em --text-secondary, não
+       --text-muted: sobre --surface-hover mede só 4.22:1 (abaixo do AA de
+       4.5:1 pra texto de 10px) — --text-secondary mede 7.05:1. */
+    .log-env-badge {
+      font-size: 10px; font-weight: 600; letter-spacing: .01em;
+      padding: 1px 7px; border-radius: 999px;
+      border: 1px solid var(--border); color: var(--text-secondary);
+      background: var(--surface-hover);
+    }
 
     .log-actions { display: flex; gap: 6px; flex-shrink: 0; margin-top: 1px; }
 
@@ -1432,6 +1444,12 @@ function renderImported(entries) {
       e.customer ? esc(e.customer) : null,
     ].filter(Boolean).join(' &middot; ');
 
+    // Só existe quando a listagem soma as empresas (roteamento ligado, sem
+    // filtro escolhido) — `/api/imported` anota `env_name` linha a linha.
+    const envBadge = e.env_name
+      ? `<span class="log-env-badge" title="Empresa">${esc(e.env_name)}</span>`
+      : '';
+
     const ps = e.portal_status || (e.fire_codigo != null ? 'sent_to_fire' : 'parsed');
     const statusPill = portalStatusBadgeHtml(ps, e.fire_status_last_seen);
     const fireBadge = e.fire_codigo != null
@@ -1464,6 +1482,7 @@ function renderImported(entries) {
           <div class="log-info" style="flex:1">
             <div class="log-filename">${esc(e.source_filename)} ${statusPill} ${fireBadge}</div>
             <div class="log-sub">
+              ${envBadge}
               <span>${dt}</span>
               ${orderInfo ? `<span>${orderInfo}</span>` : ''}
               ${checkSummary ? `<span>${checkSummary}</span>` : ''}

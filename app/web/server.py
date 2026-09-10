@@ -448,11 +448,18 @@ def index(request: Request):
     """Dashboard. Redireciona para login se não autenticado, e para
     seleção de ambiente se logado mas sem env ativo (cookie portal_env
     ausente ou inválido — middleware não hidrata request.state.environment).
+
+    Com `roteamento_modo='ligado'` o ambiente é propriedade do pedido, não da
+    sessão: não há o que escolher, e o passo de seleção some. Nos outros
+    modos o comportamento é o de sempre.
     """
+    from app.persistence import roteamento_repo
+
     if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
         return RedirectResponse(url="/login")
-    if getattr(request.state, "environment", None) is None and not _is_test_bypass():
-        return RedirectResponse(url="/selecionar-ambiente")
+    if roteamento_repo.modo() != roteamento_repo.LIGADO:
+        if getattr(request.state, "environment", None) is None and not _is_test_bypass():
+            return RedirectResponse(url="/selecionar-ambiente")
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 
@@ -1312,6 +1319,7 @@ def import_files(
 
 @app.get("/api/imported")
 def list_imported(
+    request: Request,
     limit: int = 100,
     offset: int = 0,
     status: str | None = None,
@@ -1326,9 +1334,25 @@ def list_imported(
     que precisa casar `sent_to_fire` e `found_in_fire` de uma vez). Um único valor
     continua funcionando exatamente como antes — vira uma lista de 1 item, e
     `repo._build_where` trata `IN (?)` como equivalente a `= ?`."""
-    from app.persistence import repo
+    from app.persistence import repo, roteamento_repo
 
-    entries = repo.list_imports(
+    # Sem empresa no cookie E com o roteamento valendo, a caixa de entrada é
+    # de todas as empresas — o ambiente virou propriedade do pedido, não da
+    # sessão. Com empresa escolhida (cookie presente), o cookie volta a ser
+    # um filtro: a lista é só daquela empresa, como sempre foi. As três
+    # funções trocam JUNTAS — lista, total e chips têm que somar o mesmo
+    # conjunto, ou a tela mostra números que não batem com o que renderizou.
+    cross = (
+        roteamento_repo.modo() == roteamento_repo.LIGADO
+        and getattr(request.state, "environment", None) is None
+    )
+    listar = repo.list_imports_all_envs if cross else repo.list_imports
+    contar = repo.count_imports_all_envs if cross else repo.count_imports
+    contar_chips = (
+        repo.count_by_portal_status_all_envs if cross else repo.count_by_portal_status
+    )
+
+    entries = listar(
         limit=limit,
         offset=offset,
         status=status,
@@ -1338,7 +1362,7 @@ def list_imported(
         date_from=date_from,
         date_to=date_to,
     )
-    total = repo.count_imports(
+    total = contar(
         status=status,
         portal_status=portal_status,
         production_status=production_status,
@@ -1351,7 +1375,7 @@ def list_imported(
     # tela acabou de renderizar — duas chamadas separadas podem cair em lados
     # opostos de uma reconciliação em background e mostrar 12 na lista com 308
     # no chip.
-    counts = repo.count_by_portal_status(
+    counts = contar_chips(
         status=status,
         production_status=production_status,
         customer_search=q,
