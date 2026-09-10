@@ -237,13 +237,9 @@
       border-top-color: #fff; border-radius: 50%;
       animation: spin .65s linear infinite; flex-shrink: 0;
     }
-    .spin-dark {
-      width: 14px; height: 14px;
-      border: 2px solid var(--border);
-      border-top-color: var(--text-muted); border-radius: 50%;
-      animation: spin .65s linear infinite; flex-shrink: 0;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    /* .spin-dark + @keyframes spin agora vivem em shell.css (com guarda de
+       prefers-reduced-motion) — eram duplicados aqui e em
+       admin-roteamento.html. */
 
     /* ── Empty state ── */
     .empty {
@@ -647,6 +643,17 @@
       font-size: 12px; color: var(--error);
     }
 
+    /* Faixa de roteamento — escolha obrigatória do ambiente. `flex-wrap`
+       (em vez do flex sem quebra + min-width:220px fixo de antes) evita que
+       o <select> seja clipado pelo `overflow:hidden` do .modal-wide em
+       320px, onde faltavam ~35px pra caber label + select lado a lado. */
+    .rot-choice { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+    .rot-choice label { font-weight:600; }
+    .rot-choice select { flex:1 1 200px; min-width:0; max-width:320px; height:32px; }
+
+    /* O "porquê" da decisão de roteamento — sempre texto, nunca só title. */
+    .rot-why { font-size: 11px; color: var(--text-secondary); }
+
     .preview-dropzone {
       display: flex; flex-direction: column; align-items: center; gap: 8px;
       padding: 32px 24px;
@@ -956,6 +963,7 @@
   </div>
 </div>
 
+<script src="/static/js/roteamento-labels.js?v=1"></script>
 <script>
 /* ── State ── */
 let cfg = { watchDir: '', outputDir: '', exportMode: 'xlsx', firebirdConfigured: false };
@@ -2056,12 +2064,8 @@ function fmtQty(v) {
   return Number.isInteger(n) ? n.toLocaleString('pt-BR') : n.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
 }
 
-// Degrau -> rótulo curto exibido junto do ambiente resolvido.
-const ROUTING_DEGRAU_LABEL = {
-  documento: 'pelo documento',
-  historico: 'pelo histórico',
-  memoria: 'escolha registrada',
-};
+// ROUTING_DEGRAU_LABEL (degrau -> rótulo curto) vem de roteamento-labels.js,
+// compartilhado com admin-roteamento.html.
 
 function renderRoutingBanner(data) {
   const el = document.getElementById('pvRoutingBanner');
@@ -2088,11 +2092,11 @@ function renderRoutingBanner(data) {
     ).join('');
     el.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:6px;width:100%">
-        <div style="color:var(--warn);font-weight:600">⚠ Não foi possível determinar o ambiente deste pedido automaticamente</div>
+        <div style="color:var(--warn-strong);font-weight:600">⚠ Não foi possível determinar o ambiente deste pedido automaticamente</div>
         <div style="color:var(--text-muted)">${esc(rot.explicacao || '')}</div>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
-          <label for="pvRoutingSelect" style="font-weight:600">Ambiente de destino:</label>
-          <select id="pvRoutingSelect" onchange="onRoutingChoiceChange(this.value)" style="min-width:220px">
+        <div class="rot-choice" style="margin-top:2px">
+          <label for="pvRoutingSelect">Ambiente de destino:</label>
+          <select id="pvRoutingSelect" onchange="onRoutingChoiceChange(this.value)">
             <option value="">Selecione…</option>
             ${options}
           </select>
@@ -2102,8 +2106,13 @@ function renderRoutingBanner(data) {
     routingChoice = null;
     const label = ROUTING_DEGRAU_LABEL[rot.degrau] || rot.degrau || '';
     const aviso = rot.divergiu_de
-      ? `<div style="color:var(--warn);margin-top:2px">⚠ A escolha registrada para este cliente era outra: <strong>${esc(nomeDoAmbiente(rot.divergiu_de))}</strong>.</div>`
+      ? `<div style="color:var(--warn-strong);margin-top:2px">⚠ A escolha registrada para este cliente era outra: <strong>${esc(nomeDoAmbiente(rot.divergiu_de))}</strong>.</div>`
       : '';
+    // A explicação (o "porquê" do degrau) sempre vira uma segunda linha —
+    // nunca só um `title` de mouse. Antes, o ramo "acertei" escondia o
+    // motivo atrás de hover enquanto o ramo "preciso perguntar" mostrava
+    // como texto: metade do silêncio que esta faixa existe pra fechar.
+    const why = rot.explicacao ? `<div class="rot-why">${esc(rot.explicacao)}</div>` : '';
     let headline;
     if (rot.modo === 'observando') {
       // 'observando' só REGISTRA o que o roteador teria feito — o pedido
@@ -2113,19 +2122,20 @@ function renderRoutingBanner(data) {
       // pra onde o pedido REALMENTE vai neste modo.
       const atual = (cfg.environment && cfg.environment.name) || 'o ambiente selecionado';
       headline = rot.env_slug
-        ? `O roteamento sugeriria <strong title="${esc(rot.explicacao || '')}">${esc(rot.env_nome || rot.env_slug)}</strong>
+        ? `O roteamento sugeriria <strong>${esc(rot.env_nome || rot.env_slug)}</strong>
            <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${esc(label)}</span>.
            Este pedido entra em <strong>${esc(atual)}</strong>, o ambiente selecionado.`
-        : `O roteamento não soube sugerir um ambiente (${esc(rot.explicacao || '')}).
+        : `O roteamento não soube sugerir um ambiente.
            Este pedido entra em <strong>${esc(atual)}</strong>, o ambiente selecionado.`;
     } else {
       headline = `Este pedido entra no ambiente
-        <strong title="${esc(rot.explicacao || '')}">${esc(rot.env_nome || rot.env_slug || '—')}</strong>
+        <strong>${esc(rot.env_nome || rot.env_slug || '—')}</strong>
         <span style="color:var(--text-muted);font-size:11px;margin-left:6px">${esc(label)}</span>`;
     }
     el.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:2px;width:100%">
         <div>${headline}</div>
+        ${why}
         ${aviso}
       </div>`;
   }
