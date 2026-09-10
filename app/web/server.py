@@ -106,9 +106,11 @@ from app.integrations.flowpcp.hook import push_new_order  # noqa: E402
 # Flow vai receber quando o pedido chegou no nome da revenda.
 from app.integrations.flowpcp.intercompany import resolucao_para  # noqa: E402
 
-# Multi-ambiente: traduz NoActiveEnvironmentError em 412 estruturado para
-# que o cliente HTTP possa redirecionar para /selecionar-ambiente em vez
-# de quebrar com 500.
+# Multi-ambiente: traduz NoActiveEnvironmentError em 412 estruturado em vez
+# de quebrar com 500. Esta é a mensagem que o operador realmente vê — com
+# roteamento `ligado` não existe mais tela de seleção, então ela não manda
+# "selecionar"; diz a verdade, que é a ação em si que exige uma empresa
+# específica.
 from app.persistence.context import NoActiveEnvironmentError  # noqa: E402
 
 
@@ -116,7 +118,10 @@ from app.persistence.context import NoActiveEnvironmentError  # noqa: E402
 async def _no_env_handler(_request, _exc):
     return JSONResponse(
         status_code=412,
-        content={"detail": "Selecione um ambiente para continuar.", "code": "no_active_env"},
+        content={
+            "detail": "Esta ação é de uma empresa específica — abra o pedido para agir nele.",
+            "code": "no_active_env",
+        },
     )
 
 
@@ -1005,6 +1010,8 @@ def invite_accept_page(token: str) -> FileResponse:  # noqa: ARG001 — token us
 
 @app.get("/api/config")
 def get_config(request: Request) -> JSONResponse:
+    from app.persistence import roteamento_repo
+
     cfg = _get_cfg_for_request(request)
     env = _request_environment(request)
     if env is not None:
@@ -1028,6 +1035,11 @@ def get_config(request: Request) -> JSONResponse:
             "exportMode": cfg.get("export_mode", "xlsx"),
             "firebirdConfigured": firebird_configured,
             "environment": environment,
+            # O shell (topbar) precisa disto pra saber se o seletor de
+            # empresa é filtro (`ligado`) ou só-leitura — /api/config já é
+            # buscado em todo carregamento de página, então o modo pega
+            # carona aqui em vez de abrir uma segunda requisição.
+            "roteamentoModo": roteamento_repo.modo(),
         }
     )
 
@@ -1328,6 +1340,7 @@ def list_imported(
     q: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    _user: User = Depends(require_user),
 ) -> JSONResponse:
     """`?portal_status=` aceita o parâmetro repetido (`?portal_status=a&portal_status=b`)
     para filtrar por múltiplos estados numa chamada só (ex.: chip "No Fire" da UI,
@@ -1768,7 +1781,10 @@ def _resolver_env_alvo(
             },
         )
     if env_alvo is None or not env_alvo.get("is_active"):
-        raise HTTPException(status_code=412, detail="Selecione um ambiente para continuar.")
+        raise HTTPException(
+            status_code=412,
+            detail="Esta ação é de uma empresa específica — abra o pedido para agir nele.",
+        )
     return env_alvo
 
 

@@ -158,3 +158,85 @@ def test_ligado_a_caixa_de_entrada_soma_os_ambientes(client, tmp_path):
     assert {e["env_name"] for e in body["entries"]} == {"Nasmar", "MM Americanense"}
     assert body["total"] == 2
     assert body["counts"]["parsed"] == 2
+
+
+# ── Fix round 1: achados da revisão ──────────────────────────────────────
+# `client` roda com TEST_AUTH_BYPASS=1 — nenhum teste que use `client` prova
+# nada sobre auth ou sobre o gate de `index()` (o bypass curto-circuita os
+# dois `if`). Os testes abaixo usam `real_client` + `real_auth`, que desligam
+# o bypass, para provar comportamento de verdade.
+
+
+def _bootstrap_admin(c: TestClient) -> None:
+    r = c.post("/api/auth/bootstrap", json={"email": "admin@x.com", "password": "supersecret1"})
+    assert r.status_code == 200, r.text
+
+
+# ACHADO 1 (CRITICAL) — `/api/imported` não declarava `Depends(require_user)`.
+# Em `ligado`, sem sessão E sem cookie `portal_env`, a rota caía no ramo
+# cross-env (que não depende do contexto de ambiente da request) e devolvia
+# 200 com pedidos das duas empresas para um chamador anônimo. Em `desligado`/
+# `observando` isso não aparecia porque a ausência de ambiente virava 412
+# (`NoActiveEnvironmentError`) antes de qualquer dado vazar — um portão
+# acidental, não uma checagem de auth.
+
+
+def test_desligado_api_imported_exige_sessao(real_client, real_auth):
+    roteamento_repo.set_modo("desligado", por="t")
+    assert real_client.get("/api/imported").status_code == 401
+
+
+def test_observando_api_imported_exige_sessao(real_client, real_auth):
+    roteamento_repo.set_modo("observando", por="t")
+    assert real_client.get("/api/imported").status_code == 401
+
+
+def test_ligado_api_imported_exige_sessao(real_client, real_auth):
+    """Sem o `Depends(require_user)`, este teste devolvia 200 com os pedidos
+    das duas empresas para um chamador sem sessão nenhuma — a lacuna real."""
+    roteamento_repo.set_modo("ligado", por="t")
+    assert real_client.get("/api/imported").status_code == 401
+
+
+# ACHADO 3 (Important) — nenhum teste com bypass desligado cobria o gate de
+# `index()`. Os dois testes de cima (`test_*_a_home_*`) usam `client`
+# (bypass ligado): `_is_test_bypass()` curto-circuita os dois `if` de
+# `index()`, então eles passam igual mesmo se o ramo de `ligado` for
+# apagado — provado forçando `modo()` a devolver "desligado" com o bypass
+# ligado e vendo o assert passar do mesmo jeito. Os três abaixo, com sessão
+# real e sem cookie de ambiente, são quem realmente prova o gate.
+
+
+def test_desligado_home_sem_ambiente_redireciona_de_verdade(real_client, real_auth):
+    roteamento_repo.set_modo("desligado", por="t")
+    _bootstrap_admin(real_client)
+    r = real_client.get("/", follow_redirects=False)
+    assert r.status_code in (302, 307)
+    assert "/selecionar-ambiente" in r.headers["location"]
+
+
+def test_observando_home_sem_ambiente_redireciona_de_verdade(real_client, real_auth):
+    roteamento_repo.set_modo("observando", por="t")
+    _bootstrap_admin(real_client)
+    r = real_client.get("/", follow_redirects=False)
+    assert r.status_code in (302, 307)
+    assert "/selecionar-ambiente" in r.headers["location"]
+
+
+def test_ligado_home_sem_ambiente_nao_redireciona_de_verdade(real_client, real_auth):
+    roteamento_repo.set_modo("ligado", por="t")
+    _bootstrap_admin(real_client)
+    r = real_client.get("/", follow_redirects=False)
+    assert r.status_code == 200
+
+
+# MINOR 6 — shell.js buscava `/api/roteamento/modo` numa requisição própria
+# em TODO carregamento de página, mesmo nos modos onde a resposta era
+# descartada. `/api/config` já vai ao servidor no mesmo tick; o modo pega
+# carona nele.
+
+
+def test_api_config_expoe_roteamento_modo(client):
+    assert client.get("/api/config").json()["roteamentoModo"] == "desligado"
+    roteamento_repo.set_modo("ligado", por="t")
+    assert client.get("/api/config").json()["roteamentoModo"] == "ligado"

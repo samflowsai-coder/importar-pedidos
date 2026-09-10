@@ -1,8 +1,12 @@
 """FastAPI dependencies de ambiente.
 
 `current_environment(request)` lê o env já hidratado pelo middleware.
-Retorna 412 (Precondition Failed) se ambiente não foi selecionado —
-o cliente HTTP/UI deve redirecionar pra `/selecionar-ambiente`.
+Retorna 412 (Precondition Failed) se ambiente não foi selecionado. Nenhuma
+rota declara esta dependency hoje (verificado — zero `Depends(current_environment)`
+no repo); o 412 que o operador realmente vê quando falta ambiente é
+`NoActiveEnvironmentError` → `_no_env_handler` em `app/web/server.py`. Com
+roteamento `ligado` não existe mais tela de seleção — não redirecione pra
+`/selecionar-ambiente` a partir daqui nem do handler de verdade.
 
 `current_env_db()` é uma dependency que abre conexão pra DB do env atual.
 Combinada com `current_environment`, simplifica handlers:

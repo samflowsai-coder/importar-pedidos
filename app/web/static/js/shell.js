@@ -88,18 +88,6 @@
     } catch (_) { return null; }
   }
 
-  // Com o roteamento `ligado` o cookie `portal_env` vira filtro opcional da
-  // caixa de entrada, não gate de login — ver `renderEnvFilter`. Modo é lido
-  // uma vez por carregamento de página: não é algo que muda no meio de uma
-  // sessão aberta.
-  async function fetchRoteamentoModo() {
-    try {
-      const r = await fetch('/api/roteamento/modo', { credentials: 'same-origin' });
-      if (!r.ok) return null;
-      return (await r.json()).modo || null;
-    } catch (_) { return null; }
-  }
-
   async function fetchEnvList() {
     try {
       const r = await fetch('/api/env/list', { credentials: 'same-origin' });
@@ -207,8 +195,10 @@
     }
   }
 
-  async function refreshFbStatus(host) {
-    const cfg = await fetchConfig();
+  // Aplica ao DOM um `cfg` já buscado (não busca sozinha) — assim o load
+  // inicial em `mount()` e o polling de `refreshFbStatus` podem compartilhar
+  // ou não a mesma chamada a `/api/config` sem duplicar a lógica de pintura.
+  function applyFbStatus(host, cfg) {
     const node = host.querySelector('[data-fb-status]');
     if (!node) return;
     const ok = !!(cfg && cfg.firebirdConfigured);
@@ -233,8 +223,12 @@
     }
   }
 
+  async function refreshFbStatus(host) {
+    applyFbStatus(host, await fetchConfig());
+  }
+
   // Com o roteamento `desligado`/`observando`, o selo de empresa no topo é
-  // só leitura (mantido por `refreshFbStatus`) — o cookie ainda é o gate que
+  // só leitura (mantido por `applyFbStatus`) — o cookie ainda é o gate que
   // o login exige. Com `ligado`, o ambiente do PEDIDO vem do documento, e o
   // cookie vira filtro opcional da caixa de entrada: o mesmo selo troca, uma
   // única vez por carregamento, para um <select> com "Todas as empresas" +
@@ -242,8 +236,14 @@
   // POST que a tela `/selecionar-ambiente` sempre usou); voltar para "Todas"
   // usa `/api/env/clear`, que só existe porque o cookie é HttpOnly — o JS
   // não tem como apagá-lo sozinho.
-  async function renderEnvFilter(host) {
-    const modo = await fetchRoteamentoModo();
+  //
+  // `modo` chega de fora (o `roteamentoModo` que `/api/config` já devolve —
+  // ver `mount`) em vez de uma busca própria a `/api/roteamento/modo`:
+  // `/api/config` já vai ao servidor no mesmo tick do carregamento da
+  // página, então o modo pega carona nele em vez de abrir uma segunda
+  // requisição em TODO carregamento (inclusive nos modos onde a resposta
+  // seria descartada).
+  async function renderEnvFilter(host, modo) {
     if (modo !== 'ligado') return;
 
     const node = host.querySelector('[data-env-name]');
@@ -341,9 +341,15 @@
 
     slot.innerHTML = renderSidebar(user) + renderTopbar(user);
     bindEvents(slot);
-    refreshFbStatus(slot);
+
+    // Uma busca só a `/api/config` alimenta o status do Firebird E decide
+    // se o selo de empresa vira filtro (`roteamentoModo`) — aguardada antes
+    // de `data-shell-ready` pra não pintar o pill read-only e trocar pelo
+    // <select> duas requisições depois, visível pro usuário.
+    const cfg = await fetchConfig();
+    applyFbStatus(slot, cfg);
+    await renderEnvFilter(slot, cfg && cfg.roteamentoModo);
     setInterval(() => refreshFbStatus(slot), 30000);
-    renderEnvFilter(slot);
 
     document.documentElement.setAttribute('data-shell-ready', '1');
   }

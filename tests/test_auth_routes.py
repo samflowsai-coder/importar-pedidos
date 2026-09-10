@@ -204,7 +204,19 @@ def test_read_only_routes_remain_open(isolated_app):
     c = TestClient(app)
     assert c.get("/health").status_code == 200
     assert c.get("/api/config").status_code == 200
-    assert c.get("/api/imported").status_code == 200
+
+
+def test_imported_list_requires_session(isolated_app):
+    """`/api/imported` NÃO fica na lista acima desde a Task 15 (roteamento
+    intercompany): com `roteamento_modo='ligado'` e sem cookie `portal_env`,
+    a rota soma pedidos de TODAS as empresas numa resposta só — a exceção
+    de "leitura fica aberta" do Phase 4b não previa esse caso, e sem
+    `Depends(require_user)` um chamador sem sessão nenhuma veria arquivo,
+    número do pedido, cliente e status de qualquer empresa. Ganhou o mesmo
+    `Depends(require_user)` das rotas irmãs de escrita."""
+    from app.web.server import app
+    c = TestClient(app)
+    assert c.get("/api/imported").status_code == 401
 
 
 # ── Webhook stays open (HMAC-protected separately) ───────────────────────
