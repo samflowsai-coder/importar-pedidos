@@ -1897,6 +1897,20 @@ def commit_preview(
                     "items": len(order.items),
                     "from_watch": entry.source_path is not None,
                     "check": entry.check.get("summary") if entry.check else None,
+                    # ACHADO 3 da revisão final: sem isto, um pedido roteado
+                    # em 'ligado' não deixava registro de POR QUE foi pra
+                    # esta empresa — só `environment_id` (o resultado), nunca
+                    # a razão. `None` em 'desligado' (decisao is None) — sinal
+                    # de "roteador nem rodou", não "não sabemos por quê".
+                    "roteamento": (
+                        {
+                            "degrau": decisao.degrau,
+                            "env_slug": decisao.env_slug,
+                            "explicacao": decisao.explicacao,
+                        }
+                        if decisao is not None
+                        else None
+                    ),
                 },
             )
             transition(

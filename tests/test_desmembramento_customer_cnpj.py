@@ -35,6 +35,23 @@ def test_sem_cnpj_nenhum_devolve_none():
     assert p._derive_customer_cnpj([]) is None
 
 
+def test_pluralidade_sem_maioria_ainda_devolve_o_vencedor():
+    """Minor 8 da revisão final. O docstring fala em 'maioria', mas a regra
+    real é PLURALIDADE (o topo não empata com o segundo colocado) — não
+    maioria absoluta (>50% das lojas). 2 de 4 lojas (exatamente metade) não é
+    maioria, mas também não empata com ninguém: 2-1-1 devolve o vencedor
+    (raiz de 2), não `None`. Comportamento existente, documentado aqui de
+    propósito para não parecer descuido numa revisão futura."""
+    p = DesmembramentoXlsParser()
+    cols = [
+        (10, "Loja A", "05.055.599/0029-85"),
+        (11, "Loja B", "05.055.599/0008-50"),
+        (12, "Loja C", "10.389.941/0001-12"),
+        (13, "Loja D", "20.111.222/0001-33"),
+    ]
+    assert p._derive_customer_cnpj(cols) == "05055599000850"
+
+
 def test_empate_de_raizes_nao_inventa_comprador():
     p = DesmembramentoXlsParser()
     cols = [

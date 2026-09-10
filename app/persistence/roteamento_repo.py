@@ -99,6 +99,10 @@ def registrar_sombra(
         logger.warning("roteamento.sombra_falhou import_id={}", import_id)
 
 
+_TAXA_DIAS_MIN = 1
+_TAXA_DIAS_MAX = 3650
+
+
 def taxa(dias: int = 30) -> dict[str, Any]:
     """Taxa de acerto da janela: total, bateu, divergiu, não soube responder.
 
@@ -110,8 +114,16 @@ def taxa(dias: int = 30) -> dict[str, Any]:
     direto (em vez de por subtração) é redundância deliberada: mesmo que essa
     garantia se perca no futuro (linha inserida fora de `registrar_sombra`,
     por exemplo), `divergiu` nunca fica negativo.
+
+    `dias` vem de query param (`/api/roteamento/taxa`), input de borda sem
+    validação de schema — por isso é clampado aqui, não só na rota:
+    `timedelta` levanta `OverflowError` (→ 500) pra `dias` gigante, e um
+    `dias` negativo devolveria `desde` no futuro em silêncio (janela vazia
+    sempre, sem erro nenhum avisando). Clamp em [1, 3650] (~10 anos) cobre
+    qualquer consulta legítima.
     """
-    desde = (datetime.now(UTC) - timedelta(days=int(dias))).isoformat(timespec="seconds")
+    dias = max(_TAXA_DIAS_MIN, min(int(dias), _TAXA_DIAS_MAX))
+    desde = (datetime.now(UTC) - timedelta(days=dias)).isoformat(timespec="seconds")
     with router.shared_connect() as conn:
         row = conn.execute(
             """SELECT COUNT(*),

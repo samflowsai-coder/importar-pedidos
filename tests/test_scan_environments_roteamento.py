@@ -327,3 +327,128 @@ def test_pendencia_reavaliada_depois_de_uma_hora(dois_ambientes, monkeypatch):
     scan_environments.run_scan()
     assert len(chamadas) == 2, "passou de 1h -- tem que reavaliar de verdade"
     assert roteamento_repo.contar_pendencias() == 1  # ainda não resolveu, mas reavaliou
+
+
+# ── Fix round 2: revisão FINAL de branch — Achados 1, 2 e 3 ────────────────
+
+
+def test_desligado_reverte_pendencia_retida_de_imediato(dois_ambientes, monkeypatch):
+    """ACHADO 1 (Important). Rollback completo: retém em 'ligado', vira a
+    chave pra 'desligado', roda o scan de novo — o arquivo tem que ser
+    importado como o Portal de hoje importa, e a pendência tem que sumir. A
+    promessa dos três estados é 'volta a qualquer momento, sem deploy' — o
+    throttle de 1h não pode atrasar essa volta."""
+    roteamento_repo.set_modo("ligado", por="t")
+    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(None))
+    p = _arquivo(dois_ambientes)
+    scan_environments.run_scan()
+    assert roteamento_repo.contar_pendencias() == 1
+    assert p.exists()
+
+    roteamento_repo.set_modo("desligado", por="t")
+    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    scan_environments.run_scan()
+
+    assert len(_imports("mm")) == 1, "desligado importa na pasta, como hoje"
+    assert not p.exists(), "arquivo tem que sair da pasta de entrada"
+    assert roteamento_repo.contar_pendencias() == 0, "pendencia de outro modo nao pode sobreviver"
+
+
+def test_observando_reverte_pendencia_retida_de_imediato(dois_ambientes, monkeypatch):
+    """ACHADO 1 (Important), mesmo cenário em 'observando': uma pendência
+    deixada por um 'ligado' anterior não pode continuar throttlando depois
+    que a chave sai de 'ligado' — 'observando' nunca cria pendência sozinho
+    (só importa e grava sombra), então o arquivo tem que fluir normalmente."""
+    roteamento_repo.set_modo("ligado", por="t")
+    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(None))
+    p = _arquivo(dois_ambientes)
+    scan_environments.run_scan()
+    assert roteamento_repo.contar_pendencias() == 1
+
+    roteamento_repo.set_modo("observando", por="t")
+    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    scan_environments.run_scan()
+
+    assert len(_imports("mm")) == 1, "observando importa na pasta varrida"
+    assert not p.exists()
+    assert roteamento_repo.contar_pendencias() == 0
+
+
+def test_desligado_mesmo_arquivo_em_duas_pastas_gera_dois_pedidos(dois_ambientes, monkeypatch):
+    """ACHADO 2 (Important). Em 'desligado' a idempotência é por ambiente —
+    igual ao Portal antes desta feature. O mesmo conteúdo (mesmo sha256)
+    aparecendo nas pastas de DUAS empresas tem que virar DOIS pedidos, um em
+    cada uma; a dedupe global só existe pra quando o roteador pode mover o
+    arquivo pra fora da pasta onde ele apareceu."""
+    roteamento_repo.set_modo("desligado", por="t")
+    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    _arquivo(dois_ambientes, slug="mm", nome="PEDIDO.pdf")
+    _arquivo(dois_ambientes, slug="nasmar", nome="PEDIDO.pdf")
+
+    scan_environments.run_scan()
+
+    assert len(_imports("mm")) == 1
+    assert len(_imports("nasmar")) == 1
+
+
+def test_ligado_mesmo_arquivo_em_duas_pastas_gera_um_pedido_so(dois_ambientes, monkeypatch):
+    """ACHADO 2 (Important), o outro lado: fora de 'desligado' o sha é único
+    no Portal inteiro — o segundo arquivo (mesmo conteúdo) é skip_duplicate,
+    não um segundo pedido."""
+    roteamento_repo.set_modo("ligado", por="t")
+    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    _arquivo(dois_ambientes, slug="mm", nome="PEDIDO.pdf")
+    _arquivo(dois_ambientes, slug="nasmar", nome="PEDIDO.pdf")
+
+    scan_environments.run_scan()
+
+    total = len(_imports("mm")) + len(_imports("nasmar"))
+    assert total == 1
+    assert len(_imports("nasmar")) == 1  # o documento manda, roteamento ligado
+
+
+def _audit(slug, import_id):
+    from app.persistence import repo as repo_mod
+
+    env = environments_repo.get_by_slug(slug)
+    with env_context.active_env(env["id"], env["slug"]):
+        return repo_mod.list_audit(import_id)
+
+
+def test_ligado_audit_carrega_degrau_e_explicacao(dois_ambientes, monkeypatch):
+    """ACHADO 3 (Important). Em 'ligado', sem humano na tela, o audit trail
+    do watcher é a ÚNICA evidência de POR QUE o pedido foi pra esta empresa
+    — o `environment_id` sozinho é o resultado, não a razão. O evento
+    `imported_to_portal` tem que carregar {degrau, env_slug, explicacao}."""
+    roteamento_repo.set_modo("ligado", por="t")
+    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    _arquivo(dois_ambientes)
+    scan_environments.run_scan()
+
+    imports_nasmar = _imports("nasmar")
+    assert len(imports_nasmar) == 1
+    import_id = imports_nasmar[0]["id"]
+
+    eventos = _audit("nasmar", import_id)
+    imported = [e for e in eventos if e["event_type"] == "imported_to_portal"]
+    assert len(imported) == 1
+    rot = imported[0]["detail"]["roteamento"]
+    assert rot["degrau"] == "documento"
+    assert rot["env_slug"] == "nasmar"
+    assert rot["explicacao"]
+
+
+def test_desligado_audit_nao_carrega_roteamento(dois_ambientes, monkeypatch):
+    """Em 'desligado' o roteador nem é chamado — o bloco `roteamento` do
+    audit tem que ser `None`, não um degrau inventado."""
+    roteamento_repo.set_modo("desligado", por="t")
+    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    _arquivo(dois_ambientes)
+    scan_environments.run_scan()
+
+    imports_mm = _imports("mm")
+    import_id = imports_mm[0]["id"]
+    eventos = _audit("mm", import_id)
+    imported = [e for e in eventos if e["event_type"] == "imported_to_portal"]
+    assert len(imported) == 1
+    assert imported[0]["detail"]["roteamento"] is None

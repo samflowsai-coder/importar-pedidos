@@ -180,7 +180,11 @@ def ambiente_para(order: Order, deps: Deps) -> Decisao:
             return Decisao(
                 env_slug=env,
                 degrau="documento",
-                explicacao=f"Fornecedor {_fmt(fornecedor)} no pedido → ambiente {env}",
+                # "Fornecedor X" afirmaria POSIÇÃO (que o CNPJ veio do campo
+                # fornecedor do documento) — `detectar_fornecedor` garante só
+                # PRESENÇA (único CNPJ de ambiente no texto, papel nenhum
+                # verificado). Ver docstring de `app/routing/documento.py`.
+                explicacao=f"CNPJ {_fmt(fornecedor)} identificado no pedido → ambiente {env}",
                 divergiu_de=lembrado if lembrado and lembrado != env else None,
             )
 

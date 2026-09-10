@@ -13,7 +13,7 @@ from app.erp.exceptions import (
     FirebirdOrderAlreadyExistsError,
 )
 from app.erp.fiscal import perfil_para
-from app.erp.mapper import FireSistemasMapper, _item_total, _parse_date
+from app.erp.mapper import FireSistemasMapper, item_total, parse_date
 from app.models.order import ERPRow, Order
 from app.utils.logger import logger
 
@@ -68,14 +68,14 @@ def _to_erp_rows(order: Order) -> list[ERPRow]:
 
 def _valor_total(rows: list[ERPRow]) -> Decimal:
     """Soma dos MESMOS totais por item que vao pra CORPO_VENDAS.TOTAL
-    (_item_total, em app.erp.mapper) — o cabecalho bate com a soma dos
+    (item_total, em app.erp.mapper) — o cabecalho bate com a soma dos
     proprios itens em vez de recalcular a regra em paralelo. Converte pra
     Decimal na borda via str() (nunca o float direto) e quantiza em 2 casas
     (escala de CAB_VENDAS.VALOR_TOTAL); o item mantem as 4 casas dele.
     """
     total = Decimal("0")
     for row in rows:
-        total += Decimal(str(_item_total(row)))
+        total += Decimal(str(item_total(row)))
     return total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
@@ -84,7 +84,7 @@ def _menor_dt_entrega(rows: list[ERPRow]) -> date | None:
     tem data; None se nenhum item tiver. Mesma regra que o desenho do lote
     intercompany usa pro pedido consolidado (regra da casa).
     """
-    datas = [d for d in (_parse_date(row.data_entrega) for row in rows) if d is not None]
+    datas = [d for d in (parse_date(row.data_entrega) for row in rows) if d is not None]
     return min(datas) if datas else None
 
 

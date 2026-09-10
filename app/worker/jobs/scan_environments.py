@@ -3,9 +3,11 @@
 Para cada ambiente ativo:
 1. Lista arquivos no `watch_dir` (filtra extensões .pdf/.xls/.xlsx)
 2. Para cada arquivo:
-   a. Calcula sha256 — se já existe em `imports.file_sha256` de QUALQUER
-      ambiente (ativo ou não — ver `_already_imported`), skip (move pra
-      `Pedidos importados/`).
+   a. Calcula sha256 — se já existe em `imports.file_sha256`, skip (move pra
+      `Pedidos importados/`). Fora de 'desligado' a checagem é global (ver
+      `_already_imported`) porque o roteamento pode mandar o arquivo pra
+      outra empresa; em 'desligado' é só dentro do próprio ambiente varrido
+      — ver "Idempotência" abaixo (ACHADO 2 da revisão final).
    b. Roda pipeline (parse → normalize → validate). Falha vira import
       com status='error' e o arquivo vai pra `Pedidos importados/com_erro/`.
    c. Roteamento (`app/routing/ambiente.py::decidir`, atrás do interruptor
@@ -14,16 +16,24 @@ Para cada ambiente ativo:
       não resolve (degrau 'perguntar', ou ambiente resolvido que não
       existe mais) NÃO é importado: fica retido na pasta e vira uma linha
       em `roteamento_pendencia` — reavaliada no máximo 1x/hora (ver
-      `_PENDENCIA_REAVALIACAO_S`), nunca a cada ciclo de 30s.
+      `_PENDENCIA_REAVALIACAO_S`), e só quando o modo ATUAL da varredura é
+      'ligado' (ACHADO 1 da revisão final: uma pendência gravada em 'ligado'
+      não pode continuar throttlando o arquivo depois que a chave volta pra
+      'desligado'/'observando' — senão "voltar sem deploy" não é imediato).
    d. Insere em `imports` via `repo.insert_import`, dentro de
       `env_context.active_env()` do ambiente DECIDIDO (que é o varrido em
       'desligado'/'observando') com status='success' e portal_status='parsed'
-      — fica esperando o operador commitar.
+      — fica esperando o operador commitar. Também grava `append_audit`
+      (evento `imported_to_portal`) com o degrau que decidiu, quando o
+      roteador rodou — ver ACHADO 3 da revisão final.
    e. Move arquivo para `Pedidos importados/` do ambiente VARRIDO — é de lá
       que o arquivo veio, e é lá que fica o histórico de entrada.
 
-Idempotência: chave = sha256, único no Portal inteiro (não por ambiente).
-Mesmo arquivo recolocado, na mesma pasta ou em outra, não duplica.
+Idempotência: em 'desligado' é `(environment_id, sha256)` — igual ao Portal
+antes desta feature, só dentro do próprio ambiente. Fora de 'desligado'
+(roteamento pode mover o arquivo pra outra empresa) a chave é `sha256`
+sozinho, único no Portal inteiro — mesmo arquivo recolocado, na mesma pasta
+ou em outra, não duplica.
 
 Erro processando um arquivo NÃO interrompe o scan — continua para o próximo.
 """
@@ -64,11 +74,27 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _already_imported(sha: str) -> bool:
-    """O sha é único no Portal inteiro, não por ambiente: com roteamento, o
-    arquivo pode ter entrado numa empresa diferente da pasta em que está —
-    inclusive um ambiente já desativado (foi importado; reimportar seria
-    duplicata). Por isso varre TODOS os ambientes, não só os ativos."""
+def _already_imported(env_slug: str, sha: str, modo_atual: str) -> bool:
+    """ACHADO 2 da revisão final: a dedupe GLOBAL só é necessária quando o
+    roteamento pode mandar um arquivo encontrado numa pasta para outra
+    empresa — o que só acontece fora de 'desligado'. Em 'desligado' a
+    semântica é a de sempre, `(environment_id, sha256)`: o mesmo arquivo em
+    DUAS pastas de DUAS empresas são dois pedidos, não um — mudar isso em
+    silêncio (varrer todo mundo mesmo com o roteador nem chamado) é perda de
+    dado da perspectiva do operador, não idempotência.
+
+    Fora de 'desligado', o sha é único no Portal inteiro: o arquivo pode ter
+    entrado numa empresa diferente da pasta em que está — inclusive um
+    ambiente já desativado (foi importado; reimportar seria duplicata). Por
+    isso varre TODOS os ambientes (`list_all()`), não só os ativos.
+    """
+    if modo_atual == roteamento_repo.DESLIGADO:
+        with router.env_connect(env_slug) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM imports WHERE file_sha256 = ? LIMIT 1", (sha,)
+            ).fetchone()
+        return row is not None
+
     for env in environments_repo.list_all():
         with router.env_connect(env["slug"]) as conn:
             row = conn.execute(
@@ -119,7 +145,14 @@ def _process_file(env: dict, p: Path) -> None:
     """Processa um arquivo: parse + roteamento + insert + move."""
     sha = _sha256(p)
     watch_dir = Path(env["watch_dir"])
-    if _already_imported(sha):
+    # Lido uma vez e reusado nos dois gates abaixo (ACHADOS 1 e 2). `decidir()`
+    # mais adiante lê `roteamento_repo.modo()` de novo por conta própria —
+    # sem lock entre as duas leituras, mas a chave não muda no meio de um
+    # ciclo de scan (30s) na prática, e nenhum dos dois gates depende de
+    # ficar em sincronia byte-a-byte com o `decidir()`.
+    modo_atual = roteamento_repo.modo()
+
+    if _already_imported(env["slug"], sha, modo_atual):
         # Ciclo fecha pro arquivo: se ele tinha uma pendência (ex.: o
         # operador resolveu pelo preview em vez de esperar o watcher), ela
         # deixou de descrever a realidade — sem isto a fila só cresce.
@@ -131,24 +164,33 @@ def _process_file(env: dict, p: Path) -> None:
         _move_to_imported(p, watch_dir)
         return
 
-    pendencia = roteamento_repo.buscar_pendencia(sha)
-    if pendencia is not None and _pendencia_ainda_recente(pendencia["visto_em"]):
-        # Retido há menos de uma hora: só toca o carimbo (visto_em/visto_vezes)
-        # — nada de reparsear nem requeimar Firebird a cada ciclo de 30s.
-        roteamento_repo.registrar_pendencia(
-            sha256=sha,
-            source_path=str(p),
-            env_scan_slug=env["slug"],
-            order_number=pendencia["order_number"],
-            customer_cnpj=pendencia["customer_cnpj"],
-            customer_name=pendencia["customer_name"],
-            motivo=pendencia["motivo"],
-        )
-        logger.info(
-            "scan.pendencia_ainda_recente sha={} file={} visto_vezes={}",
-            sha[:12], p.name, pendencia["visto_vezes"] + 1,
-        )
-        return
+    # ACHADO 1 da revisão final: o throttle de pendência só pode gatear
+    # quando a varredura ATUAL está em 'ligado' — é o único modo em que uma
+    # pendência é criada (ver o `if modo == LIGADO:` mais abaixo). Fora
+    # disso a linha é lixo de um 'ligado' anterior: sem este gate, um
+    # rollback pra 'desligado'/'observando' não devolvia o comportamento de
+    # hoje de imediato — o arquivo continuava retido até o throttle de 1h
+    # expirar por conta própria, contradizendo a promessa central dos três
+    # estados ("volta a qualquer momento, sem deploy").
+    if modo_atual == roteamento_repo.LIGADO:
+        pendencia = roteamento_repo.buscar_pendencia(sha)
+        if pendencia is not None and _pendencia_ainda_recente(pendencia["visto_em"]):
+            # Retido há menos de uma hora: só toca o carimbo (visto_em/visto_vezes)
+            # — nada de reparsear nem requeimar Firebird a cada ciclo de 30s.
+            roteamento_repo.registrar_pendencia(
+                sha256=sha,
+                source_path=str(p),
+                env_scan_slug=env["slug"],
+                order_number=pendencia["order_number"],
+                customer_cnpj=pendencia["customer_cnpj"],
+                customer_name=pendencia["customer_name"],
+                motivo=pendencia["motivo"],
+            )
+            logger.info(
+                "scan.pendencia_ainda_recente sha={} file={} visto_vezes={}",
+                sha[:12], p.name, pendencia["visto_vezes"] + 1,
+            )
+            return
 
     raw = p.read_bytes()
     loaded = LoadedFile(path=p, extension=p.suffix.lower(), raw=raw)
@@ -252,6 +294,29 @@ def _process_file(env: dict, p: Path) -> None:
         try:
             with env_context.active_env(env_alvo["id"], env_alvo["slug"]):
                 repo.insert_import(entry)
+                # ACHADO 3 da revisão final: sem isto, um pedido roteado pelo
+                # degrau 'historico'/'memoria' em 'ligado' não deixava
+                # nenhum registro de POR QUE foi pra esta empresa — só o
+                # `environment_id` (o resultado), nunca a razão. `roteamento`
+                # vem `None` em 'desligado' (decisao is None) — audit sem
+                # bloco de roteamento é o sinal de "roteador nem rodou".
+                repo.append_audit(
+                    import_id,
+                    "imported_to_portal",
+                    {
+                        "source": "scan",
+                        "from_watch": True,
+                        "roteamento": (
+                            {
+                                "degrau": decisao.degrau,
+                                "env_slug": decisao.env_slug,
+                                "explicacao": decisao.explicacao,
+                            }
+                            if decisao is not None
+                            else None
+                        ),
+                    },
+                )
                 # Fecha o ciclo também quando é a PRÓPRIA reavaliação do
                 # watcher que resolve (ex.: a memória aprendeu por outro
                 # pedido do mesmo cliente) — não só quando o operador
@@ -267,8 +332,9 @@ def _process_file(env: dict, p: Path) -> None:
                         env_escolhido=env["slug"],
                     )
                 logger.info(
-                    "scan.imported env={} file={} order={} import_id={}",
+                    "scan.imported env={} file={} order={} import_id={} degrau={}",
                     env_alvo["slug"], p.name, order.header.order_number, import_id,
+                    decisao.degrau if decisao is not None else None,
                 )
                 _move_to_imported(p, watch_dir)
         except Exception as e:

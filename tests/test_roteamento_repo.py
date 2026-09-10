@@ -124,6 +124,22 @@ def test_taxa_de_periodo_vazio_nao_divide_por_zero(fresh_shared):
     assert t == {"total": 0, "bateu": 0, "divergiu": 0, "perguntar": 0, "desde": t["desde"]}
 
 
+def test_taxa_clampa_dias_absurdamente_grande(fresh_shared):
+    """Minor 5 da revisão final. `dias=1_000_000_000` levantava `OverflowError`
+    em `timedelta` (vira 500 na rota) antes do clamp."""
+    t = rot.taxa(dias=1_000_000_000)
+    assert t["total"] == 0
+    assert t["desde"]  # não levantou
+
+
+def test_taxa_clampa_dias_negativo(fresh_shared):
+    """`dias` negativo devolvia `desde` no futuro em silêncio — janela vazia
+    sem erro nenhum avisando o operador."""
+    hoje = datetime.now(UTC).isoformat(timespec="seconds")
+    t = rot.taxa(dias=-5)
+    assert t["desde"] <= hoje, "clampado pro minimo (1 dia), nunca no futuro"
+
+
 def test_pendencia_do_mesmo_arquivo_nao_duplica(fresh_shared):
     """O watcher re-varre a pasta a cada ciclo; a fila nao pode inflar."""
     for _ in range(3):

@@ -31,7 +31,7 @@ def _digits_only(value: str | None) -> str:
     return re.sub(r"\D", "", value)
 
 
-def _parse_date(value: str | None) -> date | None:
+def parse_date(value: str | None) -> date | None:
     if not value:
         return None
     for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d/%m/%y"):
@@ -42,7 +42,7 @@ def _parse_date(value: str | None) -> date | None:
     return None
 
 
-def _item_total(item: ERPRow) -> float:
+def item_total(item: ERPRow) -> float:
     """Regra unica do total de um item: valor_total explicito quando presente,
     senao qtd * preco_unitario (4 casas). Usada em CORPO_VENDAS.TOTAL aqui e
     na soma de CAB_VENDAS.VALOR_TOTAL no exporter — cabecalho e itens tem que
@@ -86,7 +86,7 @@ class FireSistemasMapper:
 
         empresa = int(os.environ.get("FB_CODEMPRESA", self.EMPRESA_CODIGO))
         pedido_cliente = (order.header.order_number or "")[:20] or None
-        data_pedido = _parse_date(order.header.issue_date) or date.today()
+        data_pedido = parse_date(order.header.issue_date) or date.today()
 
         return (
             header_pk,                    # CODIGO
@@ -134,9 +134,9 @@ class FireSistemasMapper:
         """
         qty = item.quantidade or 0.0
         unit_price = item.preco_unitario or 0.0
-        total = _item_total(item)
+        total = item_total(item)
         desc = (item.descricao or "")[:100]
-        delivery = _parse_date(item.data_entrega)
+        delivery = parse_date(item.data_entrega)
 
         return (
             item_pk,               # CODIGO

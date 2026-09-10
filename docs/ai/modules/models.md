@@ -5,8 +5,13 @@
 
 ## Tipos
 - `Order(header, items, source_file)`
-- `OrderHeader(order_number, issue_date, customer_name, customer_cnpj)` — **`customer_*`,
-  não `client_*`**. Todo campo é opcional.
+- `OrderHeader(order_number, issue_date, customer_name, customer_cnpj, supplier_cnpj)` —
+  **`customer_*`, não `client_*`**. Todo campo é opcional. `supplier_cnpj` é o
+  degrau 1 do roteamento intercompany: normalmente vazio até `app.pipeline`
+  rodar a varredura do fornecedor (`_marcar_fornecedor`, ver `modules/pipeline.md`)
+  entre o parser e o normalizer; um parser que já leia o rótulo "FORNECEDOR" no
+  documento pode preencher antes, e nesse caso a varredura não sobrescreve.
+  Detalhe da escada em `modules/routing.md`.
 - `OrderItem(description, product_code, ean, quantity, unit_price, total_price, obs,
   delivery_date, delivery_cnpj, delivery_name, delivery_ean)` — `delivery_ean` é a chave
   de split da GRADE do Sam's (ver `modules/exporters.md`).
