@@ -104,6 +104,59 @@ API pública para páginas-filho:
     mesmo `order`, o FlowPCP também recebe a identidade Fire dos itens vinculados
     (desejável: o catálogo do Flow é Fire-synced). Só afeta itens com vínculo.
 
+## Roteamento intercompany (wiring web)
+
+Domínio completo (degraus, interruptor, tabelas) em
+[`modules/routing.md`](routing.md). Aqui só o que muda nas rotas de `web`.
+
+- `GET /admin/roteamento` → `admin-roteamento.html` (interruptor + taxa de
+  acerto). Exige login (`require_user`); a troca do modo em si é
+  admin-only, enforced na API, não na página.
+- `GET /api/roteamento/modo` (`require_user`) → `{modo, modos}`.
+- `PUT /api/roteamento/modo` (`require_admin`) body `{modo}` → grava via
+  `roteamento_repo.set_modo`, 400 se fora de `MODOS`.
+- `GET /api/roteamento/taxa?dias=` (`require_user`) → taxa de acerto da
+  janela + `divergencias` (até 50, de `roteamento_sombra`) + `pendencias`
+  (até 50, de `roteamento_pendencia`). `dias` é clampado em `[1, 3650]`
+  dentro de `roteamento_repo.taxa` — protege contra `OverflowError` do
+  `timedelta` com valor absurdo e contra janela no futuro com `dias`
+  negativo.
+- `POST /api/env/clear` (`require_user`) → remove o cookie `portal_env`
+  (`HttpOnly`, por isso o clear precisa ser uma rota — JS não apaga
+  sozinho). Só faz sentido com o roteamento `ligado`, onde não ter empresa
+  escolhida é um estado válido ("todas as empresas"); nos outros modos a UI
+  não oferece a opção.
+
+`POST /api/commit` (fluxo normal, sem mudança de rota) ganhou o wiring do
+roteamento: resolve `(modo, decisao)` via `_decidir_ambiente`, decide o
+ambiente de gravação via `_resolver_env_alvo` (409 pede escolha quando
+`ligado` não resolve e o operador não mandou `environment_slug`; 412 se o
+ambiente resolvido não existe mais ou está inativo). Em `observando` grava
+`roteamento_sombra` (nunca em `ligado` — sombra é "o que teria feito", não
+"o que fez"); em `ligado` sem resposta, a escolha do operador vira memória
+(`decisao_ambiente_repo.lembrar`). O evento de audit `imported_to_portal`
+carrega `{degrau, env_slug, explicacao}` sob a chave `roteamento` (`None`
+em `desligado`) — é o registro de POR QUE o pedido foi para aquela empresa,
+não só o `environment_id` (achado 3 da revisão final de branch).
+
+`GET /api/imported` (`require_user` — faltava antes de um fix de revisão;
+sem ele a rota cross-env respondia 200 pra chamador anônimo em `ligado`
+sem cookie) soma as empresas — lista, `total` e chips juntos, via
+`repo.list_imports_all_envs` / `count_imports_all_envs` /
+`count_by_portal_status_all_envs` — quando `roteamento_modo == 'ligado'` **e**
+não há ambiente no cookie. Com cookie presente, mesmo em `ligado`, o cookie
+volta a ser filtro (só aquela empresa). Fora de `ligado`, comportamento
+idêntico ao anterior à feature. Cada linha da listagem somada carrega o
+selo da empresa (`environment_slug`/`environment_name`).
+
+`GET /` deixa de redirecionar para `/selecionar-ambiente` quando
+`roteamento_modo == 'ligado'` — o ambiente é propriedade do pedido, não da
+sessão, e o passo de seleção deixa de fazer sentido. `current_environment`
+(dependency) muda a mensagem do 412 de "Selecione um ambiente" para "Esta
+ação é de uma empresa específica — abra o pedido para agir nele" — mais
+honesta fora de `ligado` também (a antiga sugeria um passo que nem sempre
+existe).
+
 ## Segurança (não relaxar)
 - Whitelist de extensão: `.pdf`, `.xls`, `.xlsx`.
 - Limite de upload: 50 MB.
@@ -121,7 +174,9 @@ API pública para páginas-filho:
 - `tests/test_flowpcp_hook.py` — `push_new_order` (gating MM + best-effort).
 - `tests/test_preview_cache.py`
 - `tests/test_firebird_config_api.py` — endpoints `/api/firebird/*`, redirect legacy, gating por role.
-- Comando: `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py tests/test_firebird_config_api.py -v`
+- `tests/test_routing_wiring.py` — wiring do roteamento em `/api/commit`, os três modos.
+- `tests/test_routing_modo.py` — `/api/roteamento/modo|taxa`, `/api/env/clear`, gate de `/` e cross-env de `/api/imported`.
+- Comando: `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py tests/test_firebird_config_api.py tests/test_routing_wiring.py tests/test_routing_modo.py -v`
 
 ## Reatividade de config (exportMode)
 O botão de ação principal (`#pvCommitBtn` no preview e `#batchSendBtn` no log)

@@ -192,6 +192,20 @@
           <span>Nome</span>
           <input name="name" required placeholder="MM Calçados">
         </label>
+        <label>
+          <span>CNPJ da empresa</span>
+          <input name="cnpj" placeholder="34.513.679/0001-34">
+        </label>
+        <p class="hint">
+          Usado para reconhecer os pedidos que têm esta empresa como fornecedor.
+        </p>
+        <label id="figura-fiscal-label" hidden>
+          <span>Figura fiscal (CODFIGFISCAL)</span>
+          <input name="fiscal_codfigfiscal" type="number" step="1">
+        </label>
+        <p id="figura-fiscal-hint" class="hint" hidden>
+          Deixe vazio para usar o padrão; a Nasmar usa 5.
+        </p>
       </fieldset>
 
       <fieldset>
@@ -436,6 +450,10 @@
       document.getElementById('title').textContent = 'Editar ambiente';
       testBtn.hidden = false;
       deleteBtn.hidden = false;
+      // Figura fiscal só existe via UPDATE (environments_repo.create não a
+      // aceita) — esconder na criação evita o campo parecer salvo e não ser.
+      document.getElementById('figura-fiscal-label').hidden = false;
+      document.getElementById('figura-fiscal-hint').hidden = false;
       Promise.all([
         fetch('/api/admin/environments/' + envId).then(r => {
           if (r.status === 401) { location.href = '/login'; return; }
@@ -505,6 +523,14 @@
       if (data.slug) data.slug = String(data.slug).toLowerCase().trim();
       // Senha em PATCH: vazio = manter atual (None no payload)
       if (isEdit && data.fb_password === '') delete data.fb_password;
+      // Figura fiscal: campo numérico opcional. Vazio = omitir (mantém atual
+      // no PATCH; irrelevante no POST, que nem aceita este campo). Number()
+      // em vez de parseInt evita truncar entrada tipo "5.5" em 5 — o input é
+      // type=number step=1, mas defesa não custa.
+      if (data.fiscal_codfigfiscal === '') delete data.fiscal_codfigfiscal;
+      else if (data.fiscal_codfigfiscal !== undefined) {
+        data.fiscal_codfigfiscal = Number(data.fiscal_codfigfiscal);
+      }
       const url = isEdit ? '/api/admin/environments/' + envId : '/api/admin/environments';
       const method = isEdit ? 'PATCH' : 'POST';
       const r = await fetch(url, {

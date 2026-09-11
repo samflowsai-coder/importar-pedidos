@@ -9,7 +9,7 @@ from typing import Any
 from app.erp.fire_reconcile import Candidato
 from app.observability.trace import current_trace_id
 from app.persistence import context as env_context
-from app.persistence import db
+from app.persistence import db, environments_repo
 from app.state.events import _insert_event
 from app.state.machine import EventSource, LifecycleEvent
 
@@ -227,7 +227,7 @@ def list_imports(
                fire_status_last_seen, fire_status_polled_at
         FROM imports
         {clause}
-        ORDER BY imported_at DESC
+        ORDER BY imported_at DESC, id DESC
         LIMIT ? OFFSET ?
     """
     params.extend([limit, offset])
@@ -783,3 +783,51 @@ def mark_found_in_fire(
             occurred_at=at,
         )
     return True
+
+
+def _envs_para_listagem() -> list[dict]:
+    return environments_repo.list_active()
+
+
+def list_imports_all_envs(limit: int = 100, offset: int = 0, **filtros) -> list[dict]:
+    """`list_imports` somando todos os ambientes ativos, com selo da empresa.
+
+    Merge em Python, não em SQL: são bancos SQLite separados (um arquivo por
+    empresa) e não há JOIN sem `ATTACH`. Cada ambiente é consultado com
+    `limit + offset` linhas — o suficiente para a página pedida, sem varrer
+    tudo. Volume real: ~108 pedidos em produção.
+
+    `limit` é clampado ao mesmo teto de `list_imports` (`_MAX_PAGE_SIZE`) — sem
+    isso, `N_ambientes` ambientes devolveriam até `N_ambientes x _MAX_PAGE_SIZE`
+    linhas, quebrando a simetria de contrato com a função irmã.
+    """
+    limit = max(1, min(int(limit), _MAX_PAGE_SIZE))
+    offset = max(0, int(offset))
+    teto = max(1, min(limit + offset, _MAX_PAGE_SIZE))
+    juntas: list[dict] = []
+    for env in _envs_para_listagem():
+        with env_context.active_env(env["id"], env["slug"]):
+            for linha in list_imports(limit=teto, offset=0, **filtros):
+                linha["env_slug"] = env["slug"]
+                linha["env_name"] = env["name"]
+                juntas.append(linha)
+    juntas.sort(key=lambda r: (r.get("imported_at") or "", r.get("id") or ""), reverse=True)
+    return juntas[offset : offset + limit]
+
+
+def count_imports_all_envs(**filtros) -> int:
+    total = 0
+    for env in _envs_para_listagem():
+        with env_context.active_env(env["id"], env["slug"]):
+            total += count_imports(**filtros)
+    return total
+
+
+def count_by_portal_status_all_envs(**filtros) -> dict[str, int]:
+    """Contadores dos chips somando os ambientes. Anda junto da listagem."""
+    total: dict[str, int] = {}
+    for env in _envs_para_listagem():
+        with env_context.active_env(env["id"], env["slug"]):
+            for estado, n in count_by_portal_status(**filtros).items():
+                total[estado] = total.get(estado, 0) + n
+    return total

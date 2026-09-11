@@ -5,14 +5,17 @@ slug é imutável após `create()` — vira parte do nome do arquivo
 `app_state_<slug>.db` e não pode mudar sem migração de dados.
 
 Funções públicas:
-- `create(...)`: insere; falha com `SlugTaken` se UNIQUE violado
+- `create(...)`: insere; falha com `SlugTaken`/`CnpjTaken` se UNIQUE violado
 - `get(env_id)` / `get_by_slug(slug)`: leitura pontual (public view, sem senha)
+- `find_by_cnpj(cnpj)`: ambiente ATIVO cujo CNPJ casa — chave do roteamento
 - `list_active()` / `list_all()`: listagens
-- `update(env_id, ...)`: atualiza campos editáveis (slug é ignorado se passado)
+- `update(env_id, ...)`: atualiza campos editáveis (slug é ignorado se passado);
+  falha com `CnpjTaken` se o novo CNPJ já pertencer a outro ambiente
 - `get_password(env_id)`: retorna senha em claro (decrypt) ou None
 - `soft_delete(env_id)`: marca `is_active=0` (preserva histórico de pedidos)
 - `to_fb_config(env)`: materializa dict pronto para `app/erp/connection`
 """
+
 from __future__ import annotations
 
 import re
@@ -21,26 +24,52 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from app.erp.cnpj import cnpj_digits
 from app.persistence import router
 from app.security import secret_store
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
 _PUBLIC_FIELDS = (
-    "id", "slug", "name", "watch_dir", "output_dir",
-    "fb_path", "fb_host", "fb_port", "fb_user", "fb_charset",
-    "is_active", "created_at", "updated_at",
+    "id",
+    "slug",
+    "name",
+    "watch_dir",
+    "output_dir",
+    "fb_path",
+    "fb_host",
+    "fb_port",
+    "fb_user",
+    "fb_charset",
+    # CNPJ da empresa do ambiente (só dígitos) — chave do roteamento pelo documento.
+    "cnpj",
+    "is_active",
+    "created_at",
+    "updated_at",
     # FlowPCP (não-secreto). O token cifrado fica fora do public view.
-    "flowpcp_enabled", "flowpcp_base_url", "flowpcp_tenant_id",
-    "flowpcp_timezone", "flowpcp_dry_run", "flowpcp_poll_interval_s",
-    "flowpcp_request_timeout_s", "flowpcp_catalogo_push",
-    "flowpcp_catalogo_apenas_meias", "flowpcp_clientes_push",
+    "flowpcp_enabled",
+    "flowpcp_base_url",
+    "flowpcp_tenant_id",
+    "flowpcp_timezone",
+    "flowpcp_dry_run",
+    "flowpcp_poll_interval_s",
+    "flowpcp_request_timeout_s",
+    "flowpcp_catalogo_push",
+    "flowpcp_catalogo_apenas_meias",
+    "flowpcp_clientes_push",
     # De-para de cliente intercompany (não-secreto).
-    "intercompany_cnpj", "intercompany_env_slug",
+    "intercompany_cnpj",
+    "intercompany_env_slug",
+    # Perfil fiscal do ambiente (CODFIGFISCAL).
+    "fiscal_codfigfiscal",
 )
 
 
 class SlugTaken(Exception):
     """Slug já existe (violação de UNIQUE)."""
+
+
+class CnpjTaken(Exception):
+    """CNPJ já usado por outro ambiente (violação de UNIQUE parcial)."""
 
 
 def _now() -> str:
@@ -77,52 +106,81 @@ def create(
     fb_user: str = "SYSDBA",
     fb_charset: str = "WIN1252",
     fb_password: str | None = None,
+    cnpj: str | None = None,
 ) -> dict[str, Any]:
     # Normaliza slug para lowercase antes de validar — UX permissiva.
     if isinstance(slug, str):
         slug = slug.strip().lower()
     if not isinstance(slug, str) or not SLUG_RE.match(slug):
-        raise ValueError(
-            f"slug inválido: {slug!r} — use [a-z0-9-], 1-31 chars, começa com alfanum"
-        )
+        raise ValueError(f"slug inválido: {slug!r} — use [a-z0-9-], 1-31 chars, começa com alfanum")
     if not name or not name.strip():
         raise ValueError("name é obrigatório")
     env_id = str(uuid.uuid4())
     now = _now()
     pw_enc = secret_store.encrypt(fb_password) if fb_password else None
     fb_path_clean = _clean_path(fb_path) or ""
+    cnpj_clean = cnpj_digits(cnpj) or None
 
     try:
         with router.shared_connect() as conn:
             conn.execute(
                 """INSERT INTO environments
                    (id, slug, name, watch_dir, output_dir, fb_path, fb_host, fb_port,
-                    fb_user, fb_charset, fb_password_enc, is_active, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
-                (env_id, slug, name.strip(), watch_dir, output_dir, fb_path_clean,
-                 fb_host or None, fb_port or None, fb_user, fb_charset,
-                 pw_enc, now, now),
+                    fb_user, fb_charset, fb_password_enc, cnpj, is_active, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+                (
+                    env_id,
+                    slug,
+                    name.strip(),
+                    watch_dir,
+                    output_dir,
+                    fb_path_clean,
+                    fb_host or None,
+                    fb_port or None,
+                    fb_user,
+                    fb_charset,
+                    pw_enc,
+                    cnpj_clean,
+                    now,
+                    now,
+                ),
             )
     except sqlite3.IntegrityError as exc:
         msg = str(exc).lower()
         if "unique" in msg and "slug" in msg:
             raise SlugTaken(slug) from exc
+        if "unique" in msg and "cnpj" in msg:
+            raise CnpjTaken(cnpj_clean) from exc
         raise
     return get(env_id)
 
 
 def get(env_id: str) -> dict[str, Any] | None:
     with router.shared_connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM environments WHERE id = ?", (env_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM environments WHERE id = ?", (env_id,)).fetchone()
     return _row_to_dict(row) if row else None
 
 
 def get_by_slug(slug: str) -> dict[str, Any] | None:
     with router.shared_connect() as conn:
+        row = conn.execute("SELECT * FROM environments WHERE slug = ?", (slug,)).fetchone()
+    return _row_to_dict(row) if row else None
+
+
+def find_by_cnpj(cnpj: str | None) -> dict[str, Any] | None:
+    """Ambiente ATIVO cujo CNPJ casa. Chave do roteamento pelo documento.
+
+    Aceita formatado ou em dígitos — normaliza antes de comparar, porque a
+    coluna guarda só dígitos. Ambiente inativo nunca casa: desativar um
+    ambiente tem que tirá-lo do roteamento, não só da UI.
+    """
+    digits = cnpj_digits(cnpj)
+    if not digits:
+        return None
+    with router.shared_connect() as conn:
         row = conn.execute(
-            "SELECT * FROM environments WHERE slug = ?", (slug,)
+            "SELECT * FROM environments WHERE cnpj = ? AND is_active = 1 LIMIT 1",
+            (digits,),
         ).fetchone()
     return _row_to_dict(row) if row else None
 
@@ -155,6 +213,8 @@ def update(
     fb_user: str | None = None,
     fb_charset: str | None = None,
     fb_password: str | None = None,
+    fiscal_codfigfiscal: int | None = None,
+    cnpj: str | None = None,
 ) -> dict[str, Any] | None:
     """Atualiza campos editáveis. `slug` propositalmente ausente — imutável.
 
@@ -162,6 +222,9 @@ def update(
     - `fb_password=None`  → mantém valor atual (típico em edits parciais)
     - `fb_password=""`    → limpa (define NULL)
     - `fb_password="..."` → substitui (re-encrypt)
+
+    `cnpj` segue a mesma semântica de três estados: `None` mantém, `""` limpa
+    (NULL), valor substitui — sempre gravado só em dígitos.
     """
     fields: dict[str, Any] = {}
     for k, v in {
@@ -178,13 +241,23 @@ def update(
             fields[k] = v
     if fb_password is not None:
         fields["fb_password_enc"] = secret_store.encrypt(fb_password) if fb_password else None
+    if fiscal_codfigfiscal is not None:
+        fields["fiscal_codfigfiscal"] = fiscal_codfigfiscal
+    if cnpj is not None:
+        fields["cnpj"] = cnpj_digits(cnpj) or None
     if not fields:
         return get(env_id)
     fields["updated_at"] = _now()
     sets = ", ".join(f"{k} = ?" for k in fields)
     values = list(fields.values()) + [env_id]
-    with router.shared_connect() as conn:
-        conn.execute(f"UPDATE environments SET {sets} WHERE id = ?", values)
+    try:
+        with router.shared_connect() as conn:
+            conn.execute(f"UPDATE environments SET {sets} WHERE id = ?", values)
+    except sqlite3.IntegrityError as exc:
+        msg = str(exc).lower()
+        if "unique" in msg and "cnpj" in msg:
+            raise CnpjTaken(fields.get("cnpj")) from exc
+        raise
     return get(env_id)
 
 
@@ -277,9 +350,7 @@ def set_intercompany_config(
     }
     sets = ", ".join(f"{k} = ?" for k in fields)
     with router.shared_connect() as conn:
-        conn.execute(
-            f"UPDATE environments SET {sets} WHERE id = ?", [*fields.values(), env_id]
-        )
+        conn.execute(f"UPDATE environments SET {sets} WHERE id = ?", [*fields.values(), env_id])
     limpar_cache()
     return get(env_id)
 

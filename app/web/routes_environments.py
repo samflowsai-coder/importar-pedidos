@@ -36,6 +36,8 @@ class CreateEnvRequest(BaseModel):
     fb_user: str = "SYSDBA"
     fb_charset: str = "WIN1252"
     fb_password: str | None = None
+    # CNPJ da empresa do ambiente — chave do roteamento pelo documento.
+    cnpj: str | None = None
 
 
 class UpdateEnvRequest(BaseModel):
@@ -51,6 +53,11 @@ class UpdateEnvRequest(BaseModel):
     fb_charset: str | None = None
     # None = mantém senha atual; "" = limpa; valor = substitui
     fb_password: str | None = None
+    # None = mantém CNPJ atual; "" = limpa; valor = substitui (sempre em dígitos)
+    cnpj: str | None = None
+    # Figura fiscal (CODFIGFISCAL). None = mantém o valor atual (sem forma de
+    # limpar por aqui hoje — mesma limitação de app/persistence/environments_repo.update).
+    fiscal_codfigfiscal: int | None = None
 
 
 class FlowPCPConfigRequest(BaseModel):
@@ -81,6 +88,20 @@ class IntercompanyConfigRequest(BaseModel):
     revenda_slug: str | None = None
 
 
+def _cnpj_taken_message(cnpj: str | None) -> str:
+    """Mensagem 409 útil: nomeia o ambiente que já usa o CNPJ.
+
+    `find_by_cnpj` basta: o índice UNIQUE é escopado a `is_active=1` (mesmo
+    WHERE de `find_by_cnpj`), então quem colide é sempre um ambiente ativo —
+    um desativado nunca dispara `CnpjTaken`, porque soltou o CNPJ ao sair do
+    roteamento.
+    """
+    outro = environments_repo.find_by_cnpj(cnpj)
+    if outro:
+        return f"CNPJ já usado pelo ambiente '{outro['name']}' ({outro['slug']})."
+    return "CNPJ já usado por outro ambiente."
+
+
 @router.get("")
 def list_environments(_=Depends(require_admin)):
     return environments_repo.list_all()
@@ -92,6 +113,8 @@ def create_environment(payload: CreateEnvRequest, _=Depends(require_admin)):
         return environments_repo.create(**payload.model_dump())
     except environments_repo.SlugTaken:
         raise HTTPException(409, "Slug já existe — escolha outro.") from None
+    except environments_repo.CnpjTaken as exc:
+        raise HTTPException(409, _cnpj_taken_message(str(exc))) from None
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
 
@@ -108,7 +131,10 @@ def get_environment(env_id: str, _=Depends(require_admin)):
 def update_environment(env_id: str, payload: UpdateEnvRequest, _=Depends(require_admin)):
     if not environments_repo.get(env_id):
         raise HTTPException(404, "Ambiente não encontrado")
-    return environments_repo.update(env_id, **payload.model_dump())
+    try:
+        return environments_repo.update(env_id, **payload.model_dump())
+    except environments_repo.CnpjTaken as exc:
+        raise HTTPException(409, _cnpj_taken_message(str(exc))) from None
 
 
 @router.put("/{env_id}/flowpcp")

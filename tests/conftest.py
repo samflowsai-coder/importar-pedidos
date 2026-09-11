@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import socket
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -90,7 +91,13 @@ def _isolate_firebird_env():
 
 @pytest.fixture(autouse=True)
 def _no_real_sockets():
-    """Nenhum teste abre socket para fora. Conferido: a suite faz ZERO conexoes.
+    """Nenhum teste abre socket Python para fora.
+
+    Cobre `socket.socket.connect` -- toda conexao de rede feita pela stack
+    padrao do Python (requests, http.client, etc). NAO cobre o Firebird: o
+    `firebird-driver`/`fdb` fala com o `fbclient` nativo via ctypes, por
+    baixo do modulo `socket`, e passa por baixo desta cerca sem ser notado
+    -- ver `_no_real_firebird` logo abaixo, que cobre esse caminho.
 
     Segunda cerca para o mesmo pasto, de proposito. A guarda de env acima impede
     a causa conhecida; esta transforma QUALQUER recorrencia -- por env, por
@@ -118,6 +125,61 @@ def _no_real_sockets():
         yield
     finally:
         socket.socket.connect = original
+
+
+@pytest.fixture(autouse=True)
+def _no_real_firebird(request):
+    """Nenhum teste abre conexao Firebird real. Cobre o que `_no_real_sockets`
+    acima NAO cobre: o `fdb` fala com a `fbclient` nativa via ctypes, sem
+    passar pelo modulo `socket` do Python.
+
+    Motivo desta cerca: um teste de `app/routing/ambiente.py` que fazia o
+    degrau 2 (historico) resolver sem trocar o enriquecimento de janela
+    ampla caiu no caminho real -- `historico.consultar(meses=24)` ->
+    `environments_repo.list_active()` -> `FirebirdConnection.connect_with_config`
+    -- e abriu TCP de verdade contra o Firebird de PRODUCAO do cliente
+    (host 192.168.15.7, `MM_AMERICANENSE.FDB`). O teste passava porque a
+    funcao engolia a falha de conexao em silencio -- exatamente o padrao que
+    a cerca de socket documenta ter custado 24 minutos de CI uma vez.
+
+    Bloqueia em `FirebirdConnection._connect_with`, o unico ponto que chama
+    `fdb.connect(...)` -- tanto `.connect()` (legado, via env vars) quanto
+    `.connect_with_config()` (multi-ambiente) passam por ali, entao uma cerca
+    so' cobre os dois caminhos.
+
+    Opt-out: `@pytest.mark.firebird_stub_proprio`. Existe para o teste que
+    injeta o PROPRIO dublê no lugar do driver (`monkeypatch.setitem(sys.modules,
+    "fdb", fake_module)`, como em `tests/test_firebird_config_api.py`) e por
+    isso precisa que `_connect_with` rode de verdade ate' o `import fdb` --
+    e' assim que ele prova que a rota trata erro de driver corretamente. Um
+    teste marcado sem dublê nenhum fala com o ERP de verdade: o marcador
+    declara a excecao, nao autoriza-a por conveniencia.
+    """
+    if request.node.get_closest_marker("firebird_stub_proprio"):
+        yield
+        return
+
+    from app.erp.connection import FirebirdConnection
+
+    @contextmanager
+    def _bloqueia(self, cfg=None):  # noqa: ARG001 - assinatura espelha o real
+        raise RuntimeError(
+            "teste tentou abrir conexao Firebird real. Testes nao falam com o "
+            "ERP: mocke `FirebirdConnection.connect_with_config`/`.connect()`, "
+            "passe `envs`/`contar` como os testes de app/routing/historico.py "
+            "fazem, ou -- se o teste precisa mesmo passar pelo driver com um "
+            "dublê proprio -- marque com @pytest.mark.firebird_stub_proprio "
+            "(ver tests/conftest.py::_no_real_firebird); confira tambem se "
+            "config vazou de outro teste (ver tests/test_env_leak_guard.py)."
+        )
+        yield  # pragma: no cover -- nunca alcancado, a excecao ja propagou
+
+    original = FirebirdConnection._connect_with
+    FirebirdConnection._connect_with = _bloqueia
+    try:
+        yield
+    finally:
+        FirebirdConnection._connect_with = original
 
 
 @pytest.fixture

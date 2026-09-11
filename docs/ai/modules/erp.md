@@ -9,6 +9,8 @@ Conectar no Firebird (embedded ou TCP) e inserir pedidos preservando o schema le
 - `app/erp/mapper.py` — mapeia `Order` → linhas do schema real (nomes de colunas).
 - `app/erp/product_check.py` — checagem de existência de produto antes de inserir.
 - `app/erp/exceptions.py` — exceções de domínio.
+- `app/erp/fiscal.py` — `PerfilFiscal` + `perfil_para(env)`: constantes fiscais do
+  pedido faturável, por ambiente (`CODFIGFISCAL` difere: 1 na MM, 5 na Nasmar).
 - `app/exporters/firebird_exporter.py` — orquestrador, chamado pelo pipeline com `EXPORT_MODE=db|both`.
 - `tools/explore_firebird.py` — gera schema_report a partir de `.fdb` (rodar SEMPRE em cópia, nunca em produção).
 
@@ -17,6 +19,45 @@ Conectar no Firebird (embedded ou TCP) e inserir pedidos preservando o schema le
 - Flags booleanas como string: `'Sim' | 'Nao'`.
 - Charset `WIN1252`.
 - Idempotência: antes de inserir, `CHECK_ORDER_EXISTS` por `PEDIDO_CLIENTE + CLIENTE`.
+
+## Perfil fiscal por ambiente + inserção completa
+
+`CAB_VENDAS` e `CORPO_VENDAS` eram inseridos com um subconjunto de colunas
+até 2026-08; hoje cobrem o que a Fire viva realmente grava, medido contra
+373 pedidos do `.7` (MM) e 90 do `.4` (Nasmar), 2026-06-01 em diante:
+
+- **`INSERT_CAB_VENDAS`** (`queries.py`) — 23 colunas posicionais. As 14
+  primeiras estão preenchidas em 100% dos pedidos medidos; `CLASSIF_FAT`,
+  `CODFIGFISCAL`, `DT_BASE_FAT` e `MECANICO` em 82%–100%. `CODPED_PAI`
+  (auto-referência = `CODIGO`) não entra no INSERT — só existe depois dele
+  — vai por `UPDATE_CODPED_PAI` na mesma transação.
+- **`INSERT_CORPO_VENDAS`** — completo (`ICMS_PORC`, `ICMS_BASE`, `REDUCAO`,
+  `DESC_SOBRE_TOTAL`, `PESO_BRUTO`, `PESO_LIQUIDO` em 100% das 1.285 linhas
+  medidas; `CFOP_PRINCIPAL` em 96%). `UNID` vem do cadastro do produto no
+  Fire (`PRODUTOS.UNIDADE`) — até 2026-08 era cravado `"UN"`, o que estava
+  errado para kits (`"KIT"` na produção real).
+- **`PerfilFiscal`** (`app/erp/fiscal.py`) — as constantes fiscais que não
+  variam por item: `tipo_cob`, `cod_class_finan`, `desc_class_finan`,
+  `classif_fat`, `mecanico`, `icms_porc`, `reducao`, `cfop_principal`, e
+  `codfigfiscal` (o único que difere por empresa: 1 na MM, 5 na Nasmar —
+  por isso mora em `environments.fiscal_codfigfiscal`, não no dataclass).
+  `perfil_para(env)` cai no default medido quando o campo está ausente/NULL.
+- **`FirebirdExporter._find_product(cur, row)`** mudou de devolver só
+  `product_seq: int | None` para **`tuple[int | None, str]`** — `(product_seq,
+  unid)`. `unid` alimenta `CORPO_VENDAS.UNID`; `"UN"` é o fallback quando o
+  produto não é encontrado ou a coluna vem vazia/NULL no Fire. Qualquer
+  call-site que ainda desestruture o retorno antigo como um único `int`
+  quebra silenciosamente (vira tupla, não `int`) — grep por `_find_product(`
+  antes de mexer na assinatura de novo.
+- **`item_total`/`parse_date`** (antes `_item_total`/`_parse_date`, ambos em
+  `app/erp/mapper.py`) foram promovidos a nomes públicos — são importados
+  por `app/exporters/firebird_exporter.py` através da fronteira de módulo
+  (soma de `CAB_VENDAS.VALOR_TOTAL` e menor `DT_ENTREGA`), e um prefixo `_`
+  cruzando módulo escondia que é API deliberada, não vazamento de detalhe
+  interno.
+
+Testes: `tests/test_erp_mapper_colunas.py`, `tests/test_smoke_erp_mapper.py`,
+`tests/test_smoke_exporter.py`.
 
 ## Variáveis de ambiente
 ```

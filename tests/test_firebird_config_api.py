@@ -172,9 +172,13 @@ def test_test_connection_missing_path_returns_400(isolated_app):
     assert "traceId" in body
 
 
+@pytest.mark.firebird_stub_proprio
 def test_test_connection_success(isolated_app, monkeypatch):
     """When the driver succeeds, endpoint reports ok=True."""
     from app.web.server import app
+
+    # O dublê é o `sys.modules["fdb"]` injetado logo abaixo — nenhuma rede é
+    # tocada; é por isso que este teste sai da cerca de tests/conftest.py.
 
     # Mock the firebird driver's connect() to return a fake connection
     fake_cur = MagicMock()
@@ -200,12 +204,15 @@ def test_test_connection_success(isolated_app, monkeypatch):
     assert "traceId" in body
 
 
+@pytest.mark.firebird_stub_proprio
 def test_test_connection_driver_error_returns_400_with_trace(isolated_app, monkeypatch):
     """Driver errors are wrapped into FirebirdConnectionError → 400 with trace_id."""
     import sys
 
     from app.web.server import app
 
+    # O dublê é o `sys.modules["fdb"]` injetado logo abaixo — nenhuma rede é
+    # tocada; é por isso que este teste sai da cerca de tests/conftest.py.
     def boom(**_kwargs):
         raise RuntimeError("io error: file not found")
 

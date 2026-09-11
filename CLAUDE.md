@@ -2,7 +2,7 @@
 
 > **Contrato de execução.** Detalhe técnico não mora aqui — mora em `docs/ai/`.
 > Se um fato aparecer nos dois lugares, `docs/ai/` ganha.
-> Números deste arquivo verificados contra o código em **2026-08-26**.
+> Números deste arquivo verificados contra o código em **2026-09-09**.
 
 ---
 
@@ -75,7 +75,7 @@ task → domínio → arquivos a carregar → testes a rodar. Não carregue o pr
 | Agendamento | **APScheduler** — `app/worker/` |
 | Log | **loguru** com rotação |
 | Lint/format | **ruff** |
-| Testes | **pytest** — **1111 testes** em 92 arquivos |
+| Testes | **pytest** — **1297 testes** em 106 arquivos |
 
 ---
 
@@ -91,7 +91,7 @@ Cada linha aponta pro doc que tem o detalhe. Este mapa é roteamento, não refer
 | `app/normalizers/`, `app/validators/` | datas/case/CNPJ; obrigatórios e qty > 0 | `modules/normalizers.md`, `modules/validators.md` |
 | `app/exporters/` | XLSX (split por loja) e Firebird | `modules/exporters.md` |
 | `app/erp/` | Firebird do Fire: queries, mapper, check de produto/preço, de-para | `modules/erp.md` |
-| `app/web/` | FastAPI (68 rotas): preview → commit, admin, app shell | `modules/web.md` |
+| `app/web/` | FastAPI (82 rotas): preview → commit, admin, app shell | `modules/web.md` |
 | `app/persistence/` | SQLite compartilhado + por ambiente, repos, roteador | `modules/persistence.md`, `modules/environments.md` |
 | `app/state/` | máquina de estados do pedido + eventos de ciclo de vida | `modules/state.md` |
 | `app/security/` | bcrypt, HMAC, rate-limit, `secret_store` (Fernet) | `modules/security.md` |
@@ -117,7 +117,7 @@ pip install -e ".[dev]"                  # instalar
 ruff check app/ tests/                   # lint
 ruff format app/ tests/                  # format
 
-.venv/bin/pytest tests/ -v               # suíte completa (1111 testes)
+.venv/bin/pytest tests/ -v               # suíte completa (1297 testes)
 .venv/bin/pytest tests/<arquivo>.py -v   # direcionado (use este durante a task)
 
 python ui.py                             # web → http://127.0.0.1:3636

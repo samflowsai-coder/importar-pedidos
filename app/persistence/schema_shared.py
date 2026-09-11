@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS environments (
     fb_user         TEXT NOT NULL DEFAULT 'SYSDBA',
     fb_charset      TEXT NOT NULL DEFAULT 'WIN1252',
     fb_password_enc TEXT,
+    -- CNPJ da empresa que este ambiente representa, SO DIGITOS. E a chave do
+    -- roteamento pelo documento: o CNPJ do fornecedor impresso no pedido casa
+    -- aqui. NULL = ambiente nao participa do roteamento automatico.
+    cnpj            TEXT,
     is_active       INTEGER NOT NULL DEFAULT 1,
     -- Ponte FlowPCP (Modelo B/OVERLAY) por ambiente. Token cifrado via
     -- secret_store (Fernet), como fb_password_enc. Só MM liga.
@@ -41,6 +45,7 @@ CREATE TABLE IF NOT EXISTS environments (
     -- Depende da marcação no Fire (Parte 2); default OFF preserva o hoje.
     flowpcp_catalogo_apenas_meias INTEGER NOT NULL DEFAULT 0,
     flowpcp_clientes_push     INTEGER NOT NULL DEFAULT 0,
+    fiscal_codfigfiscal       INTEGER,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -94,11 +99,86 @@ CREATE TABLE IF NOT EXISTS rate_limit_buckets (
     tokens         REAL NOT NULL,
     last_refill_at REAL NOT NULL
 );
+
+-- Memória das escolhas de ambiente feitas pelo operador. NASCE VAZIA e isso é
+-- um estado válido: o Portal funciona sem uma linha aqui. Perde para o
+-- documento E para o histórico — é o degrau 3, não a verdade.
+-- `divergiu_*` é preenchido quando um degrau mais forte contradiz a escolha
+-- depois: erro que aparece é erro que se conserta.
+CREATE TABLE IF NOT EXISTS decisao_ambiente (
+    cnpj_cliente  TEXT PRIMARY KEY,
+    env_slug      TEXT NOT NULL,
+    decidido_por  TEXT NOT NULL,
+    decidido_em   TEXT NOT NULL,
+    divergiu_em   TEXT,
+    divergiu_de   TEXT
+);
+
+-- Interruptor global do roteamento. Linha única (id=1), alterável no admin
+-- sem deploy. Default 'desligado' é o que permite mergear e deployar a Fase 1
+-- sem mudar nada para o operador.
+--   desligado   o roteador nem é chamado; comportamento de hoje, íntegro
+--   observando  calcula e grava o que TERIA feito; a escolha do operador vale
+--   ligado      a decisão vale
+CREATE TABLE IF NOT EXISTS roteamento_modo (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    valor        TEXT NOT NULL DEFAULT 'desligado'
+                 CHECK (valor IN ('desligado', 'observando', 'ligado')),
+    alterado_por TEXT,
+    alterado_em  TEXT
+);
+
+-- O que o Portal TERIA decidido, versus o que aconteceu. Alimenta a taxa de
+-- acerto que autoriza virar a chave, e a lista de divergências que é o
+-- material de treinamento do time.
+CREATE TABLE IF NOT EXISTS roteamento_sombra (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    import_id                   TEXT NOT NULL,
+    decidido_em                 TEXT NOT NULL,
+    degrau                      TEXT NOT NULL,
+    env_sugerido                TEXT,
+    env_escolhido_pelo_operador TEXT,
+    bateu                       INTEGER NOT NULL
+);
+
+-- Arquivo que o watcher não soube rotear. NÃO é importado em ambiente
+-- nenhum: fica visível aqui e o arquivo continua na pasta de entrada, onde o
+-- operador pode abri-lo pelo preview e responder. Chave = sha do arquivo, para
+-- que a re-varredura a cada ciclo não infle a fila.
+CREATE TABLE IF NOT EXISTS roteamento_pendencia (
+    sha256        TEXT PRIMARY KEY,
+    source_path   TEXT NOT NULL,
+    env_scan_slug TEXT NOT NULL,
+    order_number  TEXT,
+    customer_cnpj TEXT,
+    customer_name TEXT,
+    -- Por que ficou retido: cliente novo, Firebird mudo, histórico ambíguo,
+    -- ambiente resolvido que não existe mais... ver
+    -- `_motivo_historico_nao_resolveu` em app/routing/ambiente.py. Sem isto o
+    -- operador tem que abrir cada arquivo pra descobrir o motivo.
+    motivo        TEXT,
+    visto_em      TEXT NOT NULL,
+    visto_vezes   INTEGER NOT NULL DEFAULT 1
+);
 """
 
 INDEXES_SQL = """
 CREATE UNIQUE INDEX IF NOT EXISTS idx_environments_slug ON environments(slug);
 CREATE INDEX IF NOT EXISTS idx_environments_active      ON environments(is_active);
+-- UNIQUE, não só INDEX: dois ambientes ATIVOS com o mesmo CNPJ fariam
+-- find_by_cnpj devolver o que o LIMIT 1 pegasse — pedido pra empresa errada,
+-- em silêncio. Escopado a is_active=1 porque é exatamente o conjunto que
+-- find_by_cnpj enxerga (mesmo WHERE): a restrição existe só pra garantir que
+-- essa busca nunca tenha dois candidatos, nem mais nem menos — um ambiente
+-- desativado não pode segurar o CNPJ pra sempre, senão desativar e recadastrar
+-- (pasta errada, etc.) trava com 409 sem motivo real. O DROP antes é
+-- necessário porque `CREATE ... IF NOT EXISTS` com o MESMO nome não substitui
+-- um índice já existente (mesmo que a definição mude) — sem o DROP, um banco
+-- que já tivesse materializado uma versão anterior deste índice nunca
+-- ganharia a garantia atual.
+DROP INDEX IF EXISTS idx_environments_cnpj;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_environments_cnpj ON environments(cnpj)
+    WHERE cnpj IS NOT NULL AND is_active = 1;
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id    ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
@@ -109,6 +189,11 @@ CREATE INDEX IF NOT EXISTS idx_invites_expires_at    ON user_invites(expires_at)
 
 CREATE INDEX IF NOT EXISTS idx_inbound_received_at  ON inbound_idempotency(received_at DESC);
 CREATE INDEX IF NOT EXISTS idx_inbound_import_id    ON inbound_idempotency(import_id);
+
+CREATE INDEX IF NOT EXISTS idx_decisao_ambiente_env ON decisao_ambiente(env_slug);
+
+CREATE INDEX IF NOT EXISTS idx_sombra_decidido_em ON roteamento_sombra(decidido_em DESC);
+CREATE INDEX IF NOT EXISTS idx_sombra_import_id   ON roteamento_sombra(import_id);
 """
 
 # Migrações de coluna para shared.db — aplicadas se a coluna ainda não existir.
@@ -141,4 +226,15 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
      "ALTER TABLE environments ADD COLUMN intercompany_cnpj TEXT"),
     ("environments", "intercompany_env_slug",
      "ALTER TABLE environments ADD COLUMN intercompany_env_slug TEXT"),
+    # Figura fiscal do ambiente. Medido na Fire viva: 1 na MM Americanense,
+    # 5 na Nasmar. NULL = usa o default de app/erp/fiscal.py.
+    ("environments", "fiscal_codfigfiscal",
+     "ALTER TABLE environments ADD COLUMN fiscal_codfigfiscal INTEGER"),
+    # CNPJ da empresa do ambiente, só dígitos — chave de `find_by_cnpj`.
+    ("environments", "cnpj",
+     "ALTER TABLE environments ADD COLUMN cnpj TEXT"),
+    # Motivo da retenção — ver comentário no CREATE TABLE acima. Migração
+    # porque `roteamento_pendencia` já existia sem esta coluna antes do fix.
+    ("roteamento_pendencia", "motivo",
+     "ALTER TABLE roteamento_pendencia ADD COLUMN motivo TEXT"),
 )

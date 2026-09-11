@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 import threading
+from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 
 from app.erp import queries
 from app.erp.connection import FirebirdConnection
@@ -10,7 +12,8 @@ from app.erp.exceptions import (
     FirebirdError,
     FirebirdOrderAlreadyExistsError,
 )
-from app.erp.mapper import FireSistemasMapper
+from app.erp.fiscal import perfil_para
+from app.erp.mapper import FireSistemasMapper, item_total, parse_date
 from app.models.order import ERPRow, Order
 from app.utils.logger import logger
 
@@ -61,6 +64,28 @@ def _to_erp_rows(order: Order) -> list[ERPRow]:
     for bucket in exporter._group_by_delivery(order).values():
         all_rows.extend(exporter._to_erp_rows(order, bucket))
     return all_rows
+
+
+def _valor_total(rows: list[ERPRow]) -> Decimal:
+    """Soma dos MESMOS totais por item que vao pra CORPO_VENDAS.TOTAL
+    (item_total, em app.erp.mapper) — o cabecalho bate com a soma dos
+    proprios itens em vez de recalcular a regra em paralelo. Converte pra
+    Decimal na borda via str() (nunca o float direto) e quantiza em 2 casas
+    (escala de CAB_VENDAS.VALOR_TOTAL); o item mantem as 4 casas dele.
+    """
+    total = Decimal("0")
+    for row in rows:
+        total += Decimal(str(item_total(row)))
+    return total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _menor_dt_entrega(rows: list[ERPRow]) -> date | None:
+    """Menor data de entrega entre os itens do pedido, ignorando quem nao
+    tem data; None se nenhum item tiver. Mesma regra que o desenho do lote
+    intercompany usa pro pedido consolidado (regra da casa).
+    """
+    datas = [d for d in (parse_date(row.data_entrega) for row in rows) if d is not None]
+    return min(datas) if datas else None
 
 
 class FirebirdExporter:
@@ -172,23 +197,46 @@ class FirebirdExporter:
         cur.execute(queries.GET_NEXT_CABVENDAS_CODIGO)
         header_pk: int = cur.fetchone()[0]
 
-        # 4. Insert header
-        header_params = self._mapper.order_to_cabvendas(order, header_pk, client_id)
-        cur.execute(queries.INSERT_CAB_VENDAS, header_params)
+        # 4. Insert header. valor_total soma os itens em Decimal e dt_entrega
+        #    e a menor data de entrega entre eles (precisa dos erp_rows antes
+        #    do insert do cabecalho); perfil vem do ambiente atual
+        #    (CODFIGFISCAL difere MM x Nasmar), default medido se ausente.
+        #    OBS fica None aqui — carrega a lista de pedidos de origem do
+        #    lote intercompany, que e um call-site futuro.
+        erp_rows = _to_erp_rows(order)
+        valor_total = _valor_total(erp_rows)
+        dt_entrega = _menor_dt_entrega(erp_rows)
+        perfil = perfil_para(self._env)
+        header_params = self._mapper.order_to_cabvendas(
+            order,
+            header_pk,
+            client_id,
+            perfil=perfil,
+            valor_total=valor_total,
+            dt_entrega=dt_entrega,
+        )
+        # ULT_ALT_USER repete ULT_INS_USER (ultimo elemento da tupla) — nao
+        # entra no mapper pra um erro de ordem na tupla nao passar despercebido.
+        cur.execute(queries.INSERT_CAB_VENDAS, (*header_params, header_params[-1]))
+        cur.execute(queries.UPDATE_CODPED_PAI, (header_pk,))
         logger.debug(
             f"CAB_VENDAS inserido: CODIGO={header_pk} "
             f"PEDIDO_CLIENTE={pedido_cliente!r} CLIENTE={client_id}"
         )
 
-        # 5. Insert items
-        erp_rows = _to_erp_rows(order)
+        # 5. Insert items. Mesmo `perfil` do cabecalho (ICMS_PORC, REDUCAO,
+        #    CFOP_PRINCIPAL sao por ambiente, nao por item). CFOP_PRINCIPAL
+        #    e o 16o valor do INSERT — anexado aqui, fora da tupla do mapper
+        #    (que tem 15 elementos).
         items_inserted = 0
         for row in erp_rows:
-            product_seq = self._find_product(cur, row)
+            product_seq, unid = self._find_product(cur, row)
             cur.execute(queries.GET_NEXT_CORPOVENDAS_CODIGO)
             item_pk: int = cur.fetchone()[0]
-            item_params = self._mapper.item_to_corpovendas(row, item_pk, header_pk, product_seq)
-            cur.execute(queries.INSERT_CORPO_VENDAS, item_params)
+            item_params = self._mapper.item_to_corpovendas(
+                row, item_pk, header_pk, product_seq, perfil=perfil, unid=unid
+            )
+            cur.execute(queries.INSERT_CORPO_VENDAS, (*item_params, perfil.cfop_principal))
             items_inserted += 1
 
         cur.close()
@@ -218,22 +266,32 @@ class FirebirdExporter:
         row = cur.fetchone()
         return row[0] if row else None
 
-    def _find_product(self, cur, row: ERPRow) -> int | None:
+    def _find_product(self, cur, row: ERPRow) -> tuple[int | None, str]:
+        """Retorna (product_seq, unid). `unid` vem de PRODUTOS.UNIDADE no
+        cadastro do Fire — "UN" quando o produto nao e encontrado ou a
+        coluna vem vazia/NULL (kits cadastrados usam 'KIT').
+        """
         # Try EAN first, then alternative code
         if row.ean:
             cur.execute(queries.FIND_PRODUCT_BY_EAN, (row.ean,))
             result = cur.fetchone()
             if result:
-                return result[0]
+                return result[0], self._unid_from_row(result)
 
         if row.codigo_produto:
             cur.execute(queries.FIND_PRODUCT_BY_CODE, (row.codigo_produto,))
             result = cur.fetchone()
             if result:
-                return result[0]
+                return result[0], self._unid_from_row(result)
 
         logger.warning(
             f"Produto não encontrado no ERP — EAN={row.ean!r} "
             f"código={row.codigo_produto!r}. Inserindo sem FK."
         )
-        return None
+        return None, "UN"
+
+    @staticmethod
+    def _unid_from_row(result: tuple) -> str:
+        """result = (SEQ, DESCRICAO, PRECO_VENDA, UNIDADE)."""
+        unid = (result[3] or "").strip()
+        return unid or "UN"

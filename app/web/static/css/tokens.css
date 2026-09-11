@@ -35,8 +35,22 @@
   --success-strong: #15803D;
   --error:          #DC2626;
   --error-bg:       rgba(220,38,38,.08);
+  /* Vermelho mais escuro que --error, só para texto sobre --error-bg — mede
+     5.72:1 (--error sozinho mede 4.27:1 aí, abaixo do mínimo AA de 4.5:1). */
+  --error-strong:   #B91C1C;
   --warn:           #D97706;
   --warn-bg:        rgba(217,119,6,.08);
+  /* Laranja mais escuro que --warn, só para texto de aviso sobre --surface
+     ou --bg — mede 4.81:1 e 5.02:1 respectivamente (--warn sozinho mede
+     3.05:1 sobre --surface, abaixo do mínimo AA de 4.5:1). */
+  --warn-strong:    #B45309;
+
+  /* Contorno de componente de UI (não de texto) — borda de controles
+     interativos que precisam de 3:1 pelo WCAG 1.4.11 e não passam com
+     --border (1.27:1) nem --border-hover (1.48:1). Mede 3.25:1 contra
+     #FFFFFF e 3.11:1 contra --surface (#FAFAFA). Mantenha --border no
+     resto (cards, tabelas) — o problema aqui é de papel, não de paleta. */
+  --border-control: #8E8E96;
 
   /* Geometry */
   --radius-sm:      6px;

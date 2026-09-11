@@ -76,6 +76,31 @@ log humano de auditoria (`audit_log`) e log append-only do ciclo de vida
 - Override **não muda `portal_status`** — não há lifecycle event próprio;
   rastreio operacional fica em `audit_log` com `event_type=cliente_override_selected`.
 
+### Roteamento intercompany (shared db, `app_shared.db`)
+
+Quatro tabelas transversais (`app/persistence/schema_shared.py`) — comportamento
+completo em [`modules/routing.md`](routing.md), aqui só o schema:
+
+- `environments.cnpj TEXT` — CNPJ (dígitos) da empresa que o ambiente
+  representa; chave do degrau 1 (documento). `NULL` = ambiente fora do
+  roteamento automático. Índice único PARCIAL, escopado a `is_active = 1`
+  (`idx_environments_cnpj`) — um ambiente desativado não segura o CNPJ pra
+  sempre.
+- `roteamento_modo` — linha única (`id=1 CHECK`), o interruptor de três
+  estados (`desligado|observando|ligado`, `CHECK` no `valor`). Sem linha =
+  `'desligado'` (lido em `roteamento_repo.modo()`, não pelo `CHECK`).
+- `roteamento_sombra` — uma linha por decisão observada: `import_id`,
+  `degrau`, `env_sugerido`, `env_escolhido_pelo_operador`, `bateu`. Só
+  gravada em `observando` (nunca em `ligado` — sombra é "o que o roteador
+  TERIA feito", não "o que ele fez").
+- `roteamento_pendencia` — PK `sha256`; arquivo que o watcher não soube
+  rotear em `ligado`. `visto_em`/`visto_vezes` — reavaliado no máximo
+  1x/hora (`app/worker/jobs/scan_environments.py`), nunca a cada ciclo de
+  30s.
+- `decisao_ambiente` — PK `cnpj_cliente`; a escolha que um humano já fez
+  (degrau 3, memória). `divergiu_em`/`divergiu_de` marcam quando um degrau
+  mais forte contradisse depois — nunca reescreve, só marca.
+
 ## Testes
 - `tests/test_persistence_repo.py` —
   `.venv/bin/pytest tests/test_persistence_repo.py -v`
