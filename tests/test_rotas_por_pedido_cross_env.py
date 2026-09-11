@@ -99,3 +99,40 @@ def test_ligado_nao_serve_pedido_a_anonimo(tmp_path, monkeypatch, rota):
     _grava("nasmar", "N1")
     roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
     assert TestClient(app).get(rota).status_code == 401
+
+
+def test_lote_agrupa_por_empresa(portal):
+    """Selecao mista nao e recusada: cada pedido e processado na SUA empresa."""
+    _grava("mm", "M1")
+    _grava("nasmar", "N1")
+    roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
+
+    r = portal.post("/api/batch/export-xlsx", json={"ids": ["M1", "N1"]})
+    assert r.status_code == 200
+    por_id = {x["id"]: x for x in r.json()["results"]}
+    assert por_id["M1"]["env_slug"] == "mm"
+    assert por_id["M1"]["env_name"] == "MM Americanense"
+    assert por_id["N1"]["env_slug"] == "nasmar"
+
+
+def test_lote_com_id_orfao_falha_so_aquele_item(portal):
+    _grava("mm", "M1")
+    roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
+
+    r = portal.post("/api/batch/export-xlsx", json={"ids": ["M1", "fantasma"]})
+    assert r.status_code == 200
+    corpo = r.json()
+    por_id = {x["id"]: x for x in corpo["results"]}
+    assert por_id["fantasma"]["ok"] is False
+    assert por_id["fantasma"]["reason"] == "nao_encontrado"
+    assert por_id["M1"]["env_slug"] == "mm"
+    assert corpo["total"] == 2
+    assert corpo["failed"] >= 1
+
+
+def test_lote_fora_de_ligado_sem_cookie_continua_412(portal):
+    """Sem cookie e sem 'ligado', o lote e o de hoje."""
+    _grava("mm", "M1")
+    roteamento_repo.set_modo(roteamento_repo.DESLIGADO, por="teste")
+    r = portal.post("/api/batch/export-xlsx", json={"ids": ["M1"]})
+    assert r.status_code == 412

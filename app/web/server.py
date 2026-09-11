@@ -43,7 +43,7 @@ from app.web.auth import (
     require_user,
     set_session_cookie,
 )
-from app.web.dependencies.pedido import env_do_pedido
+from app.web.dependencies.pedido import env_do_import_id, env_do_pedido
 from app.web.middleware.rate_limit import check_and_consume
 
 if TYPE_CHECKING:
@@ -184,16 +184,19 @@ def _request_environment(request: Request) -> dict | None:
     return getattr(request.state, "environment", None)
 
 
-def _get_cfg_for_request(request: Request) -> dict:
-    """Return legacy config, overridden by selected environment dirs when present."""
-    cfg = _get_cfg()
-    env = _request_environment(request)
-    if env is None:
-        return cfg
-    out = dict(cfg)
+def _cfg_para_env(env: dict) -> dict:
+    """Cfg legado com as pastas DESTA empresa. Usado pelo lote agrupado, onde
+    cada grupo escreve na pasta da sua empresa e não na do cookie."""
+    out = dict(_get_cfg())
     out["watch_dir"] = env["watch_dir"]
     out["output_dir"] = env["output_dir"]
     return out
+
+
+def _get_cfg_for_request(request: Request) -> dict:
+    """Return legacy config, overridden by selected environment dirs when present."""
+    env = _request_environment(request)
+    return _get_cfg() if env is None else _cfg_para_env(env)
 
 
 def _firebird_open_for_request(request: Request, conn_mgr):
@@ -2382,33 +2385,97 @@ def batch_send_to_fire(
     if len(body.ids) > 100:
         raise HTTPException(status_code=400, detail="Máximo 100 pedidos por lote")
 
-    cfg = _get_cfg_for_request(request)
-    request_env = getattr(request.state, "environment", None)
+    from app.persistence import environments_repo, roteamento_repo
+
     results: list[dict] = []
     ok_count = 0
     fail_count = 0
+
+    env_do_cookie = _request_environment(request)
+    # Caixa somada: em 'ligado' sem cookie a seleção pode ter pedidos de
+    # empresas diferentes — cada id resolve a SUA empresa. Fora de 'ligado',
+    # ou com cookie presente, é o comportamento de sempre: uma empresa só, a
+    # do cookie (sem cookie, o handler falha como sempre falhou — 412).
+    agrupar_por_pedido = (
+        roteamento_repo.modo() == roteamento_repo.LIGADO and env_do_cookie is None
+    )
+
+    if not agrupar_por_pedido:
+        cfg = _get_cfg_for_request(request)
+        for import_id in body.ids:
+            outcome = _send_one_to_fire(import_id, cfg, request_env=env_do_cookie)
+            if outcome.ok:
+                ok_count += 1
+                results.append(
+                    {
+                        "id": import_id,
+                        "ok": True,
+                        "fire_codigo": outcome.fire_codigo,
+                        "items_inserted": outcome.items_inserted,
+                    }
+                )
+            else:
+                fail_count += 1
+                results.append(
+                    {
+                        "id": import_id,
+                        "ok": False,
+                        "reason": outcome.reason,
+                        "detail": outcome.detail,
+                    }
+                )
+        return JSONResponse(
+            {"total": len(body.ids), "ok": ok_count, "failed": fail_count, "results": results}
+        )
+
+    from collections import defaultdict
+
+    grupos: dict[str, list[str]] = defaultdict(list)
     for import_id in body.ids:
-        outcome = _send_one_to_fire(import_id, cfg, request_env=request_env)
-        if outcome.ok:
-            ok_count += 1
-            results.append(
-                {
-                    "id": import_id,
-                    "ok": True,
-                    "fire_codigo": outcome.fire_codigo,
-                    "items_inserted": outcome.items_inserted,
-                }
-            )
-        else:
+        achado = env_do_import_id(import_id)
+        if achado is None:
             fail_count += 1
             results.append(
                 {
                     "id": import_id,
                     "ok": False,
-                    "reason": outcome.reason,
-                    "detail": outcome.detail,
+                    "reason": "nao_encontrado",
+                    "detail": "Pedido não encontrado em nenhuma empresa ativa",
                 }
             )
+        else:
+            grupos[achado["slug"]].append(import_id)
+
+    for slug, ids in grupos.items():
+        env = environments_repo.get_by_slug(slug)
+        cfg_do_grupo = _cfg_para_env(env)
+        with env_context.active_env(env["id"], env["slug"]):
+            for import_id in ids:
+                outcome = _send_one_to_fire(import_id, cfg_do_grupo, request_env=env)
+                if outcome.ok:
+                    ok_count += 1
+                    results.append(
+                        {
+                            "id": import_id,
+                            "ok": True,
+                            "fire_codigo": outcome.fire_codigo,
+                            "items_inserted": outcome.items_inserted,
+                            "env_slug": env["slug"],
+                            "env_name": env["name"],
+                        }
+                    )
+                else:
+                    fail_count += 1
+                    results.append(
+                        {
+                            "id": import_id,
+                            "ok": False,
+                            "reason": outcome.reason,
+                            "detail": outcome.detail,
+                            "env_slug": env["slug"],
+                            "env_name": env["name"],
+                        }
+                    )
 
     return JSONResponse(
         {
@@ -2432,32 +2499,91 @@ def batch_export_xlsx(
     if len(body.ids) > 100:
         raise HTTPException(status_code=400, detail="Máximo 100 pedidos por lote")
 
-    cfg = _get_cfg_for_request(request)
-    request_env = getattr(request.state, "environment", None)
+    from app.persistence import environments_repo, roteamento_repo
+
     results: list[dict] = []
     ok_count = 0
     fail_count = 0
+
+    env_do_cookie = _request_environment(request)
+    # Caixa somada: em 'ligado' sem cookie a seleção pode ter pedidos de
+    # empresas diferentes — cada id resolve a SUA empresa. Fora de 'ligado',
+    # ou com cookie presente, é o comportamento de sempre: uma empresa só, a
+    # do cookie (sem cookie, o handler falha como sempre falhou — 412).
+    agrupar_por_pedido = (
+        roteamento_repo.modo() == roteamento_repo.LIGADO and env_do_cookie is None
+    )
+
+    if not agrupar_por_pedido:
+        cfg = _get_cfg_for_request(request)
+        for import_id in body.ids:
+            outcome = _export_one_xlsx(import_id, cfg, request_env=env_do_cookie)
+            if outcome.ok:
+                ok_count += 1
+                results.append(
+                    {"id": import_id, "ok": True, "output_files": outcome.output_files}
+                )
+            else:
+                fail_count += 1
+                results.append(
+                    {
+                        "id": import_id,
+                        "ok": False,
+                        "reason": outcome.reason,
+                        "detail": outcome.detail,
+                    }
+                )
+        return JSONResponse(
+            {"total": len(body.ids), "ok": ok_count, "failed": fail_count, "results": results}
+        )
+
+    from collections import defaultdict
+
+    grupos: dict[str, list[str]] = defaultdict(list)
     for import_id in body.ids:
-        outcome = _export_one_xlsx(import_id, cfg, request_env=request_env)
-        if outcome.ok:
-            ok_count += 1
-            results.append(
-                {
-                    "id": import_id,
-                    "ok": True,
-                    "output_files": outcome.output_files,
-                }
-            )
-        else:
+        achado = env_do_import_id(import_id)
+        if achado is None:
             fail_count += 1
             results.append(
                 {
                     "id": import_id,
                     "ok": False,
-                    "reason": outcome.reason,
-                    "detail": outcome.detail,
+                    "reason": "nao_encontrado",
+                    "detail": "Pedido não encontrado em nenhuma empresa ativa",
                 }
             )
+        else:
+            grupos[achado["slug"]].append(import_id)
+
+    for slug, ids in grupos.items():
+        env = environments_repo.get_by_slug(slug)
+        cfg_do_grupo = _cfg_para_env(env)
+        with env_context.active_env(env["id"], env["slug"]):
+            for import_id in ids:
+                outcome = _export_one_xlsx(import_id, cfg_do_grupo, request_env=env)
+                if outcome.ok:
+                    ok_count += 1
+                    results.append(
+                        {
+                            "id": import_id,
+                            "ok": True,
+                            "output_files": outcome.output_files,
+                            "env_slug": env["slug"],
+                            "env_name": env["name"],
+                        }
+                    )
+                else:
+                    fail_count += 1
+                    results.append(
+                        {
+                            "id": import_id,
+                            "ok": False,
+                            "reason": outcome.reason,
+                            "detail": outcome.detail,
+                            "env_slug": env["slug"],
+                            "env_name": env["name"],
+                        }
+                    )
 
     return JSONResponse(
         {
