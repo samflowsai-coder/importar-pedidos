@@ -110,13 +110,58 @@ fornecedor é a **Nasmar**. Samples: `PEDIDO KOLOSH.pdf` (fev/26),
    - Todos os itens recebem o **mesmo** `delivery_ean`, então `_group_by_delivery`
      continua devolvendo 1 grupo e 1 arquivo. O split por loja segue exclusivo do GRADE.
 2. **GRADE** — quando o texto contém `"Cross Docking"`, ativa o caminho alternativo:
-   - `_build_item_lookup(text)` lê a tabela superior e monta `{ean_produto: {pack_size, unit_price}}`.
+   - `_build_item_lookup(text)` lê a tabela superior e monta `{ean_produto: preço}`.
    - `_parse_cross_docking(text, ...)` lê a seção Cross Docking. **Layout do pdfplumber quebra o CNPJ em 3 linhas visuais** (head `00.063.960 /`, linha de dados `<EAN_loja> <EAN_produto> <packs> <data>`, tail `0094-08`). `_stitch_cnpj()` junta as 2 metades pelas linhas N-1 e N+1.
-   - **Quantidade na grade = embalagens, não unidades.** Multiplica por `pack_size` da tabela superior. Item 7898686879194 tem `Qtde. na Emb.=36` → 1 embalagem na grade vira 36 unidades.
+   - **Quantidade na grade já vem na mesma unidade da `Qtde Pedida`** (kits). Não multiplicar por nada — ver seção abaixo.
    - `delivery_ean` (EAN da loja) é a chave inequívoca usada pelo exportador para split — evita ambiguidade quando o CNPJ da filial coincide com o `customer_cnpj` (caso `00.063.960/0094-08`).
    - `_warn_if_grade_diverges()` soma qty da grade por SKU e compara com a tabela superior; emite `logger.warning` se divergir.
 
-Ambos layouts compartilham `_parse_header()` (regex `Número (?:do )?Pedido:` cobre as duas variações). Detecção case-insensitive em `can_parse`.
+Ambos layouts compartilham `_parse_header()` (regex `Número (?:do )?Pedido:` cobre as duas variações), mas ele recebe `grade=` porque a regra de cliente difere — ver abaixo. Detecção case-insensitive em `can_parse`.
+
+### `Qtde na Emb.` é o conteúdo do KIT, nunca multiplicador
+
+O produto vendido é o **kit**: `Qtde na Emb.` diz quantas peças vão dentro dele,
+`Qtde Pedida` diz quantos kits o Sam's quer e `Preço Bruto` é o preço do kit.
+`Valor Total Item` fecha como `Qtde Pedida × Preço Bruto` nos quatro samples.
+Pedido 06839396-0000 (Camila, 10/09): emb=22, pedida=1, bruto=694,98,
+total=694,98 — **um kit de 22, não 22 unidades**.
+
+Até 2026-09 a quantidade saía como `emb × pedida` nos dois layouts (no GRADE,
+`packs × pack_size`). Consequência: kit entrava no Fire com 22x (ou 36x) a
+quantidade real, e `QUANTIDADE × PRECO_UNITARIO` não fechava com `VALOR_TOTAL`
+no XLSX. Passou meses despercebido porque emb=1 na esmagadora maioria dos itens
+— 16 dos 18 do sample de janeiro.
+
+Prova na GRADE, que é onde o total nasce do parser: SKU `7898686879194` tem
+`Qtde Pedida = 2` na tabela superior e duas linhas de `1,00` no Cross Docking.
+A quantidade da grade já está na mesma unidade da Qtde Pedida. Pinado por
+`test_sams_soma_dos_itens_bate_com_o_sumario_do_pdf`, que compara a soma dos
+itens com o `Valor Total Mercadorias` impresso — com a multiplicação, a GRADE
+somava 1.412.766,48 em vez de 40.891,24. (Tolerância de 1 centavo: o sample de
+janeiro diverge de si mesmo, soma dos itens 33.577,68 contra Sumário 33.577,67.)
+
+### O cliente é o LOCAL DE ENTREGA, não o Comprador
+
+`_parse_header(text, grade=False)` usa o CNPJ **e o nome** do `Local de Entrega`
+como `customer_cnpj`/`customer_name` no layout consolidado. A MM cadastra no Fire
+o CD que recebe (`00.063.960/0587-94` = CD SAM'S DF), não cada clube que emite a
+ordem: o `CNPJ:` do bloco Comprador muda a cada pedido (`/0044-30`, `/0048-64`,
+`/0223-31`) e nenhum existe no `CADASTRO`. Mesma regra do SBF/Centauro, que casa
+pelo CNPJ de faturamento e não pela matriz. Confirmado pela MM em 10/09/2026.
+
+Dois efeitos colaterais:
+- `customer_name` deixa de ser nulo — o consolidado não tem `Destinatário:`, daí o
+  `SEM_CLIENTE_...xlsx`. Sai mastigado pelo `.title()` do `OrderNormalizer`
+  (`Cd Sam'S Df`); débito conhecido, ver `docs/BACKLOG.md`.
+- `CNPJ_LOCAL_ENTREGA` fica **vazio** no XLSX: `_to_erp_rows` só preenche quando o
+  destino difere do cliente, e agora eles são o mesmo. O `EAN_LOCAL_ENTREGA`
+  continua.
+
+⚠️ **A GRADE ficou de fora**, de propósito: lá o `Local de Entrega` do cabeçalho é
+CD de trânsito (`0591-70`) e a mercadoria é cross-docked para N lojas, cada uma já
+virando um arquivo próprio no split. Quem é o cliente de cada perna é pergunta em
+aberto — ver `docs/BACKLOG.md`. Sem caso real reportado, o comportamento antigo
+(Comprador) continua.
 
 ## Nasmar Template: a assinatura é o cabeçalho, não a marca
 

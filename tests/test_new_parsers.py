@@ -314,12 +314,73 @@ def test_sams_consolidado_captura_o_ean_do_local_de_entrega():
     assert {i.delivery_ean for i in order.items} == {"7891737676667"}
 
 
-def test_sams_cd_df_nao_muda_numero_cnpj_nem_valores():
+def test_sams_cd_df_nao_muda_numero_nem_valores():
     order = _process(SAMS_CD_DF)
     assert order.header.order_number == "06834549-0000"
-    assert order.header.customer_cnpj == "00.063.960/0044-30"
     assert {i.delivery_cnpj for i in order.items} == {"00.063.960/0587-94"}
     assert round(sum(i.total_price for i in order.items), 2) == 5983.17
+
+
+# ── SamsClubParser: o cliente é o LOCAL DE ENTREGA, não o Comprador ──────────
+
+
+@pytest.mark.parametrize(
+    "sample,cnpj_cd,nome_cd,cnpj_comprador",
+    [
+        (SAMS_CD_DF, "00.063.960/0587-94", "Cd Sam'S Df", "00.063.960/0044-30"),
+        (
+            "PEDIDO SAMS CLUB 06839396.pdf",
+            "00.063.960/0587-94",
+            "Cd Sam'S Df",
+            "00.063.960/0223-31",
+        ),
+        (
+            "PEDIDO SAMS CLUB.pdf",
+            "00.063.960/0069-99",
+            "Centro Dist Muribeca Sams",
+            "00.063.960/0048-64",
+        ),
+    ],
+)
+def test_sams_consolidado_usa_o_cnpj_do_local_de_entrega_como_cliente(
+    sample, cnpj_cd, nome_cd, cnpj_comprador
+):
+    """A MM cadastra no Fire o CD que recebe, não o clube que compra.
+
+    O `CNPJ:` do bloco Comprador muda a cada pedido (/0044-30, /0048-64,
+    /0223-31) e nenhum existe no CADASTRO — o pedido não casava com cliente
+    nenhum. Mesma regra do SBF/Centauro (CNPJ de faturamento, não a matriz).
+    Confirmado pela MM em 10/09/2026.
+
+    O nome esperado já vem mastigado pelo `.title()` do `OrderNormalizer`
+    (`CD SAM'S DF` → `Cd Sam'S Df`) — débito conhecido, ver `docs/BACKLOG.md`.
+    """
+    order = _process(sample)
+    assert order.header.customer_cnpj == cnpj_cd
+    assert order.header.customer_cnpj != cnpj_comprador
+    assert order.header.customer_name == nome_cd
+
+
+def test_sams_grade_mantem_o_comprador_como_cliente():
+    """A GRADE fica fora da regra: o Local de Entrega do cabeçalho é CD de
+    trânsito e a mercadoria é cross-docked para N lojas, cada uma já com
+    arquivo próprio. Sem caso real reportado, não se mexe (ver BACKLOG)."""
+    order = _process(GRADE_FILE)
+    assert order.header.customer_cnpj == "00.063.960/0094-08"
+
+
+def test_sams_nome_do_arquivo_deixa_de_ser_sem_cliente():
+    """`SEM_CLIENTE_...xlsx` era sintoma do mesmo bug: o layout consolidado não
+    tem `Destinatário:`, então o cliente ficava sem nome."""
+    import tempfile
+
+    from app.exporters.erp_exporter import ERPExporter
+
+    order = _process("PEDIDO SAMS CLUB 06839396.pdf")
+    with tempfile.TemporaryDirectory() as tmp:
+        (path,) = ERPExporter().export(order, tmp)
+    assert "SEM_CLIENTE" not in path.name
+    assert path.name.startswith("Cd_Sam_S_Df_00063960058794_Pedido_06839396-0000")
 
 
 def test_sams_consolidado_antigo_tambem_ganha_nome_e_ean_do_cd():
@@ -374,9 +435,9 @@ def test_sams_grade_qty_sum_matches_consolidated():
     assert sums["7898686876711"] == 59.0
     assert sums["7898686876728"] == 153.0
     assert sums["7898686876735"] == 234.0
-    # SKU com pack=36 → grade expressa em embalagens, multiplica por 36
-    assert sums["7898686879194"] == 72.0  # 1 + 1 embalagens × 36
-    assert sums["7898686879200"] == 144.0  # 1 + 2 + 1 embalagens × 36
+    # SKU de KIT (36 peças dentro): a grade já vem em kits, igual à Qtde Pedida
+    assert sums["7898686879194"] == 2.0  # Qtde Pedida da tabela superior
+    assert sums["7898686879200"] == 4.0
 
 
 def test_sams_grade_unit_price_lookup():
@@ -389,13 +450,19 @@ def test_sams_grade_unit_price_lookup():
             assert it.unit_price == 730.44
 
 
-def test_sams_grade_pack_size_multiplier():
-    """SKUs com pack > 1: cada item da grade deve refletir packs × pack_size."""
+def test_sams_grade_kit_nao_multiplica_pelo_conteudo():
+    """`Qtde na Emb.` é o conteúdo do kit, nunca multiplicador.
+
+    O SKU 7898686879194 tem `Qtde Pedida = 2` na tabela superior e duas linhas
+    de `1,00` no Cross Docking: 1 kit por loja. Multiplicar pelas 36 peças de
+    dentro mandava 36 kits por loja para o Fire.
+    """
     order = _process(GRADE_FILE)
-    pack36 = [i for i in order.items if i.ean == "7898686879194"]
-    # 2 lojas × 1 embalagem cada → 2 itens, todos com qty=36
-    assert len(pack36) == 2
-    assert all(i.quantity == 36.0 for i in pack36)
+    kits = [i for i in order.items if i.ean == "7898686879194"]
+    assert len(kits) == 2
+    assert all(i.quantity == 1.0 for i in kits)
+    assert all(i.unit_price == 730.44 for i in kits)
+    assert all(i.total_price == 730.44 for i in kits)
 
 
 def test_sams_grade_per_store_split():
@@ -998,3 +1065,69 @@ def test_daju_data_de_entrega_completa_e_lida():
 
     texto = "Entrega prevista: 15/09/2026"
     assert DajuParser()._find(texto, r"Entrega prevista:\s*(\d{2}/\d{2}/\d{4})") == "15/09/2026"
+
+
+# ── SamsClubParser: `Qtde na Emb.` é conteúdo do kit, não multiplicador ──────
+
+SAMS_KIT = "PEDIDO SAMS CLUB 06839396.pdf"
+
+
+def test_sams_kit_quantidade_vem_em_kits_nao_em_pecas():
+    """Pedido real 06839396-0000 (Camila, 10/09).
+
+    `Qtde na Emb.=22`, `Qtde Pedida=1`, `Preço Bruto=694,98`, `Valor Total
+    Item=694,98`. O produto é um KIT de 22 peças e o Sam's pediu 1 — não 22.
+    Multiplicando, o pedido entrava no Fire 22x maior que o real.
+    """
+    order = _process(SAMS_KIT)
+    kit = next(i for i in order.items if i.ean == "7901045301646")
+    assert kit.quantity == 1.0
+    assert kit.unit_price == 694.98
+    assert kit.total_price == 694.98
+    assert round(kit.quantity * kit.unit_price, 2) == kit.total_price
+
+
+def test_sams_item_sem_kit_nao_muda():
+    """Emb.=1 → nada a multiplicar. Regressão do caso comum."""
+    order = _process(SAMS_KIT)
+    avulso = next(i for i in order.items if i.ean == "7898686876865")
+    assert avulso.quantity == 12.0
+    assert avulso.unit_price == 28.09
+    assert avulso.total_price == 337.08
+
+
+def test_sams_consolidado_antigo_kit_de_36():
+    """Sample de janeiro, item 17: emb=36, pedida=6, bruto=730,44, total=4.382,64.
+
+    6 kits × 730,44 fecha. Com a multiplicação dava 216 kits.
+    """
+    order = _process("PEDIDO SAMS CLUB.pdf")
+    kit36 = next(i for i in order.items if i.ean == "7898686879194")
+    assert kit36.quantity == 6.0
+    assert kit36.unit_price == 730.44
+    assert round(kit36.quantity * kit36.unit_price, 2) == kit36.total_price
+
+
+@pytest.mark.parametrize(
+    "sample,total_mercadorias",
+    [
+        (SAMS_KIT, 1032.06),
+        ("PEDIDO SAMS CLUB.pdf", 33577.67),
+        ("PEDIDO SAMS CLUB CD DF.pdf", 5983.17),
+        ("PEDIDO SAMS CLUB GRADE.pdf", 40891.24),
+    ],
+)
+def test_sams_soma_dos_itens_bate_com_o_sumario_do_pdf(sample, total_mercadorias):
+    """Âncora dura: o `Valor Total Mercadorias` impresso no próprio PDF.
+
+    Na GRADE o total de cada item NASCE do parser (`qty × preço`), então este é
+    o teste que prova que a quantidade da grade está na unidade certa: com a
+    multiplicação por `Qtde na Emb.` o pedido somava 1.412.766,48.
+
+    Tolerância de 1 centavo porque o próprio PDF diverge de si mesmo: no sample
+    de janeiro a soma dos 18 totais impressos dá 33.577,68 e o Sumário imprime
+    33.577,67. Seguimos a linha do item, que é o que vira CORPO_VENDAS.TOTAL.
+    """
+    order = _process(sample)
+    soma = sum(i.total_price or 0 for i in order.items)
+    assert soma == pytest.approx(total_mercadorias, abs=0.01)

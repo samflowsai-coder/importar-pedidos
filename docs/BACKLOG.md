@@ -191,6 +191,35 @@ Próximo passo se aprovado: brainstorm → spec.
 
 ## 5. Verificação pendente (não dá para afirmar hoje)
 
+### 5.3 Sam's GRADE: quem é o cliente de cada perna do cross-docking?
+
+O layout consolidado passou a usar o **Local de Entrega** como cliente em 2026-09-10
+(a MM cadastra o CD no Fire, não o clube que compra — confirmado pela MM). A GRADE
+ficou **deliberadamente de fora**: lá o `Local de Entrega` do cabeçalho é um CD de
+trânsito (`00.063.960/0591-70` = CD SAM'S RS) e a mercadoria é cross-docked para N
+lojas, cada uma já virando um arquivo próprio no split por `delivery_ean`.
+
+Hoje cada um desses arquivos sai com `CNPJ_CLIENTE` = **Comprador** do cabeçalho
+(`/0094-08`), que por acaso também é uma das lojas do sample. As duas leituras
+plausíveis são: cliente = o CD de trânsito, ou cliente = a loja de cada perna
+(caminho que o exporter já sabe fazer — é o mesmo do Riachuelo, com
+`customer_cnpj = None`). Sem um pedido GRADE reportado pela MM não dá para escolher,
+e chutar quebra um fluxo que hoje funciona.
+
+**Próximo passo:** perguntar à Camila como um pedido GRADE é cadastrado hoje no Fire —
+um pedido por loja ou um só para o CD.
+
+### 5.4 `.title()` mastiga nome com sigla e apóstrofo
+
+`OrderNormalizer.normalize` faz `customer_name.strip().title()`. Com o cliente do Sam's
+passando a ser o CD, isso virou visível: `CD SAM'S DF` → **`Cd Sam'S Df`**, e o nome do
+arquivo sai `Cd_Sam_S_Df_...xlsx`. O `str.title()` do Python quebra em apóstrofo e
+rebaixa qualquer sigla.
+
+Já estava catalogado na auditoria de UI de 24/08 e não foi corrigido porque **muda o
+nome de todo cliente** (`Sbf Comercio Produtos Esportivos` está pinado em teste). Não
+entrou no hotfix do Sam's por isso — decisão do Samuel.
+
 ### 5.1 Os campos do de-para intercompany estão preenchidos no cliente?
 **Metade resolvido em 2026-08-24:** a dúvida sobre a versão acabou — o cliente passou a
 rodar uma versão que contém o de-para. **Produção hoje: `20260826-1925`** (commit

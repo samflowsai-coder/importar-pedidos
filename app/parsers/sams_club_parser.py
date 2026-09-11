@@ -55,9 +55,10 @@ class SamsClubParser(BaseParser):
         if not self.can_parse(extracted):
             return None
 
-        header = self._parse_header(text)
+        grade = _GRADE_MARKER in text
+        header = self._parse_header(text, grade=grade)
 
-        if _GRADE_MARKER in text:
+        if grade:
             item_lookup = self._build_item_lookup(text)
             items = self._parse_cross_docking(text, item_lookup, header)
             self._warn_if_grade_diverges(text, items)
@@ -73,7 +74,25 @@ class SamsClubParser(BaseParser):
     # Header
     # ------------------------------------------------------------------
 
-    def _parse_header(self, text: str) -> OrderHeader:
+    def _parse_header(self, text: str, *, grade: bool = False) -> OrderHeader:
+        """Cabeçalho do pedido.
+
+        **O cliente é o LOCAL DE ENTREGA, não o Comprador.** A MM cadastra no
+        Fire o CD que recebe (`00.063.960/0587-94` = CD SAM'S DF), não cada
+        clube que emite a ordem — o `CNPJ:` do bloco Comprador muda a cada
+        pedido (`/0044-30`, `/0048-64`, `/0223-31`) e nenhum deles existe no
+        `CADASTRO`. Mesma regra do SBF/Centauro, que casa pelo CNPJ de
+        faturamento e não pela matriz. Confirmado pela MM em 10/09/2026.
+
+        Efeito colateral bom: `customer_name` deixa de ser nulo (era
+        `SEM_CLIENTE` no nome do arquivo) e passa a ser o nome do CD.
+
+        ⚠️ **A GRADE fica de fora.** Lá o `Local de Entrega` do cabeçalho é um
+        CD de trânsito e a mercadoria é cross-docked para N lojas — cada uma já
+        vira um arquivo próprio no split. Quem é o cliente de cada perna é
+        pergunta em aberto (ver `docs/BACKLOG.md`); até ter um caso real
+        reportado, o comportamento antigo continua.
+        """
         order_number = self._find(text, r"N[uú]mero (?:do )?Pedido:\s*([\d-]+)")
         issue_date = self._extract_date(
             text, r"Data de Emiss[aã]o:\s*(\d{2}\s*/\s*\d{2}\s*/\s*\d{4})"
@@ -82,6 +101,15 @@ class SamsClubParser(BaseParser):
         if customer_cnpj:
             customer_cnpj = re.sub(r"\s+", "", customer_cnpj)
         customer_name = self._find(text, r"Destinat[aá]rio:\s*([^\n\r]+?)\s*(?:\n|$)")
+
+        if not grade:
+            entrega_cnpj, entrega_nome = self._parse_delivery_location(text)
+            # Sem local de entrega legível, o Comprador segue como rede — nunca
+            # devolver cabeçalho sem CNPJ (o exporter trata isso como Riachuelo).
+            if entrega_cnpj:
+                customer_cnpj = entrega_cnpj
+                customer_name = entrega_nome or customer_name
+
         return OrderHeader(
             order_number=order_number,
             issue_date=issue_date,
@@ -106,29 +134,25 @@ class SamsClubParser(BaseParser):
         m = re.search(re.escape(_SIGNATURE_TEXT), text, re.IGNORECASE)
         return text[m.start() :] if m else text
 
-    def _build_item_lookup(self, text: str) -> dict[str, dict[str, float]]:
-        """Mapa {ean_produto: {'unit_price', 'pack_size'}} da tabela 'Itens do Pedido'.
+    def _build_item_lookup(self, text: str) -> dict[str, float]:
+        """Mapa {ean_produto: preço} da tabela 'Itens do Pedido'.
 
-        `pack_size` (Qtde. na Emb.) é crítico: na seção Cross Docking a quantidade
-        é expressa em EMBALAGENS, não em unidades. Para obter o total de unidades
-        por loja, multiplica-se qty_cross_docking × pack_size.
+        A seção Cross Docking não repete o preço — só a quantidade por loja.
+
+        ⚠️ `Qtde na Emb.` (grupo 3) é lido e **descartado de propósito**: ver
+        `_parse_items`. Não usar como multiplicador.
         """
         section = self._items_section(text)
-        lookup: dict[str, dict[str, float]] = {}
+        lookup: dict[str, float] = {}
         for m in _ITEM_RE.finditer(section):
-            ean = m.group(2)
-            pack_size = self._parse_br_number(m.group(3)) or 1.0
             unit_price = self._parse_br_number(m.group(5))
-            lookup[ean] = {
-                "pack_size": pack_size,
-                "unit_price": unit_price if unit_price is not None else 0.0,
-            }
+            lookup[m.group(2)] = unit_price if unit_price is not None else 0.0
         return lookup
 
     def _parse_cross_docking(
         self,
         text: str,
-        item_lookup: dict[str, dict[str, float]],
+        item_lookup: dict[str, float],
         header: OrderHeader,
     ) -> list[OrderItem]:
         """Parsea a seção 'Cross Docking' do PDF GRADE.
@@ -141,6 +165,10 @@ class SamsClubParser(BaseParser):
         - Linha N-1: início do CNPJ (`00.063.960 /`)
         - Linha N:   `<EAN_local> <EAN_produto> <qty> <data_inicial>`
         - Linha N+1: final do CNPJ (`0094-08`)
+
+        A quantidade da grade está na MESMA unidade da `Qtde Pedida` da tabela
+        superior — medido no sample: SKU 7898686879194 tem `Qtde Pedida = 2` lá
+        em cima e duas linhas de `1,00` aqui. Não multiplicar por nada.
         """
         idx = text.find(_GRADE_MARKER)
         if idx == -1:
@@ -157,10 +185,10 @@ class SamsClubParser(BaseParser):
 
             ean_local = m.group(1)
             ean_produto = m.group(2)
-            packs = self._parse_br_number(m.group(3))
+            qty = self._parse_br_number(m.group(3))
             data_inicial = re.sub(r"\s*/\s*", "/", m.group(4))
 
-            if packs is None or packs <= 0:
+            if qty is None or qty <= 0:
                 continue
 
             cnpj = self._stitch_cnpj(lines, i)
@@ -168,11 +196,11 @@ class SamsClubParser(BaseParser):
             if data_inicial == "00/00/0000":
                 data_inicial = fallback_date
 
-            info = item_lookup.get(ean_produto, {})
-            pack_size = info.get("pack_size", 1.0)
-            unit_price = info.get("unit_price")
-            qty = packs * pack_size
-            total_price = qty * unit_price if unit_price else None
+            unit_price = item_lookup.get(ean_produto)
+            # 2 casas: a grade não traz total impresso, então ele nasce aqui —
+            # sem arredondar, o float vaza (730.4400000000001) para o XLSX e
+            # para CORPO_VENDAS.TOTAL.
+            total_price = round(qty * unit_price, 2) if unit_price else None
 
             items.append(
                 OrderItem(
@@ -212,9 +240,8 @@ class SamsClubParser(BaseParser):
         agg: dict[str, float] = {}
         for m in _ITEM_RE.finditer(section):
             ean = m.group(2)
-            emb = self._parse_br_number(m.group(3)) or 1.0
             ped = self._parse_br_number(m.group(4)) or 0.0
-            agg[ean] = agg.get(ean, 0.0) + emb * ped
+            agg[ean] = agg.get(ean, 0.0) + ped
 
         grade_sum: dict[str, float] = {}
         for it in items:
@@ -229,6 +256,21 @@ class SamsClubParser(BaseParser):
                 )
 
     def _parse_items(self, text: str) -> list[OrderItem]:
+        """Itens do layout consolidado.
+
+        ⚠️ `Qtde na Emb.` (grupo 3 do `_ITEM_RE`) NÃO é multiplicador. O produto
+        vendido é o KIT: `Qtde na Emb.` diz quantas peças vão dentro dele e
+        `Qtde Pedida` quantos kits o Sam's quer. `Preço Bruto` é o preço do kit,
+        e `Valor Total Item` fecha como `Qtde Pedida × Preço Bruto` nos três
+        samples — o pedido 06839396-0000 tem emb=22, pedida=1, bruto=694,98 e
+        total=694,98: um kit de 22, não 22 unidades.
+
+        Até 2026-09 a quantidade saía como `emb × pedida`, então um kit de 22
+        entrava no Fire como 22 kits (22x o pedido real) e `QUANTIDADE ×
+        PRECO_UNITARIO` não fechava com `VALOR_TOTAL` no XLSX. Passou meses
+        despercebido porque emb=1 na esmagadora maioria dos itens (16 dos 18 do
+        sample de janeiro).
+        """
         # Restrict to section after "Itens do Pedido"
         section = self._items_section(text)
 
@@ -240,18 +282,10 @@ class SamsClubParser(BaseParser):
         items = []
         for m in _ITEM_RE.finditer(section):
             ean = m.group(2)
-            emb_qty = self._parse_br_number(m.group(3))
-            pedida_qty = self._parse_br_number(m.group(4))
+            qty = self._parse_br_number(m.group(4))
             preco_bruto = self._parse_br_number(m.group(5))
             total_str = m.group(7)
             total_price = self._parse_br_number(total_str)
-
-            # Final quantity = emb_qty * pedida_qty (pack size * number of packs)
-            qty = None
-            if emb_qty is not None and pedida_qty is not None:
-                qty = emb_qty * pedida_qty
-            elif pedida_qty is not None:
-                qty = pedida_qty
 
             if qty is None:
                 continue
