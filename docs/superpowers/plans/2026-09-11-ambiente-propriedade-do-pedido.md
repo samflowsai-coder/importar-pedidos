@@ -248,7 +248,7 @@ def _app_de_teste():
         ativo = env_context.current()
         return {
             "env_da_dependency": env["slug"] if env else None,
-            "contextvar": ativo.slug if ativo else None,
+            "contextvar": ativo["slug"] if ativo else None,
         }
 
     return TestClient(app)
@@ -298,8 +298,9 @@ def test_a_dependency_e_async(duas_empresas):
     )
 ```
 
-> `env_context.current()` devolve um `ActiveEnv` (dataclass), não um dict — por isso
-> `ativo.slug` e não `ativo["slug"]`. Confira em `app/persistence/context.py:38`.
+> `env_context.current()` devolve um `ActiveEnv`, que é um `TypedDict`
+> (`app/persistence/context.py:26`) — em runtime é dict puro, então o acesso é
+> `ativo["slug"]`.
 
 - [ ] **Step 6: Run to verify it fails**
 
