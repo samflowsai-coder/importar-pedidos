@@ -219,6 +219,25 @@ def test_imported_list_requires_session(isolated_app):
     assert c.get("/api/imported").status_code == 401
 
 
+def test_pending_list_requires_session(isolated_app):
+    """`/api/pending` nunca teve `Depends(require_user)` — achado da task
+    "ambiente é propriedade do pedido" (fluxo da pasta de entrada). Mesma
+    classe de buraco do `test_imported_list_requires_session` acima: com
+    `roteamento_modo='ligado'` e sem cookie `portal_env`, a rota soma as
+    pastas de TODAS as empresas ativas — sem sessão, um chamador anônimo via
+    nome de arquivo, tamanho e data de qualquer empresa. Ganhou o mesmo
+    `Depends(require_user)` das rotas irmãs de ação (`/api/import`,
+    `/api/reimport`, `/api/preview-pending`, que já exigiam sessão).
+
+    `tests/test_pasta_cross_env.py` não cobre isso: as 9 fixtures de lá
+    setam `TEST_AUTH_BYPASS=1`, então nenhuma delas consegue exercitar
+    `require_user` de verdade — só este arquivo (via `real_auth`/
+    `isolated_app`) desliga o bypass."""
+    from app.web.server import app
+    c = TestClient(app)
+    assert c.get("/api/pending").status_code == 401
+
+
 # ── Webhook stays open (HMAC-protected separately) ───────────────────────
 
 

@@ -104,3 +104,37 @@ def test_ligado_import_declarado_le_a_pasta_certa(portal, tmp_path):
     # a pasta da OUTRA empresa nunca foi tocada
     assert not (tmp_path / "recebidos" / "mm").exists()
     assert (tmp_path / "mm" / "in" / "PEDIDO.pdf").read_bytes() == b"%PDF-1.4 mm"
+
+
+def test_ligado_com_cookie_env_slug_do_corpo_e_ignorado(portal, tmp_path, monkeypatch):
+    """Cookie presente em 'ligado' continua mandando: `env_slug` do corpo é
+    só considerado quando NÃO há cookie (`_env_da_pasta` devolve `None` na
+    hora que vê `_request_environment(request) is not None`). Cookie=mm +
+    `env_slug=nasmar` no corpo tem que ler o arquivo da pasta do COOKIE — se
+    a precedência estivesse invertida, o preview leria (e guardaria) o
+    arquivo da empresa ERRADA sem avisar ninguém."""
+    import app.pipeline
+
+    # O PDF da fixture é só bytes de mentira (não é um pedido real) — sem
+    # isolar o parse, pdfplumber explode com `PdfminerException` em vez de
+    # devolver o 422 limpo que o resto do teste quer verificar. Mesmo mock
+    # que `test_arquivo_que_o_parser_nao_reconhece_ainda_e_guardado` usa em
+    # `test_web_server.py`. `_guardar_original` roda ANTES do parse, então a
+    # prova de qual pasta foi lida já existe em disco quando o mock devolve
+    # `None`.
+    monkeypatch.setattr(app.pipeline, "process", lambda _loaded: None)
+
+    roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
+    portal.cookies.set("portal_env", environments_repo.get_by_slug("mm")["id"])
+
+    r = portal.post(
+        "/api/preview-pending",
+        json={"filename": "PEDIDO.pdf", "env_slug": "nasmar"},
+    )
+    assert r.status_code == 422, r.text
+
+    copias_mm = list((tmp_path / "recebidos" / "mm").rglob("*.pdf"))
+    assert len(copias_mm) == 1
+    assert copias_mm[0].read_bytes() == b"%PDF-1.4 mm"
+    # a pasta da Nasmar (do env_slug ignorado) nunca foi tocada
+    assert not (tmp_path / "recebidos" / "nasmar").exists()
