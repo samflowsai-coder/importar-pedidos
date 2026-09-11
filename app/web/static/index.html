@@ -1062,17 +1062,32 @@ function showSkeleton() {
 
 function renderPending(data) {
   const label = document.getElementById('watchDirLabel');
-  label.textContent = data.watchDir || 'Pasta não configurada';
-  label.classList.toggle('missing', !data.exists);
+  // `watchDir: null` é o caso somado ('ligado' sem cookie): não existe UMA
+  // pasta, existem as de todas as empresas ativas — o selo por item
+  // (renderFileRows) é quem diz qual é qual, não o rótulo do topo.
+  const somado = data.watchDir === null;
+  if (somado) {
+    label.textContent = 'Todas as empresas ativas';
+    label.classList.remove('missing');
+  } else {
+    label.textContent = data.watchDir || 'Pasta não configurada';
+    label.classList.toggle('missing', !data.exists);
+  }
 
   const emptyEl = document.getElementById('pendingEmpty');
   const listEl  = document.getElementById('pendingList');
 
   if (!pendingFiles.length) {
-    const notConfigured = !data.watchDir;
     const sub = document.getElementById('pendingEmptySub');
     const ctaBtn = document.getElementById('emptyCfgBtn');
-    if (notConfigured) {
+    if (somado) {
+      // A pasta é por empresa (/admin/ambientes), não a config legada de
+      // pasta única — o CTA abaixo levaria pro lugar errado aqui.
+      sub.textContent = data.exists
+        ? 'Nenhum arquivo pendente nas empresas ativas.'
+        : 'Nenhuma pasta de entrada encontrada nas empresas ativas.';
+      ctaBtn.classList.add('hidden');
+    } else if (!data.watchDir) {
       sub.textContent = 'Configure uma pasta de entrada para começar.';
       ctaBtn.classList.remove('hidden');
     } else if (!data.exists) {
@@ -1096,12 +1111,20 @@ function renderFileRows() {
   const el = document.getElementById('fileListEl');
   el.innerHTML = pendingFiles.map(f => {
     const extCls = f.ext === 'pdf' ? 'pdf' : 'xls';
+    // Só existe na caixa somada ('ligado' sem cookie) — mesmo selo de
+    // `/api/imported` somado (Task 3), classe reusada, sem inventar cor. Vai
+    // no `.file-meta` (não no `.file-name`, que é `nowrap`+ellipsis — um
+    // nome comprido escondia o selo atrás do corte).
+    const envBadge = f.env_name
+      ? ` &middot; <span class="log-env-badge" title="Empresa">${esc(f.env_name)}</span>`
+      : '';
+    const envArg = f.env_slug ? `, '${escJs(f.env_slug)}'` : '';
     return `
-      <div class="file-row" onclick="previewPending('${escJs(f.name)}')" title="Revisar e enviar ao Fire">
+      <div class="file-row" onclick="previewPending('${escJs(f.name)}'${envArg})" title="Revisar e enviar ao Fire">
         <div class="ext-badge ${extCls}">${f.ext.toUpperCase()}</div>
         <div class="file-info">
           <div class="file-name">${esc(f.name)}</div>
-          <div class="file-meta">${fmtSize(f.size)} &middot; ${fmtDate(f.mtime)}</div>
+          <div class="file-meta">${fmtSize(f.size)} &middot; ${fmtDate(f.mtime)}${envBadge}</div>
         </div>
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="opacity:.5;flex-shrink:0">
           <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1117,7 +1140,7 @@ function showPendingEmpty(msg) {
 }
 
 /* ── Preview from watch folder ── */
-async function previewPending(filename) {
+async function previewPending(filename, envSlug) {
   currentPreview = null;
   routingChoice = null;
   showPreviewModal();
@@ -1125,10 +1148,13 @@ async function previewPending(filename) {
   hidePreviewError();
 
   try {
+    // `envSlug` só vem da caixa somada (renderFileRows) — nome de arquivo
+    // não é único entre empresas, então é ele quem diz de qual pasta ler.
+    const body = envSlug ? { filename, env_slug: envSlug } : { filename };
     const data = await api('/api/preview-pending', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filename }),
+      body: JSON.stringify(body),
     });
     currentPreview = data;
     renderPreview(data);
@@ -1348,6 +1374,32 @@ function updateBatchBar() {
 
 async function doBatchSendToFire() { return doBatchPrimary(); }
 
+// Resumo do lote pro alert() de resultado. Fora da caixa somada (sem
+// `env_name` nos itens) é a linha única de sempre. Na caixa somada
+// ('ligado' sem cookie), um lote pode ter pedidos de mais de uma empresa
+// (Task 3, `_com_env`) — agrupa por `env_name` pra não misturar contagem
+// de empresas diferentes numa frase só.
+function _resumoLote(res, verb) {
+  const porEmpresa = res.results.some(r => r.env_name);
+  if (!porEmpresa) {
+    return res.failed
+      ? `${res.ok} ${verb}, ${res.failed} com erro.`
+      : `${res.ok} pedido(s) ${verb}.`;
+  }
+  const grupos = new Map();
+  for (const r of res.results) {
+    const nome = r.env_name || '—';
+    const g = grupos.get(nome) || { ok: 0, failed: 0 };
+    if (r.ok) g.ok++; else g.failed++;
+    grupos.set(nome, g);
+  }
+  return [...grupos.entries()]
+    .map(([nome, g]) => g.failed
+      ? `${nome}: ${g.ok} ${verb}, ${g.failed} com erro`
+      : `${nome}: ${g.ok} ${verb}`)
+    .join('\n');
+}
+
 async function doBatchPrimary() {
   const ids = [...batchSelection];
   if (!ids.length) return;
@@ -1370,9 +1422,7 @@ async function doBatchPrimary() {
     const verb = isXlsxOnly
       ? 'XLS gerado(s)'
       : (cfg.exportMode === 'both' ? 'cadastrado(s) no Fire + XLS' : 'cadastrado(s) no Fire');
-    const msg = res.failed
-      ? `${res.ok} ${verb}, ${res.failed} com erro.`
-      : `${res.ok} pedido(s) ${verb}.`;
+    const msg = _resumoLote(res, verb);
     alert(msg + (res.failed ? '\n\nDetalhes no console.' : ''));
     if (res.failed) {
       console.warn('Batch primary action failures:', res.results.filter(r => !r.ok));

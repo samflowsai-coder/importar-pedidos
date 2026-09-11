@@ -157,6 +157,42 @@ ação é de uma empresa específica — abra o pedido para agir nele" — mais
 honesta fora de `ligado` também (a antiga sugeria um passo que nem sempre
 existe).
 
+### Fluxo da pasta de entrada (empresa DECLARADA, não derivada)
+
+Diferente do resto do wiring de roteamento: `import_id` é único globalmente,
+mas **nome de arquivo não é** — dois arquivos podem ter o mesmo nome nas
+pastas de empresas diferentes. Por isso a empresa aqui não é derivada do
+pedido (não existe pedido ainda); é **declarada** pelo cliente via `env_slug`,
+resolvido por `_env_da_pasta(request, env_slug)` (`app/web/server.py`):
+
+- Fora de `'ligado'`, ou com cookie `portal_env` presente mesmo em `'ligado'`,
+  o cookie manda e `env_slug` é ignorado — comportamento idêntico ao anterior
+  a esta task.
+- Em `'ligado'` sem cookie: `env_slug` ausente → 400 nomeando o campo;
+  não corresponde a empresa ATIVA (`environments_repo.list_active()`) → 404.
+  Nunca um default.
+
+`GET /api/pending` (agora `require_user` — faltava antes; a pasta de entrada
+respondia 200 pra chamador anônimo) soma as pastas de todas as empresas
+ativas nesse caso, e cada item ganha `env_slug`/`env_name` (mesmo selo de
+`/api/imported` somado). **Mudança de shape:** `watchDir` no topo da resposta
+vira `null` (sem valor único possível quando há mais de uma pasta) e `exists`
+passa a significar "pelo menos uma pasta existe" — a UI usa o selo por item
+em vez do rótulo do topo (`renderFileRows`/`renderPending` em `index.html`
+tratam `watchDir === null` como o caso somado). Fora de `'ligado'`, ou com
+cookie, o shape é o de sempre (`watchDir` da empresa/legado, sem os campos
+novos por item).
+
+`POST /api/import`, `/api/reimport` e `/api/preview-pending` ganham
+`env_slug: str | None = None` no corpo. Quando `_env_da_pasta` resolve uma
+empresa (só acontece em `'ligado'` sem cookie), o handler troca o cfg pelo
+de `_cfg_para_env(env)` (pastas DESTA empresa, não do cookie) e envolve todo
+o trabalho — inclusive `_guardar_original` e `_append_log`, que resolvem a
+DB pelo contextvar, não por `cfg` — em `env_context.active_env(env["id"],
+env["slug"])`. Fábrica `_persist_ctx(env)`, não uma instância guardada: um
+context manager de `@contextmanager` só entra/sai uma vez, e `reimport_file`
+precisa dele nos dois ramos (sucesso e erro).
+
 ## Segurança (não relaxar)
 - Whitelist de extensão: `.pdf`, `.xls`, `.xlsx`.
 - Limite de upload: 50 MB.
@@ -164,6 +200,11 @@ existe).
 - `POST /api/auth/login` — rate-limit 10 req/15 min/IP via token bucket SQLite.
   Retorna 429 + `Retry-After: 900` quando esgotado.
   Env `RATE_LIMIT_ENABLED=false` desativa (dev/test).
+- `GET /api/pending` ganhou `require_user` (task "ambiente é propriedade do
+  pedido" — faltava desde sempre; a rota nunca teve dependency de auth
+  nenhuma, então um chamador anônimo via a estrutura de pastas/arquivos
+  pendentes de todas as empresas em `ligado` sem cookie). `/api/import`,
+  `/api/reimport` e `/api/preview-pending` já exigiam `require_user`.
 
 ## Testes
 - `tests/test_web_server.py` — inclui o push FlowPCP no send-to-fire
@@ -176,7 +217,15 @@ existe).
 - `tests/test_firebird_config_api.py` — endpoints `/api/firebird/*`, redirect legacy, gating por role.
 - `tests/test_routing_wiring.py` — wiring do roteamento em `/api/commit`, os três modos.
 - `tests/test_routing_modo.py` — `/api/roteamento/modo|taxa`, `/api/env/clear`, gate de `/` e cross-env de `/api/imported`.
-- Comando: `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py tests/test_firebird_config_api.py tests/test_routing_wiring.py tests/test_routing_modo.py -v`
+- `tests/test_env_do_pedido.py` — `env_do_pedido`/`env_do_import_id` (resolver + gate), inclusive
+  o requisito de `async def` (contextvar em threadpool).
+- `tests/test_rotas_por_pedido_cross_env.py` — as 10 rotas por-pedido e o lote (`/api/batch/*`)
+  agrupado por empresa em `'ligado'` sem cookie.
+- `tests/test_pasta_cross_env.py` — `GET /api/pending` somado com selo por item; `env_slug`
+  obrigatório (400) e validado contra empresa ativa (404) nas três rotas de ação
+  (`/api/import`, `/api/reimport`, `/api/preview-pending`); prova de que o `env_slug`
+  declarado lê a pasta certa mesmo com nome de arquivo repetido entre empresas.
+- Comando: `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py tests/test_firebird_config_api.py tests/test_routing_wiring.py tests/test_routing_modo.py tests/test_env_do_pedido.py tests/test_rotas_por_pedido_cross_env.py tests/test_pasta_cross_env.py -v`
 
 ## Reatividade de config (exportMode)
 O botão de ação principal (`#pvCommitBtn` no preview e `#batchSendBtn` no log)
@@ -224,3 +273,14 @@ Parse que falha (422), preview descartado ou expirado: a cópia já existe.
 - `_export_one_xlsx` re-roda `check_order` SEM passar `request_env` (caminho
   legado). Em deploy multi-ambiente isso usa env vars `FB_*`. Follow-up:
   passar env do request quando essa rota também adotar `getattr(request.state, "environment")`.
+- `POST /api/import` (lote por nome de arquivo) e `POST /api/reimport` existem no backend
+  (com teste) mas **não têm nenhum call site em `index.html`** — `doReimport()` está definida
+  mas nada renderiza o botão `id="reimport-..."` que ela espera (grep de `api/import\b` e
+  `reimport-` no arquivo inteiro, antes desta task, não achou chamador nenhum). Aceitam
+  `env_slug` porque o contrato do backend precisa ser correto independente de UI, mas não há
+  hoje um fluxo real que monte o corpo com `env_slug` para elas — só `previewPending` (aba de
+  pendentes) tem essa informação disponível (`f.env_slug` da listagem somada).
+- Um context manager de `@contextmanager` (como `env_context.active_env(...)`) só entra/sai
+  UMA vez. `_persist_ctx(env)` em `server.py` é fábrica (chama `active_env`/`nullcontext` de
+  novo a cada `with`), nunca guarde o retorno numa variável pra reusar em dois blocos `with`
+  (ex.: ramo de sucesso e ramo de erro) — a segunda entrada estoura.

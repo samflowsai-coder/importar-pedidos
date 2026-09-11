@@ -199,6 +199,55 @@ def _get_cfg_for_request(request: Request) -> dict:
     return _get_cfg() if env is None else _cfg_para_env(env)
 
 
+def _persist_ctx(env: dict[str, object] | None):
+    """Context manager do bloco de persistência: ambiente DECLARADO quando
+    há um (`env_slug` resolvido em `ligado` sem cookie), `nullcontext()`
+    quando não há — o contexto já veio do middleware (cookie) ou nem existe
+    (legado single-tenant). Uma fábrica, não uma instância guardada: um
+    context manager baseado em `@contextmanager` só entra/sai UMA vez —
+    reusar a mesma instância num segundo `with` (ex.: ramo de erro depois do
+    ramo de sucesso) estoura."""
+    from contextlib import nullcontext
+
+    return env_context.active_env(env["id"], env["slug"]) if env is not None else nullcontext()
+
+
+def _env_da_pasta(request: Request, env_slug: str | None) -> dict[str, object] | None:
+    """De qual empresa é esta ação no fluxo da pasta de entrada
+    (import/reimport/preview-pending).
+
+    Aqui o identificador é diferente do resto do wiring de roteamento:
+    `import_id` é único globalmente, **nome de arquivo não é** — dois
+    arquivos podem ter o mesmo nome em pastas de empresas diferentes. Por
+    isso a empresa não é derivada, é DECLARADA pelo `env_slug` do corpo.
+
+    Fora de `'ligado'`, ou com cookie presente, o cookie manda e `env_slug`
+    é ignorado — comportamento de hoje, intacto. Em `'ligado'` sem cookie:
+    ausente -> 400 nomeando o campo; não corresponde a empresa ATIVA -> 404.
+    Nunca um default.
+    """
+    from app.persistence import environments_repo, roteamento_repo
+
+    if roteamento_repo.modo() != roteamento_repo.LIGADO:
+        return None
+    if _request_environment(request) is not None:
+        return None
+    if not env_slug:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "env_slug é obrigatório: roteamento ligado e nenhuma empresa "
+                "selecionada (sem cookie)."
+            ),
+        )
+    for env in environments_repo.list_active():
+        if env["slug"] == env_slug:
+            return env
+    raise HTTPException(
+        status_code=404, detail=f"Empresa '{env_slug}' não encontrada ou inativa."
+    )
+
+
 def _firebird_open_for_request(request: Request, conn_mgr):
     """Return a Firebird connection opener for selected env, or legacy fallback."""
     env = _request_environment(request)
@@ -1198,13 +1247,13 @@ def test_firebird_connection(
                     os.environ[k] = prev
 
 
-@app.get("/api/pending")
-def list_pending(request: Request) -> JSONResponse:
-    cfg = _get_cfg_for_request(request)
-    watch = Path(cfg["watch_dir"])
-
+def _listar_pasta_pendente(watch_dir: str) -> tuple[list[dict], bool]:
+    """Arquivos elegíveis de UMA pasta de entrada, ou `([], False)` se ela não
+    existir. Extraído de `list_pending` pra ser reusado tanto no caso de uma
+    empresa só quanto na soma entre empresas (`ligado` sem cookie)."""
+    watch = Path(watch_dir)
     if not watch.exists():
-        return JSONResponse({"files": [], "watchDir": cfg["watch_dir"], "exists": False})
+        return [], False
 
     files = []
     for f in sorted(
@@ -1229,12 +1278,43 @@ def list_pending(request: Request) -> JSONResponse:
         except Exception:
             pass
 
-    return JSONResponse({"files": files, "watchDir": cfg["watch_dir"], "exists": True})
+    return files, True
+
+
+@app.get("/api/pending")
+def list_pending(request: Request, _user: User = Depends(require_user)) -> JSONResponse:
+    from app.persistence import environments_repo, roteamento_repo
+
+    if roteamento_repo.modo() == roteamento_repo.LIGADO and _request_environment(request) is None:
+        # Ambiente é propriedade do PEDIDO — a caixa soma as pastas de todas
+        # as empresas ativas. Nome de arquivo não é único entre elas, então
+        # cada item carrega `env_slug`/`env_name` (mesmo `_com_env` do lote
+        # somado) pra quem for agir saber qual pasta é qual.
+        files: list[dict] = []
+        any_exists = False
+        for env in environments_repo.list_active():
+            env_files, exists = _listar_pasta_pendente(env["watch_dir"])
+            any_exists = any_exists or exists
+            files.extend(_com_env(f, env) for f in env_files)
+        files.sort(key=lambda f: f["mtime"], reverse=True)
+        # `watchDir` não tem valor único no caso somado — a UI usa o selo por
+        # item em vez do topo (ver Step 6). `exists` reflete "pelo menos uma
+        # pasta existe", pra não acender o aviso de "pasta não encontrada" à
+        # toa quando só uma das empresas ainda não tem a pasta criada.
+        return JSONResponse({"files": files, "watchDir": None, "exists": any_exists})
+
+    cfg = _get_cfg_for_request(request)
+    files, exists = _listar_pasta_pendente(cfg["watch_dir"])
+    return JSONResponse({"files": files, "watchDir": cfg["watch_dir"], "exists": exists})
 
 
 class ImportRequest(BaseModel):
     files: list[str]
     outputDir: str | None = None
+    # Empresa DECLARADA pelo cliente — nome de arquivo não é único entre
+    # empresas, então não dá pra derivar. Só obrigatório em `ligado` sem
+    # cookie; ver `_env_da_pasta`.
+    env_slug: str | None = None
 
 
 @app.post("/api/import")
@@ -1245,8 +1325,9 @@ def import_files(
 ) -> JSONResponse:
     from app import config as app_config
 
-    cfg = _get_cfg_for_request(request)
-    request_env = _request_environment(request)
+    env = _env_da_pasta(request, body.env_slug)
+    cfg = _cfg_para_env(env) if env is not None else _get_cfg_for_request(request)
+    request_env = env if env is not None else _request_environment(request)
     watch = Path(cfg["watch_dir"])
     imp = app_config.imported_dir(cfg)
 
@@ -1265,63 +1346,72 @@ def import_files(
     results = []
     errors = []
 
-    for filename in body.files:
-        name = Path(filename).name  # strip any path component — security
-        src = watch / name
+    # `env` só é não-None em 'ligado' sem cookie: aí o cfg acima já é o DESTA
+    # empresa (via `_cfg_para_env`), e `_guardar_original`/`_append_log`
+    # também precisam do contextvar ativo — eles resolvem a DB por ele, não
+    # por `cfg`. Nos outros casos o contexto já veio do middleware (cookie)
+    # ou nem existe (legado single-tenant) — `_persist_ctx` devolve
+    # `nullcontext()` e não muda nada.
+    with _persist_ctx(env):
+        for filename in body.files:
+            name = Path(filename).name  # strip any path component — security
+            src = watch / name
 
-        if not src.exists() or not src.is_file():
-            errors.append({"source": name, "error": "Arquivo não encontrado na pasta de entrada"})
-            continue
-        if src.suffix.lower() not in ALLOWED_EXTENSIONS:
-            errors.append({"source": name, "error": "Extensão não permitida"})
-            continue
+            if not src.exists() or not src.is_file():
+                errors.append(
+                    {"source": name, "error": "Arquivo não encontrado na pasta de entrada"}
+                )
+                continue
+            if src.suffix.lower() not in ALLOWED_EXTENSIONS:
+                errors.append({"source": name, "error": "Extensão não permitida"})
+                continue
 
-        try:
-            recebido = _guardar_original(src.read_bytes(), name)
-            result = _process_file(src, output_path, env=request_env)
+            try:
+                recebido = _guardar_original(src.read_bytes(), name)
+                result = _process_file(src, output_path, env=request_env)
 
-            dest = imp / name
-            if dest.exists():
-                stem, suffix = src.stem, src.suffix
-                dest = imp / f"{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}"
-            shutil.move(str(src), str(dest))
+                dest = imp / name
+                if dest.exists():
+                    stem, suffix = src.stem, src.suffix
+                    dest = imp / f"{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}"
+                shutil.move(str(src), str(dest))
 
-            entry = _make_log_entry(
-                source_filename=name,
-                order_number=result["order_number"],
-                customer=result["customer"],
-                output_files=result["output_files"],
-                status="success",
-                snapshot=result.get("snapshot"),
-                fire_codigo=result.get("fire_codigo"),
-                db_result=result.get("db_result"),
-                file_sha256=recebido.sha256,
-                original_path=str(recebido.path),
-            )
-            _append_log(cfg, entry)
+                entry = _make_log_entry(
+                    source_filename=name,
+                    order_number=result["order_number"],
+                    customer=result["customer"],
+                    output_files=result["output_files"],
+                    status="success",
+                    snapshot=result.get("snapshot"),
+                    fire_codigo=result.get("fire_codigo"),
+                    db_result=result.get("db_result"),
+                    file_sha256=recebido.sha256,
+                    original_path=str(recebido.path),
+                )
+                _append_log(cfg, entry)
 
-            results.append(
-                {
-                    "source": name,
-                    "order": result["order_number"] or "—",
-                    "customer": result["customer"] or "—",
-                    "files": result["output_files"],
-                    "fire_codigo": result.get("fire_codigo"),
-                    "entry_id": entry["id"],
-                }
-            )
+                results.append(
+                    {
+                        "source": name,
+                        "order": result["order_number"] or "—",
+                        "customer": result["customer"] or "—",
+                        "files": result["output_files"],
+                        "fire_codigo": result.get("fire_codigo"),
+                        "entry_id": entry["id"],
+                    }
+                )
 
-        except Exception as exc:
-            entry = _make_log_entry(
-                source_filename=name,
-                order_number=None,
-                customer=None,
-                output_files=[],
-                status="error",
-                error=str(exc),
-            )
-            _append_log(cfg, entry)
-            errors.append({"source": name, "error": str(exc)})
+            except Exception as exc:
+                entry = _make_log_entry(
+                    source_filename=name,
+                    order_number=None,
+                    customer=None,
+                    output_files=[],
+                    status="error",
+                    error=str(exc),
+                )
+                _append_log(cfg, entry)
+                errors.append({"source": name, "error": str(exc)})
 
     return JSONResponse({"results": results, "errors": errors})
 
@@ -1483,6 +1573,8 @@ def reconciliar_fire_agora(
 class ReimportRequest(BaseModel):
     filename: str
     outputDir: str | None = None
+    # Empresa DECLARADA — ver `ImportRequest.env_slug` / `_env_da_pasta`.
+    env_slug: str | None = None
 
 
 @app.post("/api/reimport")
@@ -1493,8 +1585,9 @@ def reimport_file(
 ) -> JSONResponse:
     from app import config as app_config
 
-    cfg = _get_cfg_for_request(request)
-    request_env = _request_environment(request)
+    env = _env_da_pasta(request, body.env_slug)
+    cfg = _cfg_para_env(env) if env is not None else _get_cfg_for_request(request)
+    request_env = env if env is not None else _request_environment(request)
     imp = app_config.imported_dir(cfg)
 
     name = Path(body.filename).name
@@ -1519,38 +1612,40 @@ def reimport_file(
         raise HTTPException(status_code=500, detail=f"Erro ao criar diretório de saída: {exc}")
 
     try:
-        result = _process_file(src, output_path, env=request_env)
-        entry = _make_log_entry(
-            source_filename=name,
-            order_number=result["order_number"],
-            customer=result["customer"],
-            output_files=result["output_files"],
-            status="success",
-            snapshot=result.get("snapshot"),
-            fire_codigo=result.get("fire_codigo"),
-            db_result=result.get("db_result"),
-        )
-        _append_log(cfg, entry)
-        return JSONResponse(
-            {
-                "source": name,
-                "order": result["order_number"] or "—",
-                "customer": result["customer"] or "—",
-                "files": result["output_files"],
-                "fire_codigo": result.get("fire_codigo"),
-                "entry_id": entry["id"],
-            }
-        )
+        with _persist_ctx(env):
+            result = _process_file(src, output_path, env=request_env)
+            entry = _make_log_entry(
+                source_filename=name,
+                order_number=result["order_number"],
+                customer=result["customer"],
+                output_files=result["output_files"],
+                status="success",
+                snapshot=result.get("snapshot"),
+                fire_codigo=result.get("fire_codigo"),
+                db_result=result.get("db_result"),
+            )
+            _append_log(cfg, entry)
+            return JSONResponse(
+                {
+                    "source": name,
+                    "order": result["order_number"] or "—",
+                    "customer": result["customer"] or "—",
+                    "files": result["output_files"],
+                    "fire_codigo": result.get("fire_codigo"),
+                    "entry_id": entry["id"],
+                }
+            )
     except Exception as exc:
-        entry = _make_log_entry(
-            source_filename=name,
-            order_number=None,
-            customer=None,
-            output_files=[],
-            status="error",
-            error=str(exc),
-        )
-        _append_log(cfg, entry)
+        with _persist_ctx(env):
+            entry = _make_log_entry(
+                source_filename=name,
+                order_number=None,
+                customer=None,
+                output_files=[],
+                status="error",
+                error=str(exc),
+            )
+            _append_log(cfg, entry)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -1690,6 +1785,8 @@ async def preview_file(
 
 class PreviewPendingRequest(BaseModel):
     filename: str
+    # Empresa DECLARADA — ver `ImportRequest.env_slug` / `_env_da_pasta`.
+    env_slug: str | None = None
 
 
 @app.post("/api/preview-pending")
@@ -1702,7 +1799,9 @@ def preview_pending(
     from app.ingestion.file_loader import LoadedFile
     from app.pipeline import process
 
-    cfg = _get_cfg_for_request(request)
+    env = _env_da_pasta(request, body.env_slug)
+    cfg = _cfg_para_env(env) if env is not None else _get_cfg_for_request(request)
+    request_env = env if env is not None else _request_environment(request)
     watch = Path(cfg["watch_dir"])
 
     name = Path(body.filename).name  # strip path components
@@ -1715,30 +1814,33 @@ def preview_pending(
     if src.stat().st_size > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Arquivo excede o limite")
 
-    raw = src.read_bytes()
-    recebido = _guardar_original(raw, name)
-    loaded = LoadedFile(path=src, extension=ext, raw=raw)
-    order = process(loaded)
+    with _persist_ctx(env):
+        raw = src.read_bytes()
+        recebido = _guardar_original(raw, name)
+        loaded = LoadedFile(path=src, extension=ext, raw=raw)
+        order = process(loaded)
 
-    if not order:
-        raise HTTPException(status_code=422, detail="Formato não reconhecido ou pedido sem itens")
+        if not order:
+            raise HTTPException(
+                status_code=422, detail="Formato não reconhecido ou pedido sem itens"
+            )
 
-    from app.erp.product_check import check_order
+        from app.erp.product_check import check_order
 
-    check = check_order(order, env=_request_environment(request))
-    entry = get_cache().put(
-        order=order,
-        source_filename=name,
-        source_bytes=raw,
-        source_ext=ext,
-        source_path=str(src),
-        check=check,
-        original_path=str(recebido.path),
-        file_sha256=recebido.sha256,
-    )
-    payload = _build_preview_payload(entry.preview_id, name, order, check)
-    # Ver comentário equivalente em `preview_upload` (Achado 4, fix round 1).
-    payload["roteamento"] = _roteamento_para_preview(order)
+        check = check_order(order, env=request_env)
+        entry = get_cache().put(
+            order=order,
+            source_filename=name,
+            source_bytes=raw,
+            source_ext=ext,
+            source_path=str(src),
+            check=check,
+            original_path=str(recebido.path),
+            file_sha256=recebido.sha256,
+        )
+        payload = _build_preview_payload(entry.preview_id, name, order, check)
+        # Ver comentário equivalente em `preview_upload` (Achado 4, fix round 1).
+        payload["roteamento"] = _roteamento_para_preview(order)
     return JSONResponse(payload)
 
 

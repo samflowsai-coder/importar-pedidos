@@ -60,7 +60,7 @@
 | worker | `tests/test_worker_drain_outbox.py`, `tests/test_worker_poll_fire.py`, `tests/test_retention.py` | `.venv/bin/pytest tests/test_worker_drain_outbox.py tests/test_worker_poll_fire.py tests/test_retention.py -v` |
 | reconcile (Fire) | `tests/test_fire_reconcile.py`, `tests/test_reconcile_repo.py`, `tests/test_reconcile_runner.py`, `tests/test_web_reconciliar_fire.py` | `.venv/bin/pytest tests/test_fire_reconcile.py tests/test_reconcile_repo.py tests/test_reconcile_runner.py tests/test_web_reconciliar_fire.py -v` |
 | llm | `tests/test_smoke_llm_fallback.py`, `tests/test_outbound_client.py` | `.venv/bin/pytest tests/test_smoke_llm_fallback.py tests/test_outbound_client.py -v` |
-| web | `tests/test_web_server.py`, `tests/test_preview_cache.py` | `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py -v` |
+| web | `tests/test_web_server.py`, `tests/test_preview_cache.py`, `tests/test_env_do_pedido.py`, `tests/test_rotas_por_pedido_cross_env.py`, `tests/test_pasta_cross_env.py` | `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py tests/test_env_do_pedido.py tests/test_rotas_por_pedido_cross_env.py tests/test_pasta_cross_env.py -v` |
 | Suite completa (antes de commit) | todos | `.venv/bin/pytest tests/ -v` |
 
 > **Suíte completa: 1297 testes em 106 arquivos (conferido 2026-09-09).** `erp`, `exporters` e `pipeline` hoje TÊM
@@ -76,6 +76,9 @@
 - `app/persistence/environments_repo.py` — CRUD multi-ambiente (substitui `firebird_config.py` no fluxo multi-empresa); senha cifrada via `app/security/secret_store.py`
 - `app/persistence/router.py` — `shared_connect()` / `env_connect(slug)` para roteamento de DB
 - `app/persistence/context.py` — ContextVar `active_env`; `db.connect()` lê daqui
+- `app/web/dependencies/pedido.py` — `env_do_pedido`/`env_do_import_id`: de qual empresa é
+  este pedido, quando `roteamento_modo='ligado'` (o ambiente é propriedade do pedido, não
+  da sessão/cookie). Inerte fora de `'ligado'`.
 - `app/firebird_config.py` — **legado**: config singleton para deploy single-empresa (mantido para compat)
 - `app/web/static/css/tokens.css`, `shell.css`, `app/web/static/js/shell.js` — app shell compartilhado entre páginas autenticadas
 - `app/http/client.py` — cliente HTTP de saída (retry/timeout); toda chamada externa passa por aqui
