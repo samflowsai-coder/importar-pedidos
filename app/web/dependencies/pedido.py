@@ -12,6 +12,7 @@ antes — é o que permite deployar isto sem mudar nada para a operação.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import HTTPException
@@ -43,7 +44,7 @@ def env_do_import_id(import_id: str) -> dict[str, Any] | None:
     return None
 
 
-async def env_do_pedido(import_id: str):
+async def env_do_pedido(import_id: str) -> AsyncIterator[dict[str, Any] | None]:
     """Ativa a empresa dona deste pedido, quando o roteamento está ligado.
 
     **Tem que ser `async def`.** Medido em 2026-09-11: a versão síncrona com

@@ -43,6 +43,7 @@ from app.web.auth import (
     require_user,
     set_session_cookie,
 )
+from app.web.dependencies.pedido import env_do_pedido
 from app.web.middleware.rate_limit import check_and_consume
 
 if TYPE_CHECKING:
@@ -1400,7 +1401,11 @@ def list_imported(
 
 
 @app.get("/api/imported/{import_id}")
-def get_imported(import_id: str) -> JSONResponse:
+def get_imported(
+    import_id: str,
+    _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
+) -> JSONResponse:
     from app.persistence import repo
 
     entry = repo.get_import(import_id)
@@ -1411,7 +1416,11 @@ def get_imported(import_id: str) -> JSONResponse:
 
 
 @app.get("/api/imported/{import_id}/arquivo-original")
-def baixar_arquivo_original(import_id: str, _user: User = Depends(require_user)) -> FileResponse:
+def baixar_arquivo_original(
+    import_id: str,
+    _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
+) -> FileResponse:
     """Cópia exata do arquivo recebido, antes do parse. Só serve de dentro de
     `recebidos/`: `original_path` vem do banco, mas defesa em profundidade
     custa duas linhas."""
@@ -2179,6 +2188,7 @@ def send_to_fire(
     import_id: str,
     request: Request,
     _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
 ) -> JSONResponse:
     cfg = _get_cfg_for_request(request)
     request_env = getattr(request.state, "environment", None)
@@ -2339,6 +2349,7 @@ def export_xlsx(
     import_id: str,
     request: Request,
     _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
 ) -> JSONResponse:
     cfg = _get_cfg_for_request(request)
     request_env = getattr(request.state, "environment", None)
@@ -2469,6 +2480,7 @@ class CancelRequest(BaseModel):
 def post_to_gestor(
     import_id: str,
     _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
 ) -> JSONResponse:
     """Envia pedido (já em Fire) para o Gestor de Produção.
 
@@ -2609,6 +2621,7 @@ def cancel_import(
     import_id: str,
     body: CancelRequest | None = None,
     _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
 ) -> JSONResponse:
     from app.persistence import repo
 
@@ -2718,6 +2731,7 @@ def override_cliente(
     body: ClienteOverrideRequest,
     request: Request,
     user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
 ) -> JSONResponse:
     """Aplica seleção manual de cliente a um pedido em revisão.
 
@@ -2888,6 +2902,7 @@ def vincular_produto(
     body: VincularProdutoRequest,
     request: Request,
     user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
 ) -> JSONResponse:
     """Cria o vínculo de-para do item (code e/ou ean → produto do Fire),
     audita e re-roda o check. Só em pedidos em revisão."""
@@ -2995,6 +3010,7 @@ def ack_sem_preco(
     import_id: str,
     request: Request,
     user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
 ) -> JSONResponse:
     """Registra ack do operador para itens sem preço cadastrado no Fire.
 
@@ -3061,7 +3077,12 @@ def ack_sem_preco(
 
 
 @app.get("/api/imported/{import_id}/preview")
-def rehydrate_preview(import_id: str, request: Request) -> JSONResponse:
+def rehydrate_preview(
+    import_id: str,
+    request: Request,
+    _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
+) -> JSONResponse:
     """Rebuild the preview payload for a stored order (for the review modal)."""
     from app.models.order import Order
     from app.persistence import repo
