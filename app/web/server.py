@@ -2368,6 +2368,43 @@ def export_xlsx(
     )
 
 
+def _com_env(item: dict, env: dict | None) -> dict:
+    """Anota `env_slug`/`env_name` no item de lote quando `env` é dado.
+
+    `env=None` é o ramo legado (uma empresa só, a do cookie) — item sai sem
+    selo de empresa, exatamente como antes desta task.
+    """
+    if env is not None:
+        item["env_slug"] = env["slug"]
+        item["env_name"] = env["name"]
+    return item
+
+
+def _item_fail(
+    import_id: str, *, reason: str | None, detail: str | None, env: dict | None = None
+) -> dict:
+    """Item de resultado de lote para falha — usado nos dois ramos (legado e
+    agrupado) e nas duas rotas de lote (`_send_one_to_fire`/`_export_one_xlsx`
+    têm o mesmo `reason`/`detail`)."""
+    return _com_env({"id": import_id, "ok": False, "reason": reason, "detail": detail}, env)
+
+
+def _item_ok_fire(import_id: str, outcome: _FireSendOutcome, *, env: dict | None = None) -> dict:
+    return _com_env(
+        {
+            "id": import_id,
+            "ok": True,
+            "fire_codigo": outcome.fire_codigo,
+            "items_inserted": outcome.items_inserted,
+        },
+        env,
+    )
+
+
+def _item_ok_xlsx(import_id: str, outcome: _XlsxExportOutcome, *, env: dict | None = None) -> dict:
+    return _com_env({"id": import_id, "ok": True, "output_files": outcome.output_files}, env)
+
+
 class BatchSendRequest(BaseModel):
     ids: list[str]
 
@@ -2385,7 +2422,7 @@ def batch_send_to_fire(
     if len(body.ids) > 100:
         raise HTTPException(status_code=400, detail="Máximo 100 pedidos por lote")
 
-    from app.persistence import environments_repo, roteamento_repo
+    from app.persistence import roteamento_repo
 
     results: list[dict] = []
     ok_count = 0
@@ -2406,23 +2443,11 @@ def batch_send_to_fire(
             outcome = _send_one_to_fire(import_id, cfg, request_env=env_do_cookie)
             if outcome.ok:
                 ok_count += 1
-                results.append(
-                    {
-                        "id": import_id,
-                        "ok": True,
-                        "fire_codigo": outcome.fire_codigo,
-                        "items_inserted": outcome.items_inserted,
-                    }
-                )
+                results.append(_item_ok_fire(import_id, outcome))
             else:
                 fail_count += 1
                 results.append(
-                    {
-                        "id": import_id,
-                        "ok": False,
-                        "reason": outcome.reason,
-                        "detail": outcome.detail,
-                    }
+                    _item_fail(import_id, reason=outcome.reason, detail=outcome.detail)
                 )
         return JSONResponse(
             {"total": len(body.ids), "ok": ok_count, "failed": fail_count, "results": results}
@@ -2430,51 +2455,42 @@ def batch_send_to_fire(
 
     from collections import defaultdict
 
+    # Achado já vem de `environments_repo.list_active()` (dentro de
+    # env_do_import_id) — reusa o mesmo dict no loop de escrita em vez de
+    # buscar de novo por slug, que fecharia menos a janela de corrida (busca
+    # por slug não filtra is_active) e gastaria uma query à toa por grupo.
     grupos: dict[str, list[str]] = defaultdict(list)
+    envs_por_slug: dict[str, dict] = {}
     for import_id in body.ids:
         achado = env_do_import_id(import_id)
         if achado is None:
             fail_count += 1
             results.append(
-                {
-                    "id": import_id,
-                    "ok": False,
-                    "reason": "nao_encontrado",
-                    "detail": "Pedido não encontrado em nenhuma empresa ativa",
-                }
+                _item_fail(
+                    import_id,
+                    reason="nao_encontrado",
+                    detail="Pedido não encontrado em nenhuma empresa ativa",
+                )
             )
         else:
             grupos[achado["slug"]].append(import_id)
+            envs_por_slug.setdefault(achado["slug"], achado)
 
     for slug, ids in grupos.items():
-        env = environments_repo.get_by_slug(slug)
+        env = envs_por_slug[slug]
         cfg_do_grupo = _cfg_para_env(env)
         with env_context.active_env(env["id"], env["slug"]):
             for import_id in ids:
                 outcome = _send_one_to_fire(import_id, cfg_do_grupo, request_env=env)
                 if outcome.ok:
                     ok_count += 1
-                    results.append(
-                        {
-                            "id": import_id,
-                            "ok": True,
-                            "fire_codigo": outcome.fire_codigo,
-                            "items_inserted": outcome.items_inserted,
-                            "env_slug": env["slug"],
-                            "env_name": env["name"],
-                        }
-                    )
+                    results.append(_item_ok_fire(import_id, outcome, env=env))
                 else:
                     fail_count += 1
                     results.append(
-                        {
-                            "id": import_id,
-                            "ok": False,
-                            "reason": outcome.reason,
-                            "detail": outcome.detail,
-                            "env_slug": env["slug"],
-                            "env_name": env["name"],
-                        }
+                        _item_fail(
+                            import_id, reason=outcome.reason, detail=outcome.detail, env=env
+                        )
                     )
 
     return JSONResponse(
@@ -2499,7 +2515,7 @@ def batch_export_xlsx(
     if len(body.ids) > 100:
         raise HTTPException(status_code=400, detail="Máximo 100 pedidos por lote")
 
-    from app.persistence import environments_repo, roteamento_repo
+    from app.persistence import roteamento_repo
 
     results: list[dict] = []
     ok_count = 0
@@ -2520,18 +2536,11 @@ def batch_export_xlsx(
             outcome = _export_one_xlsx(import_id, cfg, request_env=env_do_cookie)
             if outcome.ok:
                 ok_count += 1
-                results.append(
-                    {"id": import_id, "ok": True, "output_files": outcome.output_files}
-                )
+                results.append(_item_ok_xlsx(import_id, outcome))
             else:
                 fail_count += 1
                 results.append(
-                    {
-                        "id": import_id,
-                        "ok": False,
-                        "reason": outcome.reason,
-                        "detail": outcome.detail,
-                    }
+                    _item_fail(import_id, reason=outcome.reason, detail=outcome.detail)
                 )
         return JSONResponse(
             {"total": len(body.ids), "ok": ok_count, "failed": fail_count, "results": results}
@@ -2539,50 +2548,42 @@ def batch_export_xlsx(
 
     from collections import defaultdict
 
+    # Achado já vem de `environments_repo.list_active()` (dentro de
+    # env_do_import_id) — reusa o mesmo dict no loop de escrita em vez de
+    # buscar de novo por slug, que fecharia menos a janela de corrida (busca
+    # por slug não filtra is_active) e gastaria uma query à toa por grupo.
     grupos: dict[str, list[str]] = defaultdict(list)
+    envs_por_slug: dict[str, dict] = {}
     for import_id in body.ids:
         achado = env_do_import_id(import_id)
         if achado is None:
             fail_count += 1
             results.append(
-                {
-                    "id": import_id,
-                    "ok": False,
-                    "reason": "nao_encontrado",
-                    "detail": "Pedido não encontrado em nenhuma empresa ativa",
-                }
+                _item_fail(
+                    import_id,
+                    reason="nao_encontrado",
+                    detail="Pedido não encontrado em nenhuma empresa ativa",
+                )
             )
         else:
             grupos[achado["slug"]].append(import_id)
+            envs_por_slug.setdefault(achado["slug"], achado)
 
     for slug, ids in grupos.items():
-        env = environments_repo.get_by_slug(slug)
+        env = envs_por_slug[slug]
         cfg_do_grupo = _cfg_para_env(env)
         with env_context.active_env(env["id"], env["slug"]):
             for import_id in ids:
                 outcome = _export_one_xlsx(import_id, cfg_do_grupo, request_env=env)
                 if outcome.ok:
                     ok_count += 1
-                    results.append(
-                        {
-                            "id": import_id,
-                            "ok": True,
-                            "output_files": outcome.output_files,
-                            "env_slug": env["slug"],
-                            "env_name": env["name"],
-                        }
-                    )
+                    results.append(_item_ok_xlsx(import_id, outcome, env=env))
                 else:
                     fail_count += 1
                     results.append(
-                        {
-                            "id": import_id,
-                            "ok": False,
-                            "reason": outcome.reason,
-                            "detail": outcome.detail,
-                            "env_slug": env["slug"],
-                            "env_name": env["name"],
-                        }
+                        _item_fail(
+                            import_id, reason=outcome.reason, detail=outcome.detail, env=env
+                        )
                     )
 
     return JSONResponse(

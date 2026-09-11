@@ -130,9 +130,10 @@ def test_lote_com_id_orfao_falha_so_aquele_item(portal):
     assert corpo["failed"] >= 1
 
 
-def test_lote_fora_de_ligado_sem_cookie_continua_412(portal):
+@pytest.mark.parametrize("modo", [roteamento_repo.DESLIGADO, roteamento_repo.OBSERVANDO])
+def test_lote_fora_de_ligado_sem_cookie_continua_412(portal, modo):
     """Sem cookie e sem 'ligado', o lote e o de hoje."""
     _grava("mm", "M1")
-    roteamento_repo.set_modo(roteamento_repo.DESLIGADO, por="teste")
+    roteamento_repo.set_modo(modo, por="teste")
     r = portal.post("/api/batch/export-xlsx", json={"ids": ["M1"]})
     assert r.status_code == 412
