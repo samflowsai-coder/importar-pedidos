@@ -199,6 +199,11 @@
     .file-meta {
       font-size: 11px; color: var(--text-muted); margin-top: 1px;
       font-variant-numeric: tabular-nums;
+      /* Mesmo padrão do `.log-sub` (aba Pedidos) pro mesmo selo de empresa:
+         quebra por SEGMENTO (o selo inteiro pula de linha como bloco),
+         nunca por palavra solta dentro do selo — nome de empresa não tem
+         limite de tamanho em /admin/ambientes. */
+      display: flex; gap: 10px; flex-wrap: wrap;
     }
 
     /* ── Skeleton ── */
@@ -352,11 +357,20 @@
        nunca uma cor sólida que competisse com os selos de status
        (statusPill / fireBadge) acima. Texto em --text-secondary, não
        --text-muted: sobre --surface-hover mede só 4.397:1 (abaixo do AA de
-       4.5:1 pra texto de 10px) — --text-secondary mede 7.032:1. */
+       4.5:1 pra texto de 10px) — --text-secondary mede 7.032:1.
+       Borda em --border-control, não --border: este selo é reusado dentro
+       de `.file-row`, que tem `:hover` mudando o fundo pra --surface-hover —
+       o MESMO valor do background do selo. No hover os dois ficam
+       pixel-idênticos e --border mediria 1.15:1 contra esse fundo (abaixo
+       do 3:1 do WCAG 1.4.11 pra contorno de componente); no estado default
+       já era 1.22:1. --border-control (criado pra isso, ver shell.css e
+       admin-roteamento.html) mede 2.96:1 contra --surface-hover e 3.11:1
+       contra --surface — o selo continua visível como chip nos dois
+       estados, com ou sem hover da linha. */
     .log-env-badge {
       font-size: 10px; font-weight: 600; letter-spacing: .01em;
       padding: 1px 7px; border-radius: 999px;
-      border: 1px solid var(--border); color: var(--text-secondary);
+      border: 1px solid var(--border-control); color: var(--text-secondary);
       background: var(--surface-hover);
     }
 
@@ -1060,6 +1074,19 @@ function showSkeleton() {
     Array(4).fill('<div class="skeleton-row"></div>').join('');
 }
 
+// `emptyCfgBtn` é UM nó de DOM reusado entre renders (só alterna classe,
+// texto). Atribuir `onclick` via JS vence o atributo inline pra sempre, uma
+// vez setado — se um ramo setasse o destino e os outros não, o destino
+// ficaria grudado ali depois que o cenário mudasse (ex.: operador conserta
+// a pasta, a lista volta ao normal, mas o botão continua apontando pra
+// `/admin/ambientes`). Por isso todo ramo que toca o CTA passa pelos MESMOS
+// dois parâmetros — nunca sobra estado de um render anterior.
+function _setEmptyCta(ctaBtn, { visible, label, href }) {
+  ctaBtn.classList.toggle('hidden', !visible);
+  ctaBtn.textContent = label;
+  ctaBtn.onclick = () => { window.location.href = href; };
+}
+
 function renderPending(data) {
   const label = document.getElementById('watchDirLabel');
   // `watchDir: null` é o caso somado ('ligado' sem cookie): não existe UMA
@@ -1068,7 +1095,10 @@ function renderPending(data) {
   const somado = data.watchDir === null;
   if (somado) {
     label.textContent = 'Todas as empresas ativas';
-    label.classList.remove('missing');
+    // Erro de configuração (nenhuma das pastas existe) tem que acender o
+    // mesmo aviso que o caso de uma empresa só usa — sem isso, duas pastas
+    // erradas em /admin/ambientes pareciam um dia tranquilo sem pedido.
+    label.classList.toggle('missing', !data.exists);
   } else {
     label.textContent = data.watchDir || 'Pasta não configurada';
     label.classList.toggle('missing', !data.exists);
@@ -1081,21 +1111,25 @@ function renderPending(data) {
     const sub = document.getElementById('pendingEmptySub');
     const ctaBtn = document.getElementById('emptyCfgBtn');
     if (somado) {
-      // A pasta é por empresa (/admin/ambientes), não a config legada de
-      // pasta única — o CTA abaixo levaria pro lugar errado aqui.
-      sub.textContent = data.exists
-        ? 'Nenhum arquivo pendente nas empresas ativas.'
-        : 'Nenhuma pasta de entrada encontrada nas empresas ativas.';
-      ctaBtn.classList.add('hidden');
+      if (data.exists) {
+        sub.textContent = 'Nenhum arquivo pendente nas empresas ativas.';
+        _setEmptyCta(ctaBtn, { visible: false, label: 'Configurar pasta', href: '/configuracoes/diretorios' });
+      } else {
+        // A pasta é por empresa — o CTA de pasta única legada levaria pro
+        // lugar errado aqui. Manda pra onde a pasta de cada empresa de fato
+        // se configura.
+        sub.textContent = 'Nenhuma pasta de entrada encontrada nas empresas ativas.';
+        _setEmptyCta(ctaBtn, { visible: true, label: 'Ver ambientes', href: '/admin/ambientes' });
+      }
     } else if (!data.watchDir) {
       sub.textContent = 'Configure uma pasta de entrada para começar.';
-      ctaBtn.classList.remove('hidden');
+      _setEmptyCta(ctaBtn, { visible: true, label: 'Configurar pasta', href: '/configuracoes/diretorios' });
     } else if (!data.exists) {
       sub.textContent = 'Pasta não encontrada. Verifique o caminho em Configurações.';
-      ctaBtn.classList.remove('hidden');
+      _setEmptyCta(ctaBtn, { visible: true, label: 'Configurar pasta', href: '/configuracoes/diretorios' });
     } else {
       sub.textContent = 'Adicione arquivos PDF, XLS ou XLSX na pasta configurada.';
-      ctaBtn.classList.add('hidden');
+      _setEmptyCta(ctaBtn, { visible: false, label: 'Configurar pasta', href: '/configuracoes/diretorios' });
     }
     emptyEl.classList.remove('hidden');
     listEl.classList.add('hidden');
@@ -1114,9 +1148,11 @@ function renderFileRows() {
     // Só existe na caixa somada ('ligado' sem cookie) — mesmo selo de
     // `/api/imported` somado (Task 3), classe reusada, sem inventar cor. Vai
     // no `.file-meta` (não no `.file-name`, que é `nowrap`+ellipsis — um
-    // nome comprido escondia o selo atrás do corte).
+    // nome comprido escondia o selo atrás do corte). Sem `&middot;` antes:
+    // `.file-meta` agora é flex com `gap`, que já separa o texto do selo —
+    // igual ao `.log-sub` (nenhum middot entre os spans de lá).
     const envBadge = f.env_name
-      ? ` &middot; <span class="log-env-badge" title="Empresa">${esc(f.env_name)}</span>`
+      ? `<span class="log-env-badge" title="Empresa">${esc(f.env_name)}</span>`
       : '';
     const envArg = f.env_slug ? `, '${escJs(f.env_slug)}'` : '';
     return `
