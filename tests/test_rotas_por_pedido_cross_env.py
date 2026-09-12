@@ -310,3 +310,106 @@ def test_fora_de_ligado_a_escrita_continua_seguindo_o_cookie(portal, espia, modo
     assert espia["check"] == "mm"
     assert espia["flow"] == "mm"
     assert espia["pasta"] == _pasta_de("mm")
+
+
+# ── As outras QUATRO amarracoes: so tinham cobertura indireta ───────────────
+#
+# `send-to-fire` e `export-xlsx`, acima, ja provam a amarracao ponta-a-ponta.
+# Estas quatro rotas passam pelo MESMO `_request_environment`/
+# `_firebird_open_for_request`, mas cada uma numa forma diferente de chegar
+# no Fire, no check de preco ou no slug do Flow — vale um teste de rota por
+# cada uma, nao so' a prova unitaria da dependency.
+
+
+@pytest.mark.parametrize("cookie", [None, "mm"], ids=["sem-cookie", "cookie-da-outra-empresa"])
+def test_ligado_override_cliente_abre_o_firebird_da_empresa_do_pedido(portal, monkeypatch, cookie):
+    """`_firebird_open_for_request` tem que devolver o config de NASMAR — nunca
+    o da MM (cookie) nem o singleton legado (sem cookie, que em 'ligado' e' o
+    estado normal). O dublê recusa a conexao: o assert e' sobre qual config
+    chegou no construtor, nunca um SELECT de verdade."""
+    from contextlib import contextmanager
+
+    from app.erp.connection import FirebirdConnection
+
+    visto: dict[str, str | None] = {}
+
+    @contextmanager
+    def _fake_connect_with_config(self, cfg):
+        visto["firebird"] = cfg.get("path")
+        raise RuntimeError("espia: sem firebird de verdade")
+        yield None  # pragma: no cover — nunca alcancado
+
+    monkeypatch.setattr(FirebirdConnection, "connect_with_config", _fake_connect_with_config)
+
+    _grava("nasmar", "N1")
+    roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
+    if cookie:
+        portal.cookies.set("portal_env", environments_repo.get_by_slug(cookie)["id"])
+
+    r = portal.post("/api/imported/N1/override-cliente", json={"cliente_codigo": 123})
+    assert r.status_code == 502, r.text  # a excecao do dublê, nao um erro de amarracao
+    assert visto["firebird"] == environments_repo.get_by_slug("nasmar")["fb_path"]
+
+
+@pytest.mark.parametrize("cookie", [None, "mm"], ids=["sem-cookie", "cookie-da-outra-empresa"])
+def test_ligado_vincular_produto_roda_o_check_na_empresa_do_pedido(portal, espia, monkeypatch, cookie):
+    """`check_order(order, env=...)` tem que rodar com o env de NASMAR — nunca
+    o da MM nem `None`, que abriria a trava de preco (`env=None`) no pedido
+    errado."""
+    from app.persistence import catalogo_fire_repo
+
+    monkeypatch.setattr(
+        catalogo_fire_repo,
+        "list_all",
+        lambda conn: [{"fire_produto_id": "P1", "codigo": 111, "nome": "TENIS X", "ean": "7891"}],
+    )
+
+    _grava("nasmar", "N1", snapshot=_snapshot("N1"))
+    roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
+    if cookie:
+        portal.cookies.set("portal_env", environments_repo.get_by_slug(cookie)["id"])
+
+    r = portal.post(
+        "/api/imported/N1/vincular-produto", json={"item_index": 0, "fire_produto_id": "P1"}
+    )
+    assert r.status_code == 200, r.text
+    assert espia["check"] == "nasmar"
+
+
+@pytest.mark.parametrize("cookie", [None, "mm"], ids=["sem-cookie", "cookie-da-outra-empresa"])
+def test_ligado_ack_sem_preco_roda_o_check_na_empresa_do_pedido(portal, espia, cookie):
+    """Mesma amarracao do vincular-produto, outra rota: o check tem que rodar
+    com o env de NASMAR, nunca da MM nem `None`."""
+    _grava("nasmar", "N1", snapshot=_snapshot("N1"))
+    roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
+    if cookie:
+        portal.cookies.set("portal_env", environments_repo.get_by_slug(cookie)["id"])
+
+    r = portal.post("/api/imported/N1/ack-sem-preco")
+    assert r.status_code == 503, r.text  # o dublê devolve available=False
+    assert espia["check"] == "nasmar"
+
+
+@pytest.mark.parametrize("cookie", [None, "mm"], ids=["sem-cookie", "cookie-da-outra-empresa"])
+def test_ligado_rehydrate_preview_le_o_slug_da_empresa_do_pedido(portal, monkeypatch, cookie):
+    """O de-para de cliente intercompany (`resolucao_para`) tem que receber o
+    slug de NASMAR — nunca o da MM nem `None`, que apagaria o bloco inteiro do
+    payload em silencio."""
+    from app.web import server as srv
+
+    visto: dict[str, str | None] = {}
+
+    def _resolucao(order, *, slug=None):
+        visto["slug"] = slug
+        return None
+
+    monkeypatch.setattr(srv, "resolucao_para", _resolucao)
+
+    _grava("nasmar", "N1", snapshot=_snapshot("N1"))
+    roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
+    if cookie:
+        portal.cookies.set("portal_env", environments_repo.get_by_slug(cookie)["id"])
+
+    r = portal.get("/api/imported/N1/preview")
+    assert r.status_code == 200, r.text
+    assert visto["slug"] == "nasmar"
