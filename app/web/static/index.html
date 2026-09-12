@@ -730,6 +730,7 @@
           Atualizar
         </button>
       </div>
+      <div class="toolbar-path missing hidden" id="missingEnvsRow" style="margin-bottom:16px"></div>
       <input type="file" id="previewFileInput" accept=".pdf,.xls,.xlsx" style="display:none" onchange="handlePreviewFileInput(event)">
 
       <div id="pendingContent">
@@ -820,7 +821,10 @@
 <div class="overlay" id="previewOverlay">
   <div class="modal-wide">
     <div class="modal-header">
-      <span class="modal-title" id="previewTitle">Revisar pedido</span>
+      <span style="display:flex;align-items:center;gap:8px">
+        <span class="modal-title" id="previewTitle">Revisar pedido</span>
+        <span class="log-env-badge hidden" id="pvEnvBadge" title="Empresa"></span>
+      </span>
       <button class="icon-btn" onclick="closePreviewModal()">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
           <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
@@ -1093,13 +1097,25 @@ function renderPending(data) {
   // pasta, existem as de todas as empresas ativas — o selo por item
   // (renderFileRows) é quem diz qual é qual, não o rótulo do topo.
   const somado = data.watchDir === null;
+  const missingRow = document.getElementById('missingEnvsRow');
   if (somado) {
     label.textContent = 'Todas as empresas ativas';
     // Erro de configuração (nenhuma das pastas existe) tem que acender o
     // mesmo aviso que o caso de uma empresa só usa — sem isso, duas pastas
     // erradas em /admin/ambientes pareciam um dia tranquilo sem pedido.
     label.classList.toggle('missing', !data.exists);
+    // Parcial (uma pasta existe, outra não): o `exists` do topo não denuncia
+    // isso sozinho — um share desmontado numa das empresas ficaria invisível.
+    const faltando = data.missingEnvs || [];
+    if (faltando.length) {
+      missingRow.textContent = 'Pasta não encontrada: ' +
+        faltando.map(e => e.name).join(', ');
+      missingRow.classList.remove('hidden');
+    } else {
+      missingRow.classList.add('hidden');
+    }
   } else {
+    missingRow.classList.add('hidden');
     label.textContent = data.watchDir || 'Pasta não configurada';
     label.classList.toggle('missing', !data.exists);
   }
@@ -1151,8 +1167,11 @@ function renderFileRows() {
     // nome comprido escondia o selo atrás do corte). Sem `&middot;` antes:
     // `.file-meta` agora é flex com `gap`, que já separa o texto do selo —
     // igual ao `.log-sub` (nenhum middot entre os spans de lá).
+    // title="Pasta de entrada", não "Empresa": com a escada de roteamento um
+    // arquivo na pasta da Nasmar pode rotear pra MM — este selo é a empresa
+    // da PASTA, não a do pedido (que só se sabe depois do parse).
     const envBadge = f.env_name
-      ? `<span class="log-env-badge" title="Empresa">${esc(f.env_name)}</span>`
+      ? `<span class="log-env-badge" title="Pasta de entrada">${esc(f.env_name)}</span>`
       : '';
     const envArg = f.env_slug ? `, '${escJs(f.env_slug)}'` : '';
     return `
@@ -1619,13 +1638,17 @@ async function sendToFire(importId) {
     const res = await api('/api/imported/' + encodeURIComponent(importId) + '/send-to-fire', {
       method: 'POST',
     });
+    // `currentPreview` é zerado por `closePreviewModal()` — captura o nome
+    // da empresa (quando o roteamento resolveu o pedido) antes de fechar.
+    const envName = currentPreview?.env_name;
     closePreviewModal();
     await loadImported();
     switchTab('imported');
     if (window.appShell?.showSuccess) {
       const codigo = res?.fire_codigo ? ` (CAB_VENDAS.CODIGO=${res.fire_codigo})` : '';
       const suffix = cfg.exportMode === 'both' ? ' + XLS gerado' : '';
-      window.appShell.showSuccess(`Cadastrado no Fire${codigo}${suffix}.`);
+      const empresa = envName ? ` da ${envName}` : '';
+      window.appShell.showSuccess(`Cadastrado no Fire${empresa}${codigo}${suffix}.`);
     }
   } catch (err) {
     btn.disabled = false;
@@ -2238,6 +2261,17 @@ function renderPreview(data) {
   hidePreviewError();
   const content = document.getElementById('previewContent');
   content.classList.remove('hidden');
+
+  // Selo de empresa no cabeçalho do modal: só existe quando o roteamento
+  // resolveu o pedido (`env_name` vindo de `env_do_pedido`). Fora de
+  // 'ligado' o campo nem chega — nada muda ali.
+  const pvEnvBadge = document.getElementById('pvEnvBadge');
+  if (data.env_name) {
+    pvEnvBadge.textContent = data.env_name;
+    pvEnvBadge.classList.remove('hidden');
+  } else {
+    pvEnvBadge.classList.add('hidden');
+  }
 
   const h = data.header || {};
   document.getElementById('pvOrderNumber').textContent = h.order_number || '—';

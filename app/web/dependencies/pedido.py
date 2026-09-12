@@ -23,20 +23,26 @@ from app.persistence import environments_repo, roteamento_repo, router
 _AUSENTE = object()
 
 
-def env_do_import_id(import_id: str) -> dict[str, Any] | None:
+def env_do_import_id(
+    import_id: str, envs: list[dict[str, Any]] | None = None
+) -> dict[str, Any] | None:
     """Empresa ATIVA que contém este pedido, ou `None`.
 
     `imports.id` é PRIMARY KEY em cada banco de empresa, então é acerto de
     índice por empresa.
 
-    Usa `list_active()` de propósito: pedido de empresa desativada fica
-    inalcançável. É coerente com `repo.list_imports_all_envs`, que também só
-    soma ativas — o pedido nem aparece na caixa de entrada — e com o
-    middleware, que já recusa cookie apontando para empresa inativa.
+    Usa `list_active()` de propósito (por padrão): pedido de empresa
+    desativada fica inalcançável. É coerente com `repo.list_imports_all_envs`,
+    que também só soma ativas — o pedido nem aparece na caixa de entrada — e
+    com o middleware, que já recusa cookie apontando para empresa inativa.
+
+    `envs`: lista já resolvida, pro chamador que resolve N ids em lote
+    hoistar a query pra fora do loop — ver `app/web/server.py` (batch de
+    envio ao Fire / export XLSX). `None` mantém o comportamento de sempre.
     """
     if not import_id:
         return None
-    for env in environments_repo.list_active():
+    for env in envs if envs is not None else environments_repo.list_active():
         with router.env_connect(env["slug"]) as conn:
             achou = conn.execute(
                 "SELECT 1 FROM imports WHERE id = ? LIMIT 1", (import_id,)

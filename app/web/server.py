@@ -221,8 +221,12 @@ def _env_da_pasta(request: Request, env_slug: str | None) -> dict[str, object] |
     arquivos podem ter o mesmo nome em pastas de empresas diferentes. Por
     isso a empresa não é derivada, é DECLARADA pelo `env_slug` do corpo.
 
-    Fora de `'ligado'`, ou com cookie presente, o cookie manda e `env_slug`
-    é ignorado — comportamento de hoje, intacto. Em `'ligado'` sem cookie:
+    Fora de `'ligado'` o cookie manda e `env_slug` é ignorado — comportamento
+    de hoje, intacto. Em `'ligado'` com cookie presente: `env_slug` AUSENTE
+    ainda deixa o cookie mandar (idem); `env_slug` PRESENTE e DIVERGENTE do
+    ambiente do cookie é conflito, não substituição silenciosa — nome de
+    arquivo não é único entre empresas, então "ignorar a declaração" seria
+    abrir o arquivo de outra empresa sem avisar. Em `'ligado'` sem cookie:
     ausente -> 400 nomeando o campo; não corresponde a empresa ATIVA -> 404.
     Nunca um default.
     """
@@ -230,7 +234,16 @@ def _env_da_pasta(request: Request, env_slug: str | None) -> dict[str, object] |
 
     if roteamento_repo.modo() != roteamento_repo.LIGADO:
         return None
-    if _request_environment(request) is not None:
+    cookie_env = _request_environment(request)
+    if cookie_env is not None:
+        if env_slug and env_slug != cookie_env["slug"]:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"empresa declarada '{env_slug}', empresa selecionada "
+                    f"'{cookie_env['slug']}' — recarregue a lista."
+                ),
+            )
         return None
     if not env_slug:
         raise HTTPException(
@@ -1292,16 +1305,24 @@ def list_pending(request: Request, _user: User = Depends(require_user)) -> JSONR
         # somado) pra quem for agir saber qual pasta é qual.
         files: list[dict] = []
         any_exists = False
+        missing_envs: list[dict] = []
         for env in environments_repo.list_active():
             env_files, exists = _listar_pasta_pendente(env["watch_dir"])
             any_exists = any_exists or exists
+            if not exists:
+                missing_envs.append({"slug": env["slug"], "name": env["name"]})
             files.extend(_com_env(f, env) for f in env_files)
         files.sort(key=lambda f: f["mtime"], reverse=True)
         # `watchDir` não tem valor único no caso somado — a UI usa o selo por
         # item em vez do topo (ver Step 6). `exists` reflete "pelo menos uma
         # pasta existe", pra não acender o aviso de "pasta não encontrada" à
         # toa quando só uma das empresas ainda não tem a pasta criada.
-        return JSONResponse({"files": files, "watchDir": None, "exists": any_exists})
+        # `missingEnvs` é o sinal que `exists` sozinho mascara: uma pasta
+        # saudável não pode esconder a ausência da outra (share de rede
+        # desmontado em uma das empresas continua invisível sem isto).
+        return JSONResponse(
+            {"files": files, "watchDir": None, "exists": any_exists, "missingEnvs": missing_envs}
+        )
 
     cfg = _get_cfg_for_request(request)
     files, exists = _listar_pasta_pendente(cfg["watch_dir"])
@@ -2557,14 +2578,18 @@ def batch_send_to_fire(
 
     from collections import defaultdict
 
-    # Achado já vem de `environments_repo.list_active()` (dentro de
-    # env_do_import_id) — reusa o mesmo dict no loop de escrita em vez de
-    # buscar de novo por slug, que fecharia menos a janela de corrida (busca
-    # por slug não filtra is_active) e gastaria uma query à toa por grupo.
+    from app.persistence import environments_repo
+
+    # Hoisted pra fora do loop: `env_do_import_id` sem isto rodaria
+    # `list_active()` (query no app_shared.db + abertura de SQLite por
+    # ambiente) uma vez PRA CADA id do lote — 100 ids = 100 buscas na mesma
+    # lista. Não fecha nenhuma janela de corrida (nem antes nem depois disto
+    # a escrita re-checa `is_active`) — é só query a menos.
+    envs_ativos = environments_repo.list_active()
     grupos: dict[str, list[str]] = defaultdict(list)
     envs_por_slug: dict[str, dict] = {}
     for import_id in body.ids:
-        achado = env_do_import_id(import_id)
+        achado = env_do_import_id(import_id, envs=envs_ativos)
         if achado is None:
             fail_count += 1
             results.append(
@@ -2650,14 +2675,18 @@ def batch_export_xlsx(
 
     from collections import defaultdict
 
-    # Achado já vem de `environments_repo.list_active()` (dentro de
-    # env_do_import_id) — reusa o mesmo dict no loop de escrita em vez de
-    # buscar de novo por slug, que fecharia menos a janela de corrida (busca
-    # por slug não filtra is_active) e gastaria uma query à toa por grupo.
+    from app.persistence import environments_repo
+
+    # Hoisted pra fora do loop: `env_do_import_id` sem isto rodaria
+    # `list_active()` (query no app_shared.db + abertura de SQLite por
+    # ambiente) uma vez PRA CADA id do lote — 100 ids = 100 buscas na mesma
+    # lista. Não fecha nenhuma janela de corrida (nem antes nem depois disto
+    # a escrita re-checa `is_active`) — é só query a menos.
+    envs_ativos = environments_repo.list_active()
     grupos: dict[str, list[str]] = defaultdict(list)
     envs_por_slug: dict[str, dict] = {}
     for import_id in body.ids:
-        achado = env_do_import_id(import_id)
+        achado = env_do_import_id(import_id, envs=envs_ativos)
         if achado is None:
             fail_count += 1
             results.append(
@@ -3333,6 +3362,11 @@ def rehydrate_preview(
     payload["fire_codigo"] = entry.get("fire_codigo")
     payload["fire_status_last_seen"] = entry.get("fire_status_last_seen")
     payload["arquivo_original"] = _arquivo_original_info(entry)
+    # Só existe quando a empresa foi RESOLVIDA pelo pedido (roteamento
+    # 'ligado', via `env_do_pedido`) — fora dali nada muda: o selo já existe
+    # na linha da caixa somada, mas some ao abrir o modal, que é a tela onde
+    # o operador decide gravar. Ver Menor 1 do lote 2.
+    payload["env_name"] = _env.get("name") if _env is not None else None
 
     # Surface the manual cliente override into the check banner so the UI shows
     # it in green instead of the original "✗ Cliente não encontrado" red flag.

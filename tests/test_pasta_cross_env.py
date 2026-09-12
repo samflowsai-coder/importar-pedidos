@@ -45,6 +45,27 @@ def test_ligado_pending_soma_as_pastas_com_selo(portal):
     assert {f["env_slug"] for f in files} == {"mm", "nasmar"}
     assert {f["env_name"] for f in files} == {"MM Americanense", "Nasmar"}
     assert {f["name"] for f in files} == {"PEDIDO.pdf"}
+    # nenhuma pasta faltando: a lista vem vazia, não ausente.
+    assert r.json()["missingEnvs"] == []
+
+
+def test_ligado_pending_denuncia_pasta_que_sumiu(portal, tmp_path):
+    """Uma pasta saudável não pode mascarar a ausência da outra: cliente roda
+    duas empresas com pastas em share de rede via VPN, e um share desmontado
+    não pode virar 'Todas as empresas ativas' silencioso."""
+    import shutil
+
+    shutil.rmtree(tmp_path / "nasmar" / "in")
+
+    roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
+    r = portal.get("/api/pending")
+    assert r.status_code == 200
+    data = r.json()
+    # `exists` continua "pelo menos uma pasta existe" — mm ainda tem pasta.
+    assert data["exists"] is True
+    assert [f["name"] for f in data["files"]] == ["PEDIDO.pdf"]
+    assert {f["env_slug"] for f in data["files"]} == {"mm"}
+    assert data["missingEnvs"] == [{"slug": "nasmar", "name": "Nasmar"}]
 
 
 @pytest.mark.parametrize("modo", [roteamento_repo.DESLIGADO, roteamento_repo.OBSERVANDO])
@@ -106,13 +127,10 @@ def test_ligado_import_declarado_le_a_pasta_certa(portal, tmp_path):
     assert (tmp_path / "mm" / "in" / "PEDIDO.pdf").read_bytes() == b"%PDF-1.4 mm"
 
 
-def test_ligado_com_cookie_env_slug_do_corpo_e_ignorado(portal, tmp_path, monkeypatch):
-    """Cookie presente em 'ligado' continua mandando: `env_slug` do corpo é
-    só considerado quando NÃO há cookie (`_env_da_pasta` devolve `None` na
-    hora que vê `_request_environment(request) is not None`). Cookie=mm +
-    `env_slug=nasmar` no corpo tem que ler o arquivo da pasta do COOKIE — se
-    a precedência estivesse invertida, o preview leria (e guardaria) o
-    arquivo da empresa ERRADA sem avisar ninguém."""
+def test_ligado_com_cookie_e_env_slug_ausente_usa_cookie(portal, tmp_path, monkeypatch):
+    """Cookie presente em 'ligado' continua mandando quando o corpo NÃO
+    declara `env_slug` (`_env_da_pasta` só entra em jogo pra resolver
+    divergência — ausência é o caso de sempre: cookie manda)."""
     import app.pipeline
 
     # O PDF da fixture é só bytes de mentira (não é um pedido real) — sem
@@ -127,14 +145,106 @@ def test_ligado_com_cookie_env_slug_do_corpo_e_ignorado(portal, tmp_path, monkey
     roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
     portal.cookies.set("portal_env", environments_repo.get_by_slug("mm")["id"])
 
-    r = portal.post(
-        "/api/preview-pending",
-        json={"filename": "PEDIDO.pdf", "env_slug": "nasmar"},
-    )
+    r = portal.post("/api/preview-pending", json={"filename": "PEDIDO.pdf"})
     assert r.status_code == 422, r.text
 
     copias_mm = list((tmp_path / "recebidos" / "mm").rglob("*.pdf"))
     assert len(copias_mm) == 1
     assert copias_mm[0].read_bytes() == b"%PDF-1.4 mm"
-    # a pasta da Nasmar (do env_slug ignorado) nunca foi tocada
     assert not (tmp_path / "recebidos" / "nasmar").exists()
+
+
+def test_ligado_com_cookie_e_env_slug_divergente_da_409(portal, tmp_path):
+    """`env_slug` presente e DIFERENTE do ambiente do cookie é conflito, não
+    substituição silenciosa: nome de arquivo não é único entre empresas — se
+    o cookie vencesse aqui sem avisar, o preview leria (e guardaria) o
+    arquivo da empresa ERRADA. 409 nomeando os dois em vez do 422 do parser:
+    o guard corta ANTES de tocar o disco (`_guardar_original` nem roda)."""
+    roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
+    portal.cookies.set("portal_env", environments_repo.get_by_slug("mm")["id"])
+
+    r = portal.post(
+        "/api/preview-pending",
+        json={"filename": "PEDIDO.pdf", "env_slug": "nasmar"},
+    )
+    assert r.status_code == 409, r.text
+    detail = str(r.json()["detail"])
+    assert "nasmar" in detail
+    assert "mm" in detail
+
+    # o guard corta antes de `_guardar_original` — nenhuma pasta foi tocada
+    assert not (tmp_path / "recebidos" / "mm").exists()
+    assert not (tmp_path / "recebidos" / "nasmar").exists()
+
+
+def _grava_pedido(slug: str, ident: str) -> None:
+    from app.persistence import context as env_context
+    from app.persistence import repo
+
+    env = environments_repo.get_by_slug(slug)
+    with env_context.active_env(env["id"], env["slug"]):
+        repo.insert_import(
+            {
+                "id": ident,
+                "source_filename": f"{ident}.pdf",
+                "imported_at": "2026-09-11T10:00:00",
+                "order_number": ident,
+                "customer": "DAJU",
+                "status": "success",
+                "portal_status": "parsed",
+                "snapshot": {
+                    "header": {"order_number": ident, "customer_name": "DAJU"},
+                    "items": [{"description": "item A", "quantity": 3.0}],
+                    "source_file": "",
+                },
+            }
+        )
+
+
+def test_ligado_rehydrate_preview_inclui_env_name(portal):
+    """O modal onde se decide gravar é a única tela que hoje some com o
+    selo de empresa — o operador clica nisso todo dia. Sem `env_name` no
+    payload, o cabeçalho não tem como dizer qual banco vai receber."""
+    _grava_pedido("nasmar", "N1")
+    roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
+
+    r = portal.get("/api/imported/N1/preview")
+    assert r.status_code == 200, r.text
+    assert r.json()["env_name"] == "Nasmar"
+
+
+@pytest.mark.parametrize("modo", [roteamento_repo.DESLIGADO, roteamento_repo.OBSERVANDO])
+def test_fora_de_ligado_rehydrate_preview_nao_muda(portal, modo):
+    """Fora de 'ligado' nada muda: sem empresa resolvida pela dependency,
+    `env_name` fica ausente do payload — comportamento de hoje, intacto."""
+    _grava_pedido("nasmar", "N1")
+    roteamento_repo.set_modo(modo, por="teste")
+    portal.cookies.set("portal_env", environments_repo.get_by_slug("nasmar")["id"])
+
+    r = portal.get("/api/imported/N1/preview")
+    assert r.status_code == 200, r.text
+    assert r.json().get("env_name") is None
+
+
+@pytest.mark.parametrize("rota", ["/api/batch/send-to-fire", "/api/batch/export-xlsx"])
+def test_ligado_batch_agrupado_lista_ativos_uma_vez_so(portal, monkeypatch, rota):
+    """Lote de N ids resolvendo empresa por id (`env_do_import_id`) não pode
+    rodar `list_active()` — query no banco compartilhado + abertura de
+    SQLite por ambiente — uma vez PRA CADA id. Ids inexistentes bastam: a
+    resolução de empresa roda antes de qualquer tentativa no Fire."""
+    from app.persistence import environments_repo
+
+    chamadas = []
+    original = environments_repo.list_active
+
+    def _contada():
+        chamadas.append(1)
+        return original()
+
+    monkeypatch.setattr(environments_repo, "list_active", _contada)
+
+    roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
+    r = portal.post(rota, json={"ids": ["nao-existe-1", "nao-existe-2", "nao-existe-3"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["failed"] == 3
+    assert len(chamadas) == 1, f"list_active() chamada {len(chamadas)}x, esperado 1x"
