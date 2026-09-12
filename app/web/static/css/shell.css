@@ -142,6 +142,28 @@ body.has-app-shell {
 }
 .app-shell-env[hidden] { display: none; }
 
+/* Roteamento `ligado`: o selo de leitura vira filtro — mesmo pill, agora um
+ * <select> nativo. `appearance: none` tira a seta do SO; a nossa entra via
+ * background-image na cor de `--text-muted` (#71717A, hardcoded — SVG em
+ * data URI não lê custom property). */
+select.app-shell-env {
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  font: inherit; text-transform: uppercase;
+  cursor: pointer;
+  padding-right: 22px;
+  /* WCAG 1.4.11 (contorno de componente, 3:1): --border media 1.27:1 aqui.
+     --border-control substitui só neste controle interativo — ver tokens.css. */
+  border-color: var(--border-control);
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 9px 6px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 9 6' fill='none'%3E%3Cpath d='M1 1l3.5 3.5L8 1' stroke='%2371717A' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+select.app-shell-env:hover { border-color: var(--border-control); color: var(--text); }
+select.app-shell-env:focus-visible { border-color: var(--accent); }
+select.app-shell-env:disabled { opacity: .6; cursor: progress; }
+select.app-shell-env option { text-transform: none; background: var(--surface-raised); color: var(--text); }
+
 .app-shell-user {
   display: flex; align-items: center; gap: 8px;
   padding: 4px 10px 4px 4px;
@@ -212,7 +234,14 @@ body.has-app-shell {
   body.has-app-shell { padding: 96px 0 0 0; }
   .app-shell {
     inset: 0 0 auto 0;
-    width: 100%; height: 96px; flex-direction: row; align-items: center;
+    /* Era 96px, com .app-shell-top fixo em top:56px (48px de altura) —
+       as duas faixas se sobrepunham de y=56 a y=96, escondendo por
+       completo o <select> de filtro (único caminho pra trocar de empresa
+       com o roteamento `ligado`) atrás da sidebar, que tem z-index maior.
+       48px = a mesma altura de .app-shell-top logo abaixo: as duas faixas
+       encostam sem se cobrir, e a soma continua batendo com o padding-top
+       do body acima. */
+    width: 100%; height: 48px; flex-direction: row; align-items: center;
     border-right: 0; border-bottom: 1px solid var(--border-subtle);
     overflow-x: auto;
   }
@@ -220,5 +249,33 @@ body.has-app-shell {
   .app-shell-nav { flex-direction: row; padding: 0 8px; gap: 4px; }
   .app-nav-children { display: none !important; }
   .app-shell-foot { display: none; }
-  .app-shell-top { left: 0; top: 56px; }
+  .app-shell-top { left: 0; top: 48px; }
+}
+
+/* Alvo de toque do filtro de empresa (WCAG 2.5.5): media 31px em 768px,
+ * abaixo dos 44px recomendados. Escopo restrito ao <select> novo — não
+ * mexe no alvo 30×30 pré-existente dos ícones do topbar. */
+@media (max-width: 768px) {
+  select.app-shell-env { min-height: 44px; }
+}
+
+/* ─── Spinner (primitivo compartilhado) ────────────────────────────── */
+
+/* Era duplicado em index.html e admin-roteamento.html — cada cópia teria
+ * que ganhar a guarda de reduced-motion abaixo separadamente. Uma única
+ * definição aqui, carregada por toda página com o shell. */
+.spin-dark {
+  width: 14px; height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--text-muted); border-radius: 50%;
+  animation: spin .65s linear infinite; flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .spin-dark { animation: none; border-top-color: var(--accent); opacity: .6; }
+  /* A guarda de .switch-opt mora em admin-roteamento.html, não aqui: a
+     página redeclara `.switch-opt { transition }` no próprio <style>, que
+     carrega depois deste link e vence por ordem no cascade — uma guarda
+     aqui nunca seria aplicada (ver comentário lá). */
 }

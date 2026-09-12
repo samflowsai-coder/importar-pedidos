@@ -30,6 +30,7 @@
     chevron: '<svg class="app-nav-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>',
     logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
     update: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>',
+    routing: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="5"/><circle cx="8" cy="12" r="3"/></svg>',
   };
 
   const NAV_DEF = {
@@ -40,6 +41,7 @@
         { label: 'Diretórios',     href: '/configuracoes/diretorios', icon: ICONS.folder, route: 'config-diretorios' },
         { label: 'Usuários',       href: '/configuracoes/usuarios',   icon: ICONS.users, route: 'config-usuarios' },
         { label: 'Atualização',    href: '/admin/atualizacao',       icon: ICONS.update, route: 'admin-atualizacao' },
+        { label: 'Roteamento',     href: '/admin/roteamento',        icon: ICONS.routing, route: 'admin-roteamento' },
       ],
     },
   };
@@ -51,6 +53,7 @@
     '/configuracoes/diretorios':  'config-diretorios',
     '/configuracoes/usuarios':    'config-usuarios',
     '/admin/atualizacao':         'admin-atualizacao',
+    '/admin/roteamento':          'admin-roteamento',
   };
 
   function el(html) {
@@ -69,8 +72,10 @@
       const r = await fetch('/api/auth/me', { credentials: 'same-origin' });
       const data = await r.json();
       window.__shellUser = data.user || null;
+      window.__shellEnv = data.environment || null;
     } catch (_) {
       window.__shellUser = null;
+      window.__shellEnv = null;
     }
     return window.__shellUser;
   }
@@ -80,6 +85,27 @@
       const r = await fetch('/api/config', { credentials: 'same-origin' });
       if (!r.ok) return null;
       return await r.json();
+    } catch (_) { return null; }
+  }
+
+  async function fetchEnvList() {
+    try {
+      const r = await fetch('/api/env/list', { credentials: 'same-origin' });
+      if (!r.ok) return [];
+      return await r.json();
+    } catch (_) { return []; }
+  }
+
+  // Rota própria, não uma carona em `/api/config`: `/api/config` é
+  // desautenticado por desenho, e `/api/roteamento/modo` exige sessão de
+  // propósito (com teste garantindo o 401). Fazer o modo sair pelos dois —
+  // um gated, outro não — cria uma assimetria que convida alguém a "corrigir"
+  // o lado errado depois. Custa uma requisição a mais por página; aceito.
+  async function fetchRoteamentoModo() {
+    try {
+      const r = await fetch('/api/roteamento/modo', { credentials: 'same-origin' });
+      if (!r.ok) return null;
+      return (await r.json()).modo || null;
     } catch (_) { return null; }
   }
 
@@ -105,7 +131,7 @@
       </a>`);
 
     if (showConfig) {
-      const expanded = ['admin-ambientes', 'config-diretorios', 'config-usuarios', 'admin-atualizacao'].includes(active);
+      const expanded = ['admin-ambientes', 'config-diretorios', 'config-usuarios', 'admin-atualizacao', 'admin-roteamento'].includes(active);
       const childLinks = NAV_DEF.config.children.map((c) => `
         <a class="app-nav-link ${active === c.route ? 'active' : ''}"
            href="${c.href}" data-route="${c.route}">
@@ -182,8 +208,10 @@
     }
   }
 
-  async function refreshFbStatus(host) {
-    const cfg = await fetchConfig();
+  // Aplica ao DOM um `cfg` já buscado (não busca sozinha) — assim o load
+  // inicial em `mount()` e o polling de `refreshFbStatus` podem compartilhar
+  // ou não a mesma chamada a `/api/config` sem duplicar a lógica de pintura.
+  function applyFbStatus(host, cfg) {
     const node = host.querySelector('[data-fb-status]');
     if (!node) return;
     const ok = !!(cfg && cfg.firebirdConfigured);
@@ -192,6 +220,9 @@
     if (label) label.textContent = ok ? 'Conectado' : 'Sem banco';
     // Mostra a empresa (ambiente) ativa ao lado do status, pra deixar claro
     // em qual empresa você está operando e de qual banco é o status acima.
+    // Some quando o filtro (`renderEnvFilter`) já substituiu este nó por um
+    // <select> — o elemento com `data-env-name` deixa de existir e este
+    // bloco vira no-op, sem disputar o DOM com o filtro.
     const envNode = host.querySelector('[data-env-name]');
     if (envNode) {
       const name = cfg && cfg.environment && cfg.environment.name;
@@ -203,6 +234,73 @@
         envNode.hidden = true;
       }
     }
+  }
+
+  async function refreshFbStatus(host) {
+    applyFbStatus(host, await fetchConfig());
+  }
+
+  // Com o roteamento `desligado`/`observando`, o selo de empresa no topo é
+  // só leitura (mantido por `applyFbStatus`) — o cookie ainda é o gate que
+  // o login exige. Com `ligado`, o ambiente do PEDIDO vem do documento, e o
+  // cookie vira filtro opcional da caixa de entrada: o mesmo selo troca, uma
+  // única vez por carregamento, para um <select> com "Todas as empresas" +
+  // uma opção por ambiente. Escolher uma reusa `/api/env/select` (o mesmo
+  // POST que a tela `/selecionar-ambiente` sempre usou); voltar para "Todas"
+  // usa `/api/env/clear`, que só existe porque o cookie é HttpOnly — o JS
+  // não tem como apagá-lo sozinho.
+  //
+  // `modo` chega de fora (`fetchRoteamentoModo()`, chamado por `mount` antes
+  // de aguardar esta função) em vez de buscado aqui dentro — só pra deixar
+  // explícito, no ponto de chamada, de onde o valor vem.
+  async function renderEnvFilter(host, modo) {
+    if (modo !== 'ligado') return;
+
+    const node = host.querySelector('[data-env-name]');
+    if (!node) return;
+
+    const envs = await fetchEnvList();
+    const current = window.__shellEnv;
+
+    const select = document.createElement('select');
+    select.className = 'app-shell-env';
+    select.setAttribute('data-env-filter', '');
+    select.title = 'Filtrar pedidos por empresa';
+    select.setAttribute('aria-label', 'Filtrar pedidos por empresa');
+
+    const allOpt = document.createElement('option');
+    allOpt.value = '';
+    allOpt.textContent = 'Todas as empresas';
+    select.appendChild(allOpt);
+
+    envs.forEach((env) => {
+      const opt = document.createElement('option');
+      opt.value = env.id;
+      opt.textContent = env.name;
+      select.appendChild(opt);
+    });
+    select.value = (current && current.id) || '';
+
+    select.addEventListener('change', async () => {
+      select.disabled = true;
+      try {
+        if (select.value) {
+          await fetch('/api/env/select', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ environment_id: select.value }),
+          });
+        } else {
+          await fetch('/api/env/clear', { method: 'POST', credentials: 'same-origin' });
+        }
+      } catch (_) {
+        // segue pro reload mesmo assim — a página em si revalida o estado
+      }
+      location.reload();
+    });
+
+    node.replaceWith(select);
   }
 
   function ensureToastHost() {
@@ -253,7 +351,15 @@
 
     slot.innerHTML = renderSidebar(user) + renderTopbar(user);
     bindEvents(slot);
-    refreshFbStatus(slot);
+
+    // Duas buscas independentes, em paralelo (não uma carona da outra —
+    // `/api/config` é desautenticado por desenho, `/api/roteamento/modo`
+    // exige sessão de propósito; ver `fetchRoteamentoModo`). Ambas
+    // aguardadas antes de `data-shell-ready` pra não pintar o pill
+    // read-only e trocar pelo <select> depois, visível pro usuário.
+    const [cfg, modo] = await Promise.all([fetchConfig(), fetchRoteamentoModo()]);
+    applyFbStatus(slot, cfg);
+    await renderEnvFilter(slot, modo);
     setInterval(() => refreshFbStatus(slot), 30000);
 
     document.documentElement.setAttribute('data-shell-ready', '1');

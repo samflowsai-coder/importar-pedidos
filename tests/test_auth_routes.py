@@ -204,7 +204,48 @@ def test_read_only_routes_remain_open(isolated_app):
     c = TestClient(app)
     assert c.get("/health").status_code == 200
     assert c.get("/api/config").status_code == 200
-    assert c.get("/api/imported").status_code == 200
+
+
+def test_imported_list_requires_session(isolated_app):
+    """`/api/imported` NÃO fica na lista acima desde a Task 15 (roteamento
+    intercompany): com `roteamento_modo='ligado'` e sem cookie `portal_env`,
+    a rota soma pedidos de TODAS as empresas numa resposta só — a exceção
+    de "leitura fica aberta" do Phase 4b não previa esse caso, e sem
+    `Depends(require_user)` um chamador sem sessão nenhuma veria arquivo,
+    número do pedido, cliente e status de qualquer empresa. Ganhou o mesmo
+    `Depends(require_user)` das rotas irmãs de escrita."""
+    from app.web.server import app
+    c = TestClient(app)
+    assert c.get("/api/imported").status_code == 401
+
+
+def test_pending_list_requires_session(isolated_app):
+    """`/api/pending` nunca teve `Depends(require_user)` — achado da task
+    "ambiente é propriedade do pedido" (fluxo da pasta de entrada). Mesma
+    classe de buraco do `test_imported_list_requires_session` acima: com
+    `roteamento_modo='ligado'` e sem cookie `portal_env`, a rota soma as
+    pastas de TODAS as empresas ativas — sem sessão, um chamador anônimo via
+    nome de arquivo, tamanho e data de qualquer empresa. Ganhou o mesmo
+    `Depends(require_user)` das rotas irmãs de ação (`/api/import`,
+    `/api/reimport`, `/api/preview-pending`, que já exigiam sessão).
+
+    `tests/test_pasta_cross_env.py` não cobre isso: as 9 fixtures de lá
+    setam `TEST_AUTH_BYPASS=1`, então nenhuma delas consegue exercitar
+    `require_user` de verdade — só este arquivo (via `real_auth`/
+    `isolated_app`) desliga o bypass."""
+    from app.web.server import app
+    c = TestClient(app)
+    assert c.get("/api/pending").status_code == 401
+
+
+def test_download_requires_session(isolated_app):
+    """`GET /api/download` nunca teve `Depends(require_user)`: achado
+    pré-existente, não criado por esta entrega, aprovado a entrar aqui porque
+    o portal roda com `PORTAL_HOST=0.0.0.0` exposto na LAN e os xlsx contêm
+    dado de cliente e preço. `path` não importa — a auth barra antes."""
+    from app.web.server import app
+    c = TestClient(app)
+    assert c.get("/api/download?path=/etc/hosts.xlsx").status_code == 401
 
 
 # ── Webhook stays open (HMAC-protected separately) ───────────────────────

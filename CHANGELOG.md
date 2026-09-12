@@ -23,7 +23,23 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
-_(nada ainda)_
+1) **Nasce desligado — esta versão não muda nada no seu dia até você ligar.** Tudo daqui pra baixo, dos itens 2 ao 7, só acontece depois que um **administrador** entra em **Configurações → Roteamento** (`/admin/roteamento`, só admin vê) e vira a chave. Instalar esta versão e não mexer em nada deixa o portal exatamente como ele é hoje.
+
+2) A chave nova tem **três posições**, não duas. Em **Desligado** (como vem) nada acontece. Em **Observando** o portal calcula qual empresa *receberia* cada pedido e anota, **sem agir** — ele continua gravando onde você mandar, e a tela mostra em quantos pedidos ele acertaria. É pra você conferir antes de confiar. Em **Ligado** ele passa a agir pelo que calculou.
+
+3) Com a chave **Ligada**, o portal descobre a empresa **pelo próprio pedido**, em vez de você escolher uma no login. Ele olha, nesta ordem: o **CNPJ do fornecedor impresso no pedido**; se não tiver, o **histórico do cliente no Fire** (em qual empresa esse cliente já comprou); se não tiver, o que **você respondeu na última vez** para esse mesmo cliente; e se nada disso resolver, ele **pergunta**. Ele nunca chuta.
+
+4) Com a chave Ligada, a **caixa de entrada passa a mostrar os pedidos das duas empresas juntos**, com um selo em cada linha dizendo de qual empresa ele é. A **aba de arquivos esperando** passa a somar as pastas de entrada das duas do mesmo jeito, também com selo. E agora **dá pra agir** num pedido dessa lista sem escolher empresa nenhuma: abrir, cadastrar no Fire, exportar, cancelar, vincular produto — tudo cai na empresa certa, a do pedido.
+
+5) Com a chave Ligada, **selecionar vários pedidos de empresas diferentes e cadastrar em lote funciona**: o portal separa por empresa e manda cada grupo para o Fire da sua. Antes ele tentaria mandar tudo para uma só. O resultado do lote diz, pedido por pedido, em qual empresa cada um entrou.
+
+6) Com a chave Ligada, o **seletor de empresa no topo vira filtro de visualização**, e a tela de escolher empresa sai do caminho do login. Você continua podendo filtrar a lista por empresa quando quiser ver só uma.
+
+7) Ainda com a chave Ligada: se a pasta de entrada de **alguma** das empresas estiver fora do ar (share de rede desmontado, pasta renomeada), a aba de arquivos esperando **avisa qual**. Antes, uma pasta funcionando escondia a outra que faltava, e os arquivos daquela empresa simplesmente não apareciam sem ninguém saber.
+
+8) **Segurança, e isso vale em qualquer posição da chave:** o link direto de **download de planilha** passa a exigir que você esteja logado, e só serve arquivo de dentro das pastas de saída configuradas. Se alguém tinha um link de planilha salvo nos favoritos, ele vai pedir login. A listagem de arquivos esperando e a abertura de um pedido também passam a exigir sessão — antes, em certas situações, respondiam sem login.
+
+9) **Antes de virar a chave para Ligado, três coisas precisam estar feitas:** cadastrar o **CNPJ de cada empresa** em Configurações → Ambientes (é por ele que o portal reconhece o fornecedor no pedido); cadastrar o **código de figura fiscal da Nasmar**; e conferir na Fire de verdade se o histórico do cliente traz o que a gente espera. Com a chave em **Observando** você vê a taxa de acerto sem risco nenhum — é o caminho recomendado antes de Ligar.
 
 ---
 

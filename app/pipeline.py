@@ -18,6 +18,7 @@ from app.parsers.nasmar_template_parser import NasmarTemplateParser
 from app.parsers.pedido_compras_revenda_parser import PedidoComprasRevendaParser
 from app.parsers.sams_club_parser import SamsClubParser
 from app.parsers.sbf_centauro_parser import SbfCentauroParser
+from app.routing import documento
 from app.utils.logger import logger
 from app.validators.order_validator import OrderValidator
 
@@ -70,8 +71,33 @@ def process(file: LoadedFile) -> Order | None:
         return None
 
     order.source_file = str(file.path)
+    _marcar_fornecedor(order, extracted)
     order = _normalizer.normalize(order)
     _validator.validate(order)
 
     logger.info(f"Pedido {order.header.order_number!r} → {len(order.items)} item(s)")
     return order
+
+
+def _marcar_fornecedor(order: Order, extracted: dict) -> None:
+    """Preenche `header.supplier_cnpj` pela varredura do texto do documento.
+
+    Um parser que já tenha lido o rótulo FORNECEDOR ganha: só preenche se o
+    campo estiver vazio.
+
+    Nunca levanta. Um erro aqui (banco compartilhado ausente no CLI, ambiente
+    sem CNPJ cadastrado) tem que deixar o pedido passar sem fornecedor — o
+    roteamento cai para o degrau seguinte, que é exatamente o desenho. Parsing
+    não pode quebrar por causa de roteamento.
+    """
+    if order.header.supplier_cnpj:
+        return
+    try:
+        conhecidos = documento.cnpjs_de_ambientes()
+        if not conhecidos:
+            return
+        order.header.supplier_cnpj = documento.detectar_fornecedor(
+            extracted.get("text", "") or "", conhecidos
+        )
+    except Exception as exc:  # noqa: BLE001 — roteamento nunca derruba parsing
+        logger.debug(f"fornecedor não detectado ({exc!r}); segue sem supplier_cnpj")

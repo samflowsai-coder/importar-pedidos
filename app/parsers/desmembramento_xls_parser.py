@@ -50,7 +50,10 @@ class DesmembramentoXlsParser(BaseParser):
         if not items:
             return None
 
-        order_header = OrderHeader(order_number=order_number)
+        order_header = OrderHeader(
+            order_number=order_number,
+            customer_cnpj=self._derive_customer_cnpj(store_cols),
+        )
         return Order(header=order_header, items=items)
 
     # ------------------------------------------------------------------
@@ -161,6 +164,31 @@ class DesmembramentoXlsParser(BaseParser):
             store_cols = [(j, name, cnpj) for (j, name, cnpj) in store_cols if cnpj]
 
         return header_idx, col_map, store_cols
+
+    def _derive_customer_cnpj(self, store_cols: list) -> str | None:
+        """CNPJ do comprador a partir das colunas de loja.
+
+        Numa planilha de desmembramento não existe "o CNPJ do cliente" — existe
+        uma lista de lojas. Quando a maioria compartilha a mesma raiz de 8
+        dígitos, são filiais da mesma empresa e essa empresa é o comprador.
+        Representante = a filial de menor sufixo: determinístico e estável entre
+        planilhas do mesmo cliente.
+
+        Sem maioria, `None`. Inventar comprador aqui roteia pedido errado lá na
+        frente.
+        """
+        from collections import Counter
+
+        from app.erp.cnpj import cnpj_digits
+
+        cnpjs = [c for c in (cnpj_digits(x[2]) for x in store_cols) if len(c) == 14]
+        if not cnpjs:
+            return None
+        raizes = Counter(c[:8] for c in cnpjs)
+        (raiz, n), *resto = raizes.most_common()
+        if resto and resto[0][1] == n:
+            return None
+        return min(c for c in cnpjs if c.startswith(raiz))
 
     def _is_header_row(self, cells: list[str]) -> bool:
         cells_upper = [c.upper() for c in cells]

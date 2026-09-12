@@ -1,8 +1,10 @@
 """CRUD da tabela `environments` em app_shared.db."""
+
 from __future__ import annotations
 
 import pytest
 
+from app.erp.fiscal import perfil_para
 from app.persistence import environments_repo, router
 
 
@@ -42,14 +44,18 @@ def test_create_rejects_invalid_slug(fresh_shared):
         environments_repo.create(
             slug="mm prod",
             name="MM",
-            watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+            watch_dir="/x",
+            output_dir="/y",
+            fb_path="/z.fdb",
         )
     # Caracteres especiais
     with pytest.raises(ValueError):
         environments_repo.create(
             slug="mm@prod",
             name="MM",
-            watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+            watch_dir="/x",
+            output_dir="/y",
+            fb_path="/z.fdb",
         )
 
 
@@ -58,13 +64,17 @@ def test_create_normalizes_uppercase_slug_to_lowercase(fresh_shared):
     env = environments_repo.create(
         slug="MM",
         name="MM",
-        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        watch_dir="/x",
+        output_dir="/y",
+        fb_path="/z.fdb",
     )
     assert env["slug"] == "mm"
     env2 = environments_repo.create(
         slug="  Nasmar  ",
         name="Nasmar",
-        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        watch_dir="/x",
+        output_dir="/y",
+        fb_path="/z.fdb",
     )
     assert env2["slug"] == "nasmar"
 
@@ -72,19 +82,28 @@ def test_create_normalizes_uppercase_slug_to_lowercase(fresh_shared):
 def test_create_requires_name(fresh_shared):
     with pytest.raises(ValueError):
         environments_repo.create(
-            slug="mm", name="   ",
-            watch_dir="/a", output_dir="/b", fb_path="/c.fdb",
+            slug="mm",
+            name="   ",
+            watch_dir="/a",
+            output_dir="/b",
+            fb_path="/c.fdb",
         )
 
 
 def test_create_rejects_duplicate_slug(fresh_shared):
-    environments_repo.create(slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+    environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
     with pytest.raises(environments_repo.SlugTaken):
-        environments_repo.create(slug="mm", name="MM2", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+        environments_repo.create(
+            slug="mm", name="MM2", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+        )
 
 
 def test_update_does_not_change_slug(fresh_shared):
-    env = environments_repo.create(slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
     updated = environments_repo.update(
         env["id"],
         name="MM Renomeado",
@@ -97,8 +116,11 @@ def test_update_does_not_change_slug(fresh_shared):
 
 def test_password_round_trip(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b", fb_path="/c.fdb",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/c.fdb",
         fb_password="masterkey",
     )
     pw = environments_repo.get_password(env["id"])
@@ -106,14 +128,19 @@ def test_password_round_trip(fresh_shared):
 
 
 def test_password_none_when_absent(fresh_shared):
-    env = environments_repo.create(slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
     assert environments_repo.get_password(env["id"]) is None
 
 
 def test_update_password_keeps_existing_when_none(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b", fb_path="/c.fdb",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/c.fdb",
         fb_password="orig",
     )
     environments_repo.update(env["id"], name="MM2", fb_password=None)
@@ -122,8 +149,11 @@ def test_update_password_keeps_existing_when_none(fresh_shared):
 
 def test_update_password_clears_with_empty_string(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b", fb_path="/c.fdb",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/c.fdb",
         fb_password="orig",
     )
     environments_repo.update(env["id"], fb_password="")
@@ -132,8 +162,11 @@ def test_update_password_clears_with_empty_string(fresh_shared):
 
 def test_update_password_replaces(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b", fb_path="/c.fdb",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/c.fdb",
         fb_password="old",
     )
     environments_repo.update(env["id"], fb_password="new")
@@ -141,7 +174,9 @@ def test_update_password_replaces(fresh_shared):
 
 
 def test_soft_delete(fresh_shared):
-    env = environments_repo.create(slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
     environments_repo.soft_delete(env["id"])
     after = environments_repo.get(env["id"])
     assert after["is_active"] == 0
@@ -150,15 +185,23 @@ def test_soft_delete(fresh_shared):
 
 
 def test_list_active_orders_by_name(fresh_shared):
-    environments_repo.create(slug="nasmar", name="Nasmar", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
-    environments_repo.create(slug="mm",     name="MM Calçados", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+    environments_repo.create(
+        slug="nasmar", name="Nasmar", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
+    environments_repo.create(
+        slug="mm", name="MM Calçados", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
     rows = environments_repo.list_active()
     assert [e["slug"] for e in rows] == ["mm", "nasmar"]  # MM (M) < Nasmar (N) por nome
 
 
 def test_list_all_includes_inactive(fresh_shared):
-    a = environments_repo.create(slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
-    environments_repo.create(slug="nasmar", name="Nasmar", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+    a = environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
+    environments_repo.create(
+        slug="nasmar", name="Nasmar", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
     environments_repo.soft_delete(a["id"])
     rows = environments_repo.list_all()
     slugs = {e["slug"] for e in rows}
@@ -166,7 +209,9 @@ def test_list_all_includes_inactive(fresh_shared):
 
 
 def test_get_by_slug(fresh_shared):
-    env = environments_repo.create(slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb")
+    env = environments_repo.create(
+        slug="mm", name="MM", watch_dir="/a", output_dir="/b", fb_path="/c.fdb"
+    )
     found = environments_repo.get_by_slug("mm")
     assert found["id"] == env["id"]
     assert environments_repo.get_by_slug("inexistente") is None
@@ -174,9 +219,13 @@ def test_get_by_slug(fresh_shared):
 
 def test_to_fb_config_extracts_password(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b", fb_path="/c.fdb",
-        fb_host="192.168.1.10", fb_port="3050",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/c.fdb",
+        fb_host="192.168.1.10",
+        fb_port="3050",
         fb_password="masterkey",
     )
     cfg = environments_repo.to_fb_config(env)
@@ -266,10 +315,13 @@ def test_flowpcp_disable_keeps_token(fresh_shared):
 # Finder "Copy as Pathname" e cmd do Windows costumam embrulhar paths em
 # aspas. Salvar bruto quebra a conexão Firebird com "io error: file not found".
 
+
 def test_create_strips_wrapping_quotes_from_fb_path(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
         fb_path="'/Users/me/db.fdb'",
     )
     assert env["fb_path"] == "/Users/me/db.fdb"
@@ -277,8 +329,10 @@ def test_create_strips_wrapping_quotes_from_fb_path(fresh_shared):
 
 def test_create_strips_wrapping_double_quotes_and_whitespace(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
         fb_path='  "/Users/me/db.fdb"  ',
     )
     assert env["fb_path"] == "/Users/me/db.fdb"
@@ -286,8 +340,11 @@ def test_create_strips_wrapping_double_quotes_and_whitespace(fresh_shared):
 
 def test_update_strips_wrapping_quotes_from_fb_path(fresh_shared):
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b", fb_path="/clean.fdb",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/clean.fdb",
     )
     updated = environments_repo.update(env["id"], fb_path="'/new/path.fdb'")
     assert updated["fb_path"] == "/new/path.fdb"
@@ -297,8 +354,11 @@ def test_to_fb_config_strips_legacy_quoted_path(fresh_shared):
     """Dados legados na DB (gravados antes do fix) ainda podem ter aspas —
     `to_fb_config` normaliza na leitura."""
     env = environments_repo.create(
-        slug="mm", name="MM",
-        watch_dir="/a", output_dir="/b", fb_path="/clean.fdb",
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/clean.fdb",
     )
     # Simula linha legada com aspas literais na DB (bypassa o sanitizer do update).
     with router.shared_connect() as conn:
@@ -309,3 +369,173 @@ def test_to_fb_config_strips_legacy_quoted_path(fresh_shared):
     env_legacy = environments_repo.get(env["id"])
     cfg = environments_repo.to_fb_config(env_legacy)
     assert cfg["path"] == "/legacy/path.fdb"
+
+
+def test_fiscal_codfigfiscal_round_trip(fresh_shared):
+    """Perfil fiscal via environments_repo + perfil_para: caminho ponta a ponta."""
+    # Cria ambiente (default MM)
+    env = environments_repo.create(
+        slug="mm",
+        name="MM",
+        watch_dir="/a",
+        output_dir="/b",
+        fb_path="/c.fdb",
+    )
+    # Verify default (MM=1)
+    env_mm = environments_repo.get(env["id"])
+    assert env_mm["fiscal_codfigfiscal"] is None
+    perfil_mm = perfil_para(env_mm)
+    assert perfil_mm.codfigfiscal == 1
+
+    # Update para Nasmar=5
+    env_nasmar = environments_repo.update(env["id"], fiscal_codfigfiscal=5)
+    assert env_nasmar["fiscal_codfigfiscal"] == 5
+    perfil_nasmar = perfil_para(env_nasmar)
+    assert perfil_nasmar.codfigfiscal == 5
+
+
+# ── CNPJ do ambiente (chave do roteamento pelo documento) ─────────────────────
+
+
+def test_cnpj_e_gravado_em_digitos(fresh_shared):
+    """Admin digita formatado; o banco guarda so os digitos."""
+    env = environments_repo.create(
+        slug="nasmar", name="Nasmar",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="34.513.679/0001-34",
+    )
+    assert env["cnpj"] == "34513679000134"
+
+
+def test_find_by_cnpj_casa_formatado_ou_nao(fresh_shared):
+    environments_repo.create(
+        slug="mm", name="MM Americanense",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="35394871000111",
+    )
+    achado = environments_repo.find_by_cnpj("35.394.871/0001-11")
+    assert achado is not None
+    assert achado["slug"] == "mm"
+    assert environments_repo.find_by_cnpj("00000000000000") is None
+    assert environments_repo.find_by_cnpj("") is None
+    assert environments_repo.find_by_cnpj(None) is None
+
+
+def test_find_by_cnpj_ignora_ambiente_inativo(fresh_shared):
+    """Ambiente desativado nao roteia nada — some do lookup."""
+    env = environments_repo.create(
+        slug="velho", name="Empresa antiga",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="11222333000144",
+    )
+    environments_repo.soft_delete(env["id"])
+    assert environments_repo.find_by_cnpj("11222333000144") is None
+
+
+def test_update_limpa_cnpj_com_string_vazia(fresh_shared):
+    """None mantem, "" limpa — mesma semantica de fb_password."""
+    env = environments_repo.create(
+        slug="mm2", name="MM",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="35394871000111",
+    )
+    assert environments_repo.update(env["id"], name="MM 2")["cnpj"] == "35394871000111"
+    assert environments_repo.update(env["id"], cnpj="")["cnpj"] is None
+
+
+# ── Unicidade de CNPJ entre ambientes (índice único parcial) ──────────────────
+# Sem UNIQUE, dois ambientes ATIVOS com o mesmo CNPJ fariam find_by_cnpj devolver
+# o que o LIMIT 1 pegar — o pedido vai pra empresa errada sem ninguém perceber.
+
+
+def test_create_rejeita_cnpj_duplicado(fresh_shared):
+    environments_repo.create(
+        slug="mm", name="MM",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="35394871000111",
+    )
+    with pytest.raises(environments_repo.CnpjTaken):
+        environments_repo.create(
+            slug="mm-duplicado", name="MM Duplicado",
+            watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+            cnpj="35394871000111",
+        )
+
+
+def test_update_rejeita_cnpj_ja_usado_por_outro_ambiente(fresh_shared):
+    environments_repo.create(
+        slug="nasmar", name="Nasmar",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="34513679000134",
+    )
+    mm = environments_repo.create(
+        slug="mm", name="MM",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="35394871000111",
+    )
+    with pytest.raises(environments_repo.CnpjTaken):
+        environments_repo.update(mm["id"], cnpj="34513679000134")
+
+
+def test_multiplos_ambientes_com_cnpj_null_convivem(fresh_shared):
+    """NULL nao e valor — e o estado de todo ambiente hoje. O indice parcial
+    (WHERE cnpj IS NOT NULL) tem que deixar N ambientes sem CNPJ conviverem."""
+    environments_repo.create(slug="a", name="A", watch_dir="/x", output_dir="/y", fb_path="/z.fdb")
+    environments_repo.create(slug="b", name="B", watch_dir="/x", output_dir="/y", fb_path="/z.fdb")
+    environments_repo.create(slug="c", name="C", watch_dir="/x", output_dir="/y", fb_path="/z.fdb")
+    slugs = {e["slug"] for e in environments_repo.list_all()}
+    assert slugs == {"a", "b", "c"}
+
+
+def test_create_rejeita_cnpj_duplicado_com_formatacao_diferente(fresh_shared):
+    """O indice e sobre a coluna normalizada — formatado ou nao colide igual."""
+    environments_repo.create(
+        slug="nasmar", name="Nasmar",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="34.513.679/0001-34",
+    )
+    with pytest.raises(environments_repo.CnpjTaken):
+        environments_repo.create(
+            slug="nasmar-2", name="Nasmar 2",
+            watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+            cnpj="34513679000134",
+        )
+
+
+def test_soft_delete_libera_cnpj_para_recadastro(fresh_shared):
+    """A restricao existe so pra garantir que find_by_cnpj nunca escolha entre
+    dois candidatos — e find_by_cnpj ja filtra is_active=1. Um ambiente
+    desativado nao pode segurar o CNPJ pra sempre: cadastrar com a pasta
+    errada, desativar e recadastrar tem que funcionar, nao travar com 409."""
+    antigo = environments_repo.create(
+        slug="nasmar-errado", name="Nasmar (pasta errada)",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="34513679000134",
+    )
+    environments_repo.soft_delete(antigo["id"])
+    novo = environments_repo.create(
+        slug="nasmar", name="Nasmar",
+        watch_dir="/x2", output_dir="/y2", fb_path="/z2.fdb",
+        cnpj="34513679000134",
+    )
+    assert novo["cnpj"] == "34513679000134"
+
+
+def test_find_by_cnpj_prefere_o_ambiente_novo_apos_recadastro(fresh_shared):
+    """A garantia que interessa, ponta a ponta: depois do recadastro so existe
+    UM ativo com aquele CNPJ, e find_by_cnpj acha ELE, nao o desativado."""
+    antigo = environments_repo.create(
+        slug="nasmar-errado", name="Nasmar (pasta errada)",
+        watch_dir="/x", output_dir="/y", fb_path="/z.fdb",
+        cnpj="34513679000134",
+    )
+    environments_repo.soft_delete(antigo["id"])
+    novo = environments_repo.create(
+        slug="nasmar", name="Nasmar",
+        watch_dir="/x2", output_dir="/y2", fb_path="/z2.fdb",
+        cnpj="34513679000134",
+    )
+    achado = environments_repo.find_by_cnpj("34513679000134")
+    assert achado is not None
+    assert achado["id"] == novo["id"]
+    assert achado["slug"] == "nasmar"

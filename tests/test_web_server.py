@@ -55,6 +55,12 @@ def test_config_returns_default_output_dir():
 
 
 # ── Security: download endpoint ──────────────────────────────────────────────
+# Achado pré-existente (não criado por esta entrega): a rota resolvia
+# qualquer caminho absoluto e só checava o sufixo `.xlsx` — sem
+# `require_user` e sem confinamento de raiz. Corrigido no mesmo padrão que
+# `baixar_arquivo_original` já usa pra `recebidos/`: raízes = `OUTPUT_DIR`
+# legado + `output_dir` de cada ambiente ATIVO (as duas fontes de onde
+# `ERPExporter().export(...)` grava — ver `_run_exporters` e `_send_one_to_fire`).
 
 
 def test_download_rejects_non_xlsx():
@@ -62,14 +68,69 @@ def test_download_rejects_non_xlsx():
     assert r.status_code == 403
 
 
-def test_download_rejects_arbitrary_files():
-    r = client.get("/api/download?path=/etc/hosts.xlsx")  # doesn't exist
-    assert r.status_code == 404
+def test_download_rejects_paths_outside_allowed_roots():
+    """Sufixo certo não basta: fora de `OUTPUT_DIR`/`output_dir` dos
+    ambientes é 403, mesmo sem o arquivo existir — a checagem de raiz roda
+    ANTES da checagem de existência (mesma ordem de `baixar_arquivo_original`),
+    pra não vazar "existe/não existe" de fora das pastas de saída."""
+    r = client.get("/api/download?path=/etc/hosts.xlsx")
+    assert r.status_code == 403
 
 
-def test_download_missing_xlsx_returns_404(tmp_path):
+def test_download_missing_xlsx_returns_404(tmp_path, monkeypatch):
+    """Dentro da raiz permitida, mas ausente no disco: 404, não 403."""
+    from app import config as app_config
+
+    monkeypatch.setattr(app_config, "_CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+
     r = client.get(f"/api/download?path={tmp_path / 'missing.xlsx'}")
     assert r.status_code == 404
+
+
+def test_download_allows_xlsx_inside_legacy_output_dir(tmp_path, monkeypatch):
+    """Autenticado + caminho dentro do `OUTPUT_DIR` legado: 200."""
+    from app import config as app_config
+
+    monkeypatch.setattr(app_config, "_CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+
+    arquivo = tmp_path / "PEDIDO-123.xlsx"
+    arquivo.write_bytes(b"fake-xlsx-bytes")
+
+    r = client.get(f"/api/download?path={arquivo}")
+    assert r.status_code == 200
+    assert r.content == b"fake-xlsx-bytes"
+    assert "spreadsheetml" in r.headers["content-type"]
+
+
+def test_download_allows_xlsx_inside_environment_output_dir(tmp_path, monkeypatch):
+    """Confinamento também aceita o `output_dir` de um ambiente ATIVO, não só
+    o `OUTPUT_DIR` legado — `_run_exporters`/`_send_one_to_fire` gravam ali
+    quando a request tem ambiente selecionado (multi-empresa)."""
+    from app.persistence import environments_repo, router
+
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    router.reset_init_cache()
+    with router.shared_connect():
+        pass
+
+    env_out = tmp_path / "env-out"
+    env_out.mkdir()
+    environments_repo.create(
+        slug="download-test-env",
+        name="Download Test Env",
+        watch_dir=str(tmp_path / "env-watch"),
+        output_dir=str(env_out),
+        fb_path="",
+    )
+
+    arquivo = env_out / "PEDIDO-999.xlsx"
+    arquivo.write_bytes(b"fake-xlsx-env")
+
+    r = client.get(f"/api/download?path={arquivo}")
+    assert r.status_code == 200
+    assert r.content == b"fake-xlsx-env"
 
 
 # ── Security: upload validation ──────────────────────────────────────────────

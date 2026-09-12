@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portal de Pedidos — Roteamento</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=2">
+  <link rel="stylesheet" href="/static/css/shell.css?v=3">
+  <script src="/static/js/shell.js?v=3" defer></script>
+  <style>
+    .main { padding: 32px 32px 96px; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 780px; }
+
+    .breadcrumb {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+    .breadcrumb a { color: var(--text-muted); text-decoration: none; }
+    .breadcrumb a:hover { color: var(--text-secondary); }
+
+    .page-title { font-size: 24px; font-weight: 600; letter-spacing: -.02em; margin-bottom: 6px; }
+    .page-subtitle { font-size: 13.5px; color: var(--text-muted); margin-bottom: 28px; line-height: 1.6; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 24px 26px;
+      box-shadow: var(--shadow-md);
+    }
+    .card + .card { margin-top: 18px; }
+    .card-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .card-desc { font-size: 12.5px; color: var(--text-muted); margin-bottom: 18px; line-height: 1.55; }
+
+    .mono { font-family: var(--font-mono); font-size: 12px; }
+
+    .err-banner {
+      font-size: 13px; color: var(--error-strong); background: var(--error-bg);
+      border: 1px solid rgba(220,38,38,.18); border-radius: var(--radius);
+      padding: 10px 12px; margin-bottom: 16px;
+    }
+
+    .card-error {
+      font-size: 12.5px; color: var(--text-secondary); line-height: 1.6;
+    }
+    .link-btn {
+      background: none; border: none; padding: 0; margin-left: 2px;
+      /* --accent sobre --surface mede 4.28:1 — mesma magnitude do --error
+         que classificamos crítico. --accent-hover mede 6.02:1 aqui. */
+      color: var(--accent-hover); font: inherit; font-weight: 600; cursor: pointer;
+    }
+    .link-btn:hover { text-decoration: underline; }
+
+    /* ── Interruptor ── */
+    .switch-meta { margin-bottom: 12px; font-size: 12px; color: var(--text-secondary); }
+    .switch-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    @media (max-width: 640px) { .switch-row { grid-template-columns: 1fr; } }
+    .switch-opt {
+      display: flex; flex-direction: column; gap: 6px;
+      text-align: left; padding: 14px 15px;
+      /* WCAG 1.4.11 (contorno de componente, 3:1): --border media 1.27:1,
+         --border-hover 1.48:1 — nenhum dos dois passa. --border-control é
+         só pra contorno de controle interativo (ver tokens.css). */
+      border: 1.5px solid var(--border-control); border-radius: var(--radius);
+      background: var(--bg); cursor: pointer; font: inherit; color: inherit;
+      transition: border-color 120ms, background 120ms, transform 80ms;
+    }
+    /* --text-secondary sobre #FFFFFF/--surface mede 7.73:1/7.41:1 (bem acima
+       do 3:1 de componente) e ainda contrasta visivelmente com o
+       --border-control da base (2.38:1 entre os dois) — hover deixa de ser
+       idêntico ao estado parado. */
+    .switch-opt:hover:not(:disabled) { border-color: var(--text-secondary); }
+    .switch-opt:not(:disabled):active { transform: scale(.995); background: var(--surface-hover); }
+    .switch-opt:disabled { cursor: default; opacity: .55; }
+    .switch-opt:disabled .switch-opt-label { color: var(--text-muted); }
+    .switch-opt.active {
+      border-color: var(--accent); background: var(--accent-bg);
+    }
+    .switch-opt-head { display: flex; align-items: center; gap: 8px; }
+    .switch-dot {
+      width: 15px; height: 15px; border-radius: 50%; flex-shrink: 0;
+      border: 1.5px solid var(--border-control); background: var(--bg);
+      position: relative;
+    }
+    .switch-opt.active .switch-dot { border-color: var(--accent); }
+    .switch-opt.active .switch-dot::after {
+      content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--accent);
+    }
+    .switch-opt-label { font-size: 13.5px; font-weight: 600; text-transform: capitalize; }
+    .switch-opt.active .switch-opt-label { color: var(--accent-hover); }
+    .switch-opt-phrase { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+    /* --text-muted sobre --accent-bg (opção selecionada), composto sobre o
+       --surface do .card por trás, mede 4.20:1 — abaixo do mínimo AA de
+       4.5:1. --text-secondary mede 6.71:1 na mesma combinação. */
+    .switch-opt.active .switch-opt-phrase { color: var(--text-secondary); }
+
+    /* A guarda equivalente em shell.css nunca vencia aqui: esta página
+       redeclara `.switch-opt { transition: ... }` no próprio <style>, que
+       carrega DEPOIS do <link> de shell.css — mesma especificidade, ganha
+       por ordem no cascade, inclusive quando a media query bate. A guarda
+       precisa morar onde a regra que ela anula realmente vence. */
+    @media (prefers-reduced-motion: reduce) {
+      .switch-opt { transition: none; }
+    }
+
+    /* ── Taxa ── */
+    .rate-figure {
+      font-size: 40px; font-weight: 600; letter-spacing: -.03em; line-height: 1;
+      font-variant-numeric: tabular-nums;
+      margin-bottom: 10px;
+    }
+    .rate-figure small {
+      font-size: 15px; font-weight: 500; color: var(--text-muted);
+      letter-spacing: 0; margin-left: 6px;
+    }
+    .rate-sentence { font-size: 14px; color: var(--text); line-height: 1.6; margin-bottom: 4px; }
+    .rate-sentence b { font-weight: 600; }
+    .rate-sentence .n-bateu    { color: var(--success-strong); font-weight: 600; }
+    .rate-sentence .n-perguntar{ color: var(--text-secondary); font-weight: 600; }
+    .rate-sentence .n-divergiu { color: var(--error); font-weight: 600; }
+    .rate-period { font-size: 12px; color: var(--text-muted); margin-bottom: 18px; }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: .65rem .5rem; text-align: left; border-bottom: 1px solid var(--border-subtle); font-size: 12.5px; }
+    th {
+      font-weight: 600; color: var(--text-muted); font-size: 10.5px;
+      text-transform: uppercase; letter-spacing: .04em;
+    }
+    td.mono, th.mono { font-family: var(--font-mono); }
+    .table-wrap { overflow-x: auto; }
+    .rate-sentence, th, td, .pend-when { font-variant-numeric: tabular-nums; }
+
+    .empty-state {
+      font-size: 13px; color: var(--text-muted); line-height: 1.6;
+      padding: 6px 0;
+    }
+
+    .pend-item {
+      display: flex; justify-content: space-between; gap: 16px;
+      padding: 12px 0; border-bottom: 1px solid var(--border-subtle);
+    }
+    .pend-item:last-child { border-bottom: none; }
+    .pend-main { min-width: 0; }
+    .pend-file { font-size: 13px; font-weight: 500; word-break: break-all; }
+    .pend-motivo { font-size: 12px; color: var(--warn-strong); margin-top: 2px; }
+    .pend-folder { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+    .pend-when { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; text-align: right; }
+
+    /* .spin-dark + @keyframes spin agora vivem em shell.css (com guarda de
+       prefers-reduced-motion) — eram cópia nova aqui, sem a guarda. Esta
+       tela usa o spinner solto dentro de um card (não numa linha flex como
+       em index.html), daí o `margin: 8px auto` local pra centralizar. */
+    #rate-loading, #pend-loading { margin: 8px auto; }
+
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+
+<div id="app-shell"></div>
+
+<main class="main">
+  <div class="container">
+    <div class="breadcrumb">
+      <a href="/">Pedidos</a>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      <span>Configurações</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      <span>Roteamento</span>
+    </div>
+
+    <h1 class="page-title">Roteamento intercompany</h1>
+    <p class="page-subtitle">
+      Decide sozinho em qual empresa cada pedido entra. Em <code class="mono">observando</code>,
+      o Portal calcula e registra o que teria feito, sem agir — é o que autoriza treinar a
+      equipe antes de ligar de vez.
+    </p>
+
+    <div id="err-banner" class="err-banner" hidden></div>
+
+    <!-- 1. Interruptor -->
+    <div class="card">
+      <div class="card-title">Interruptor</div>
+      <div class="card-desc">Voltar para trás (observando ou desligado) é imediato. Avançar para ligado pede confirmação.</div>
+      <p class="card-error" id="switch-error" hidden>Não foi possível carregar o modo atual. <button type="button" class="link-btn" onclick="loadModo()">Tentar de novo</button></p>
+      <div class="switch-meta" id="switch-meta"></div>
+      <div class="switch-row" id="switch-row" role="radiogroup" aria-label="Modo do roteamento"></div>
+    </div>
+
+    <!-- 2. Taxa -->
+    <div class="card">
+      <div class="card-title">Taxa de acerto</div>
+      <div id="rate-loading" class="spin-dark"></div>
+      <p class="card-error" id="rate-error" hidden>Não foi possível carregar. <button type="button" class="link-btn" onclick="loadTaxa()">Tentar de novo</button></p>
+      <div id="rate-content" hidden>
+        <p class="rate-figure" id="rate-figure" hidden></p>
+        <p class="rate-sentence" id="rate-sentence"></p>
+        <p class="rate-period" id="rate-period"></p>
+        <div id="diverg-wrap">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Quando</th><th>Pedido</th><th>Degrau</th><th>Sugerido</th><th>Escolhido</th></tr>
+              </thead>
+              <tbody id="diverg-rows"></tbody>
+            </table>
+          </div>
+        </div>
+        <p class="empty-state" id="diverg-empty" hidden>Nenhuma divergência no período — todo pedido em que o Portal teve uma sugestão bateu com a escolha do operador.</p>
+      </div>
+    </div>
+
+    <!-- 3. Pendências -->
+    <div class="card">
+      <div class="card-title">Pendências do watcher</div>
+      <div class="card-desc">Arquivos que o Portal recebeu mas não soube rotear sozinho.</div>
+      <div id="pend-loading" class="spin-dark"></div>
+      <p class="card-error" id="pend-error" hidden>Não foi possível carregar. <button type="button" class="link-btn" onclick="loadTaxa()">Tentar de novo</button></p>
+      <p class="empty-state" id="pend-empty" hidden>Nenhum arquivo retido — este é o estado normal.</p>
+      <div id="pend-list"></div>
+    </div>
+  </div>
+</main>
+
+<script src="/static/js/roteamento-labels.js?v=1"></script>
+<script>
+  const API = '/api/roteamento';
+  const MODO_PHRASES = {
+    desligado:  'nada muda. O operador escolhe a empresa no login, como sempre.',
+    observando: 'o Portal calcula a decisão e registra o que teria feito. A escolha do operador continua valendo.',
+    // Ligar também troca o selo de empresa do topbar por um filtro e faz a
+    // caixa de entrada somar as empresas — a frase original só citava o
+    // login. Ver ALTO-B da validação de design.
+    ligado:     'a decisão do Portal vale. A seleção de ambiente sai do login e o selo de empresa no topo vira filtro — a caixa de entrada passa a mostrar as empresas somadas.',
+  };
+  const MODO_ORDEM = ['desligado', 'observando', 'ligado'];
+
+  function $(id) { return document.getElementById(id); }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function showError(msg) {
+    const b = $('err-banner');
+    b.textContent = msg;
+    b.hidden = false;
+  }
+  function clearError() { $('err-banner').hidden = true; }
+
+  function fmtDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function timeAgo(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const secs = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+    if (secs < 60) return 'agora';
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `há ${mins} min`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `há ${hours} h`;
+    const days = Math.floor(hours / 24);
+    return `há ${days} d`;
+  }
+
+  // ── Interruptor ──────────────────────────────────────────────────
+  // O modo é lido por qualquer usuário logado antes de saber se é admin
+  // (loadModo roda em paralelo com o /api/auth/me de boot()) — por isso
+  // MODO_ORDEM.indexOf(currentModo) e afins toleram currentModo ainda nulo.
+  let currentModo = null;
+  let isAdmin = false;
+
+  // Monta o DOM do interruptor uma única vez. Trocar de modo depois só
+  // alterna classes/aria-checked/tabindex via updateSwitchState — reescrever
+  // innerHTML a cada clique destruía o botão que tinha o foco (Enter jogava
+  // o foco pro <body>, obrigando quem usa teclado a tabular da página
+  // inteira de novo a cada troca).
+  function buildSwitch() {
+    const row = $('switch-row');
+    row.innerHTML = MODO_ORDEM.map((m) => `
+      <button type="button" class="switch-opt" data-modo="${m}" role="radio" aria-checked="false" tabindex="-1" ${isAdmin ? '' : 'disabled'}>
+        <div class="switch-opt-head">
+          <span class="switch-dot"></span>
+          <span class="switch-opt-label">${m}</span>
+        </div>
+        <span class="switch-opt-phrase">— ${esc(MODO_PHRASES[m])}</span>
+      </button>`).join('');
+    row.querySelectorAll('.switch-opt').forEach((btn) => {
+      btn.addEventListener('click', () => onSwitchClick(btn.dataset.modo));
+    });
+    row.addEventListener('keydown', onSwitchKeydown);
+    updateSwitchState();
+    $('switch-meta').textContent = isAdmin ? '' : 'Apenas administradores podem trocar o modo.';
+  }
+
+  // Padrão APG de radiogroup: só o rádio marcado é alcançável por Tab
+  // (tabindex 0); os outros ficam com tabindex -1. Sem a navegação por seta
+  // abaixo, os outros dois modos ficariam permanentemente inalcançáveis por
+  // teclado — roving tabindex sem isso não é "menos acessível", é inoperável.
+  function updateSwitchState(focusActive) {
+    $('switch-row').querySelectorAll('.switch-opt').forEach((btn) => {
+      const active = btn.dataset.modo === currentModo;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-checked', String(active));
+      btn.tabIndex = active ? 0 : -1;
+      if (active && focusActive) btn.focus();
+    });
+  }
+
+  function onSwitchKeydown(e) {
+    if (!['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp'].includes(e.key)) return;
+    if (!isAdmin) return;
+    e.preventDefault();
+    const idx = Math.max(0, MODO_ORDEM.indexOf(currentModo));
+    const dir = (e.key === 'ArrowRight' || e.key === 'ArrowDown') ? 1 : -1;
+    onSwitchClick(MODO_ORDEM[(idx + dir + MODO_ORDEM.length) % MODO_ORDEM.length]);
+  }
+
+  async function onSwitchClick(modo) {
+    if (modo === currentModo) return;
+    if (modo === 'ligado') {
+      const ok = confirm('A decisão do Portal passa a valer e a seleção de ambiente some do login. Confirmar?');
+      if (!ok) return;
+    }
+    clearError();
+    try {
+      const r = await fetch(`${API}/modo`, {
+        method: 'PUT', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modo }),
+      });
+      if (r.status === 401) { location.href = '/login'; return; }
+      if (r.status === 403) { showError('Apenas administradores podem trocar o modo.'); return; }
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { showError(data.detail || `Falha ao trocar o modo (${r.status}).`); return; }
+      currentModo = data.modo;
+      updateSwitchState(true);
+      if (window.appShell) window.appShell.showSuccess(`Modo alterado para "${currentModo}".`);
+    } catch (e) {
+      showError('Falha de rede ao trocar o modo.');
+    }
+  }
+
+  async function loadModo() {
+    $('switch-error').hidden = true;
+    try {
+      const r = await fetch(`${API}/modo`, { credentials: 'same-origin' });
+      if (r.status === 401) { location.href = '/login'; return; }
+      if (!r.ok) throw new Error(`http_${r.status}`);
+      const data = await r.json();
+      currentModo = data.modo;
+      buildSwitch();
+    } catch (e) {
+      // Slot de erro do próprio card, igual aos outros dois (taxa/pendências)
+      // — antes, uma falha aqui deixava o switch-row vazio sem nenhuma pista
+      // de por quê, e o banner global some sozinho na próxima ação bem-sucedida.
+      $('switch-error').hidden = false;
+    }
+  }
+
+  // ── Vocabulário de ambiente (slug → nome) ───────────────────────────
+  // A tabela de divergências e as pendências guardam SLUG (mesma chave que
+  // env_scan_slug, env_sugerido, env_escolhido no banco); /api/env/list é a
+  // mesma rota que shell.js já usa pro filtro do topbar — reusa em vez de
+  // inventar um segundo dicionário slug→nome.
+  let envNameBySlug = {};
+
+  async function loadEnvNames() {
+    try {
+      const r = await fetch('/api/env/list', { credentials: 'same-origin' });
+      if (!r.ok) return;
+      const envs = await r.json();
+      envs.forEach((e) => { envNameBySlug[e.slug] = e.name; });
+    } catch (e) {
+      // Sem nomes, as colunas caem pro slug cru — não é falha grave o
+      // bastante pra um banner de erro dedicado.
+    }
+  }
+
+  function envLabel(slug) {
+    if (!slug) return '—';
+    const name = envNameBySlug[slug];
+    return name ? `<span title="${esc(slug)}">${esc(name)}</span>` : esc(slug);
+  }
+
+  function degrauLabel(d) {
+    return esc(ROUTING_DEGRAU_LABEL[d] || d || '—');
+  }
+
+  // ── Taxa ─────────────────────────────────────────────────────────
+  function renderRateFigure(t) {
+    const fig = $('rate-figure');
+    const denom = t.bateu + t.divergiu;
+    if (denom === 0) {
+      fig.hidden = true;
+      fig.innerHTML = '';
+      return;
+    }
+    // bateu / (bateu + divergiu) — só entre os pedidos em que o Portal TEVE
+    // resposta. Incluir "perguntar" no denominador mediria cobertura, uma
+    // pergunta diferente; as duas leituras não podem ser fundidas num só número.
+    const pct = (t.bateu / denom * 100).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    fig.hidden = false;
+    fig.innerHTML = `${pct}%<small>de acerto quando o Portal teve resposta</small>`;
+  }
+
+  function renderRateSentence(t) {
+    const sentEl = $('rate-sentence');
+    if (t.total === 0) {
+      // O vazio padrão de instalação nova é `desligado` — nesse modo o
+      // roteador nem é chamado, então total===0 é sempre o caso, pra sempre.
+      // Apresentar isso como "nada foi roteado" (como se fosse falta de
+      // dado) esconde que é o modo, não a ausência de pedidos.
+      sentEl.innerHTML = currentModo === 'desligado'
+        ? 'O roteamento está desligado, então nada está sendo medido. Escolha <b>observando</b> acima para começar a acumular evidência sem mudar nada para o operador.'
+        : 'Nenhum pedido roteado nos últimos 30 dias. O primeiro pedido importado já aparece aqui.';
+    } else {
+      sentEl.innerHTML =
+        `nos últimos 30 dias, <b>${t.total}</b> pedidos: ` +
+        `<span class="n-bateu">${t.bateu} bateram</span>, ` +
+        `<span class="n-perguntar">${t.perguntar} o Portal não soube responder</span>, ` +
+        `<span class="n-divergiu">${t.divergiu} divergiram</span>.`;
+    }
+    $('rate-period').textContent = t.desde ? `desde ${fmtDate(t.desde)}` : '';
+  }
+
+  function renderDivergencias(rows) {
+    const empty = !rows || rows.length === 0;
+    $('diverg-wrap').hidden = empty;
+    $('diverg-empty').hidden = !empty;
+    if (empty) return;
+    $('diverg-rows').innerHTML = rows.map((d) => `
+      <tr>
+        <td>${esc(timeAgo(d.decidido_em))}</td>
+        <td class="mono">${esc(d.import_id)}</td>
+        <td>${degrauLabel(d.degrau)}</td>
+        <td>${envLabel(d.env_sugerido)}</td>
+        <td>${envLabel(d.env_escolhido)}</td>
+      </tr>`).join('');
+  }
+
+  // As duas buscas de rede (modo, nomes de ambiente) disparam em paralelo
+  // com esta em boot() — loadTaxa só ESPERA (`await`, sem repetir a
+  // requisição) que elas resolvam antes de decidir a copy/rótulos, porque
+  // nem currentModo nem envNameBySlug podem ficar obsoletos no meio da
+  // renderização. Nenhuma das duas promessas rejeita (cada uma trata seu
+  // próprio erro internamente), então este await nunca lança.
+  async function loadTaxa() {
+    $('rate-loading').hidden = false;
+    $('rate-error').hidden = true;
+    $('pend-loading').hidden = false;
+    $('pend-error').hidden = true;
+    try {
+      const r = await fetch(`${API}/taxa?dias=30`, { credentials: 'same-origin' });
+      if (r.status === 401) { location.href = '/login'; return; }
+      if (!r.ok) throw new Error(`http_${r.status}`);
+      const t = await r.json();
+      await Promise.all([modoReady, envNamesReady]);
+      $('rate-content').hidden = false;
+      renderRateFigure(t);
+      renderRateSentence(t);
+      renderDivergencias(t.divergencias || []);
+      renderPendencias(t.pendencias || []);
+    } catch (e) {
+      $('rate-error').hidden = false;
+      $('pend-error').hidden = false;
+    } finally {
+      $('rate-loading').hidden = true;
+      $('pend-loading').hidden = true;
+    }
+  }
+
+  // ── Pendências ───────────────────────────────────────────────────
+  function renderPendencias(items) {
+    const empty = !items || items.length === 0;
+    $('pend-empty').hidden = !empty;
+    $('pend-list').hidden = empty;
+    if (empty) { $('pend-list').innerHTML = ''; return; }
+    $('pend-list').innerHTML = items.map((p) => `
+      <div class="pend-item">
+        <div class="pend-main">
+          <div class="pend-file">${esc(p.order_number || p.source_path)}</div>
+          <div class="pend-motivo">${esc(p.motivo || 'motivo não registrado')}</div>
+          <div class="pend-folder">${esc(p.source_path)} · ${envLabel(p.env_scan_slug)}</div>
+        </div>
+        <div class="pend-when">${esc(timeAgo(p.visto_em))}</div>
+      </div>`).join('');
+  }
+
+  // ── Boot ─────────────────────────────────────────────────────────
+  // Leitura (modo/taxa/pendências) vale para qualquer usuário logado — é
+  // material de treinamento do time, não só do admin. Só a troca do modo
+  // (PUT) exige admin; o switch fica desabilitado para quem não é.
+  //
+  // loadModo/loadEnvNames/loadTaxa disparam em paralelo (Promise.allSettled):
+  // a falha de um card não apaga os outros dois. Cada uma trata seu próprio
+  // erro e nunca rejeita — allSettled é redundância proposital, não a única
+  // rede de segurança.
+  let modoReady = null;
+  let envNamesReady = null;
+
+  async function boot() {
+    try {
+      const r = await fetch('/api/auth/me', { credentials: 'same-origin' });
+      if (r.status === 401) { location.href = '/login'; return; }
+      const data = await r.json();
+      isAdmin = !!(data.user && data.user.role === 'admin');
+    } catch (e) {
+      isAdmin = false;
+    }
+
+    modoReady = loadModo();
+    envNamesReady = loadEnvNames();
+    await Promise.allSettled([modoReady, envNamesReady, loadTaxa()]);
+  }
+
+  boot();
+</script>
+</body>
+</html>

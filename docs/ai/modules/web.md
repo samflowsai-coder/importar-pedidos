@@ -47,7 +47,9 @@ API pública para páginas-filho:
 - `POST /api/process` → upload + parse + cache de preview.
 - `POST /api/imported/{id}/export-xlsx` → gera XLSX do pedido `parsed` **sem** tocar Firebird (`require_user`). Mantém `portal_status='parsed'`. Retorna `{entry_id, output_files, portal_status}`. Usado quando `EXPORT_MODE='xlsx'`. **Também dispara `push_new_order` pro FlowPCP** (gated por `flowpcp_enabled` do ambiente; best-effort; o Flow deduplica por `externalId` — re-export não duplica; audita `flowpcp_push {ok}`).
 - `POST /api/batch/export-xlsx` → versão lote do anterior (mesmo limite 1..100).
-- `GET /api/download?path=` → download xlsx (whitelisted, path traversal bloqueado).
+- `GET /api/download?path=` → download xlsx (`require_user`). Só sufixo `.xlsx`
+  E dentro do `OUTPUT_DIR` legado ou do `output_dir` de um ambiente ATIVO (403
+  fora — mesmo padrão de confinamento de `baixar_arquivo_original`).
 - `GET /api/imported/{id}/arquivo-original` → cópia exata do arquivo recebido, antes do
   parse (`require_user`). Serve só de dentro de `<APP_DATA_DIR>/recebidos/` (403 fora);
   404 amigável em pedido anterior à guarda. Nome do download = `source_filename`.
@@ -104,13 +106,109 @@ API pública para páginas-filho:
     mesmo `order`, o FlowPCP também recebe a identidade Fire dos itens vinculados
     (desejável: o catálogo do Flow é Fire-synced). Só afeta itens com vínculo.
 
+## Roteamento intercompany (wiring web)
+
+Domínio completo (degraus, interruptor, tabelas) em
+[`modules/routing.md`](routing.md). Aqui só o que muda nas rotas de `web`.
+
+- `GET /admin/roteamento` → `admin-roteamento.html` (interruptor + taxa de
+  acerto). Exige login (`require_user`); a troca do modo em si é
+  admin-only, enforced na API, não na página.
+- `GET /api/roteamento/modo` (`require_user`) → `{modo, modos}`.
+- `PUT /api/roteamento/modo` (`require_admin`) body `{modo}` → grava via
+  `roteamento_repo.set_modo`, 400 se fora de `MODOS`.
+- `GET /api/roteamento/taxa?dias=` (`require_user`) → taxa de acerto da
+  janela + `divergencias` (até 50, de `roteamento_sombra`) + `pendencias`
+  (até 50, de `roteamento_pendencia`). `dias` é clampado em `[1, 3650]`
+  dentro de `roteamento_repo.taxa` — protege contra `OverflowError` do
+  `timedelta` com valor absurdo e contra janela no futuro com `dias`
+  negativo.
+- `POST /api/env/clear` (`require_user`) → remove o cookie `portal_env`
+  (`HttpOnly`, por isso o clear precisa ser uma rota — JS não apaga
+  sozinho). Só faz sentido com o roteamento `ligado`, onde não ter empresa
+  escolhida é um estado válido ("todas as empresas"); nos outros modos a UI
+  não oferece a opção.
+
+`POST /api/commit` (fluxo normal, sem mudança de rota) ganhou o wiring do
+roteamento: resolve `(modo, decisao)` via `_decidir_ambiente`, decide o
+ambiente de gravação via `_resolver_env_alvo` (409 pede escolha quando
+`ligado` não resolve e o operador não mandou `environment_slug`; 412 se o
+ambiente resolvido não existe mais ou está inativo). Em `observando` grava
+`roteamento_sombra` (nunca em `ligado` — sombra é "o que teria feito", não
+"o que fez"); em `ligado` sem resposta, a escolha do operador vira memória
+(`decisao_ambiente_repo.lembrar`). O evento de audit `imported_to_portal`
+carrega `{degrau, env_slug, explicacao}` sob a chave `roteamento` (`None`
+em `desligado`) — é o registro de POR QUE o pedido foi para aquela empresa,
+não só o `environment_id` (achado 3 da revisão final de branch).
+
+`GET /api/imported` (`require_user` — faltava antes de um fix de revisão;
+sem ele a rota cross-env respondia 200 pra chamador anônimo em `ligado`
+sem cookie) soma as empresas — lista, `total` e chips juntos, via
+`repo.list_imports_all_envs` / `count_imports_all_envs` /
+`count_by_portal_status_all_envs` — quando `roteamento_modo == 'ligado'` **e**
+não há ambiente no cookie. Com cookie presente, mesmo em `ligado`, o cookie
+volta a ser filtro (só aquela empresa). Fora de `ligado`, comportamento
+idêntico ao anterior à feature. Cada linha da listagem somada carrega o
+selo da empresa (`environment_slug`/`environment_name`).
+
+`GET /` deixa de redirecionar para `/selecionar-ambiente` quando
+`roteamento_modo == 'ligado'` — o ambiente é propriedade do pedido, não da
+sessão, e o passo de seleção deixa de fazer sentido. `current_environment`
+(dependency) muda a mensagem do 412 de "Selecione um ambiente" para "Esta
+ação é de uma empresa específica — abra o pedido para agir nele" — mais
+honesta fora de `ligado` também (a antiga sugeria um passo que nem sempre
+existe).
+
+### Fluxo da pasta de entrada (empresa DECLARADA, não derivada)
+
+Diferente do resto do wiring de roteamento: `import_id` é único globalmente,
+mas **nome de arquivo não é** — dois arquivos podem ter o mesmo nome nas
+pastas de empresas diferentes. Por isso a empresa aqui não é derivada do
+pedido (não existe pedido ainda); é **declarada** pelo cliente via `env_slug`,
+resolvido por `_env_da_pasta(request, env_slug)` (`app/web/server.py`):
+
+- Fora de `'ligado'`, ou com cookie `portal_env` presente mesmo em `'ligado'`,
+  o cookie manda e `env_slug` é ignorado — comportamento idêntico ao anterior
+  a esta task.
+- Em `'ligado'` sem cookie: `env_slug` ausente → 400 nomeando o campo;
+  não corresponde a empresa ATIVA (`environments_repo.list_active()`) → 404.
+  Nunca um default.
+
+`GET /api/pending` (agora `require_user` — faltava antes; a pasta de entrada
+respondia 200 pra chamador anônimo) soma as pastas de todas as empresas
+ativas nesse caso, e cada item ganha `env_slug`/`env_name` (mesmo selo de
+`/api/imported` somado). **Mudança de shape:** `watchDir` no topo da resposta
+vira `null` (sem valor único possível quando há mais de uma pasta) e `exists`
+passa a significar "pelo menos uma pasta existe" — a UI usa o selo por item
+em vez do rótulo do topo (`renderFileRows`/`renderPending` em `index.html`
+tratam `watchDir === null` como o caso somado). Fora de `'ligado'`, ou com
+cookie, o shape é o de sempre (`watchDir` da empresa/legado, sem os campos
+novos por item).
+
+`POST /api/import`, `/api/reimport` e `/api/preview-pending` ganham
+`env_slug: str | None = None` no corpo. Quando `_env_da_pasta` resolve uma
+empresa (só acontece em `'ligado'` sem cookie), o handler troca o cfg pelo
+de `_cfg_para_env(env)` (pastas DESTA empresa, não do cookie) e envolve todo
+o trabalho — inclusive `_guardar_original` e `_append_log`, que resolvem a
+DB pelo contextvar, não por `cfg` — em `env_context.active_env(env["id"],
+env["slug"])`. Fábrica `_persist_ctx(env)`, não uma instância guardada: um
+context manager de `@contextmanager` só entra/sai uma vez, e `reimport_file`
+precisa dele nos dois ramos (sucesso e erro).
+
 ## Segurança (não relaxar)
 - Whitelist de extensão: `.pdf`, `.xls`, `.xlsx`.
 - Limite de upload: 50 MB.
-- `/api/download` aceita SOMENTE `.xlsx` e bloqueia `..`.
+- `/api/download` exige sessão (`require_user`), aceita SOMENTE `.xlsx` e
+  confina o caminho resolvido ao `OUTPUT_DIR` legado + `output_dir` dos
+  ambientes ativos (403 fora das raízes).
 - `POST /api/auth/login` — rate-limit 10 req/15 min/IP via token bucket SQLite.
   Retorna 429 + `Retry-After: 900` quando esgotado.
   Env `RATE_LIMIT_ENABLED=false` desativa (dev/test).
+- `GET /api/pending` ganhou `require_user` (task "ambiente é propriedade do
+  pedido" — faltava desde sempre; a rota nunca teve dependency de auth
+  nenhuma, então um chamador anônimo via a estrutura de pastas/arquivos
+  pendentes de todas as empresas em `ligado` sem cookie). `/api/import`,
+  `/api/reimport` e `/api/preview-pending` já exigiam `require_user`.
 
 ## Testes
 - `tests/test_web_server.py` — inclui o push FlowPCP no send-to-fire
@@ -121,7 +219,21 @@ API pública para páginas-filho:
 - `tests/test_flowpcp_hook.py` — `push_new_order` (gating MM + best-effort).
 - `tests/test_preview_cache.py`
 - `tests/test_firebird_config_api.py` — endpoints `/api/firebird/*`, redirect legacy, gating por role.
-- Comando: `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py tests/test_firebird_config_api.py -v`
+- `tests/test_routing_wiring.py` — wiring do roteamento em `/api/commit`, os três modos.
+- `tests/test_routing_modo.py` — `/api/roteamento/modo|taxa`, `/api/env/clear`, gate de `/` e cross-env de `/api/imported`.
+- `tests/test_env_do_pedido.py` — `env_do_pedido`/`env_do_import_id` (resolver + gate), inclusive
+  o requisito de `async def` (contextvar em threadpool).
+- `tests/test_rotas_por_pedido_cross_env.py` — as 10 rotas por-pedido e o lote (`/api/batch/*`)
+  agrupado por empresa em `'ligado'` sem cookie. Inclui a prova nas rotas de **escrita**
+  (`export-xlsx`, `send-to-fire`): as quatro amarrações — Firebird/check de preço, pasta de
+  saída, slug do Flow e SQLite — são a empresa do pedido, com cookie de outra empresa e sem
+  cookie nenhum. É o teste que faltava quando as rotas por-pedido amarravam três empresas
+  diferentes de uma vez.
+- `tests/test_pasta_cross_env.py` — `GET /api/pending` somado com selo por item; `env_slug`
+  obrigatório (400) e validado contra empresa ativa (404) nas três rotas de ação
+  (`/api/import`, `/api/reimport`, `/api/preview-pending`); prova de que o `env_slug`
+  declarado lê a pasta certa mesmo com nome de arquivo repetido entre empresas.
+- Comando: `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py tests/test_firebird_config_api.py tests/test_routing_wiring.py tests/test_routing_modo.py tests/test_env_do_pedido.py tests/test_rotas_por_pedido_cross_env.py tests/test_pasta_cross_env.py -v`
 
 ## Reatividade de config (exportMode)
 O botão de ação principal (`#pvCommitBtn` no preview e `#batchSendBtn` no log)
@@ -169,3 +281,14 @@ Parse que falha (422), preview descartado ou expirado: a cópia já existe.
 - `_export_one_xlsx` re-roda `check_order` SEM passar `request_env` (caminho
   legado). Em deploy multi-ambiente isso usa env vars `FB_*`. Follow-up:
   passar env do request quando essa rota também adotar `getattr(request.state, "environment")`.
+- `POST /api/import` (lote por nome de arquivo) e `POST /api/reimport` existem no backend
+  (com teste) mas **não têm nenhum call site em `index.html`** — `doReimport()` está definida
+  mas nada renderiza o botão `id="reimport-..."` que ela espera (grep de `api/import\b` e
+  `reimport-` no arquivo inteiro, antes desta task, não achou chamador nenhum). Aceitam
+  `env_slug` porque o contrato do backend precisa ser correto independente de UI, mas não há
+  hoje um fluxo real que monte o corpo com `env_slug` para elas — só `previewPending` (aba de
+  pendentes) tem essa informação disponível (`f.env_slug` da listagem somada).
+- Um context manager de `@contextmanager` (como `env_context.active_env(...)`) só entra/sai
+  UMA vez. `_persist_ctx(env)` em `server.py` é fábrica (chama `active_env`/`nullcontext` de
+  novo a cada `with`), nunca guarde o retorno numa variável pra reusar em dois blocos `with`
+  (ex.: ramo de sucesso e ramo de erro) — a segunda entrada estoura.

@@ -102,6 +102,19 @@ def test_auth_me_environment_null_when_inactive(app_setup):
     assert r.json()["environment"] is None
 
 
+def test_clear_env_removes_cookie(app_setup):
+    """Com o roteamento `ligado`, o topo oferece "Todas as empresas" — que
+    precisa de um jeito de remover o cookie sem deslogar. `set_env_cookie`
+    grava HttpOnly; JS não consegue apagar isso sozinho, por isso a rota."""
+    env_mm, _ = app_setup
+    c = _client()
+    c.post("/api/env/select", json={"environment_id": env_mm["id"]})
+    r = c.post("/api/env/clear")
+    assert r.status_code == 200
+    assert r.json()["environment"] is None
+    assert c.cookies.get("portal_env") is None
+
+
 def test_root_redirects_to_select_env_without_cookie(app_setup, monkeypatch):
     """Sem cookie portal_env e sem TEST_AUTH_BYPASS, root → /selecionar-ambiente."""
     monkeypatch.delenv("TEST_AUTH_BYPASS", raising=False)

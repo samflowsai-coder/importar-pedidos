@@ -8,6 +8,7 @@ import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
@@ -42,7 +43,14 @@ from app.web.auth import (
     require_user,
     set_session_cookie,
 )
+from app.web.dependencies.pedido import env_do_import_id, env_do_pedido
 from app.web.middleware.rate_limit import check_and_consume
+
+if TYPE_CHECKING:
+    # Só para anotação de tipo — `app.routing.ambiente` fica fora do import
+    # top-level do resto do módulo por convenção (imports pesados/roteamento
+    # são locais nas funções que os usam).
+    from app.routing.ambiente import Decisao
 
 
 def _is_test_bypass() -> bool:
@@ -99,9 +107,11 @@ from app.integrations.flowpcp.hook import push_new_order  # noqa: E402
 # Flow vai receber quando o pedido chegou no nome da revenda.
 from app.integrations.flowpcp.intercompany import resolucao_para  # noqa: E402
 
-# Multi-ambiente: traduz NoActiveEnvironmentError em 412 estruturado para
-# que o cliente HTTP possa redirecionar para /selecionar-ambiente em vez
-# de quebrar com 500.
+# Multi-ambiente: traduz NoActiveEnvironmentError em 412 estruturado em vez
+# de quebrar com 500. Esta é a mensagem que o operador realmente vê — com
+# roteamento `ligado` não existe mais tela de seleção, então ela não manda
+# "selecionar"; diz a verdade, que é a ação em si que exige uma empresa
+# específica.
 from app.persistence.context import NoActiveEnvironmentError  # noqa: E402
 
 
@@ -109,7 +119,10 @@ from app.persistence.context import NoActiveEnvironmentError  # noqa: E402
 async def _no_env_handler(_request, _exc):
     return JSONResponse(
         status_code=412,
-        content={"detail": "Selecione um ambiente para continuar.", "code": "no_active_env"},
+        content={
+            "detail": "Esta ação é de uma empresa específica — abra o pedido para agir nele.",
+            "code": "no_active_env",
+        },
     )
 
 
@@ -132,6 +145,11 @@ app.include_router(environments_router)
 from app.web import routes_update  # noqa: E402
 
 app.include_router(routes_update.router)
+
+# Roteamento intercompany: interruptor de 3 estados + taxa de acerto.
+from app.web.routes_roteamento import router as roteamento_router  # noqa: E402
+
+app.include_router(roteamento_router)
 
 
 @app.on_event("startup")
@@ -166,16 +184,81 @@ def _request_environment(request: Request) -> dict | None:
     return getattr(request.state, "environment", None)
 
 
-def _get_cfg_for_request(request: Request) -> dict:
-    """Return legacy config, overridden by selected environment dirs when present."""
-    cfg = _get_cfg()
-    env = _request_environment(request)
-    if env is None:
-        return cfg
-    out = dict(cfg)
+def _cfg_para_env(env: dict) -> dict:
+    """Cfg legado com as pastas DESTA empresa. Usado pelo lote agrupado, onde
+    cada grupo escreve na pasta da sua empresa e não na do cookie."""
+    out = dict(_get_cfg())
     out["watch_dir"] = env["watch_dir"]
     out["output_dir"] = env["output_dir"]
     return out
+
+
+def _get_cfg_for_request(request: Request) -> dict:
+    """Return legacy config, overridden by selected environment dirs when present."""
+    env = _request_environment(request)
+    return _get_cfg() if env is None else _cfg_para_env(env)
+
+
+def _persist_ctx(env: dict[str, object] | None):
+    """Context manager do bloco de persistência: ambiente DECLARADO quando
+    há um (`env_slug` resolvido em `ligado` sem cookie), `nullcontext()`
+    quando não há — o contexto já veio do middleware (cookie) ou nem existe
+    (legado single-tenant). Uma fábrica, não uma instância guardada: um
+    context manager baseado em `@contextmanager` só entra/sai UMA vez —
+    reusar a mesma instância num segundo `with` (ex.: ramo de erro depois do
+    ramo de sucesso) estoura."""
+    from contextlib import nullcontext
+
+    return env_context.active_env(env["id"], env["slug"]) if env is not None else nullcontext()
+
+
+def _env_da_pasta(request: Request, env_slug: str | None) -> dict[str, object] | None:
+    """De qual empresa é esta ação no fluxo da pasta de entrada
+    (import/reimport/preview-pending).
+
+    Aqui o identificador é diferente do resto do wiring de roteamento:
+    `import_id` é único globalmente, **nome de arquivo não é** — dois
+    arquivos podem ter o mesmo nome em pastas de empresas diferentes. Por
+    isso a empresa não é derivada, é DECLARADA pelo `env_slug` do corpo.
+
+    Fora de `'ligado'` o cookie manda e `env_slug` é ignorado — comportamento
+    de hoje, intacto. Em `'ligado'` com cookie presente: `env_slug` AUSENTE
+    ainda deixa o cookie mandar (idem); `env_slug` PRESENTE e DIVERGENTE do
+    ambiente do cookie é conflito, não substituição silenciosa — nome de
+    arquivo não é único entre empresas, então "ignorar a declaração" seria
+    abrir o arquivo de outra empresa sem avisar. Em `'ligado'` sem cookie:
+    ausente -> 400 nomeando o campo; não corresponde a empresa ATIVA -> 404.
+    Nunca um default.
+    """
+    from app.persistence import environments_repo, roteamento_repo
+
+    if roteamento_repo.modo() != roteamento_repo.LIGADO:
+        return None
+    cookie_env = _request_environment(request)
+    if cookie_env is not None:
+        if env_slug and env_slug != cookie_env["slug"]:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"empresa declarada '{env_slug}', empresa selecionada "
+                    f"'{cookie_env['slug']}' — recarregue a lista."
+                ),
+            )
+        return None
+    if not env_slug:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "env_slug é obrigatório: roteamento ligado e nenhuma empresa "
+                "selecionada (sem cookie)."
+            ),
+        )
+    for env in environments_repo.list_active():
+        if env["slug"] == env_slug:
+            return env
+    raise HTTPException(
+        status_code=404, detail=f"Empresa '{env_slug}' não encontrada ou inativa."
+    )
 
 
 def _firebird_open_for_request(request: Request, conn_mgr):
@@ -234,6 +317,42 @@ def _make_log_entry(
 
 
 # ── Preview helpers ───────────────────────────────────────────────────────
+
+
+def _decidir_ambiente(order) -> tuple[str, Decisao | None]:
+    """(modo, Decisao|None) pro commit do preview. Contrato completo (modos,
+    blindagem de exceção) mora em `app/routing/ambiente.py::decidir` — o
+    scan_environments (watcher) usa a mesma função, com `origem="scan"`; só
+    o prefixo do log muda. Este wrapper existe porque testes já importam
+    `_decidir_ambiente` daqui (`tests/test_routing_wiring.py`)."""
+    from app.routing import ambiente as routing
+
+    return routing.decidir(order, origem="web")
+
+
+def _roteamento_para_preview(order) -> dict | None:
+    """Bloco `roteamento` do payload do preview. `None` em 'desligado'.
+
+    A UI nunca roteia em silêncio: mesmo quando a decisão é automática, o
+    bloco viaja no preview para a faixa acima dos itens mostrar o ambiente
+    de destino e o degrau que decidiu.
+    """
+    from app.persistence import environments_repo, roteamento_repo
+
+    modo, decisao = _decidir_ambiente(order)
+    if decisao is None:
+        return None
+    env = environments_repo.get_by_slug(decisao.env_slug) if decisao.env_slug else None
+    return {
+        "modo": modo,
+        "degrau": decisao.degrau,
+        "env_slug": decisao.env_slug,
+        "env_nome": env["name"] if env else None,
+        "explicacao": decisao.explicacao,
+        "divergiu_de": decisao.divergiu_de,
+        "precisa_escolher": modo == roteamento_repo.LIGADO and not decisao.resolveu,
+        "opcoes": [{"slug": e["slug"], "name": e["name"]} for e in environments_repo.list_active()],
+    }
 
 
 def _build_preview_payload(
@@ -400,11 +519,18 @@ def index(request: Request):
     """Dashboard. Redireciona para login se não autenticado, e para
     seleção de ambiente se logado mas sem env ativo (cookie portal_env
     ausente ou inválido — middleware não hidrata request.state.environment).
+
+    Com `roteamento_modo='ligado'` o ambiente é propriedade do pedido, não da
+    sessão: não há o que escolher, e o passo de seleção some. Nos outros
+    modos o comportamento é o de sempre.
     """
+    from app.persistence import roteamento_repo
+
     if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
         return RedirectResponse(url="/login")
-    if getattr(request.state, "environment", None) is None and not _is_test_bypass():
-        return RedirectResponse(url="/selecionar-ambiente")
+    if roteamento_repo.modo() != roteamento_repo.LIGADO:
+        if getattr(request.state, "environment", None) is None and not _is_test_bypass():
+            return RedirectResponse(url="/selecionar-ambiente")
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 
@@ -450,6 +576,15 @@ def admin_atualizacao_page(request: Request):
     if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
         return RedirectResponse(url="/login")
     return FileResponse(str(STATIC_DIR / "admin-atualizacao.html"))
+
+
+@app.get("/admin/roteamento")
+def admin_roteamento_page(request: Request):
+    """Interruptor do roteamento + taxa de acerto. Exige login (não admin —
+    leitura é `require_user`, só a troca do modo exige admin). API enforce o role."""
+    if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
+        return RedirectResponse(url="/login")
+    return FileResponse(str(STATIC_DIR / "admin-roteamento.html"))
 
 
 @app.get("/admin/usuarios")
@@ -1125,13 +1260,13 @@ def test_firebird_connection(
                     os.environ[k] = prev
 
 
-@app.get("/api/pending")
-def list_pending(request: Request) -> JSONResponse:
-    cfg = _get_cfg_for_request(request)
-    watch = Path(cfg["watch_dir"])
-
+def _listar_pasta_pendente(watch_dir: str) -> tuple[list[dict], bool]:
+    """Arquivos elegíveis de UMA pasta de entrada, ou `([], False)` se ela não
+    existir. Extraído de `list_pending` pra ser reusado tanto no caso de uma
+    empresa só quanto na soma entre empresas (`ligado` sem cookie)."""
+    watch = Path(watch_dir)
     if not watch.exists():
-        return JSONResponse({"files": [], "watchDir": cfg["watch_dir"], "exists": False})
+        return [], False
 
     files = []
     for f in sorted(
@@ -1156,12 +1291,51 @@ def list_pending(request: Request) -> JSONResponse:
         except Exception:
             pass
 
-    return JSONResponse({"files": files, "watchDir": cfg["watch_dir"], "exists": True})
+    return files, True
+
+
+@app.get("/api/pending")
+def list_pending(request: Request, _user: User = Depends(require_user)) -> JSONResponse:
+    from app.persistence import environments_repo, roteamento_repo
+
+    if roteamento_repo.modo() == roteamento_repo.LIGADO and _request_environment(request) is None:
+        # Ambiente é propriedade do PEDIDO — a caixa soma as pastas de todas
+        # as empresas ativas. Nome de arquivo não é único entre elas, então
+        # cada item carrega `env_slug`/`env_name` (mesmo `_com_env` do lote
+        # somado) pra quem for agir saber qual pasta é qual.
+        files: list[dict] = []
+        any_exists = False
+        missing_envs: list[dict] = []
+        for env in environments_repo.list_active():
+            env_files, exists = _listar_pasta_pendente(env["watch_dir"])
+            any_exists = any_exists or exists
+            if not exists:
+                missing_envs.append({"slug": env["slug"], "name": env["name"]})
+            files.extend(_com_env(f, env) for f in env_files)
+        files.sort(key=lambda f: f["mtime"], reverse=True)
+        # `watchDir` não tem valor único no caso somado — a UI usa o selo por
+        # item em vez do topo (ver Step 6). `exists` reflete "pelo menos uma
+        # pasta existe", pra não acender o aviso de "pasta não encontrada" à
+        # toa quando só uma das empresas ainda não tem a pasta criada.
+        # `missingEnvs` é o sinal que `exists` sozinho mascara: uma pasta
+        # saudável não pode esconder a ausência da outra (share de rede
+        # desmontado em uma das empresas continua invisível sem isto).
+        return JSONResponse(
+            {"files": files, "watchDir": None, "exists": any_exists, "missingEnvs": missing_envs}
+        )
+
+    cfg = _get_cfg_for_request(request)
+    files, exists = _listar_pasta_pendente(cfg["watch_dir"])
+    return JSONResponse({"files": files, "watchDir": cfg["watch_dir"], "exists": exists})
 
 
 class ImportRequest(BaseModel):
     files: list[str]
     outputDir: str | None = None
+    # Empresa DECLARADA pelo cliente — nome de arquivo não é único entre
+    # empresas, então não dá pra derivar. Só obrigatório em `ligado` sem
+    # cookie; ver `_env_da_pasta`.
+    env_slug: str | None = None
 
 
 @app.post("/api/import")
@@ -1172,8 +1346,9 @@ def import_files(
 ) -> JSONResponse:
     from app import config as app_config
 
-    cfg = _get_cfg_for_request(request)
-    request_env = _request_environment(request)
+    env = _env_da_pasta(request, body.env_slug)
+    cfg = _cfg_para_env(env) if env is not None else _get_cfg_for_request(request)
+    request_env = env if env is not None else _request_environment(request)
     watch = Path(cfg["watch_dir"])
     imp = app_config.imported_dir(cfg)
 
@@ -1192,69 +1367,79 @@ def import_files(
     results = []
     errors = []
 
-    for filename in body.files:
-        name = Path(filename).name  # strip any path component — security
-        src = watch / name
+    # `env` só é não-None em 'ligado' sem cookie: aí o cfg acima já é o DESTA
+    # empresa (via `_cfg_para_env`), e `_guardar_original`/`_append_log`
+    # também precisam do contextvar ativo — eles resolvem a DB por ele, não
+    # por `cfg`. Nos outros casos o contexto já veio do middleware (cookie)
+    # ou nem existe (legado single-tenant) — `_persist_ctx` devolve
+    # `nullcontext()` e não muda nada.
+    with _persist_ctx(env):
+        for filename in body.files:
+            name = Path(filename).name  # strip any path component — security
+            src = watch / name
 
-        if not src.exists() or not src.is_file():
-            errors.append({"source": name, "error": "Arquivo não encontrado na pasta de entrada"})
-            continue
-        if src.suffix.lower() not in ALLOWED_EXTENSIONS:
-            errors.append({"source": name, "error": "Extensão não permitida"})
-            continue
+            if not src.exists() or not src.is_file():
+                errors.append(
+                    {"source": name, "error": "Arquivo não encontrado na pasta de entrada"}
+                )
+                continue
+            if src.suffix.lower() not in ALLOWED_EXTENSIONS:
+                errors.append({"source": name, "error": "Extensão não permitida"})
+                continue
 
-        try:
-            recebido = _guardar_original(src.read_bytes(), name)
-            result = _process_file(src, output_path, env=request_env)
+            try:
+                recebido = _guardar_original(src.read_bytes(), name)
+                result = _process_file(src, output_path, env=request_env)
 
-            dest = imp / name
-            if dest.exists():
-                stem, suffix = src.stem, src.suffix
-                dest = imp / f"{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}"
-            shutil.move(str(src), str(dest))
+                dest = imp / name
+                if dest.exists():
+                    stem, suffix = src.stem, src.suffix
+                    dest = imp / f"{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}"
+                shutil.move(str(src), str(dest))
 
-            entry = _make_log_entry(
-                source_filename=name,
-                order_number=result["order_number"],
-                customer=result["customer"],
-                output_files=result["output_files"],
-                status="success",
-                snapshot=result.get("snapshot"),
-                fire_codigo=result.get("fire_codigo"),
-                db_result=result.get("db_result"),
-                file_sha256=recebido.sha256,
-                original_path=str(recebido.path),
-            )
-            _append_log(cfg, entry)
+                entry = _make_log_entry(
+                    source_filename=name,
+                    order_number=result["order_number"],
+                    customer=result["customer"],
+                    output_files=result["output_files"],
+                    status="success",
+                    snapshot=result.get("snapshot"),
+                    fire_codigo=result.get("fire_codigo"),
+                    db_result=result.get("db_result"),
+                    file_sha256=recebido.sha256,
+                    original_path=str(recebido.path),
+                )
+                _append_log(cfg, entry)
 
-            results.append(
-                {
-                    "source": name,
-                    "order": result["order_number"] or "—",
-                    "customer": result["customer"] or "—",
-                    "files": result["output_files"],
-                    "fire_codigo": result.get("fire_codigo"),
-                    "entry_id": entry["id"],
-                }
-            )
+                results.append(
+                    {
+                        "source": name,
+                        "order": result["order_number"] or "—",
+                        "customer": result["customer"] or "—",
+                        "files": result["output_files"],
+                        "fire_codigo": result.get("fire_codigo"),
+                        "entry_id": entry["id"],
+                    }
+                )
 
-        except Exception as exc:
-            entry = _make_log_entry(
-                source_filename=name,
-                order_number=None,
-                customer=None,
-                output_files=[],
-                status="error",
-                error=str(exc),
-            )
-            _append_log(cfg, entry)
-            errors.append({"source": name, "error": str(exc)})
+            except Exception as exc:
+                entry = _make_log_entry(
+                    source_filename=name,
+                    order_number=None,
+                    customer=None,
+                    output_files=[],
+                    status="error",
+                    error=str(exc),
+                )
+                _append_log(cfg, entry)
+                errors.append({"source": name, "error": str(exc)})
 
     return JSONResponse({"results": results, "errors": errors})
 
 
 @app.get("/api/imported")
 def list_imported(
+    request: Request,
     limit: int = 100,
     offset: int = 0,
     status: str | None = None,
@@ -1263,15 +1448,32 @@ def list_imported(
     q: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    _user: User = Depends(require_user),
 ) -> JSONResponse:
     """`?portal_status=` aceita o parâmetro repetido (`?portal_status=a&portal_status=b`)
     para filtrar por múltiplos estados numa chamada só (ex.: chip "No Fire" da UI,
     que precisa casar `sent_to_fire` e `found_in_fire` de uma vez). Um único valor
     continua funcionando exatamente como antes — vira uma lista de 1 item, e
     `repo._build_where` trata `IN (?)` como equivalente a `= ?`."""
-    from app.persistence import repo
+    from app.persistence import repo, roteamento_repo
 
-    entries = repo.list_imports(
+    # Sem empresa no cookie E com o roteamento valendo, a caixa de entrada é
+    # de todas as empresas — o ambiente virou propriedade do pedido, não da
+    # sessão. Com empresa escolhida (cookie presente), o cookie volta a ser
+    # um filtro: a lista é só daquela empresa, como sempre foi. As três
+    # funções trocam JUNTAS — lista, total e chips têm que somar o mesmo
+    # conjunto, ou a tela mostra números que não batem com o que renderizou.
+    cross = (
+        roteamento_repo.modo() == roteamento_repo.LIGADO
+        and getattr(request.state, "environment", None) is None
+    )
+    listar = repo.list_imports_all_envs if cross else repo.list_imports
+    contar = repo.count_imports_all_envs if cross else repo.count_imports
+    contar_chips = (
+        repo.count_by_portal_status_all_envs if cross else repo.count_by_portal_status
+    )
+
+    entries = listar(
         limit=limit,
         offset=offset,
         status=status,
@@ -1281,7 +1483,7 @@ def list_imported(
         date_from=date_from,
         date_to=date_to,
     )
-    total = repo.count_imports(
+    total = contar(
         status=status,
         portal_status=portal_status,
         production_status=production_status,
@@ -1294,7 +1496,7 @@ def list_imported(
     # tela acabou de renderizar — duas chamadas separadas podem cair em lados
     # opostos de uma reconciliação em background e mostrar 12 na lista com 308
     # no chip.
-    counts = repo.count_by_portal_status(
+    counts = contar_chips(
         status=status,
         production_status=production_status,
         customer_search=q,
@@ -1313,7 +1515,11 @@ def list_imported(
 
 
 @app.get("/api/imported/{import_id}")
-def get_imported(import_id: str) -> JSONResponse:
+def get_imported(
+    import_id: str,
+    _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
+) -> JSONResponse:
     from app.persistence import repo
 
     entry = repo.get_import(import_id)
@@ -1324,7 +1530,11 @@ def get_imported(import_id: str) -> JSONResponse:
 
 
 @app.get("/api/imported/{import_id}/arquivo-original")
-def baixar_arquivo_original(import_id: str, _user: User = Depends(require_user)) -> FileResponse:
+def baixar_arquivo_original(
+    import_id: str,
+    _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
+) -> FileResponse:
     """Cópia exata do arquivo recebido, antes do parse. Só serve de dentro de
     `recebidos/`: `original_path` vem do banco, mas defesa em profundidade
     custa duas linhas."""
@@ -1384,6 +1594,8 @@ def reconciliar_fire_agora(
 class ReimportRequest(BaseModel):
     filename: str
     outputDir: str | None = None
+    # Empresa DECLARADA — ver `ImportRequest.env_slug` / `_env_da_pasta`.
+    env_slug: str | None = None
 
 
 @app.post("/api/reimport")
@@ -1394,8 +1606,9 @@ def reimport_file(
 ) -> JSONResponse:
     from app import config as app_config
 
-    cfg = _get_cfg_for_request(request)
-    request_env = _request_environment(request)
+    env = _env_da_pasta(request, body.env_slug)
+    cfg = _cfg_para_env(env) if env is not None else _get_cfg_for_request(request)
+    request_env = env if env is not None else _request_environment(request)
     imp = app_config.imported_dir(cfg)
 
     name = Path(body.filename).name
@@ -1420,46 +1633,67 @@ def reimport_file(
         raise HTTPException(status_code=500, detail=f"Erro ao criar diretório de saída: {exc}")
 
     try:
-        result = _process_file(src, output_path, env=request_env)
-        entry = _make_log_entry(
-            source_filename=name,
-            order_number=result["order_number"],
-            customer=result["customer"],
-            output_files=result["output_files"],
-            status="success",
-            snapshot=result.get("snapshot"),
-            fire_codigo=result.get("fire_codigo"),
-            db_result=result.get("db_result"),
-        )
-        _append_log(cfg, entry)
-        return JSONResponse(
-            {
-                "source": name,
-                "order": result["order_number"] or "—",
-                "customer": result["customer"] or "—",
-                "files": result["output_files"],
-                "fire_codigo": result.get("fire_codigo"),
-                "entry_id": entry["id"],
-            }
-        )
+        with _persist_ctx(env):
+            result = _process_file(src, output_path, env=request_env)
+            entry = _make_log_entry(
+                source_filename=name,
+                order_number=result["order_number"],
+                customer=result["customer"],
+                output_files=result["output_files"],
+                status="success",
+                snapshot=result.get("snapshot"),
+                fire_codigo=result.get("fire_codigo"),
+                db_result=result.get("db_result"),
+            )
+            _append_log(cfg, entry)
+            return JSONResponse(
+                {
+                    "source": name,
+                    "order": result["order_number"] or "—",
+                    "customer": result["customer"] or "—",
+                    "files": result["output_files"],
+                    "fire_codigo": result.get("fire_codigo"),
+                    "entry_id": entry["id"],
+                }
+            )
     except Exception as exc:
-        entry = _make_log_entry(
-            source_filename=name,
-            order_number=None,
-            customer=None,
-            output_files=[],
-            status="error",
-            error=str(exc),
-        )
-        _append_log(cfg, entry)
+        with _persist_ctx(env):
+            entry = _make_log_entry(
+                source_filename=name,
+                order_number=None,
+                customer=None,
+                output_files=[],
+                status="error",
+                error=str(exc),
+            )
+            _append_log(cfg, entry)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/download")
-def download_file(path: str) -> FileResponse:
+def download_file(path: str, _user: User = Depends(require_user)) -> FileResponse:
+    """XLSX gerado pelo exportador. Confinado às raízes de onde
+    `ERPExporter().export(...)` de fato grava — ver `_run_exporters` e
+    `_send_one_to_fire`/`_export_one_xlsx`: `OUTPUT_DIR` legado (quando não há
+    ambiente selecionado) e `output_dir` de cada ambiente ATIVO (multi-empresa).
+    Mesma defesa em profundidade que `baixar_arquivo_original` já usa pra
+    `recebidos/`: resolve o caminho, confere a raiz ANTES de checar existência
+    (não vaza "existe/não existe" fora das pastas de saída), só então serve.
+    """
+    from app import config as app_config
+    from app.persistence import environments_repo
+
     file_path = Path(path).expanduser().resolve()
     if file_path.suffix.lower() != ".xlsx":
         raise HTTPException(status_code=403, detail="Apenas arquivos .xlsx podem ser baixados")
+
+    raizes = [Path(app_config.load()["output_dir"]).expanduser().resolve()]
+    raizes += [
+        Path(env["output_dir"]).expanduser().resolve() for env in environments_repo.list_active()
+    ]
+    if not any(raiz in file_path.parents for raiz in raizes):
+        raise HTTPException(status_code=403, detail="Caminho fora das pastas de saída permitidas")
+
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
     return FileResponse(
@@ -1581,11 +1815,18 @@ async def preview_file(
         file_sha256=recebido.sha256,
     )
     payload = _build_preview_payload(entry.preview_id, filename, order, check)
+    # Bloco `roteamento`: só nos dois montadores de preview FRESCO (aqui e em
+    # `preview_pending`) — não em `_build_preview_payload`, que também
+    # alimenta `rehydrate_preview` (pedido já commitado, ambiente definitivo,
+    # nada a decidir ali — ver Achado 4 do fix round 1).
+    payload["roteamento"] = _roteamento_para_preview(order)
     return JSONResponse(payload)
 
 
 class PreviewPendingRequest(BaseModel):
     filename: str
+    # Empresa DECLARADA — ver `ImportRequest.env_slug` / `_env_da_pasta`.
+    env_slug: str | None = None
 
 
 @app.post("/api/preview-pending")
@@ -1598,7 +1839,9 @@ def preview_pending(
     from app.ingestion.file_loader import LoadedFile
     from app.pipeline import process
 
-    cfg = _get_cfg_for_request(request)
+    env = _env_da_pasta(request, body.env_slug)
+    cfg = _cfg_para_env(env) if env is not None else _get_cfg_for_request(request)
+    request_env = env if env is not None else _request_environment(request)
     watch = Path(cfg["watch_dir"])
 
     name = Path(body.filename).name  # strip path components
@@ -1611,119 +1854,279 @@ def preview_pending(
     if src.stat().st_size > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Arquivo excede o limite")
 
-    raw = src.read_bytes()
-    recebido = _guardar_original(raw, name)
-    loaded = LoadedFile(path=src, extension=ext, raw=raw)
-    order = process(loaded)
+    with _persist_ctx(env):
+        raw = src.read_bytes()
+        recebido = _guardar_original(raw, name)
+        loaded = LoadedFile(path=src, extension=ext, raw=raw)
+        order = process(loaded)
 
-    if not order:
-        raise HTTPException(status_code=422, detail="Formato não reconhecido ou pedido sem itens")
+        if not order:
+            raise HTTPException(
+                status_code=422, detail="Formato não reconhecido ou pedido sem itens"
+            )
 
-    from app.erp.product_check import check_order
+        from app.erp.product_check import check_order
 
-    check = check_order(order, env=_request_environment(request))
-    entry = get_cache().put(
-        order=order,
-        source_filename=name,
-        source_bytes=raw,
-        source_ext=ext,
-        source_path=str(src),
-        check=check,
-        original_path=str(recebido.path),
-        file_sha256=recebido.sha256,
-    )
-    payload = _build_preview_payload(entry.preview_id, name, order, check)
+        check = check_order(order, env=request_env)
+        entry = get_cache().put(
+            order=order,
+            source_filename=name,
+            source_bytes=raw,
+            source_ext=ext,
+            source_path=str(src),
+            check=check,
+            original_path=str(recebido.path),
+            file_sha256=recebido.sha256,
+        )
+        payload = _build_preview_payload(entry.preview_id, name, order, check)
+        # Ver comentário equivalente em `preview_upload` (Achado 4, fix round 1).
+        payload["roteamento"] = _roteamento_para_preview(order)
     return JSONResponse(payload)
 
 
 class CommitRequest(BaseModel):
     preview_id: str
+    # Resposta do operador quando o roteamento (modo 'ligado') não soube
+    # decidir sozinho. Ignorado nos outros modos — lá o ambiente é sempre o
+    # do cookie, como sempre foi.
+    environment_slug: str | None = None
+
+
+def _resolver_env_alvo(
+    request: Request, body: CommitRequest, modo: str, decisao: Decisao | None
+) -> dict | None:
+    """O ambiente onde ESTE commit vai gravar. Nunca chuta em 'ligado'.
+
+    Fora de `'ligado'` é sempre o ambiente do cookie (`None` se não houver
+    nenhum) — idêntico ao que já era antes desta feature. Em `'ligado'`
+    segue a escada: decisão resolvida > escolha do operador
+    (`body.environment_slug`) > pergunta (409). Os 409/412 daqui rodam ANTES
+    de `get_cache().consume()` no chamador — não queimam o preview (ver
+    docstring de `commit_preview`, ponto 3).
+    """
+    from app.persistence import environments_repo, roteamento_repo
+
+    env_alvo = _request_environment(request)
+    if modo != roteamento_repo.LIGADO:
+        return env_alvo
+
+    if decisao.resolveu:
+        env_alvo = environments_repo.get_by_slug(decisao.env_slug)
+    elif body.environment_slug:
+        env_alvo = environments_repo.get_by_slug(body.environment_slug)
+    else:
+        # Sem resposta NÃO vira ambiente default. Pergunta.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "precisa_escolher": True,
+                "explicacao": decisao.explicacao,
+                "degrau": decisao.degrau,
+                "opcoes": [
+                    {"slug": e["slug"], "name": e["name"]} for e in environments_repo.list_active()
+                ],
+            },
+        )
+    if env_alvo is None or not env_alvo.get("is_active"):
+        raise HTTPException(
+            status_code=412,
+            detail="Esta ação é de uma empresa específica — abra o pedido para agir nele.",
+        )
+    return env_alvo
 
 
 @app.post("/api/commit")
 def commit_preview(
     body: CommitRequest,
     request: Request,
-    _user: User = Depends(require_user),
+    user: User = Depends(require_user),
 ) -> JSONResponse:
     """Salva o pedido no portal como 'em revisão'. NÃO grava no Fire.
     O usuário revisa o match na aba Pedidos e só depois clica em 'Cadastrar no Fire'.
+
+    Roteamento intercompany (`app/routing/ambiente.py`, modos 'observando' e
+    'ligado'): o ambiente onde o pedido é gravado pode divergir do ambiente
+    do cookie (`env_alvo`, resolvido por `_resolver_env_alvo`). Três cuidados
+    resolvidos neste handler:
+
+    1. `imports` mora em `app_state_<slug>.db`, e `db.connect()` resolve o
+       arquivo pelo CONTEXTVAR de `env_context`, não por um campo no dict —
+       por isso todo o bloco de persistência roda dentro de
+       `env_context.active_env(env_alvo["id"], env_alvo["slug"])`.
+    2. O arquivo original segue o pedido: o `shutil.move` do fim usa as
+       pastas do ambiente ROTEADO (via `cfg` sobrescrito abaixo), não as do
+       cookie — senão o arquivo da Nasmar iria parar em `Pedidos importados`
+       da MM.
+    3. O preview só é CONSUMIDO depois que o ambiente já foi decidido sem
+       erro. Em `'ligado'`, o roteador pode ter resolvido no preview e
+       falhar bem no commit (ex.: Firebird caiu no meio) — se `consume()`
+       rodasse antes da decisão, o 409 que pede escolha de novo queimaria o
+       preview, e a segunda tentativa do operador bateria em "Preview já foi
+       importado" sem nada ter sido importado (as duas DBs continuariam
+       vazias). `consume()` continua atômico sob lock e roda antes de
+       qualquer escrita, então a proteção contra clique duplo não se perde —
+       só um request vence a corrida por `consume()`.
+
+    Em modo 'desligado' (default) `env_alvo` é sempre o ambiente do cookie —
+    idêntico ao comportamento anterior a esta feature — e nenhuma sombra ou
+    memória é gravada.
     """
     cfg = _get_cfg_for_request(request)
+
+    entry = get_cache().get(body.preview_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Preview expirado ou inexistente")
+    if entry.consumed:
+        raise HTTPException(status_code=409, detail="Preview já foi importado")
+
+    order = entry.order
+
+    from contextlib import nullcontext
+
+    from app.persistence import decisao_ambiente_repo as memoria
+    from app.persistence import roteamento_repo
+    from app.routing.ambiente import cnpjs_do_pedido
+
+    modo, decisao = _decidir_ambiente(order)
+    env_alvo = _resolver_env_alvo(request, body, modo, decisao)
+
+    cnpj_cliente = (cnpjs_do_pedido(order) or [""])[0]
+
+    # Armadilha 2: as pastas seguem o pedido roteado, não o cookie. Quando
+    # não há ambiente nenhum resolvido (deploy single-tenant legado, sem
+    # cookie de ambiente) `cfg` fica como `_get_cfg_for_request` já devolveu.
+    if env_alvo is not None:
+        cfg = dict(cfg)
+        cfg["watch_dir"] = env_alvo["watch_dir"]
+        cfg["output_dir"] = env_alvo["output_dir"]
+
+    # Armadilha 1: o bind do ambiente é o contextvar, não `log_entry["environment_id"]`
+    # sozinho. Sem ambiente resolvido, o bloco roda sob o contexto que já
+    # estava ativo (cookie via middleware, ou nenhum — igual sempre foi).
+    persist_ctx = (
+        env_context.active_env(env_alvo["id"], env_alvo["slug"])
+        if env_alvo is not None
+        else nullcontext()
+    )
+
+    # Só consome depois que `_resolver_env_alvo` não levantou — ver ponto 3
+    # do docstring acima. `consume()` segue atômico sob lock: só um request
+    # vence em caso de clique duplo / corrida.
     try:
-        entry = get_cache().consume(body.preview_id)
+        get_cache().consume(body.preview_id)
     except PreviewNotFoundError:
         raise HTTPException(status_code=404, detail="Preview expirado ou inexistente")
     except PreviewConsumedError:
         raise HTTPException(status_code=409, detail="Preview já foi importado")
 
-    order = entry.order
+    with persist_ctx:
+        # Trace_id is minted at this boundary and travels with the pedido for life.
+        with with_trace_id() as trace_id:
+            log_entry = _make_log_entry(
+                source_filename=entry.source_filename,
+                order_number=order.header.order_number,
+                customer=order.header.customer_name,
+                output_files=[],
+                status="success",
+                snapshot=order.model_dump(),
+                trace_id=trace_id,
+                file_sha256=entry.file_sha256,
+                original_path=entry.original_path,
+            )
+            log_entry["portal_status"] = "parsed"
+            log_entry["check"] = entry.check
+            if env_alvo is not None:
+                log_entry["environment_id"] = env_alvo["id"]
 
-    # Trace_id is minted at this boundary and travels with the pedido for life.
-    with with_trace_id() as trace_id:
-        log_entry = _make_log_entry(
-            source_filename=entry.source_filename,
-            order_number=order.header.order_number,
-            customer=order.header.customer_name,
-            output_files=[],
-            status="success",
-            snapshot=order.model_dump(),
-            trace_id=trace_id,
-            file_sha256=entry.file_sha256,
-            original_path=entry.original_path,
-        )
-        log_entry["portal_status"] = "parsed"
-        log_entry["check"] = entry.check
+            # DB first — if this fails, the file stays in the watch folder and user
+            # can retry without losing the original document.
+            from app.persistence import repo
 
-        # DB first — if this fails, the file stays in the watch folder and user
-        # can retry without losing the original document.
-        from app.persistence import repo
+            repo.insert_import(log_entry)
+            repo.append_audit(
+                log_entry["id"],
+                "imported_to_portal",
+                {
+                    "source": "preview_commit",
+                    "items": len(order.items),
+                    "from_watch": entry.source_path is not None,
+                    "check": entry.check.get("summary") if entry.check else None,
+                    # ACHADO 3 da revisão final: sem isto, um pedido roteado
+                    # em 'ligado' não deixava registro de POR QUE foi pra
+                    # esta empresa — só `environment_id` (o resultado), nunca
+                    # a razão. `None` em 'desligado' (decisao is None) — sinal
+                    # de "roteador nem rodou", não "não sabemos por quê".
+                    #
+                    # Achado (minor) da re-review: `env_slug` sozinho é
+                    # ambíguo em 'observando' — é a SUGESTÃO do roteador, não
+                    # o destino (que é a escolha do operador/cookie); só em
+                    # 'ligado' os dois coincidem. `modo` viaja junto pra quem
+                    # ler este registro daqui a meses não concluir o oposto
+                    # do que aconteceu.
+                    "roteamento": (
+                        {
+                            "modo": modo,
+                            "degrau": decisao.degrau,
+                            "env_slug": decisao.env_slug,
+                            "explicacao": decisao.explicacao,
+                        }
+                        if decisao is not None
+                        else None
+                    ),
+                },
+            )
+            transition(
+                log_entry["id"],
+                LifecycleEvent.IMPORTED,
+                source=EventSource.PORTAL,
+                payload={
+                    "items": len(order.items),
+                    "from_watch": entry.source_path is not None,
+                    "check_summary": entry.check.get("summary") if entry.check else None,
+                },
+            )
 
-        repo.insert_import(log_entry)
-        repo.append_audit(
-            log_entry["id"],
-            "imported_to_portal",
-            {
-                "source": "preview_commit",
-                "items": len(order.items),
-                "from_watch": entry.source_path is not None,
-                "check": entry.check.get("summary") if entry.check else None,
-            },
-        )
-        transition(
-            log_entry["id"],
-            LifecycleEvent.IMPORTED,
-            source=EventSource.PORTAL,
-            payload={
-                "items": len(order.items),
-                "from_watch": entry.source_path is not None,
-                "check_summary": entry.check.get("summary") if entry.check else None,
-            },
-        )
+            if decisao is not None:
+                if modo == roteamento_repo.OBSERVANDO and env_alvo is not None:
+                    roteamento_repo.registrar_sombra(
+                        import_id=log_entry["id"],
+                        degrau=decisao.degrau,
+                        env_sugerido=decisao.env_slug,
+                        env_escolhido=env_alvo["slug"],
+                    )
+                if decisao.divergiu_de and cnpj_cliente:
+                    memoria.marcar_divergencia(cnpj_cliente=cnpj_cliente, de=decisao.divergiu_de)
+                if modo == roteamento_repo.LIGADO and not decisao.resolveu and cnpj_cliente:
+                    memoria.lembrar(
+                        cnpj_cliente=cnpj_cliente,
+                        env_slug=env_alvo["slug"],
+                        por=user.email,
+                    )
 
-        # Only move the source after persistence succeeded.
-        if entry.source_path:
-            from app import config as app_config
+            # Only move the source after persistence succeeded. `cfg` já
+            # aponta pras pastas do ambiente roteado (armadilha 2, acima).
+            if entry.source_path:
+                from app import config as app_config
 
-            src = Path(entry.source_path)
-            if src.exists():
-                imp = app_config.imported_dir(cfg)
-                imp.mkdir(parents=True, exist_ok=True)
-                dest = imp / src.name
-                if dest.exists():
-                    stem, suffix = src.stem, src.suffix
-                    dest = imp / f"{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}"
-                shutil.move(str(src), str(dest))
+                src = Path(entry.source_path)
+                if src.exists():
+                    imp = app_config.imported_dir(cfg)
+                    imp.mkdir(parents=True, exist_ok=True)
+                    dest = imp / src.name
+                    if dest.exists():
+                        stem, suffix = src.stem, src.suffix
+                        dest = imp / f"{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}"
+                    shutil.move(str(src), str(dest))
 
-        return JSONResponse(
-            {
-                "entry_id": log_entry["id"],
-                "order": order.header.order_number or "—",
-                "customer": order.header.customer_name or "—",
-                "portal_status": "parsed",
-                "trace_id": trace_id,
-            }
-        )
+            return JSONResponse(
+                {
+                    "entry_id": log_entry["id"],
+                    "order": order.header.order_number or "—",
+                    "customer": order.header.customer_name or "—",
+                    "portal_status": "parsed",
+                    "trace_id": trace_id,
+                }
+            )
 
 
 # ── Per-order actions ───────────────────────────────────────────────────
@@ -1930,6 +2333,7 @@ def send_to_fire(
     import_id: str,
     request: Request,
     _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
 ) -> JSONResponse:
     cfg = _get_cfg_for_request(request)
     request_env = getattr(request.state, "environment", None)
@@ -2090,6 +2494,7 @@ def export_xlsx(
     import_id: str,
     request: Request,
     _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
 ) -> JSONResponse:
     cfg = _get_cfg_for_request(request)
     request_env = getattr(request.state, "environment", None)
@@ -2103,6 +2508,43 @@ def export_xlsx(
             "portal_status": "parsed",
         }
     )
+
+
+def _com_env(item: dict, env: dict | None) -> dict:
+    """Anota `env_slug`/`env_name` no item de lote quando `env` é dado.
+
+    `env=None` é o ramo legado (uma empresa só, a do cookie) — item sai sem
+    selo de empresa, exatamente como antes desta task.
+    """
+    if env is not None:
+        item["env_slug"] = env["slug"]
+        item["env_name"] = env["name"]
+    return item
+
+
+def _item_fail(
+    import_id: str, *, reason: str | None, detail: str | None, env: dict | None = None
+) -> dict:
+    """Item de resultado de lote para falha — usado nos dois ramos (legado e
+    agrupado) e nas duas rotas de lote (`_send_one_to_fire`/`_export_one_xlsx`
+    têm o mesmo `reason`/`detail`)."""
+    return _com_env({"id": import_id, "ok": False, "reason": reason, "detail": detail}, env)
+
+
+def _item_ok_fire(import_id: str, outcome: _FireSendOutcome, *, env: dict | None = None) -> dict:
+    return _com_env(
+        {
+            "id": import_id,
+            "ok": True,
+            "fire_codigo": outcome.fire_codigo,
+            "items_inserted": outcome.items_inserted,
+        },
+        env,
+    )
+
+
+def _item_ok_xlsx(import_id: str, outcome: _XlsxExportOutcome, *, env: dict | None = None) -> dict:
+    return _com_env({"id": import_id, "ok": True, "output_files": outcome.output_files}, env)
 
 
 class BatchSendRequest(BaseModel):
@@ -2122,33 +2564,80 @@ def batch_send_to_fire(
     if len(body.ids) > 100:
         raise HTTPException(status_code=400, detail="Máximo 100 pedidos por lote")
 
-    cfg = _get_cfg_for_request(request)
-    request_env = getattr(request.state, "environment", None)
+    from app.persistence import roteamento_repo
+
     results: list[dict] = []
     ok_count = 0
     fail_count = 0
+
+    env_do_cookie = _request_environment(request)
+    # Caixa somada: em 'ligado' sem cookie a seleção pode ter pedidos de
+    # empresas diferentes — cada id resolve a SUA empresa. Fora de 'ligado',
+    # ou com cookie presente, é o comportamento de sempre: uma empresa só, a
+    # do cookie (sem cookie, o handler falha como sempre falhou — 412).
+    agrupar_por_pedido = (
+        roteamento_repo.modo() == roteamento_repo.LIGADO and env_do_cookie is None
+    )
+
+    if not agrupar_por_pedido:
+        cfg = _get_cfg_for_request(request)
+        for import_id in body.ids:
+            outcome = _send_one_to_fire(import_id, cfg, request_env=env_do_cookie)
+            if outcome.ok:
+                ok_count += 1
+                results.append(_item_ok_fire(import_id, outcome))
+            else:
+                fail_count += 1
+                results.append(
+                    _item_fail(import_id, reason=outcome.reason, detail=outcome.detail)
+                )
+        return JSONResponse(
+            {"total": len(body.ids), "ok": ok_count, "failed": fail_count, "results": results}
+        )
+
+    from collections import defaultdict
+
+    from app.persistence import environments_repo
+
+    # Hoisted pra fora do loop: `env_do_import_id` sem isto rodaria
+    # `list_active()` (query no app_shared.db + abertura de SQLite por
+    # ambiente) uma vez PRA CADA id do lote — 100 ids = 100 buscas na mesma
+    # lista. Não fecha nenhuma janela de corrida (nem antes nem depois disto
+    # a escrita re-checa `is_active`) — é só query a menos.
+    envs_ativos = environments_repo.list_active()
+    grupos: dict[str, list[str]] = defaultdict(list)
+    envs_por_slug: dict[str, dict] = {}
     for import_id in body.ids:
-        outcome = _send_one_to_fire(import_id, cfg, request_env=request_env)
-        if outcome.ok:
-            ok_count += 1
-            results.append(
-                {
-                    "id": import_id,
-                    "ok": True,
-                    "fire_codigo": outcome.fire_codigo,
-                    "items_inserted": outcome.items_inserted,
-                }
-            )
-        else:
+        achado = env_do_import_id(import_id, envs=envs_ativos)
+        if achado is None:
             fail_count += 1
             results.append(
-                {
-                    "id": import_id,
-                    "ok": False,
-                    "reason": outcome.reason,
-                    "detail": outcome.detail,
-                }
+                _item_fail(
+                    import_id,
+                    reason="nao_encontrado",
+                    detail="Pedido não encontrado em nenhuma empresa ativa",
+                )
             )
+        else:
+            grupos[achado["slug"]].append(import_id)
+            envs_por_slug.setdefault(achado["slug"], achado)
+
+    for slug, ids in grupos.items():
+        env = envs_por_slug[slug]
+        cfg_do_grupo = _cfg_para_env(env)
+        with env_context.active_env(env["id"], env["slug"]):
+            for import_id in ids:
+                outcome = _send_one_to_fire(import_id, cfg_do_grupo, request_env=env)
+                if outcome.ok:
+                    ok_count += 1
+                    results.append(_item_ok_fire(import_id, outcome, env=env))
+                else:
+                    fail_count += 1
+                    results.append(
+                        _item_fail(
+                            import_id, reason=outcome.reason, detail=outcome.detail, env=env
+                        )
+                    )
 
     return JSONResponse(
         {
@@ -2172,32 +2661,80 @@ def batch_export_xlsx(
     if len(body.ids) > 100:
         raise HTTPException(status_code=400, detail="Máximo 100 pedidos por lote")
 
-    cfg = _get_cfg_for_request(request)
-    request_env = getattr(request.state, "environment", None)
+    from app.persistence import roteamento_repo
+
     results: list[dict] = []
     ok_count = 0
     fail_count = 0
+
+    env_do_cookie = _request_environment(request)
+    # Caixa somada: em 'ligado' sem cookie a seleção pode ter pedidos de
+    # empresas diferentes — cada id resolve a SUA empresa. Fora de 'ligado',
+    # ou com cookie presente, é o comportamento de sempre: uma empresa só, a
+    # do cookie (sem cookie, o handler falha como sempre falhou — 412).
+    agrupar_por_pedido = (
+        roteamento_repo.modo() == roteamento_repo.LIGADO and env_do_cookie is None
+    )
+
+    if not agrupar_por_pedido:
+        cfg = _get_cfg_for_request(request)
+        for import_id in body.ids:
+            outcome = _export_one_xlsx(import_id, cfg, request_env=env_do_cookie)
+            if outcome.ok:
+                ok_count += 1
+                results.append(_item_ok_xlsx(import_id, outcome))
+            else:
+                fail_count += 1
+                results.append(
+                    _item_fail(import_id, reason=outcome.reason, detail=outcome.detail)
+                )
+        return JSONResponse(
+            {"total": len(body.ids), "ok": ok_count, "failed": fail_count, "results": results}
+        )
+
+    from collections import defaultdict
+
+    from app.persistence import environments_repo
+
+    # Hoisted pra fora do loop: `env_do_import_id` sem isto rodaria
+    # `list_active()` (query no app_shared.db + abertura de SQLite por
+    # ambiente) uma vez PRA CADA id do lote — 100 ids = 100 buscas na mesma
+    # lista. Não fecha nenhuma janela de corrida (nem antes nem depois disto
+    # a escrita re-checa `is_active`) — é só query a menos.
+    envs_ativos = environments_repo.list_active()
+    grupos: dict[str, list[str]] = defaultdict(list)
+    envs_por_slug: dict[str, dict] = {}
     for import_id in body.ids:
-        outcome = _export_one_xlsx(import_id, cfg, request_env=request_env)
-        if outcome.ok:
-            ok_count += 1
-            results.append(
-                {
-                    "id": import_id,
-                    "ok": True,
-                    "output_files": outcome.output_files,
-                }
-            )
-        else:
+        achado = env_do_import_id(import_id, envs=envs_ativos)
+        if achado is None:
             fail_count += 1
             results.append(
-                {
-                    "id": import_id,
-                    "ok": False,
-                    "reason": outcome.reason,
-                    "detail": outcome.detail,
-                }
+                _item_fail(
+                    import_id,
+                    reason="nao_encontrado",
+                    detail="Pedido não encontrado em nenhuma empresa ativa",
+                )
             )
+        else:
+            grupos[achado["slug"]].append(import_id)
+            envs_por_slug.setdefault(achado["slug"], achado)
+
+    for slug, ids in grupos.items():
+        env = envs_por_slug[slug]
+        cfg_do_grupo = _cfg_para_env(env)
+        with env_context.active_env(env["id"], env["slug"]):
+            for import_id in ids:
+                outcome = _export_one_xlsx(import_id, cfg_do_grupo, request_env=env)
+                if outcome.ok:
+                    ok_count += 1
+                    results.append(_item_ok_xlsx(import_id, outcome, env=env))
+                else:
+                    fail_count += 1
+                    results.append(
+                        _item_fail(
+                            import_id, reason=outcome.reason, detail=outcome.detail, env=env
+                        )
+                    )
 
     return JSONResponse(
         {
@@ -2220,6 +2757,7 @@ class CancelRequest(BaseModel):
 def post_to_gestor(
     import_id: str,
     _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
 ) -> JSONResponse:
     """Envia pedido (já em Fire) para o Gestor de Produção.
 
@@ -2360,6 +2898,7 @@ def cancel_import(
     import_id: str,
     body: CancelRequest | None = None,
     _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
 ) -> JSONResponse:
     from app.persistence import repo
 
@@ -2469,6 +3008,7 @@ def override_cliente(
     body: ClienteOverrideRequest,
     request: Request,
     user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
 ) -> JSONResponse:
     """Aplica seleção manual de cliente a um pedido em revisão.
 
@@ -2639,6 +3179,7 @@ def vincular_produto(
     body: VincularProdutoRequest,
     request: Request,
     user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
 ) -> JSONResponse:
     """Cria o vínculo de-para do item (code e/ou ean → produto do Fire),
     audita e re-roda o check. Só em pedidos em revisão."""
@@ -2746,6 +3287,7 @@ def ack_sem_preco(
     import_id: str,
     request: Request,
     user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
 ) -> JSONResponse:
     """Registra ack do operador para itens sem preço cadastrado no Fire.
 
@@ -2812,7 +3354,12 @@ def ack_sem_preco(
 
 
 @app.get("/api/imported/{import_id}/preview")
-def rehydrate_preview(import_id: str, request: Request) -> JSONResponse:
+def rehydrate_preview(
+    import_id: str,
+    request: Request,
+    _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
+) -> JSONResponse:
     """Rebuild the preview payload for a stored order (for the review modal)."""
     from app.models.order import Order
     from app.persistence import repo
@@ -2834,6 +3381,11 @@ def rehydrate_preview(import_id: str, request: Request) -> JSONResponse:
     payload["fire_codigo"] = entry.get("fire_codigo")
     payload["fire_status_last_seen"] = entry.get("fire_status_last_seen")
     payload["arquivo_original"] = _arquivo_original_info(entry)
+    # Só existe quando a empresa foi RESOLVIDA pelo pedido (roteamento
+    # 'ligado', via `env_do_pedido`) — fora dali nada muda: o selo já existe
+    # na linha da caixa somada, mas some ao abrir o modal, que é a tela onde
+    # o operador decide gravar. Ver Menor 1 do lote 2.
+    payload["env_name"] = _env.get("name") if _env is not None else None
 
     # Surface the manual cliente override into the check banner so the UI shows
     # it in green instead of the original "✗ Cliente não encontrado" red flag.

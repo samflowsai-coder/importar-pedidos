@@ -137,16 +137,25 @@ SEARCH_CLIENTS = """
     ORDER BY RAZAO_SOCIAL
 """
 
-# Product lookup by EAN-13
+# Product lookup by EAN-13. UNIDADE alimenta CORPO_VENDAS.UNID no insert
+# (cadastro do produto, nao mais cravado "UN" — ver app/erp/mapper.py).
+#
+# NAO INTERPERMUTAVEL com find_products_by_eans_sql (abaixo), mesmo com
+# mesma aridade (4 colunas) e bind posicional: aqui col[0]=SEQ e col[3]=UNIDADE;
+# la col[0]=CODIGO_EAN13_TRIM (a chave, string) e col[3]=PRECO_VENDA. Ler um
+# resultado como se fosse o outro le tipo/campo errado em silencio (ex.:
+# UNIDADE onde se esperava PRECO_VENDA).
 FIND_PRODUCT_BY_EAN = """
-    SELECT SEQ, DESCRICAO, PRECO_VENDA FROM PRODUTOS
+    SELECT SEQ, DESCRICAO, PRECO_VENDA, UNIDADE FROM PRODUTOS
     WHERE CODIGO_EAN13 = ?
     ROWS 1
 """
 
-# Product lookup by alternative code (CODPROD_ALTERN)
+# Product lookup by alternative code (CODPROD_ALTERN). UNIDADE — ver acima.
+# NAO INTERPERMUTAVEL com find_products_by_codes_sql — mesmo aviso do
+# FIND_PRODUCT_BY_EAN acima.
 FIND_PRODUCT_BY_CODE = """
-    SELECT SEQ, DESCRICAO, PRECO_VENDA FROM PRODUTOS
+    SELECT SEQ, DESCRICAO, PRECO_VENDA, UNIDADE FROM PRODUTOS
     WHERE TRIM(CODPROD_ALTERN) = ?
     ROWS 1
 """
@@ -166,6 +175,11 @@ def find_products_by_eans_sql(n: int) -> str:
     então sem TRIM a chave do map fica blank-padded e o compare em Python
     (`it.ean in ean_map`) nunca bate (EAN do parser vem sem padding). ORDER BY SEQ
     torna o primeiro resultado determinístico quando o catálogo tem EAN duplicado.
+
+    NÃO INTERPERMUTÁVEL com `FIND_PRODUCT_BY_EAN` (singular, acima) — mesma
+    aridade (4 colunas), significado incompatível por posição: aqui col[0] é
+    a chave (string) e col[3] é PRECO_VENDA; lá col[0] é SEQ e col[3] é
+    UNIDADE. Bind posicional confundido lê o campo errado sem erro nenhum.
     """
     placeholders = ", ".join(["?"] * n)
     return (
@@ -179,6 +193,10 @@ def find_products_by_codes_sql(n: int) -> str:
 
     ORDER BY SEQ torna o primeiro resultado determinístico quando o catálogo tem
     CODPROD_ALTERN duplicado (mesmo motivo do find_products_by_eans_sql).
+
+    NÃO INTERPERMUTÁVEL com `FIND_PRODUCT_BY_CODE` (singular, acima) — mesmo
+    aviso de `find_products_by_eans_sql`: mesma aridade, col[0]/col[3]
+    trocados de significado.
     """
     placeholders = ", ".join(["?"] * n)
     return (
@@ -195,23 +213,41 @@ def find_products_by_seqs_sql(n: int) -> str:
 
 # Insert sales order header (CAB_VENDAS).
 #
-# Production data pattern (verified against Americanense 2026-04-21 backup):
-#   - STATUS = 'PEDIDO' for new orders (NOT 'Aberto')
-#   - DOCUMENTO is usually NULL (retailer ref goes to PEDIDO_CLIENTE)
-#   - CLINAOCAD is never used in practice (always NULL) — CLIENTE FK required
-#   - DTHORA_PEDIDO holds the creation timestamp alongside ULT_INS_DTHR
+# Colunas e valores conferidos contra 373 pedidos do .7 e 90 do .4 na Fire
+# viva (2026-08-24, todos de 2026-06-01 em diante). As 14 primeiras estao
+# preenchidas em 100% dos pedidos digitados pela operacao; CLASSIF_FAT,
+# CODFIGFISCAL, DT_BASE_FAT e MECANICO em 82% a 100%.
+#
+# CODPED_PAI (auto-referencia = CODIGO) NAO entra aqui: o valor so existe
+# depois do INSERT. Vai por UPDATE_CODPED_PAI logo em seguida, na mesma
+# transacao.
 INSERT_CAB_VENDAS = """
     INSERT INTO CAB_VENDAS (
         CODIGO, CODEMPRESA, DATA_PEDIDO,
         CLIENTE, STATUS, PEDIDO_CLIENTE,
-        OBS, DT_ENTREGA,
-        ULT_INS_USER, ULT_INS_DTHR, DTHORA_PEDIDO
+        OBS, DT_ENTREGA, DT_BASE_FAT,
+        VALOR_TOTAL, TOTAL_PRODUTO, DESCONTO,
+        TIPO_COB, COD_CLASS_FINAN, DESC_CLASS_FINAN,
+        CLASSIF_FAT, CODFIGFISCAL, MECANICO,
+        SEM_IMP, PED_ZF, EH_VENDACONSUMIDOR, VENDEDOR_COMI,
+        ULT_INS_USER, ULT_ALT_USER,
+        ULT_INS_DTHR, ULT_ALT_DTHR, DTHORA_PEDIDO
     ) VALUES (
         ?, ?, ?,
         ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?, ?,
         ?, ?,
-        ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
     )
+"""
+
+# CODPED_PAI aponta pro proprio pedido em 100% dos pedidos medidos.
+UPDATE_CODPED_PAI = """
+    UPDATE CAB_VENDAS SET CODPED_PAI = CODIGO WHERE CODIGO = ?
 """
 
 # ── Poll Worker (Fase 5) ──────────────────────────────────────────────────────
@@ -226,16 +262,26 @@ GET_ORDER_STATUS_BY_CODE = """
     ROWS 1
 """
 
-# Insert order item (CORPO_VENDAS)
+# Insert order item (CORPO_VENDAS).
+#
+# Conferido contra 1.285 linhas de item no .7 (2026-08). ICMS_PORC, ICMS_BASE,
+# REDUCAO, DESC_SOBRE_TOTAL, PESO_BRUTO e PESO_LIQUIDO estao em 100% das linhas;
+# CFOP_PRINCIPAL em 96%.
 INSERT_CORPO_VENDAS = """
     INSERT INTO CORPO_VENDAS (
         CODIGO, CODVENDA, CODPRODUTO,
         DESCRICAO, QTD, PRECO_UNITARIO, TOTAL,
-        UNID, DT_ENTREGA_ITEM
+        UNID, DT_ENTREGA_ITEM,
+        ICMS_PORC, ICMS_BASE, REDUCAO,
+        DESC_SOBRE_TOTAL, PESO_BRUTO, PESO_LIQUIDO,
+        CFOP_PRINCIPAL
     ) VALUES (
         ?, ?, ?,
         ?, ?, ?, ?,
-        ?, ?
+        ?, ?,
+        ?, ?, ?,
+        ?, ?, ?,
+        ?
     )
 """
 
@@ -341,4 +387,25 @@ def FIND_ORDERS_BY_PEDIDO_CLIENTE(n: int) -> str:
     FROM CAB_VENDAS V
     JOIN CADASTRO C ON C.CODIGO = V.CLIENTE
     WHERE TRIM(V.PEDIDO_CLIENTE) IN ({marcadores})
+    """
+
+
+# ── Roteamento: histórico do cliente (degrau 2) ───────────────────────────────
+# "Este cliente já comprou desta empresa nos últimos N meses?" — a resposta
+# que decide o ambiente quando o documento não traz o CNPJ do fornecedor.
+# CPF_CNPJ é limpo do mesmo jeito que em FIND_CLIENT_BY_CNPJ; o bind chega em
+# dígitos. Aceita N CNPJs porque uma planilha de desmembramento identifica o
+# comprador pelas colunas de loja, não pelo cabeçalho.
+def count_pedidos_cliente_desde_sql(n: int) -> str:
+    """SQL com N placeholders de CNPJ. Bind: (desde, cnpj1, ..., cnpjN)."""
+    if n < 1:
+        raise ValueError("count_pedidos_cliente_desde_sql exige ao menos 1 CNPJ")
+    marks = ", ".join("?" for _ in range(n))
+    return f"""
+        SELECT COUNT(*), MAX(V.DATA_PEDIDO)
+        FROM CAB_VENDAS V
+        JOIN CADASTRO C ON C.CODIGO = V.CLIENTE
+        WHERE V.DATA_PEDIDO >= ?
+          AND REPLACE(REPLACE(REPLACE(REPLACE(
+                C.CPF_CNPJ, '.', ''), '/', ''), '-', ''), ' ', '') IN ({marks})
     """
