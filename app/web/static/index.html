@@ -2054,6 +2054,19 @@ async function confirmProductLink() {
 /* ── Utils ── */
 async function api(url, opts) {
   const res = await fetch(url, opts);
+  // 401 = a sessão venceu com a aba aberta. Vai pro login em vez de pintar
+  // "autenticação requerida" cru na tela: o operador não tem o que fazer com
+  // essa frase, e o caminho é sempre o mesmo. Ficou visível agora porque
+  // /api/pending, /api/imported/{id} e /preview passaram a exigir sessão —
+  // antes respondiam sem, e a sessão vencida seguia abrindo pedido.
+  // Não rejeita nem resolve de propósito: a navegação já está em curso, e
+  // rejeitar faria cada chamador pintar um toast de erro numa tela que está
+  // sendo substituída. `login.html` volta pra raiz depois de logar, que é
+  // justamente onde o operador estava.
+  if (res.status === 401) {
+    window.location.href = '/login';
+    return new Promise(() => {});
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail || `HTTP ${res.status}`);

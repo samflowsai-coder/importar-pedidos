@@ -187,6 +187,32 @@ produção do ERP é irreversível, ao contrário do XLS. Trava proposta: opt-in
 modo `both` (XLS de backup) + cair para o XLS na dúvida. **Exige corrigir o §2.1 antes.**
 Próximo passo se aprovado: brainstorm → spec.
 
+### 4.2 Regra mais forte de validação de preço por cliente — **próxima tarefa (2026-09-12)**
+Samuel pediu isto como próximo trabalho, antes de habilitar a inserção direta no Fire.
+
+**O que existe hoje:** `check_order` compara o preço do item do pedido contra o preço do
+Fire (`TABELA_PRECO_PRODS`), e `is_blocking` (`app/erp/product_check.py:295`) bloqueia em
+`mismatch`, `no_order_price` e `no_price_in_fire` sem ack. A regra é **por produto**, não
+por cliente.
+
+**O furo:** `is_blocking` devolve `(False, ...)` quando `check["available"]` é `False` —
+docstring: "sem dados pra avaliar, não bloqueia". Se o portal não conseguiu consultar o
+Fire, a trava de preço **desliga em silêncio** e o pedido passa. Foi exatamente isso que
+tornou o Crítico da entrega de 12/09 tão grave: `check_order(env=None)` devolvia
+indisponível e ninguém era avisado de que a validação nem tinha acontecido. O bind da
+empresa foi corrigido (`dbf2708`), mas a regra de fundo segue permissiva.
+
+**Decisões que são do Samuel, não minhas:**
+- Check indisponível deve **bloquear** em vez de passar? (Inverter o default muda o
+  comportamento de hoje e pode travar a operação quando a VPN cai.)
+- A regra é por cliente, por marca, por faixa de desconto, ou combinação?
+- Quem pode dar o ack de uma divergência — qualquer usuário logado, ou só admin?
+- O que acontece quando o Fire está fora do ar: fila, bloqueio, ou passar com marca?
+- Tolerância: centavos de arredondamento contam como divergência?
+
+**Próximo passo:** brainstorming antes de qualquer código. É mudança de regra de negócio
+num caminho que decide se pedido entra ou não, então spec antes de plano.
+
 ---
 
 ## 5. Verificação pendente (não dá para afirmar hoje)
