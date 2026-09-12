@@ -1671,10 +1671,29 @@ def reimport_file(
 
 
 @app.get("/api/download")
-def download_file(path: str) -> FileResponse:
+def download_file(path: str, _user: User = Depends(require_user)) -> FileResponse:
+    """XLSX gerado pelo exportador. Confinado às raízes de onde
+    `ERPExporter().export(...)` de fato grava — ver `_run_exporters` e
+    `_send_one_to_fire`/`_export_one_xlsx`: `OUTPUT_DIR` legado (quando não há
+    ambiente selecionado) e `output_dir` de cada ambiente ATIVO (multi-empresa).
+    Mesma defesa em profundidade que `baixar_arquivo_original` já usa pra
+    `recebidos/`: resolve o caminho, confere a raiz ANTES de checar existência
+    (não vaza "existe/não existe" fora das pastas de saída), só então serve.
+    """
+    from app import config as app_config
+    from app.persistence import environments_repo
+
     file_path = Path(path).expanduser().resolve()
     if file_path.suffix.lower() != ".xlsx":
         raise HTTPException(status_code=403, detail="Apenas arquivos .xlsx podem ser baixados")
+
+    raizes = [Path(app_config.load()["output_dir"]).expanduser().resolve()]
+    raizes += [
+        Path(env["output_dir"]).expanduser().resolve() for env in environments_repo.list_active()
+    ]
+    if not any(raiz in file_path.parents for raiz in raizes):
+        raise HTTPException(status_code=403, detail="Caminho fora das pastas de saída permitidas")
+
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
     return FileResponse(

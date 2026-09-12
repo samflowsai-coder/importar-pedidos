@@ -47,7 +47,9 @@ API pública para páginas-filho:
 - `POST /api/process` → upload + parse + cache de preview.
 - `POST /api/imported/{id}/export-xlsx` → gera XLSX do pedido `parsed` **sem** tocar Firebird (`require_user`). Mantém `portal_status='parsed'`. Retorna `{entry_id, output_files, portal_status}`. Usado quando `EXPORT_MODE='xlsx'`. **Também dispara `push_new_order` pro FlowPCP** (gated por `flowpcp_enabled` do ambiente; best-effort; o Flow deduplica por `externalId` — re-export não duplica; audita `flowpcp_push {ok}`).
 - `POST /api/batch/export-xlsx` → versão lote do anterior (mesmo limite 1..100).
-- `GET /api/download?path=` → download xlsx (whitelisted, path traversal bloqueado).
+- `GET /api/download?path=` → download xlsx (`require_user`). Só sufixo `.xlsx`
+  E dentro do `OUTPUT_DIR` legado ou do `output_dir` de um ambiente ATIVO (403
+  fora — mesmo padrão de confinamento de `baixar_arquivo_original`).
 - `GET /api/imported/{id}/arquivo-original` → cópia exata do arquivo recebido, antes do
   parse (`require_user`). Serve só de dentro de `<APP_DATA_DIR>/recebidos/` (403 fora);
   404 amigável em pedido anterior à guarda. Nome do download = `source_filename`.
@@ -196,7 +198,9 @@ precisa dele nos dois ramos (sucesso e erro).
 ## Segurança (não relaxar)
 - Whitelist de extensão: `.pdf`, `.xls`, `.xlsx`.
 - Limite de upload: 50 MB.
-- `/api/download` aceita SOMENTE `.xlsx` e bloqueia `..`.
+- `/api/download` exige sessão (`require_user`), aceita SOMENTE `.xlsx` e
+  confina o caminho resolvido ao `OUTPUT_DIR` legado + `output_dir` dos
+  ambientes ativos (403 fora das raízes).
 - `POST /api/auth/login` — rate-limit 10 req/15 min/IP via token bucket SQLite.
   Retorna 429 + `Retry-After: 900` quando esgotado.
   Env `RATE_LIMIT_ENABLED=false` desativa (dev/test).

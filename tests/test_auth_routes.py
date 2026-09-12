@@ -238,6 +238,16 @@ def test_pending_list_requires_session(isolated_app):
     assert c.get("/api/pending").status_code == 401
 
 
+def test_download_requires_session(isolated_app):
+    """`GET /api/download` nunca teve `Depends(require_user)`: achado
+    pré-existente, não criado por esta entrega, aprovado a entrar aqui porque
+    o portal roda com `PORTAL_HOST=0.0.0.0` exposto na LAN e os xlsx contêm
+    dado de cliente e preço. `path` não importa — a auth barra antes."""
+    from app.web.server import app
+    c = TestClient(app)
+    assert c.get("/api/download?path=/etc/hosts.xlsx").status_code == 401
+
+
 # ── Webhook stays open (HMAC-protected separately) ───────────────────────
 
 
