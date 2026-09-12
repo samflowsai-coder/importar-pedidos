@@ -7,7 +7,7 @@ em `tmp_path`, SQLite puro, zero Firebird.
 from __future__ import annotations
 
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 
 from app.persistence import context as env_context
@@ -116,6 +116,46 @@ def test_fora_de_ligado_a_dependency_e_inerte(duas_empresas, modo, monkeypatch):
 def test_ligado_com_id_inexistente_da_404(duas_empresas):
     roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
     assert _app_de_teste().get("/x/nao-existe").status_code == 404
+
+
+def _app_que_reporta_state():
+    """App mínimo que expõe se a dependency encostou em `request.state`.
+
+    App separado de `_app_de_teste` de propósito: o teste de inércia lá asserta
+    o corpo inteiro por igualdade, e mexer na forma da resposta dele apagaria a
+    garantia de que ele não mudou.
+    """
+    from app.web.dependencies.pedido import env_do_pedido
+
+    app = FastAPI()
+
+    @app.get("/y/{import_id}")
+    def rota(import_id: str, request: Request, env=Depends(env_do_pedido)):  # noqa: ARG001
+        return {
+            "tem_state": hasattr(request.state, "environment"),
+            "state": (getattr(request.state, "environment", None) or {}).get("slug"),
+        }
+
+    return TestClient(app)
+
+
+def test_ligado_ativa_as_duas_metades_contextvar_e_request_state(duas_empresas):
+    """O contextvar resolve o SQLite; `request.state.environment` resolve o
+    Firebird, a pasta de saida e o slug do Flow. Ativar so' uma amarrava o
+    pedido a duas empresas ao mesmo tempo."""
+    _grava("nasmar", "N1")
+    roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
+    r = _app_que_reporta_state().get("/y/N1")
+    assert r.json() == {"tem_state": True, "state": "nasmar"}
+
+
+@pytest.mark.parametrize("modo", [roteamento_repo.DESLIGADO, roteamento_repo.OBSERVANDO])
+def test_fora_de_ligado_nao_encosta_em_request_state(duas_empresas, modo):
+    """Nem para escrever, nem para criar o atributo com `None`."""
+    _grava("nasmar", "N1")
+    roteamento_repo.set_modo(modo, por="teste")
+    r = _app_que_reporta_state().get("/y/N1")
+    assert r.json() == {"tem_state": False, "state": None}
 
 
 def test_a_dependency_e_async(duas_empresas):

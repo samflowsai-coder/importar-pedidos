@@ -220,7 +220,11 @@ precisa dele nos dois ramos (sucesso e erro).
 - `tests/test_env_do_pedido.py` — `env_do_pedido`/`env_do_import_id` (resolver + gate), inclusive
   o requisito de `async def` (contextvar em threadpool).
 - `tests/test_rotas_por_pedido_cross_env.py` — as 10 rotas por-pedido e o lote (`/api/batch/*`)
-  agrupado por empresa em `'ligado'` sem cookie.
+  agrupado por empresa em `'ligado'` sem cookie. Inclui a prova nas rotas de **escrita**
+  (`export-xlsx`, `send-to-fire`): as quatro amarrações — Firebird/check de preço, pasta de
+  saída, slug do Flow e SQLite — são a empresa do pedido, com cookie de outra empresa e sem
+  cookie nenhum. É o teste que faltava quando as rotas por-pedido amarravam três empresas
+  diferentes de uma vez.
 - `tests/test_pasta_cross_env.py` — `GET /api/pending` somado com selo por item; `env_slug`
   obrigatório (400) e validado contra empresa ativa (404) nas três rotas de ação
   (`/api/import`, `/api/reimport`, `/api/preview-pending`); prova de que o `env_slug`

@@ -78,7 +78,10 @@
 - `app/persistence/context.py` — ContextVar `active_env`; `db.connect()` lê daqui
 - `app/web/dependencies/pedido.py` — `env_do_pedido`/`env_do_import_id`: de qual empresa é
   este pedido, quando `roteamento_modo='ligado'` (o ambiente é propriedade do pedido, não
-  da sessão/cookie). Inerte fora de `'ligado'`.
+  da sessão/cookie). Inerte fora de `'ligado'`. Em `'ligado'` ativa as **duas** metades,
+  igual ao `EnvironmentMiddleware`: o contextvar (SQLite) **e**
+  `request.state.environment` (pasta de saída, Firebird, check de preço, slug do Flow,
+  perfil fiscal). Ativar só uma amarra o pedido a duas empresas ao mesmo tempo.
 - `app/firebird_config.py` — **legado**: config singleton para deploy single-empresa (mantido para compat)
 - `app/web/static/css/tokens.css`, `shell.css`, `app/web/static/js/shell.js` — app shell compartilhado entre páginas autenticadas
 - `app/http/client.py` — cliente HTTP de saída (retry/timeout); toda chamada externa passa por aqui

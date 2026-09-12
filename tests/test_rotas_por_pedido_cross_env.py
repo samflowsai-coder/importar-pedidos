@@ -5,6 +5,8 @@ O teste que protege a adocao e o de 'desligado'/'observando': 412, como hoje.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -33,20 +35,31 @@ def portal(tmp_path, monkeypatch):
     yield TestClient(app)
 
 
-def _grava(slug: str, ident: str) -> None:
+def _snapshot(ident: str) -> dict:
+    return {
+        "header": {"order_number": ident, "customer_name": "DAJU"},
+        "items": [{"description": "TENIS", "quantity": 2.0, "unit_price": 89.90, "ean": "7891"}],
+        "source_file": "",
+    }
+
+
+def _grava(slug: str, ident: str, *, snapshot: dict | None = None) -> None:
     env = environments_repo.get_by_slug(slug)
+    dados = {
+        "id": ident,
+        "source_filename": f"{ident}.pdf",
+        "imported_at": "2026-09-11T10:00:00",
+        "order_number": ident,
+        "customer_name": "DAJU",
+        "status": "success",
+        "portal_status": "parsed",
+    }
+    # Snapshot so' quando o teste vai exercitar uma rota que exporta: sem ele
+    # `_export_one_xlsx` para em 'no_snapshot' antes de tocar qualquer amarracao.
+    if snapshot is not None:
+        dados["snapshot"] = snapshot
     with env_context.active_env(env["id"], env["slug"]):
-        repo.insert_import(
-            {
-                "id": ident,
-                "source_filename": f"{ident}.pdf",
-                "imported_at": "2026-09-11T10:00:00",
-                "order_number": ident,
-                "customer_name": "DAJU",
-                "status": "success",
-                "portal_status": "parsed",
-            }
-        )
+        repo.insert_import(dados)
 
 
 def test_ligado_sem_cookie_abre_pedido_da_outra_empresa(portal):
@@ -137,3 +150,163 @@ def test_lote_fora_de_ligado_sem_cookie_continua_412(portal, modo):
     roteamento_repo.set_modo(modo, por="teste")
     r = portal.post("/api/batch/export-xlsx", json={"ids": ["M1"]})
     assert r.status_code == 412
+
+
+# ── Escrita por-pedido: as QUATRO amarracoes seguem o pedido ────────────────
+#
+# O SQLite ja seguia (contextvar). As outras tres saem de lugares diferentes e
+# nao seguiam: a pasta de saida vem do `cfg`, e o Firebird / o check de preco /
+# o slug do Flow vem de `request.state.environment`, que o middleware preenche
+# a partir do COOKIE. Em 'ligado' "sem cookie" e o estado normal, entao o alvo
+# silencioso e a config legada — outro banco, outra pasta, trava de preco off.
+
+
+@pytest.fixture
+def espia(monkeypatch, tmp_path):
+    """Grava qual empresa chegou em cada amarracao de uma rota de escrita.
+
+    Tudo que toca ERP ou planilha e' substituido: nenhuma conexao Firebird,
+    nenhum xlsx de verdade. A pasta ainda e' exercitada no disco (o dublê do
+    ERPExporter escreve onde o handler mandou), porque o defeito e justamente
+    a pasta errada.
+
+    `app_config.load` aponta pra uma pasta 'legado' em tmp_path de proposito:
+    e' pra onde o bug manda o arquivo quando nao ha cookie, e um teste nao
+    pode escrever no `output/` do repo pra descobrir isso.
+    """
+    from app import config as app_config
+    from app.erp import product_check as pc_mod
+    from app.exporters import erp_exporter as erp_mod
+    from app.exporters import firebird_exporter as fb_mod
+    from app.web import server as srv
+
+    visto: dict[str, str | None] = {}
+    legado = tmp_path / "legado"
+    legado.mkdir()
+
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(legado), "output_dir": str(legado), "export_mode": "xlsx"},
+    )
+
+    def _check(order, *, env=None):
+        visto["check"] = (env or {}).get("slug")
+        # `available: False` e o proprio sintoma do cenario B (is_blocking
+        # devolve (False, ...) pra check indisponivel): nao bloqueia, entao a
+        # rota segue e da' pra medir as outras amarracoes.
+        return {"available": False, "items": [], "summary": {}}
+
+    monkeypatch.setattr(pc_mod, "check_order", _check)
+
+    def _export(self, order, output_dir):  # noqa: ARG001 — assinatura do real
+        visto["pasta"] = str(output_dir)
+        destino = Path(output_dir) / f"{order.header.order_number}.xlsx"
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.touch()
+        return [destino]
+
+    monkeypatch.setattr(erp_mod.ERPExporter, "export", _export)
+
+    class _FirebirdEspia:
+        """Registra o env que chegou no construtor e recusa o insert."""
+
+        def __init__(self, env=None):
+            visto["firebird"] = (env or {}).get("slug")
+
+        def export(self, order, *, override_client_id=None):  # noqa: ARG002
+            return _ResultadoSkip()
+
+    class _ResultadoSkip:
+        skipped = True
+        skip_reason = "ESPIA"
+        fire_codigo = None
+        items_inserted = 0
+
+        def to_dict(self):
+            return {"skipped": True, "skip_reason": "ESPIA"}
+
+    monkeypatch.setattr(fb_mod, "FirebirdExporter", _FirebirdEspia)
+
+    def _push(order, *, import_id=None, slug=None):  # noqa: ARG001
+        visto["flow"] = slug
+        return True
+
+    monkeypatch.setattr(srv, "push_new_order", _push)
+    return visto
+
+
+def _pasta_de(slug: str) -> str:
+    """Pasta de saida da empresa, na forma que o handler resolve (`.resolve()`)."""
+    return str(Path(environments_repo.get_by_slug(slug)["output_dir"]).resolve())
+
+
+def _sqlite_de(slug: str, ident: str) -> dict | None:
+    env = environments_repo.get_by_slug(slug)
+    with env_context.active_env(env["id"], env["slug"]):
+        return repo.get_import(ident)
+
+
+@pytest.mark.parametrize("cookie", [None, "mm"], ids=["sem-cookie", "cookie-da-outra-empresa"])
+def test_ligado_escrita_amarra_tudo_na_empresa_do_pedido(portal, espia, cookie):
+    """O pedido decide as QUATRO pontas, nao so' o SQLite.
+
+    Um pedido da Nasmar exportado com 'MM' no filtro — ou com filtro nenhum,
+    que e o default em 'ligado' — nao pode encostar em nada da MM nem na
+    config legada.
+    """
+    _grava("nasmar", "N1", snapshot=_snapshot("N1"))
+    roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
+    if cookie:
+        portal.cookies.set("portal_env", environments_repo.get_by_slug(cookie)["id"])
+
+    r = portal.post("/api/imported/N1/export-xlsx")
+    assert r.status_code == 200, r.text
+
+    # 1. check de preco / Firebird
+    assert espia["check"] == "nasmar"
+    # 2. pasta de saida — a config, o que a rota respondeu, e o disco
+    assert espia["pasta"] == _pasta_de("nasmar")
+    assert r.json()["output_files"][0]["path"].startswith(_pasta_de("nasmar"))
+    assert list(Path(_pasta_de("nasmar")).glob("*.xlsx"))
+    assert not list(Path(_pasta_de("mm")).glob("*.xlsx"))
+    # 3. slug do FlowPCP
+    assert espia["flow"] == "nasmar"
+    # 4. SQLite
+    gravado = _sqlite_de("nasmar", "N1")
+    assert gravado is not None
+    assert gravado["output_files"][0]["path"].startswith(_pasta_de("nasmar"))
+    assert _sqlite_de("mm", "N1") is None
+
+
+@pytest.mark.parametrize("cookie", [None, "mm"], ids=["sem-cookie", "cookie-da-outra-empresa"])
+def test_ligado_send_to_fire_usa_o_firebird_da_empresa_do_pedido(portal, espia, cookie):
+    """O pior caso do defeito: pedido de compra inserido no ERP da empresa errada.
+
+    O dublê do exporter registra o env que chegou e devolve skip — o assert e'
+    sobre qual banco teria recebido o insert, nunca sobre um insert real.
+    """
+    _grava("nasmar", "N1", snapshot=_snapshot("N1"))
+    roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
+    if cookie:
+        portal.cookies.set("portal_env", environments_repo.get_by_slug(cookie)["id"])
+
+    r = portal.post("/api/imported/N1/send-to-fire")
+    assert r.status_code == 409  # o skip do dublê, nao um erro de amarracao
+    assert espia["firebird"] == "nasmar"
+    assert espia["check"] == "nasmar"
+    assert espia["pasta"] == _pasta_de("nasmar")
+
+
+@pytest.mark.parametrize("modo", [roteamento_repo.DESLIGADO, roteamento_repo.OBSERVANDO])
+def test_fora_de_ligado_a_escrita_continua_seguindo_o_cookie(portal, espia, modo):
+    """Nada muda pra quem nao ligou o roteamento: o cookie manda, como hoje."""
+    _grava("mm", "M1", snapshot=_snapshot("M1"))
+    roteamento_repo.set_modo(modo, por="teste")
+    portal.cookies.set("portal_env", environments_repo.get_by_slug("mm")["id"])
+
+    r = portal.post("/api/imported/M1/export-xlsx")
+    assert r.status_code == 200, r.text
+    assert espia["check"] == "mm"
+    assert espia["flow"] == "mm"
+    assert espia["pasta"] == _pasta_de("mm")

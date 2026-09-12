@@ -15,10 +15,12 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from app.persistence import context as env_context
 from app.persistence import environments_repo, roteamento_repo, router
+
+_AUSENTE = object()
 
 
 def env_do_import_id(import_id: str) -> dict[str, Any] | None:
@@ -44,7 +46,9 @@ def env_do_import_id(import_id: str) -> dict[str, Any] | None:
     return None
 
 
-async def env_do_pedido(import_id: str) -> AsyncIterator[dict[str, Any] | None]:
+async def env_do_pedido(
+    import_id: str, request: Request
+) -> AsyncIterator[dict[str, Any] | None]:
     """Ativa a empresa dona deste pedido, quando o roteamento está ligado.
 
     **Tem que ser `async def`.** Medido em 2026-09-11: a versão síncrona com
@@ -57,6 +61,23 @@ async def env_do_pedido(import_id: str) -> AsyncIterator[dict[str, Any] | None]:
     Em `ligado` o PEDIDO decide e o cookie não opina — o cookie passa a
     filtrar a listagem e nada mais. Isso resolve o link direto: abrir um
     pedido da Nasmar com "MM" no filtro funciona em vez de dar 404.
+
+    **Ativa as DUAS metades, como o `EnvironmentMiddleware` faz.** O contextvar
+    resolve o SQLite (`db.connect()`, `repo.*`); `request.state.environment`
+    resolve todo o resto — a pasta de saída (`_get_cfg_for_request`), a conexão
+    Firebird (`_firebird_open_for_request`), o `env` do check de preço, o slug
+    do FlowPCP e o perfil fiscal. Ativar só o contextvar amarrava o pedido a
+    três empresas ao mesmo tempo: o SQLite na empresa do pedido, o ERP na
+    empresa do cookie, e a pasta na config legada quando não havia cookie —
+    que em `ligado` é o estado normal, não a exceção. Era HTTP 200, sem aviso,
+    com o pedido de compra entrando no ERP da empresa errada.
+
+    Medido neste FastAPI (0.136.0 / Starlette 1.0.0) antes de escolher este
+    caminho: escrever em `request.state` de dentro de uma dependency `async`
+    com `yield` chega no handler — sync ou async — e sobrepõe o valor que o
+    middleware pôs a partir do cookie, porque `request.state` é uma view sobre
+    `scope["state"]`, o mesmo dict dos dois lados. Uma regra aqui em vez de
+    seis nos handlers.
     """
     if roteamento_repo.modo() != roteamento_repo.LIGADO:
         yield None
@@ -66,5 +87,17 @@ async def env_do_pedido(import_id: str) -> AsyncIterator[dict[str, Any] | None]:
         raise HTTPException(
             status_code=404, detail="Pedido não encontrado em nenhuma empresa ativa"
         )
-    with env_context.active_env(env["id"], env["slug"]):
-        yield env
+    # Simétrico na saída: `request.state` é por-request e não vaza entre
+    # requests, mas restaurar é barato e mantém a dependency sem efeito
+    # residual se algo mais rodar depois do `yield`. Sentinela em vez de
+    # `None` porque "não havia cookie" é o atributo AUSENTE, não `None`.
+    anterior = getattr(request.state, "environment", _AUSENTE)
+    request.state.environment = env
+    try:
+        with env_context.active_env(env["id"], env["slug"]):
+            yield env
+    finally:
+        if anterior is _AUSENTE:
+            del request.state.environment
+        else:
+            request.state.environment = anterior
