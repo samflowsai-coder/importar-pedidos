@@ -97,6 +97,20 @@ async def env_do_pedido(
     # requests, mas restaurar é barato e mantém a dependency sem efeito
     # residual se algo mais rodar depois do `yield`. Sentinela em vez de
     # `None` porque "não havia cookie" é o atributo AUSENTE, não `None`.
+    #
+    # A restauração roda no caminho de exceção também: a exit stack das
+    # dependencies vive na MESMA task do endpoint, então o `finally` desenrola
+    # antes de qualquer exception handler ver a exceção.
+    #
+    # ARMADILHA, se você for adicionar um middleware: `BaseHTTPMiddleware`
+    # devolve de `call_next()` assim que recebe o `http.response.start` — ANTES
+    # do corpo ser drenado, e portanto antes deste `finally` rodar. Um
+    # middleware montado FORA do `EnvironmentMiddleware` que leia
+    # `request.state.environment` no bloco depois do `call_next` pode ver a
+    # empresa do PEDIDO em vez da restaurada. Hoje ninguém faz isso
+    # (`_no_cache_html` só mexe em header), mas um middleware de auditoria ou
+    # log "na saída" cairia direto nessa janela e atribuiria a ação à empresa
+    # errada. Se precisar do ambiente na saída, leia-o DENTRO do handler.
     anterior = getattr(request.state, "environment", _AUSENTE)
     request.state.environment = env
     try:
