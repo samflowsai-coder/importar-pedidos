@@ -167,9 +167,10 @@ aberto — ver `docs/BACKLOG.md`. Sem caso real reportado, o comportamento antig
 
 `NasmarTemplateParser` (`app/parsers/nasmar_template_parser.py`) cobre o template de
 pedido de kits do **próprio fornecedor** (Nasmar/MM). Um template, N clientes:
-Authentic Feet, Magic Feet, "Pulmão" do Grupo Afeet e Tennis Station. Samples:
+Authentic Feet, Magic Feet, "Pulmão" do Grupo Afeet, Tennis Station e NBA. Samples:
 `Pedido Authentic Fit.xlsx`, `Pedido Magic Feet MF048.xlsx`,
-`Pedido Grupo Afeet Pulmao.xlsx`, `PEDIDO TENNIS STATION.xlsx`.
+`Pedido Grupo Afeet Pulmao.xlsx`, `PEDIDO TENNIS STATION.xlsx`,
+`PEDIDO NBA MOGI SHOPPING.xlsx`.
 
 - **`_match_header(row)` é fonte única** do gate e do `col_map` — `can_parse` e
   `_find_header_row` chamam a mesma função. Antes eram duas cópias literais da mesma
@@ -184,6 +185,17 @@ Authentic Feet, Magic Feet, "Pulmão" do Grupo Afeet e Tennis Station. Samples:
 - **A quantidade real é `TOTAL KITS`.** Sem este parser o arquivo cai no `GenericParser`,
   que lê a coluna `REF COR` (cor) como quantidade — bug real de produção, três vezes
   (Magic Feet, Pulmão, Tennis Station).
+- **O código é a VARIANTE, e `REF.` nem sempre é a variante** (`_codigo_variante`).
+  AF/MF/Pulmão/TS: `REF.` já vem completo (`AFK3S-A-100-3338`) e `REF COR` é só a cor
+  (`100`). NBA: `REF.` é o modelo (`NB01`), `REF COR` é modelo + cor (`NB01 - 1`) e o
+  tamanho vem com letra (`M - 33-38`); o Fire (`.4`, `CODPROD_ALTERN`) cadastra
+  `NB01-1M`, mesmo código que o desmembramento NBA (`PEDIDO NBA 3.xlsx`) já traz
+  pronto. Regra: se `REF COR` = `REF.` + `-` + cor, o código é `REF COR` sem espaço +
+  letra do tamanho; senão, `REF.`. Gravando o modelo, o pedido 4932 (NBA Mogi,
+  21/09/2026) saiu com 12 linhas e só 2 códigos, nenhum existente no Fire, e a MM
+  relatou 2 produtos no Fire. Mecanismo provável, não conferido em produção: o de-para
+  é por código por cliente (`depara_apply`), então um vínculo `NB01` → kit arrasta as
+  6 linhas do modelo para o mesmo produto.
 - **O preço é `CUSTO`, nunca `SUGESTÃO`.** `SUGESTÃO` é preço de venda ao consumidor
   (29,99 contra 12,18 de custo); entrar no ERP como unitário infla o pedido ~2,5x e
   passa em qualquer validador. Coberto por teste.
