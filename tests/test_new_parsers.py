@@ -931,6 +931,59 @@ def test_nba_store_as_customer_name():
     assert len(store_names) == 21, f"Expected 21 distinct store names, got {len(store_names)}"
 
 
+# ── NBA no template de kits: REF. é o MODELO, não a variante ─────────────────
+#
+# Pedido 4932 (Camila, 21/09/2026), NBA Store Mogi Shopping. Mesmo template do
+# Authentic Feet, preenchido de outro jeito: lá `REF.` já é a variante completa
+# (`AFK3S-A-100-3338`) e `REF COR` é só a cor (`100`); aqui `REF.` é o modelo
+# (`NB01`), `REF COR` é modelo + cor (`NB01 - 1`) e o tamanho vem com letra
+# (`M - 33-38`). O parser gravava `REF.` como código: 12 linhas com só 2 códigos
+# distintos, nenhum existe no Fire, e o pedido entrou com 2 produtos. No catálogo
+# da Nasmar (.4) o kit é `NB01-1M` — o mesmo código que o desmembramento NBA já
+# traz pronto (`PEDIDO NBA 3.xlsx`).
+
+_NBA_MOGI = "PEDIDO NBA MOGI SHOPPING.xlsx"
+
+
+def test_nba_template_codigo_e_a_variante_do_fire():
+    order = _process(_NBA_MOGI)
+    assert order is not None
+    # Modelo x cor (1 = branca, 3 = preta) x tamanho, na ordem da planilha.
+    esperado = [f"{m}-{c}{t}" for m in ("NB01", "NB03") for c in "13" for t in ("M", "G", "GG")]
+    assert [i.product_code for i in order.items] == esperado
+
+
+def test_nba_template_soma_bate_com_o_totalizador_da_planilha():
+    """Linha 23 do arquivo: 150 kits, R$ 5.832,71."""
+    order = _process(_NBA_MOGI)
+    assert sum(int(i.quantity) for i in order.items) == 150
+    assert sum(i.total_price for i in order.items) == pytest.approx(5832.71, abs=0.01)
+
+
+@pytest.mark.parametrize(
+    ("ref", "ref_cor", "tamanhos", "esperado"),
+    [
+        # NBA: REF. é o modelo -> compõe REF COR + letra do tamanho.
+        ("NB01", "NB01 - 1", "M - 33-38", "NB01-1M"),
+        ("NB03", "NB03 - 3", "GG - 45-48", "NB03-3GG"),
+        # AF / MF / TS: REF. já é a variante, REF COR é só a cor. Intocado.
+        ("AFK3S-A-100-3338", "100", "33 - 38", "AFK3S-A-100-3338"),
+        ("MFK3C-B-100-1922", "100", "19 - 22", "MFK3C-B-100-1922"),
+        ("K3ABCCIL1FTS", "001", "33 - 38", "K3ABCCIL1FTS"),
+        # Cor que COMEÇA com o REF sem ser REF + "-" + cor não é modelo.
+        ("10", "100", "33 - 38", "10"),
+        # Sem REF COR não há de onde compor.
+        ("NB01", "", "M - 33-38", "NB01"),
+        # Tamanho sem letra: o mais específico que o documento dá é REF COR.
+        ("NB01", "NB01 - 1", "33 - 38", "NB01-1"),
+    ],
+)
+def test_template_codigo_da_variante(ref, ref_cor, tamanhos, esperado):
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert NasmarTemplateParser()._codigo_variante(ref, ref_cor, tamanhos) == esperado
+
+
 # ── FIX: Riachuelo ME — page-footer URL not imported as item ─────────────────
 
 
