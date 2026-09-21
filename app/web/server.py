@@ -415,6 +415,7 @@ def _build_preview_payload(
         "source_filename": source_filename,
         "header": {
             "order_number": order.header.order_number,
+            "order_number_gerado": order.header.order_number_gerado,
             "issue_date": order.header.issue_date,
             "customer_name": order.header.customer_name,
             "customer_cnpj": order.header.customer_cnpj,

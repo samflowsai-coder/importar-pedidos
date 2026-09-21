@@ -729,23 +729,72 @@ def test_ordem_de_compra_tem_precedencia_sobre_fantasia():
     assert order.header.order_number == "TS-4417"
 
 
-def test_sample_tennis_station_entra_sem_numero_de_pedido():
-    """Documenta a lacuna conhecida: com `Ordem de compra`, FANTASIA e DATA DO
-    PEDIDO todos em branco, o pedido entra sem número — e `mapper.py` grava
-    PEDIDO_CLIENTE = NULL no Fire, sem chave de idempotência. Não há edição de
-    número no preview (`CommitRequest` só carrega `preview_id`). Mesmo estado do
-    Pulmão hoje em produção."""
+def test_sample_tennis_station_recebe_numero_gerado_pelo_portal():
+    """`Ordem de compra`, FANTASIA e DATA DO PEDIDO em branco: o parser não
+    inventa (devolve None) e o pipeline gera `SN-` + hash do arquivo. Antes
+    entrava com PEDIDO_CLIENTE = NULL no Fire, sem reconciliação."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert NasmarTemplateParser().parse(_rows(_TS)).header.order_number is None
     order = _process(_TS)
-    assert order.header.order_number is None
+    assert order.header.order_number.startswith("SN-")
+    assert order.header.order_number_gerado is True
 
 
 def test_ordem_de_compra_nao_muda_o_numero_dos_pedidos_antigos():
     """Não-regressão: o campo novo não existe no template AF/MF, então a cadeia
-    de fallback (FANTASIA) tem que continuar valendo lá."""
+    de fallback (FANTASIA com código de loja) tem que continuar valendo lá."""
     assert _process("Pedido Authentic Fit.xlsx").header.order_number == "AF198"
     # 'mf048' no arquivo; o OrderNormalizer faz .upper() depois do parser.
     assert _process("Pedido Magic Feet MF048.xlsx").header.order_number == "MF048"
-    assert _process("Pedido Grupo Afeet Pulmao.xlsx").header.order_number is None
+    assert _process("Pedido Grupo Afeet Pulmao.xlsx").header.order_number.startswith("SN-")
+
+
+# ── Número do pedido: só de campo que é número ───────────────────────────────
+#
+# O FANTASIA muda de sentido por cliente. Na H2S4 é o código da loja (`AF198.`,
+# `mf048`) e é a convenção da própria MM no Fire — a reconciliação depende dele.
+# Na NBA é o NOME da loja: o pedido 4932 (21/09/2026) entrou com PEDIDO_CLIENTE
+# `NBA STORE MOGI SHOPP`, que o Fire copia para a nota fiscal. E a DATA colide
+# quando a loja manda dois pedidos no mesmo dia. Nenhum dos dois é número.
+
+
+def _cabecalho_template(*campos):
+    """Linhas mínimas do template: os campos pedidos + cabeçalho + 1 item."""
+    return [
+        *[[None, rotulo, None, valor, None, None, None] for rotulo, valor in campos],
+        [None, "REF.", "DESCRIÇÃO PRODUTO", "TOTAL Kits", "TOTAL R$", None, None],
+        [None, "K3ABCCIL1FTS", "KIT", 10, 121.80, None, None],
+    ]
+
+
+def _numero(*campos):
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    rows = _cabecalho_template(*campos)
+    return NasmarTemplateParser().parse({"rows": rows, "text": "", "tables": []}).header
+
+
+@pytest.mark.parametrize("fantasia", ["AF198.", "mf048", "AF090 - 3", "AF127 - 66", "AF-198"])
+def test_fantasia_com_codigo_de_loja_continua_sendo_o_numero(fantasia):
+    assert _numero(("FANTASIA:", fantasia)).order_number == fantasia.rstrip(".")
+
+
+@pytest.mark.parametrize("fantasia", ["NBA Store Mogi Shopping", "TS", "LOJA CENTRO"])
+def test_fantasia_com_nome_de_loja_nao_vira_numero(fantasia):
+    assert _numero(("FANTASIA:", fantasia)).order_number is None
+
+
+def test_data_do_pedido_nao_vira_numero():
+    header = _numero(("DATA DO PEDIDO:", "16/09/2026"))
+    assert header.order_number is None
+    assert header.issue_date == "16/09/2026"
+
+
+def test_ordem_de_compra_sem_digito_nao_vira_numero():
+    """`SEM OC`, `-`, `N/A` no campo da OC não são número de pedido."""
+    header = _numero(("Ordem de compra:", "SEM OC"), ("FANTASIA:", "AF198"))
+    assert header.order_number == "AF198"
 
 
 # ── O template também tinha a bomba da Daju ──────────────────────────────────

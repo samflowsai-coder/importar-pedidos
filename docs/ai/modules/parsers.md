@@ -199,11 +199,16 @@ Authentic Feet, Magic Feet, "Pulmão" do Grupo Afeet, Tennis Station e NBA. Samp
 - **O preço é `CUSTO`, nunca `SUGESTÃO`.** `SUGESTÃO` é preço de venda ao consumidor
   (29,99 contra 12,18 de custo); entrar no ERP como unitário infla o pedido ~2,5x e
   passa em qualquer validador. Coberto por teste.
-- **Número do pedido: `Ordem de compra` → `FANTASIA` → `DATA DO PEDIDO`.** O campo
-  `Ordem de compra:` só existe no template da Tennis Station, e onde existir ganha.
-  `FANTASIA` é apelido digitado livre pelo comprador e só é fallback porque o template
-  antigo não tem campo de número — é de lá que vem o `AF76` vs `AF076` aberto na
-  reconciliação com o Fire. `_coerce_text` evita o `'4417.0'` do float do openpyxl.
+- **Número do pedido: `Ordem de compra` → `FANTASIA` com forma de código de loja →
+  None.** O campo `Ordem de compra:` só existe no template da Tennis Station, e onde
+  existir (com ao menos um dígito) ganha. `FANTASIA` é apelido digitado livre e só vale
+  se casar `_CODIGO_DE_LOJA` (`AF198`, `MF048`, `AF090 - 3`, `AF-198`): é a convenção
+  da MM no PEDIDO_CLIENTE do Fire pra H2S4, e a reconciliação depende dela (é daí o
+  `AF76` vs `AF076`). Nome de loja não vira número: o FANTASIA da NBA (`NBA Store Mogi
+  Shopping`) entrou no Fire e na nota como `NBA STORE MOGI SHOPP` (pedido 4932,
+  21/09/2026). A `DATA DO PEDIDO` saiu da cadeia (dois pedidos no mesmo dia colidem).
+  Sem número, o parser devolve None e o pipeline gera `SN-<hash>` — ver
+  `modules/pipeline.md`. `_coerce_text` evita o `'4417.0'` do float do openpyxl.
 - **Números: use o valor CRU da célula** (`_raw`), não o stringificado (`_cell`, só
   para campos textuais). `_to_number` é tipo-consciente: texto só-com-ponto usa a regra
   do último grupo — 3 dígitos = milhar (`1.300` → 1300), senão decimal (`300.0` → 300.0).
@@ -221,8 +226,8 @@ Authentic Feet, Magic Feet, "Pulmão" do Grupo Afeet, Tennis Station e NBA. Samp
 
 **Lacunas conhecidas (Tennis Station, 1 sample só) — ver `docs/BACKLOG.md`:**
 o sample real veio com `Ordem de compra`, `RAZÃO SOCIAL` e `DATA DO PEDIDO` em branco →
-`order_number = None` → `mapper.py:64` grava `PEDIDO_CLIENTE = NULL` no Fire, sem chave
-de idempotência, e a reconciliação não casa (mesmo estado do Pulmão hoje). E o CNPJ
+o parser devolve `order_number = None` e o pipeline gera `SN-<hash>` (antes entrava
+`PEDIDO_CLIENTE = NULL` no Fire, sem reconciliação — mesmo estado do Pulmão). E o CNPJ
 capturado é o **primeiro de uma lista escondida de 39 CNPJs** de filiais do grupo TS nas
 colunas X+ (lista de validação do dropdown) — pode ser escolha do comprador ou default
 não tocado. Confirmar com um segundo pedido real antes de confiar nele.

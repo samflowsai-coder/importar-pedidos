@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 from app.classifiers.format_classifier import FileFormat, FormatClassifier
 from app.extractors.pdf_extractor import PDFExtractor
 from app.extractors.xls_extractor import XLSExtractor
@@ -72,11 +74,34 @@ def process(file: LoadedFile) -> Order | None:
 
     order.source_file = str(file.path)
     _marcar_fornecedor(order, extracted)
+    _numerar_se_ausente(order, file.raw)
     order = _normalizer.normalize(order)
     _validator.validate(order)
 
     logger.info(f"Pedido {order.header.order_number!r} → {len(order.items)} item(s)")
     return order
+
+
+def _numerar_se_ausente(order: Order, raw: bytes) -> None:
+    """Pedido sem número no documento recebe `SN-` + 8 hex do sha256 do arquivo.
+
+    O `order_number` vira `PEDIDO_CLIENTE` no Fire, que o copia para a nota
+    fiscal (xPed, cortado em 15 — por isso 11 caracteres). Em modo xlsx é o
+    único campo que liga o pedido do portal à linha do Fire: sem ele o pedido
+    fica órfão, sem reconciliação. Parser nunca inventa número; o portal gera
+    aqui, marca `order_number_gerado` e o preview avisa.
+
+    Determinístico: o mesmo arquivo dá o mesmo número (reimport, preview de
+    novo, worker), e é o prefixo do `imports.file_sha256` — do número impresso
+    na nota o suporte chega no import. O hífen seguido de 8 caracteres nunca
+    casa o corte de sufixo de loja da reconciliação (`app/erp/numero_pedido.py`).
+    """
+    if order.header.order_number:
+        return
+    numero = f"SN-{hashlib.sha256(raw).hexdigest()[:8].upper()}"
+    order.header.order_number = numero
+    order.header.order_number_gerado = True
+    logger.warning(f"Documento sem número de pedido — número gerado pelo portal: {numero}")
 
 
 def _marcar_fornecedor(order: Order, extracted: dict) -> None:
