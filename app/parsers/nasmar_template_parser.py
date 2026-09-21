@@ -13,9 +13,10 @@ _ESPACO = re.compile(r"\s+")
 # é decimal, não milhar. Mesma regra do DajuParser (helper duplicado por dívida
 # conhecida — ver docs/BACKLOG.md; a casa manda copiar do vizinho, não inventar).
 _MILHAR_BR = re.compile(r"\d{1,3}(?:\.\d{3})+")
-# Letra do tamanho no início da célula TAMANHOS (`M - 33-38`, `GG - 45-48`). O
-# template do AF/MF/TS traz só a numeração (`33 - 38`) e não casa.
-_LETRA_TAMANHO = re.compile(r"([A-Z]{1,3})\s*-")
+# Letra do tamanho no início da célula TAMANHOS, colada à numeração:
+# `M - 33-38`, `GG - 45-48`, `M/33-38`, `M 33-38`. O template do AF/MF/TS traz
+# só a numeração (`33 - 38`) e não casa; `P/M - 33-38` também não (letra ambígua).
+_LETRA_TAMANHO = re.compile(r"([A-Z]{1,3})\s*[-/]?\s*\d")
 
 # Quantas células vazias seguidas o `_next_raw` atravessa antes de desistir do
 # campo. Medido nos 4 samples do template: o valor nunca está a mais de 2 células
@@ -277,15 +278,23 @@ class NasmarTemplateParser(BaseParser):
 
         O sinal de "REF. é modelo" é `REF COR` ser exatamente `REF.` + `-` + cor,
         não só começar com ele: `10` / `100` é coincidência, não composição.
-        Sem letra no tamanho, devolve `REF COR` — o mais específico que o
-        documento dá; não casa no Fire e cai na vinculação manual.
+
+        Sem letra de tamanho legível, o código leva o tamanho como veio
+        (`NB01-1 33-38`): não existe no Fire e cai na vinculação manual, mas
+        cada tamanho continua sendo um código distinto. Devolver só `REF COR`
+        faria as linhas de tamanho da mesma cor dividirem um código — e um
+        vínculo de-para por código as colapsaria de novo, como no 4932.
         """
         cor = _ESPACO.sub("", ref_cor).upper()
         modelo = _ESPACO.sub("", ref).upper()
         if not cor.startswith(modelo + "-") or cor == modelo + "-":
             return ref
-        m = _LETRA_TAMANHO.match(tamanhos.strip().upper())
-        return cor + m.group(1) if m else cor
+        tam = tamanhos.strip().upper()
+        m = _LETRA_TAMANHO.match(tam)
+        if m:
+            return cor + m.group(1)
+        tam = _ESPACO.sub("", tam)
+        return f"{cor} {tam}" if tam else cor
 
     # ------------------------------------------------------------------
     # Helpers locais

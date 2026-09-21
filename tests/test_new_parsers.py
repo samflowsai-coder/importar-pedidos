@@ -974,14 +974,32 @@ def test_nba_template_soma_bate_com_o_totalizador_da_planilha():
         ("10", "100", "33 - 38", "10"),
         # Sem REF COR não há de onde compor.
         ("NB01", "", "M - 33-38", "NB01"),
-        # Tamanho sem letra: o mais específico que o documento dá é REF COR.
-        ("NB01", "NB01 - 1", "33 - 38", "NB01-1"),
+        # Letra colada à numeração, com outro separador digitado à mão.
+        ("NB01", "NB01 - 1", "M/33-38", "NB01-1M"),
+        ("NB01", "NB01 - 1", "M 33-38", "NB01-1M"),
+        # Sem letra legível: o tamanho vai junto e o código segue distinto por
+        # linha (não casa no Fire, cai na vinculação manual, nunca colapsa).
+        ("NB01", "NB01 - 1", "33 - 38", "NB01-1 33-38"),
+        ("NB01", "NB01 - 1", "P/M - 33-38", "NB01-1 P/M-33-38"),
+        ("NB01", "NB01 - 1", "ÚNICO", "NB01-1 ÚNICO"),
+        ("NB01", "NB01 - 1", "", "NB01-1"),
     ],
 )
 def test_template_codigo_da_variante(ref, ref_cor, tamanhos, esperado):
     from app.parsers.nasmar_template_parser import NasmarTemplateParser
 
     assert NasmarTemplateParser()._codigo_variante(ref, ref_cor, tamanhos) == esperado
+
+
+def test_tamanhos_sem_letra_nunca_dividem_o_codigo():
+    """O modo de falha do 4932 com outro gatilho: TAMANHOS digitado sem a letra.
+    Se as três linhas de tamanho da mesma cor saíssem com o mesmo código, um
+    vínculo de-para as juntaria num produto só."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    p = NasmarTemplateParser()
+    codigos = {p._codigo_variante("NB01", "NB01 - 1", t) for t in ("33-38", "39-44", "45-48")}
+    assert len(codigos) == 3
 
 
 # ── FIX: Riachuelo ME — page-footer URL not imported as item ─────────────────
