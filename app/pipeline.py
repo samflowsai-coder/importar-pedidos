@@ -88,15 +88,17 @@ def _numerar_se_ausente(order: Order, raw: bytes) -> None:
     O `order_number` vira `PEDIDO_CLIENTE` no Fire, que o copia para a nota
     fiscal (xPed, cortado em 15 — por isso 11 caracteres). Em modo xlsx é o
     único campo que liga o pedido do portal à linha do Fire: sem ele o pedido
-    fica órfão, sem reconciliação. Parser nunca inventa número; o portal gera
-    aqui, marca `order_number_gerado` e o preview avisa.
+    fica órfão, sem reconciliação. O portal gera aqui, marca
+    `order_number_gerado` e o preview avisa. (Um parser que invente número com
+    texto do documento escapa disto — ver docs/BACKLOG.md, desmembramento NBA.)
 
     Determinístico: o mesmo arquivo dá o mesmo número (reimport, preview de
-    novo, worker), e é o prefixo do `imports.file_sha256` — do número impresso
-    na nota o suporte chega no import. O hífen seguido de 8 caracteres nunca
-    casa o corte de sufixo de loja da reconciliação (`app/erp/numero_pedido.py`).
+    novo, worker). É o prefixo do `imports.file_sha256` quando os dois leem os
+    mesmos bytes — lote e worker leem o arquivo duas vezes (ver
+    docs/BACKLOG.md). O hífen seguido de 8 caracteres nunca casa o corte de
+    sufixo de loja da reconciliação (`app/erp/numero_pedido.py`).
     """
-    if order.header.order_number:
+    if (order.header.order_number or "").strip():
         return
     numero = f"SN-{hashlib.sha256(raw).hexdigest()[:8].upper()}"
     order.header.order_number = numero

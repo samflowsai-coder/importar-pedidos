@@ -142,6 +142,18 @@ do Fire no import e parar de depender do número.
 `imports.file_sha256` só é checado em `app/worker/jobs/scan_environments.py`. Upload
 web e lote aceitam o mesmo arquivo de novo sem aviso. Barato de portar; independe do
 número do pedido.
+**Mesma raiz:** lote (`server.py`, `_guardar_original(src.read_bytes())` e depois
+`_process_file` lê de novo) e worker (`_sha256(p)` em chunks, depois `p.read_bytes()`)
+leem o arquivo **duas vezes**. Arquivo ainda sendo copiado no share dá `file_sha256`
+diferente do que foi parseado — e o `SN-<hash>` deixa de ser o prefixo dele. Fix: ler
+uma vez e passar os mesmos bytes para a guarda, o hash e o parse.
+
+### 2.14 Preview não avisa quando itens diferentes dividem o mesmo código
+O pedido 4932 entrou com 12 linhas e 2 códigos, e nada no caminho percebeu:
+`product_check` deduplica os códigos num `set` e apaga a pista. Guarda barata e
+independente de parser: avisar no preview quando N itens com descrições diferentes
+têm o mesmo `product_code`. É a rede para o próximo parser que gravar o modelo no
+lugar da variante.
 
 ### 2.12 Desmembramento NBA sai com texto como número
 `PEDIDO NBA 3.xlsx` vira `order_number = 'NBA DEZEMBRO'` no `DesmembramentoXlsParser` —

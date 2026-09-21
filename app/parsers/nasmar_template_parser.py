@@ -141,7 +141,7 @@ class NasmarTemplateParser(BaseParser):
         # entrou no Fire (e na nota) como `NBA STORE MOGI SHOPP` — pedido 4932,
         # 21/09/2026. A DATA saiu da cadeia: dois pedidos no mesmo dia colidem.
         # Sem número, devolve None e o pipeline gera um (`SN-<hash>`).
-        if ordem_compra and not any(c.isdigit() for c in ordem_compra):
+        if ordem_compra and not any(c in "123456789" for c in ordem_compra):
             ordem_compra = None
         if fantasia and not _CODIGO_DE_LOJA.fullmatch(fantasia.upper()):
             fantasia = None

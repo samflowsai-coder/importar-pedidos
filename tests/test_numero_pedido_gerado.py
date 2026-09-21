@@ -92,3 +92,32 @@ def test_preview_leva_a_marca_de_numero_gerado(gerado):
     )
     payload = _build_preview_payload("pid", "arquivo.xlsx", order)
     assert payload["header"]["order_number_gerado"] is gerado
+
+
+def test_numero_so_com_espaco_recebe_numero_do_portal():
+    """Número só de espaços é truthy mas vira vazio no normalizer: sem o strip,
+    o pedido escaparia do gerador e entraria órfão."""
+    from app.models.order import Order, OrderHeader
+    from app.pipeline import _numerar_se_ausente
+
+    order = Order(header=OrderHeader(order_number="   "), items=[])
+    _numerar_se_ausente(order, b"arquivo")
+    assert order.header.order_number.startswith("SN-")
+    assert order.header.order_number_gerado is True
+
+
+def test_numero_gerado_chega_na_coluna_pedido_do_xlsx(tmp_path):
+    """A coluna PEDIDO é o que o importador de Excel do Fire grava em
+    PEDIDO_CLIENTE — e dali vai pra nota."""
+    import openpyxl
+
+    from app.exporters.erp_exporter import ERPExporter
+
+    order = process(_load("Pedido Grupo Afeet Pulmao.xlsx"))
+    (arquivo,) = ERPExporter().export(order, str(tmp_path))
+    ws = openpyxl.load_workbook(arquivo).active
+    cabecalho = [c.value for c in ws[1]]
+    col = cabecalho.index("PEDIDO")
+    pedidos = {row[col] for row in ws.iter_rows(min_row=2, values_only=True) if row[col]}
+    assert pedidos == {order.header.order_number}
+    assert order.header.order_number in Path(arquivo).name

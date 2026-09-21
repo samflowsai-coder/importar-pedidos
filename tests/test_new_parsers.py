@@ -775,12 +775,28 @@ def _numero(*campos):
     return NasmarTemplateParser().parse({"rows": rows, "text": "", "tables": []}).header
 
 
-@pytest.mark.parametrize("fantasia", ["AF198.", "mf048", "AF090 - 3", "AF127 - 66", "AF-198"])
+@pytest.mark.parametrize(
+    "fantasia", ["AF198.", "mf048", "AF090 - 3", "AF127 - 66", "AF-198", "AF76", "AF017-99"]
+)
 def test_fantasia_com_codigo_de_loja_continua_sendo_o_numero(fantasia):
     assert _numero(("FANTASIA:", fantasia)).order_number == fantasia.rstrip(".")
 
 
-@pytest.mark.parametrize("fantasia", ["NBA Store Mogi Shopping", "TS", "LOJA CENTRO"])
+# Nome de loja com dígito é a mesma classe do 4932: repete em todo pedido da
+# loja e vai pra nota. A forma medida na Fire é 2 letras + 2 a 4 dígitos.
+@pytest.mark.parametrize(
+    "fantasia",
+    [
+        "NBA Store Mogi Shopping",
+        "TS",
+        "LOJA CENTRO",
+        "LOJA 10",
+        "NBA 3",
+        "RIO 2",
+        "CD 1",
+        "SHOP 12",
+    ],
+)
 def test_fantasia_com_nome_de_loja_nao_vira_numero(fantasia):
     assert _numero(("FANTASIA:", fantasia)).order_number is None
 
@@ -795,6 +811,10 @@ def test_ordem_de_compra_sem_digito_nao_vira_numero():
     """`SEM OC`, `-`, `N/A` no campo da OC não são número de pedido."""
     header = _numero(("Ordem de compra:", "SEM OC"), ("FANTASIA:", "AF198"))
     assert header.order_number == "AF198"
+
+
+def test_ordem_de_compra_so_com_zero_nao_vira_numero():
+    assert _numero(("Ordem de compra:", "0")).order_number is None
 
 
 # ── O template também tinha a bomba da Daju ──────────────────────────────────
