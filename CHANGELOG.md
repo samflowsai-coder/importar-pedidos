@@ -23,7 +23,11 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
-## 20260921-1345
+_(nada ainda)_
+
+---
+
+## 20260921-1347
 
 1) **Pedido NBA no modelo de kits entra com o produto certo.** Cada linha agora vai pro Fire com o código da sua cor e do seu tamanho (`NB01-1M`, `NB01-3G`, `NB03-1GG`...). Antes, todas as linhas de um mesmo modelo entravam como um produto só — foi o que aconteceu no pedido 4932.
 
@@ -32,6 +36,8 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 3) **O nome da loja no campo Fantasia não vira mais número do pedido.** O código de loja da Authentic Feet e da Magic Feet (`AF198`, `MF048`) continua valendo como número, igual sempre foi.
 
 4) Se aparecer o selo "Gerado pelo portal" num pedido que **tem** número no documento, não envie: avise o Samuel, porque o portal deveria ter lido aquele número.
+
+---
 
 ## 20260912-1053
 
