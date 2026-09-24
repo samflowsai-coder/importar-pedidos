@@ -166,40 +166,27 @@ independente de parser: avisar no preview quando N itens com descrições difere
 têm o mesmo `product_code`. É a rede para o próximo parser que gravar o modelo no
 lugar da variante.
 
-### 2.15 Aviso de troca de produto pelo importador de Excel do Fire — **design fechado, implementação parada (Samuel, 21/09/2026)**
+### 2.15 Troca de produto pelo importador de Excel do Fire — aviso no portal feito, restam 3 pontas
 
-**O defeito é do Fire, não do portal.** O importador de Excel do Fire (`MECANICO=99`)
-não busca o código exato: casa por PREFIXO e fica com o primeiro registro da ordem
-física do banco. Medido na Fire viva em 21/09 e reproduzido **8/8**:
-`NB01-3G` → gravou `NB01-3GG` (SEQ 3103, o certo era 3102) no pedido 4939; e
-`NB01`/`NB03` (o bug antigo do parser) → 3095/3113, que foi o colapso silencioso do
-4932. Código inexistente **não é recusado** se algum código começa com ele.
-**Alcance hoje:** 30 códigos na MM (famílias 2BCM/2BVM/2SCM G→GG, `0001`→`0001P`,
-`0087`→`0087P`, M101, MM00, NB01-3G) e 4 na Nasmar (`M1011`→`M1011.2`, `M1015`,
-`01FMELTOPOL`, `PV5032.812`). Chamado com a Fire Sistemas é a correção de origem.
+O aviso (`troca_no_fire`) foi implementado em 24/09/2026 — detalhe em
+`docs/ai/modules/erp.md`. O defeito de origem continua sendo do Fire (casa por
+prefixo, primeiro da ordem física); medido em 24/09: 33 trocas na MM, 5 na Nasmar,
+mais os códigos duplicados (`5041G` nas duas). Pontas abertas:
 
-**Design aprovado (falta só implementar):**
-- `product_check.check_order` ganha **uma** query batelada a mais (`queries.py`):
-  varredura em ordem física com `CODPROD_ALTERN STARTING WITH ?` em OR, chunk de 150,
-  primeiro hit por código. Conferido contra a consulta individual em **430/430**
-  códigos (300 MM + 130 Nasmar) — o lote prevê o mesmo produto.
-- Consulta o código que **vai pro XLSX**: o do parser, ou `fire_codigo` quando o item
-  tem vínculo de-para (o `depara_apply` reescreve no export).
-- Item ganha `troca_no_fire: {fire_product_id, codigo, descricao}` quando o palpite do
-  Fire difere do match do portal; `summary` ganha a contagem. Só campo novo, sem
-  migration. Cobre também item SEM match, que o Fire importaria calado como outro.
-- **Não bloqueia** a exportação: o XLSX está certo, o erro acontece dentro do Fire.
-  Fora de `is_blocking`.
-- UI: célula da coluna Fire `⚠ vira NB01-3GG` (title explicando) + linha no banner
-  ("o Fire vai trocar N item(ns) ao importar — corrija no Fire depois").
-- Aviso **preciso**, não "código é prefixo de outro": seriam 290 alertas na MM para 30
-  trocas reais, e alerta demais vira alerta ignorado.
-- Testes: cursor falso em ordem física (troca, sem troca, sem-match silencioso, código
-  vindo do de-para, chunk > 1) + não entra na trava de exportação.
-- **Limite:** reproduz o comportamento medido, não o código-fonte do Fire. Se a Fire
-  mudar o importador, a previsão erra. Revisar quando o chamado for respondido.
-- Em `EXPORT_MODE=db` o aviso não se aplica (insert direto usa match exato); hoje
-  produção é `xlsx` e o aviso aparece sempre — rever se o modo `db` for ligado (1.5).
+- **Chamado com a Fire Sistemas** (mensagem pronta, a MM envia). Quando responderem,
+  revisar a previsão: ela reproduz o comportamento medido, não o código deles.
+- **De-para exporta SEQ como código.** `fire_codigo` = `str(SEQ)`. Não sei se o
+  importador do Fire tenta SEQ exato antes do prefixo de `CODPROD_ALTERN`. Prova
+  barata: importar no Fire uma planilha com 1 item vinculado e ver o produto
+  gravado. Até lá, o aviso consulta o SEQ em texto como o Fire leria.
+- **Código com mais de 30 caracteres derruba o check inteiro.** A query de match
+  exato (`find_products_by_codes_sql`, `IN (...)`) estoura "string right
+  truncation" (coluna `VARCHAR(30)`) e o preview mostra "check indisponível". Bug
+  antigo; a query nova do aviso já filtra.
+- Desmembramento AF/MF: nos samples, 0 de 570 / 276 itens casam no portal e o
+  Fire casaria todos por prefixo (`AFK2E-L-` → `AFK2E-L-100-3338`). O aviso agora
+  mostra isso; a causa (código truncado no parser do desmembramento) não foi
+  investigada.
 
 ---
 

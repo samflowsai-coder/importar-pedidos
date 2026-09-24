@@ -205,6 +205,21 @@ def find_products_by_codes_sql(n: int) -> str:
     )
 
 
+def prever_import_fire_sql(n: int) -> str:
+    """Palpite do importador de Excel do Fire. Retorna (CODPROD_ALTERN, SEQ, DESCRICAO).
+
+    O importador do Fire (`MECANICO=99`) não busca o código exato: casa por
+    PREFIXO e fica com o primeiro registro da ordem física. Esta query reproduz
+    isso em lote: sem ORDER BY de propósito, o chamador fica com a primeira
+    linha que começa com cada código. Conferido na Fire viva contra
+    `SELECT FIRST 1 ... STARTING WITH ?` um a um: 620/620 iguais (24/09/2026,
+    MM e Nasmar). Ver BACKLOG 2.15.
+    """
+    return "SELECT CODPROD_ALTERN, SEQ, DESCRICAO FROM PRODUTOS WHERE " + " OR ".join(
+        ["CODPROD_ALTERN STARTING WITH ?"] * n
+    )
+
+
 def find_products_by_seqs_sql(n: int) -> str:
     """SELECT batelado por SEQ. Retorna (SEQ, DESCRICAO, PRECO_VENDA)."""
     placeholders = ", ".join(["?"] * n)

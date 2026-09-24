@@ -2414,11 +2414,30 @@ function renderPreview(data) {
         : `<span style="color:var(--success)">✓ ${s.items_matched}/${s.items_total} itens com match no Fire</span>`;
     }
 
+    // ── Troca pelo importador do Fire (BACKLOG 2.15) — avisa, não bloqueia ────
+    // O XLSX sai certo; o importador de Excel do Fire casa o código por
+    // prefixo e grava outro produto. O conserto é no pedido do Fire.
+    // Dois casos, dois conselhos: item que o portal casou e o Fire troca é
+    // erro certo; item sem correspondência o Fire casa sozinho pelo começo do
+    // código — às vezes acerta (Riachuelo `…001` → `…001_RIAC`), então é conferir.
+    const comTroca = check.available ? (check.items || []).filter(i => i.troca_no_fire) : [];
+    const trocasCertas = comTroca.filter(i => i.match).length;
+    const palpites = comTroca.length - trocasCertas;
+    const trocaBit = [
+      trocasCertas > 0
+        ? `<span style="color:var(--warn-strong);font-weight:600">⚠ O Fire vai gravar outro produto em ${trocasCertas} item(ns) ao importar esta planilha (marcados com "vira" na coluna Fire). Depois de importar, troque o produto desses itens no pedido do Fire.</span>`
+        : '',
+      palpites > 0
+        ? `<span style="color:var(--warn-strong)">⚠ ${palpites} item(ns) sem correspondência vão entrar no Fire com o produto que ele escolher pelo começo do código (marcados com "vira"). Confira se é o produto certo, ou vincule antes de importar.</span>`
+        : '',
+    ].filter(Boolean).map(b => `<div>${b}</div>`).join('');
+
     // ── Render: stacked vertically ───────────────────────────────────────────
     banner.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:6px;width:100%">
         <div>${clientBit}</div>
         ${priceBit ? `<div>${priceBit}</div>` : ''}
+        ${trocaBit}
       </div>`;
     banner.classList.remove('hidden');
   } else if (banner) {
@@ -2505,6 +2524,17 @@ function renderPreview(data) {
           } else {
             cell = okBadge;
           }
+        }
+        if (check && check.available && m && m.troca_no_fire) {
+          const t = m.troca_no_fire;
+          // Código duplicado no Fire: mesmo texto, outro produto — mostra o SEQ.
+          const alvo = t.codigo === it.product_code ? `#${t.fire_product_id}` : t.codigo;
+          const oQueFazer = m.match
+            ? `em vez de #${m.fire_product_id}. Depois de importar, troque o produto deste item no pedido do Fire.`
+            : 'porque o código não existe no Fire. Confira se é o produto certo, ou vincule antes de importar.';
+          const trocaTitle = `O importador de Excel do Fire casa o código pelo começo e vai gravar #${t.fire_product_id} · ${t.codigo} · ${t.descricao || ''}, ${oQueFazer}`;
+          cell += `<div style="color:var(--warn-strong);font-weight:600;font-size:11px;margin-top:2px;white-space:nowrap"
+                        title="${esc(trocaTitle)}">⚠ vira ${esc(alvo)}</div>`;
         }
         rows.push(`
           <tr>

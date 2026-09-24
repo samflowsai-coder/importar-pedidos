@@ -132,6 +132,39 @@ Os guards vivem em `_send_one_to_fire` e `_export_one_xlsx` (web). Audit
 events: `send_to_fire_blocked`, `xlsx_export_blocked`, `sem_preco_acknowledged`.
 Métricas: `portal_price_check_blocks_total{reason}`, `portal_price_check_acks_total`.
 
+## Troca de produto pelo importador de Excel do Fire (`troca_no_fire`)
+
+O importador de Excel do Fire (`MECANICO=99`) não casa o código exato: pega o
+primeiro produto da ORDEM FÍSICA cujo `CODPROD_ALTERN` começa com o código da
+planilha, e não recusa código inexistente se algum começa com ele. O portal
+prevê isso no check e avisa, sem bloquear (o XLSX está certo; o erro acontece
+dentro do Fire).
+
+- `queries.prever_import_fire_sql(n)`: `STARTING WITH ?` em OR, **sem ORDER BY
+  de propósito** (a ordem física É o comportamento). `_prever_import_fire` roda
+  em lotes de 150 e fica com a primeira linha que começa com cada código.
+  Conferido na Fire viva contra `SELECT FIRST 1 ... STARTING WITH ?` um a um:
+  620/620 iguais (MM + Nasmar, 24/09/2026).
+- Consulta o código que VAI NO XLSX: o do parser, ou o `fire_codigo` do de-para
+  (que o `depara_apply` escreve no export).
+- Item ganha `troca_no_fire = {fire_product_id, codigo, descricao}` quando o
+  palpite difere do match do portal, inclusive item sem match (`fire_product_id`
+  None) e código duplicado no Fire (mesmo texto, outro SEQ). `summary` ganha
+  `items_troca_no_fire` e `troca_no_fire_checked` (False se a previsão falhou —
+  a falha nunca derruba o check).
+- Código com mais de 30 caracteres fica fora da query: `CODPROD_ALTERN` é
+  `VARCHAR(30)` nas duas Fire, e parâmetro maior estoura truncamento.
+- Fora de `is_blocking`. UI: `⚠ vira <código>` na coluna Fire + banner com dois
+  conselhos (casado no portal = troque depois no Fire; sem match = confira ou
+  vincule antes).
+- **Limite:** reproduz o comportamento medido, não o código-fonte do Fire. Em
+  `EXPORT_MODE=db` (insert com match exato) o aviso não se aplica.
+- ⚠️ **Não verificado:** o `fire_codigo` do de-para é `str(SEQ)`
+  (`catalogo_fire.codigo`). Se o importador do Fire só olha `CODPROD_ALTERN`, um
+  item vinculado sai com o SEQ em texto e pode casar por prefixo com outro
+  produto (310 SEQs na MM e 176 na Nasmar são prefixo de algum código). Se ele
+  tentar SEQ antes, o aviso nesse caso é falso positivo. BACKLOG 2.15.
+
 ## De-para de cliente intercompany (Nasmar → cliente real)
 
 `app/erp/depara_cliente.py` — `resolver_cliente_real(chave, *, revenda_slug)`.

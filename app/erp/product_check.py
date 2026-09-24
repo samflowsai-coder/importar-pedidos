@@ -46,6 +46,37 @@ def _fetch_map_by_key(cur, sql_builder, values: list) -> dict:
     return out
 
 
+# CODPROD_ALTERN é VARCHAR(30) na MM e na Nasmar (conferido 24/09/2026). Parâmetro
+# maior que a coluna estoura "string right truncation" no Firebird, e um código
+# maior que 30 não é prefixo de nada.
+_CODPROD_ALTERN_MAX = 30
+_LOTE_PREVISAO = 150
+
+
+def _prever_import_fire(cur, codigos: list[str]) -> dict[str, tuple]:
+    """{codigo: (seq, codprod_altern, descricao)} do produto que o importador de
+    Excel do Fire gravaria para cada código.
+
+    O Fire casa por PREFIXO e fica com o primeiro da ordem física (BACKLOG 2.15).
+    A query volta nessa ordem, então o primeiro registro que começa com o código
+    é o palpite dele. Código sem nenhum candidato fica fora do dict.
+    """
+    out: dict[str, tuple] = {}
+    validos = [c for c in codigos if c.strip() and len(c) <= _CODPROD_ALTERN_MAX]
+    for lote in _chunked(validos, _LOTE_PREVISAO):
+        cur.execute(queries.prever_import_fire_sql(len(lote)), tuple(lote))
+        pendentes = set(lote)
+        for codprod, seq, desc in cur.fetchall():
+            if not pendentes:
+                break
+            if codprod is None:
+                continue
+            for c in [c for c in pendentes if codprod.startswith(c)]:
+                out[c] = (seq, codprod.strip(), desc)
+                pendentes.discard(c)
+    return out
+
+
 def _to_cents(value: float | None) -> int | None:
     """Converte reais em centavos (int) para comparação sem drift de float."""
     if value is None:
@@ -86,6 +117,7 @@ def _empty_item_result(
         "unit_price_order": unit_price_order,
         "price_status": "no_product_match",
         "price_diff": None,
+        "troca_no_fire": None,
     }
 
 
@@ -108,6 +140,8 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
             "items_matched": 0,
             "items_missing": len(order.items),
             "client_matched": False,
+            "items_troca_no_fire": 0,
+            "troca_no_fire_checked": False,
             "price_summary": {
                 "items_match": 0,
                 "items_mismatch": 0,
@@ -199,11 +233,15 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
                         seq_map[row[0]] = (row[0], row[1], row[2])
 
             items_report: list[dict] = []
+            # Código que vai na coluna CODIGO_PRODUTO do XLSX, por item: o do
+            # parser, ou o `fire_codigo` quando o de-para reescreve no export.
+            codigos_xlsx: list[str | None] = []
             matched = 0
             price_match = price_mismatch = price_no_price_in_fire = price_no_order_price = 0
 
             for it in order.items:
                 entry = _empty_item_result(it.product_code, it.ean, it.unit_price)
+                codigo_xlsx = it.product_code
                 hit = None
                 source = None
                 if it.ean and it.ean in ean_map:
@@ -227,6 +265,7 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
                         resolved = seq_map.get(seq) if seq is not None else None
                         if resolved is not None:
                             hit, source = resolved, "depara"
+                            codigo_xlsx = dv.get("fire_codigo") or it.product_code
 
                 if hit is not None:
                     seq, desc, preco = hit
@@ -255,6 +294,9 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
                         entry["price_diff"] = round(float(fire_p) - float(it.unit_price), 2)
                 # else: price_status fica 'no_product_match' (default), price_diff None
                 items_report.append(entry)
+                codigos_xlsx.append(codigo_xlsx)
+
+            trocas, troca_checked = _marcar_trocas_no_fire(cur, items_report, codigos_xlsx)
 
             cur.close()
     except Exception as exc:  # noqa: BLE001 — any Firebird failure downgrades to "check unavailable"
@@ -282,6 +324,8 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
             "items_matched": matched,
             "items_missing": len(order.items) - matched,
             "client_matched": client_id is not None,
+            "items_troca_no_fire": trocas,
+            "troca_no_fire_checked": troca_checked,
             "price_summary": {
                 "items_match": price_match,
                 "items_mismatch": price_mismatch,
@@ -290,6 +334,35 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
             },
         },
     }
+
+
+def _marcar_trocas_no_fire(
+    cur, items_report: list[dict], codigos_xlsx: list[str | None]
+) -> tuple[int, bool]:
+    """Preenche `troca_no_fire` onde o palpite do Fire difere do match do portal.
+
+    Cobre o item sem match também: o Fire não recusa código inexistente se algum
+    código começa com ele, e grava o outro em silêncio (pedido 4932). Só avisa,
+    nunca bloqueia: o XLSX está certo, o erro acontece dentro do Fire. Qualquer
+    falha aqui não derruba o check — devolve (0, False) e o preview segue.
+    """
+    try:
+        palpites = _prever_import_fire(cur, list({c for c in codigos_xlsx if c}))
+    except Exception as exc:  # noqa: BLE001 — previsão é extra, o check não depende dela
+        from app.utils.logger import logger
+
+        logger.warning(f"Previsão do importador do Fire falhou ({type(exc).__name__}): {exc}")
+        return 0, False
+
+    trocas = 0
+    for entry, codigo in zip(items_report, codigos_xlsx, strict=True):
+        palpite = palpites.get(codigo) if codigo else None
+        if palpite is None or palpite[0] == entry["fire_product_id"]:
+            continue
+        seq, codprod, desc = palpite
+        entry["troca_no_fire"] = {"fire_product_id": seq, "codigo": codprod, "descricao": desc}
+        trocas += 1
+    return trocas, True
 
 
 def is_blocking(
