@@ -30,7 +30,18 @@ _MODELO_KINGS = re.compile(r"KG\s*(\d{2})")
 # Sufixo de cor do kit Kings no Fire (`KG07BR`), pelas duas fontes do template:
 # o número em REF COR e o nome em DESCRIÇÃO COR. Só as 3 cores que existem lá.
 _COR_KINGS_POR_NUMERO = {1: "BR", 2: "PR", 3: "ST"}
-_COR_KINGS_POR_NOME = {"BRANC": "BR", "PRET": "PR", "SORTID": "ST"}
+# Número da cor como o openpyxl/xlrd entregam: `001`, `1` ou `1.0` (o .xls
+# devolve todo número como float). Só dígitos ASCII — `²` passa no isdigit()
+# e quebra o int().
+_NUMERO_COR_KINGS = re.compile(r"0*([0-9]{1,3})(?:\.0+)?")
+# Nome da cor. Branco/Preto só valem sozinhos: `Preto/Branco` ou `Branco,
+# Mescla, Preto` escolheriam um código REAL e errado — melhor cair na
+# vinculação manual. Sortido vem com a composição entre parênteses.
+_COR_KINGS_POR_NOME = (
+    (re.compile(r"BRANC[OA]S?"), "BR"),
+    (re.compile(r"PRET[OA]S?"), "PR"),
+    (re.compile(r"SORTID[OA]S?(\s*\(.*\))?"), "ST"),
+)
 
 # Quantas células vazias seguidas o `_next_raw` atravessa antes de desistir do
 # campo. Medido nos 4 samples do template: o valor nunca está a mais de 2 células
@@ -332,7 +343,7 @@ class NasmarTemplateParser(BaseParser):
 
         A cor sai do número E do nome. Se um só estiver legível, ele decide; se os
         dois discordarem, nenhum decide. Sem cor confiável, devolve o modelo com a
-        cor como veio, separados por espaço (`KG 07 004`): o importador de Excel do
+        cor como veio, separados por espaço (`KG07 004`): o importador de Excel do
         Fire casa por PREFIXO, e `KG07` sozinho entraria como `KG07BR` sem aviso.
         Com o espaço, não é prefixo de nenhum KG e cai na vinculação manual.
         """
@@ -342,12 +353,11 @@ class NasmarTemplateParser(BaseParser):
         modelo = f"KG{m.group(1)}"
 
         por_numero = None
-        if ref_cor.strip().isdigit():
-            por_numero = _COR_KINGS_POR_NUMERO.get(int(ref_cor.strip()))
-        nome = cor.strip().upper()
-        por_nome = next(
-            (suf for raiz, suf in _COR_KINGS_POR_NOME.items() if nome.startswith(raiz)), None
-        )
+        n = _NUMERO_COR_KINGS.fullmatch(ref_cor.strip())
+        if n:
+            por_numero = _COR_KINGS_POR_NUMERO.get(int(n.group(1)))
+        nome = _ESPACO.sub(" ", cor).strip().upper()
+        por_nome = next((suf for rx, suf in _COR_KINGS_POR_NOME if rx.fullmatch(nome)), None)
 
         if por_numero and por_nome and por_numero != por_nome:
             sufixo = None

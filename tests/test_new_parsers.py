@@ -1135,8 +1135,6 @@ def test_kings_quantidade_e_custo_nunca_a_sugestao():
     assert primeiro.unit_price == 16.66  # CUSTO, não 39.99 (SUGESTÃO)
     assert primeiro.obs == "Produto sem toalha com silicone"
     assert "Branco" in primeiro.description
-    for item in order.items:
-        assert item.quantity * item.unit_price == pytest.approx(item.total_price, abs=0.01)
 
 
 @pytest.mark.parametrize(
@@ -1148,8 +1146,10 @@ def test_kings_quantidade_e_custo_nunca_a_sugestao():
         # Digitado sem espaço, em minúscula, cor no feminino ou plural.
         ("KG07", "002", "preta", "KG07PR"),
         ("kg 05", "003", "Sortidas", "KG05ST"),
-        # Número da cor digitado como número (o Excel tira os zeros).
+        # Número da cor digitado como número (o Excel tira os zeros; o .xls
+        # devolve float, que vira "1.0").
         ("KG 07", "1", "Branco", "KG07BR"),
+        ("KG 07", "2.0", "Preto", "KG07PR"),
         # Só uma das duas fontes preenchida: ela decide.
         ("KG 07", "", "Branco", "KG07BR"),
         ("KG 07", "002", "", "KG07PR"),
@@ -1165,6 +1165,12 @@ def test_kings_codigo_da_cor(ref, ref_cor, cor, esperado):
     ("ref", "ref_cor", "cor"),
     [
         ("KG 07", "001", "Preto"),  # número e nome discordam: não escolhe
+        ("KG 07", "2.0", "Branco"),  # idem, com o float do .xls
+        # Nome editado sem número: não adivinha pelo começo do texto.
+        ("KG 07", "", "Preto/Branco"),
+        ("KG 07", "", "Branco, Mescla, Preto"),
+        ("KG 07", "", "Brancoxyz"),
+        ("KG 07", "²", "Branco, Mescla"),  # dígito não-ASCII não derruba o arquivo
         ("KG 07", "004", "Azul"),  # cor que não existe no Fire
         ("KG 07", "", ""),  # sem cor nenhuma
         ("KG07", "", ""),

@@ -203,8 +203,10 @@ branco: quantidades zeradas, os testes preenchem em memória).
   `REF COR` = número da cor (`001`), `DESCRIÇÃO COR` = nome (`Branco`). No Fire da MM
   (`.7`, conferido 24/09/2026, 28 kits, SEQ 2133–2150 e 3945–3954; nenhum na Nasmar
   `.4`) o código é modelo sem espaço + sufixo: `KG07BR`, `KG07PR`, `KG10ST`. O tamanho
-  já está no modelo. Cor: `001`/`002`/`003` e Branco/Preto/Sortido; se só uma fonte
-  é legível ela decide, se discordam nenhuma decide. **Sem cor confiável o código
+  já está no modelo. Cor: `001`/`002`/`003` (aceita `1` e o `1.0` do `.xls`) e
+  Branco/Preto/Sortido, com o nome casado INTEIRO (`Preto/Branco` não decide nada;
+  Sortido aceita a composição entre parênteses); se só uma fonte é legível ela
+  decide, se discordam nenhuma decide. **Sem cor confiável o código
   leva espaço** (`KG07 004`), porque o importador de Excel do Fire casa por prefixo
   e `KG07` sozinho entraria como `KG07BR` em silêncio (BACKLOG 2.15). A rede tem ~55
   franquias no `CADASTRO` da `.7`, cada loja com CNPJ próprio: o cliente é o CNPJ do
