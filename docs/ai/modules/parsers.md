@@ -167,10 +167,11 @@ aberto — ver `docs/BACKLOG.md`. Sem caso real reportado, o comportamento antig
 
 `NasmarTemplateParser` (`app/parsers/nasmar_template_parser.py`) cobre o template de
 pedido de kits do **próprio fornecedor** (Nasmar/MM). Um template, N clientes:
-Authentic Feet, Magic Feet, "Pulmão" do Grupo Afeet, Tennis Station e NBA. Samples:
-`Pedido Authentic Fit.xlsx`, `Pedido Magic Feet MF048.xlsx`,
+Authentic Feet, Magic Feet, "Pulmão" do Grupo Afeet, Tennis Station, NBA e Kings.
+Samples: `Pedido Authentic Fit.xlsx`, `Pedido Magic Feet MF048.xlsx`,
 `Pedido Grupo Afeet Pulmao.xlsx`, `PEDIDO TENNIS STATION.xlsx`,
-`PEDIDO NBA MOGI SHOPPING.xlsx`.
+`PEDIDO NBA MOGI SHOPPING.xlsx`, `Planilha modelo cliente Kings.xlsx` (modelo em
+branco: quantidades zeradas, os testes preenchem em memória).
 
 - **`_match_header(row)` é fonte única** do gate e do `col_map` — `can_parse` e
   `_find_header_row` chamam a mesma função. Antes eram duas cópias literais da mesma
@@ -196,6 +197,20 @@ Authentic Feet, Magic Feet, "Pulmão" do Grupo Afeet, Tennis Station e NBA. Samp
   relatou 2 produtos no Fire. Mecanismo provável, não conferido em produção: o de-para
   é por código por cliente (`depara_apply`), então um vínculo `NB01` → kit arrasta as
   6 linhas do modelo para o mesmo produto.
+- **Kings tem regra própria, restrita à família `KG NN`** (`_codigo_kings`, tentada
+  antes de `_codigo_variante`; devolve None para qualquer `REF.` fora de
+  `KG\s*\d{2}`, então nenhum outro cliente passa por ela). `REF.` = modelo (`KG 07`),
+  `REF COR` = número da cor (`001`), `DESCRIÇÃO COR` = nome (`Branco`). No Fire da MM
+  (`.7`, conferido 24/09/2026, 28 kits, SEQ 2133–2150 e 3945–3954; nenhum na Nasmar
+  `.4`) o código é modelo sem espaço + sufixo: `KG07BR`, `KG07PR`, `KG10ST`. O tamanho
+  já está no modelo. Cor: `001`/`002`/`003` (aceita `1` e o `1.0` do `.xls`) e
+  Branco/Preto/Sortido, com o nome casado INTEIRO (`Preto/Branco` não decide nada;
+  Sortido aceita a composição entre parênteses); se só uma fonte é legível ela
+  decide, se discordam nenhuma decide. **Sem cor confiável o código
+  leva espaço** (`KG07 004`), porque o importador de Excel do Fire casa por prefixo
+  e `KG07` sozinho entraria como `KG07BR` em silêncio (BACKLOG 2.15). A rede tem ~55
+  franquias no `CADASTRO` da `.7`, cada loja com CNPJ próprio: o cliente é o CNPJ do
+  cabeçalho, como na Tennis Station.
 - **O preço é `CUSTO`, nunca `SUGESTÃO`.** `SUGESTÃO` é preço de venda ao consumidor
   (29,99 contra 12,18 de custo); entrar no ERP como unitário infla o pedido ~2,5x e
   passa em qualquer validador. Coberto por teste.

@@ -23,7 +23,7 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
-_(nada ainda)_
+1) **Pedido da Kings no modelo de kits entra com o produto certo.** Cada linha vai pro Fire com o código da cor (`KG07BR`, `KG07PR`, `KG10ST`...). Se a cor da linha vier diferente de Branco, Preto ou Sortido, o item aparece na revisão como produto não encontrado, para vincular à mão, em vez de entrar com o produto errado.
 
 ---
 
