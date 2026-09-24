@@ -148,13 +148,6 @@ leem o arquivo **duas vezes**. Arquivo ainda sendo copiado no share dá `file_sh
 diferente do que foi parseado — e o `SN-<hash>` deixa de ser o prefixo dele. Fix: ler
 uma vez e passar os mesmos bytes para a guarda, o hash e o parse.
 
-### 2.14 Preview não avisa quando itens diferentes dividem o mesmo código
-O pedido 4932 entrou com 12 linhas e 2 códigos, e nada no caminho percebeu:
-`product_check` deduplica os códigos num `set` e apaga a pista. Guarda barata e
-independente de parser: avisar no preview quando N itens com descrições diferentes
-têm o mesmo `product_code`. É a rede para o próximo parser que gravar o modelo no
-lugar da variante.
-
 ### 2.12 Desmembramento NBA sai com texto como número
 `PEDIDO NBA 3.xlsx` vira `order_number = 'NBA DEZEMBRO'` no `DesmembramentoXlsParser` —
 mesma classe do FANTASIA-nome corrigido no template (2026-09-21): texto repetível vira
@@ -165,6 +158,50 @@ PEDIDO_CLIENTE e xPed da nota.
 `--warn-ink` (6.27:1), mas `index.html` ainda usa `var(--warn)` como cor de texto em
 `.toolbar-path.missing`, no aviso "item(s) sem match no Fire" e no status `parsed`.
 No celular, o rodapé do modal "Revisar pedido" quebra palavra por palavra.
+
+### 2.14 Preview não avisa quando itens diferentes dividem o mesmo código
+O pedido 4932 entrou com 12 linhas e 2 códigos, e nada no caminho percebeu:
+`product_check` deduplica os códigos num `set` e apaga a pista. Guarda barata e
+independente de parser: avisar no preview quando N itens com descrições diferentes
+têm o mesmo `product_code`. É a rede para o próximo parser que gravar o modelo no
+lugar da variante.
+
+### 2.15 Aviso de troca de produto pelo importador de Excel do Fire — **design fechado, implementação parada (Samuel, 21/09/2026)**
+
+**O defeito é do Fire, não do portal.** O importador de Excel do Fire (`MECANICO=99`)
+não busca o código exato: casa por PREFIXO e fica com o primeiro registro da ordem
+física do banco. Medido na Fire viva em 21/09 e reproduzido **8/8**:
+`NB01-3G` → gravou `NB01-3GG` (SEQ 3103, o certo era 3102) no pedido 4939; e
+`NB01`/`NB03` (o bug antigo do parser) → 3095/3113, que foi o colapso silencioso do
+4932. Código inexistente **não é recusado** se algum código começa com ele.
+**Alcance hoje:** 30 códigos na MM (famílias 2BCM/2BVM/2SCM G→GG, `0001`→`0001P`,
+`0087`→`0087P`, M101, MM00, NB01-3G) e 4 na Nasmar (`M1011`→`M1011.2`, `M1015`,
+`01FMELTOPOL`, `PV5032.812`). Chamado com a Fire Sistemas é a correção de origem.
+
+**Design aprovado (falta só implementar):**
+- `product_check.check_order` ganha **uma** query batelada a mais (`queries.py`):
+  varredura em ordem física com `CODPROD_ALTERN STARTING WITH ?` em OR, chunk de 150,
+  primeiro hit por código. Conferido contra a consulta individual em **430/430**
+  códigos (300 MM + 130 Nasmar) — o lote prevê o mesmo produto.
+- Consulta o código que **vai pro XLSX**: o do parser, ou `fire_codigo` quando o item
+  tem vínculo de-para (o `depara_apply` reescreve no export).
+- Item ganha `troca_no_fire: {fire_product_id, codigo, descricao}` quando o palpite do
+  Fire difere do match do portal; `summary` ganha a contagem. Só campo novo, sem
+  migration. Cobre também item SEM match, que o Fire importaria calado como outro.
+- **Não bloqueia** a exportação: o XLSX está certo, o erro acontece dentro do Fire.
+  Fora de `is_blocking`.
+- UI: célula da coluna Fire `⚠ vira NB01-3GG` (title explicando) + linha no banner
+  ("o Fire vai trocar N item(ns) ao importar — corrija no Fire depois").
+- Aviso **preciso**, não "código é prefixo de outro": seriam 290 alertas na MM para 30
+  trocas reais, e alerta demais vira alerta ignorado.
+- Testes: cursor falso em ordem física (troca, sem troca, sem-match silencioso, código
+  vindo do de-para, chunk > 1) + não entra na trava de exportação.
+- **Limite:** reproduz o comportamento medido, não o código-fonte do Fire. Se a Fire
+  mudar o importador, a previsão erra. Revisar quando o chamado for respondido.
+- Em `EXPORT_MODE=db` o aviso não se aplica (insert direto usa match exato); hoje
+  produção é `xlsx` e o aviso aparece sempre — rever se o modo `db` for ligado (1.5).
+
+---
 
 ## 3. Bloqueado em terceiros
 
