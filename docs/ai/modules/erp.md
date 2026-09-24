@@ -140,7 +140,10 @@ conhece Flow e não decide quando deve ser usado — isso é
 `app/integrations/flowpcp/intercompany.py::resolucao_para(order, *, slug)`, a
 camada de política, que casa o CNPJ do pedido contra
 `environments.intercompany_cnpj` e, se bater, chama o resolver passando
-`order.header.order_number` como chave.
+`order.header.order_number` como chave — **exceto** quando o número foi gerado
+pelo portal (`order_number_gerado`, `SN-<hash>`): aí passa `None` e o resolver
+responde `sem_chave` sem abrir conexão. O token nunca foi digitado no Fire da
+revenda; consultar com ele não casa e, com o `.4` fora do ar, trava o preview.
 
 Pedido no nome da revenda (ela fatura, a produção é nossa) sobe pro Flow com o
 cliente REAL. A chave é o `PEDIDO_CLIENTE` (= `order.header.order_number`),

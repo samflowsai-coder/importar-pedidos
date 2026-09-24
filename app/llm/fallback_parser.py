@@ -100,9 +100,11 @@ class LLMFallbackParser:
             )
             data = _extract_json(content or "")
 
+            # `order_number_gerado` é marca do pipeline, não dado do documento:
+            # nem a resposta do modelo nem texto injetado no PDF podem ligá-la.
             header = OrderHeader(**{
                 k: v for k, v in data.get("header", {}).items()
-                if k in OrderHeader.model_fields
+                if k in OrderHeader.model_fields and k != "order_number_gerado"
             })
             items = [
                 OrderItem(**{k: v for k, v in item.items() if k in OrderItem.model_fields})

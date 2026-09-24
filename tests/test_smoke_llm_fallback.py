@@ -95,3 +95,20 @@ def test_model_env_override(monkeypatch) -> None:
     assert LLMFallbackParser().model == "anthropic/claude-haiku-3-5"
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
     assert LLMFallbackParser().model == "google/gemini-flash-1.5"
+
+
+def test_modelo_nao_liga_a_marca_de_numero_gerado() -> None:
+    """A marca é do pipeline. Resposta do modelo (ou texto injetado no PDF) não
+    pode fazer o preview dizer "Gerado pelo portal" sobre um número real."""
+    payload = {
+        "header": {"order_number": "PED-9", "order_number_gerado": True},
+        "items": [{"description": "I", "quantity": 1}],
+    }
+    parser = LLMFallbackParser()
+    parser._client = MagicMock()
+    parser._client.chat_completion.return_value = json.dumps(payload)
+
+    result = parser.parse({"text": "..."})
+
+    assert result.header.order_number == "PED-9"
+    assert result.header.order_number_gerado is False

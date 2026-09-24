@@ -17,6 +17,12 @@ _MILHAR_BR = re.compile(r"\d{1,3}(?:\.\d{3})+")
 # `M - 33-38`, `GG - 45-48`, `M/33-38`, `M 33-38`. O template do AF/MF/TS traz
 # só a numeração (`33 - 38`) e não casa; `P/M - 33-38` também não (letra ambígua).
 _LETRA_TAMANHO = re.compile(r"([A-Z]{1,3})\s*[-/]?\s*\d")
+# Código de loja da H2S4 no FANTASIA: é a convenção da MM no PEDIDO_CLIENTE do
+# Fire, e a reconciliação depende dela. Forma medida na Fire viva (21/09/2026):
+# 675 de 700 códigos são 2 letras + 2 a 4 dígitos (`AF198`, `AW064`, `MF048`,
+# `AF76`), às vezes com sufixo de loja (`AF090 - 3`). Nome de loja não casa, nem
+# com dígito: `NBA Store Mogi Shopping`, `LOJA 10`, `NBA 3`, `CD 1`.
+_CODIGO_DE_LOJA = re.compile(r"[A-Z]{2}\s*-?\s*\d{2,4}(\s*-\s*\d{1,4})?")
 
 # Quantas células vazias seguidas o `_next_raw` atravessa antes de desistir do
 # campo. Medido nos 4 samples do template: o valor nunca está a mais de 2 células
@@ -130,7 +136,16 @@ class NasmarTemplateParser(BaseParser):
         # livre e só serve de fallback porque o template antigo (AF/MF) não tem
         # campo de número: foi de lá que saiu o `AF76` vs `AF076` que ficou aberto
         # na reconciliação com o Fire. Onde os dois existirem, o campo próprio ganha.
-        order_number = ordem_compra or fantasia or issue_date
+        #
+        # Só vale o que tem forma de número. O FANTASIA da NBA é o nome da loja e
+        # entrou no Fire (e na nota) como `NBA STORE MOGI SHOPP` — pedido 4932,
+        # 21/09/2026. A DATA saiu da cadeia: dois pedidos no mesmo dia colidem.
+        # Sem número, devolve None e o pipeline gera um (`SN-<hash>`).
+        if ordem_compra and not any(c in "123456789" for c in ordem_compra):
+            ordem_compra = None
+        if fantasia and not _CODIGO_DE_LOJA.fullmatch(fantasia.upper()):
+            fantasia = None
+        order_number = ordem_compra or fantasia
 
         return OrderHeader(
             order_number=order_number,

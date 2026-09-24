@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/tokens.css?v=2">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=3">
   <link rel="stylesheet" href="/static/css/shell.css?v=3">
   <script src="/static/js/shell.js?v=3" defer></script>
   <style>
@@ -40,7 +40,7 @@
       text-transform: uppercase;
     }
     .badge-ok   { background: var(--success-bg); color: var(--success); }
-    .badge-warn { background: var(--warn-bg);    color: var(--warn);    }
+    .badge-warn { background: var(--warn-bg);    color: var(--warn-ink); }
 
     /* Firebird indicator */
     .fb-indicator {
@@ -849,6 +849,8 @@
         <div>
           <div class="preview-field-label">Pedido</div>
           <div class="preview-field-value" id="pvOrderNumber">—</div>
+          <span id="pvNumeroGerado" class="badge badge-warn hidden" style="display:inline-block;white-space:nowrap"
+                title="O documento não traz ordem de compra. O portal gerou este número a partir do arquivo; ele vai pro Fire e sai na nota fiscal do cliente. Se o documento tiver um número, avise antes de enviar.">Gerado pelo portal</span>
         </div>
         <div>
           <div class="preview-field-label">Data</div>
@@ -2288,6 +2290,9 @@ function renderPreview(data) {
 
   const h = data.header || {};
   document.getElementById('pvOrderNumber').textContent = h.order_number || '—';
+  // Documento sem ordem de compra: o número é do portal (`SN-<hash>`), não do
+  // cliente. Vai pro Fire e pra nota fiscal — a operadora precisa saber.
+  document.getElementById('pvNumeroGerado').classList.toggle('hidden', !h.order_number_gerado);
   document.getElementById('pvIssueDate').textContent = h.issue_date || '—';
   const name = h.customer_name || '—';
   const nameEl = document.getElementById('pvCustomerName');
