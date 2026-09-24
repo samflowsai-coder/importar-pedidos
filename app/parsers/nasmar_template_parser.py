@@ -24,6 +24,14 @@ _LETRA_TAMANHO = re.compile(r"([A-Z]{1,3})\s*[-/]?\s*\d")
 # com dígito: `NBA Store Mogi Shopping`, `LOJA 10`, `NBA 3`, `CD 1`.
 _CODIGO_DE_LOJA = re.compile(r"[A-Z]{2}\s*-?\s*\d{2,4}(\s*-\s*\d{1,4})?")
 
+# Modelo da linha Kings: `KG 07`, `KG07`. Exatamente 2 dígitos — é a forma de
+# todos os 28 kits KG no Fire da MM (`.7`, conferido em 24/09/2026).
+_MODELO_KINGS = re.compile(r"KG\s*(\d{2})")
+# Sufixo de cor do kit Kings no Fire (`KG07BR`), pelas duas fontes do template:
+# o número em REF COR e o nome em DESCRIÇÃO COR. Só as 3 cores que existem lá.
+_COR_KINGS_POR_NUMERO = {1: "BR", 2: "PR", 3: "ST"}
+_COR_KINGS_POR_NOME = {"BRANC": "BR", "PRET": "PR", "SORTID": "ST"}
+
 # Quantas células vazias seguidas o `_next_raw` atravessa antes de desistir do
 # campo. Medido nos 4 samples do template: o valor nunca está a mais de 2 células
 # do rótulo. As listas de validação dos dropdowns ficam a 19+ colunas.
@@ -267,9 +275,12 @@ class NasmarTemplateParser(BaseParser):
             description = " - ".join(p for p in (produto, cor, tamanhos) if p)
 
             ref_cor = self._cell(row, col_map.get("ref_cor"))
+            codigo = self._codigo_kings(ref, ref_cor, cor) or self._codigo_variante(
+                ref, ref_cor, tamanhos
+            )
 
             items.append(OrderItem(
-                product_code=self._codigo_variante(ref, ref_cor, tamanhos),
+                product_code=codigo,
                 description=description or None,
                 quantity=qty,
                 unit_price=self._to_number(self._raw(row, col_map.get("custo"))),
@@ -310,6 +321,41 @@ class NasmarTemplateParser(BaseParser):
             return cor + m.group(1)
         tam = _ESPACO.sub("", tam)
         return f"{cor} {tam}" if tam else cor
+
+    def _codigo_kings(self, ref: str, ref_cor: str, cor: str) -> str | None:
+        """Código do kit Kings no Fire, ou None se a linha não é da família KG.
+
+        A Kings recebe o template com `REF.` = modelo (`KG 07`), `REF COR` = número
+        da cor (`001`) e `DESCRIÇÃO COR` = nome (`Branco`). No Fire o kit é modelo
+        sem espaço + sufixo de cor: `KG07BR`, `KG07PR`, `KG10ST`. O tamanho já
+        está no modelo (`KG07` = 34-38, `KG08` = 39-44).
+
+        A cor sai do número E do nome. Se um só estiver legível, ele decide; se os
+        dois discordarem, nenhum decide. Sem cor confiável, devolve o modelo com a
+        cor como veio, separados por espaço (`KG 07 004`): o importador de Excel do
+        Fire casa por PREFIXO, e `KG07` sozinho entraria como `KG07BR` sem aviso.
+        Com o espaço, não é prefixo de nenhum KG e cai na vinculação manual.
+        """
+        m = _MODELO_KINGS.fullmatch(ref.strip().upper())
+        if not m:
+            return None
+        modelo = f"KG{m.group(1)}"
+
+        por_numero = None
+        if ref_cor.strip().isdigit():
+            por_numero = _COR_KINGS_POR_NUMERO.get(int(ref_cor.strip()))
+        nome = cor.strip().upper()
+        por_nome = next(
+            (suf for raiz, suf in _COR_KINGS_POR_NOME.items() if nome.startswith(raiz)), None
+        )
+
+        if por_numero and por_nome and por_numero != por_nome:
+            sufixo = None
+        else:
+            sufixo = por_numero or por_nome
+        if sufixo:
+            return modelo + sufixo
+        return f"{modelo} {ref_cor.strip() or cor.strip() or 'SEM COR'}"
 
     # ------------------------------------------------------------------
     # Helpers locais

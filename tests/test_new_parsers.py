@@ -1071,6 +1071,132 @@ def test_tamanhos_sem_letra_nunca_dividem_o_codigo():
     assert len(codigos) == 3
 
 
+# ── Kings: o template do fornecedor com código de modelo + número de cor ─────
+#
+# A rede Kings (~55 franquias, cada loja com CNPJ próprio, todas na MM `.7`)
+# recebeu o template de kits com `REF.` = modelo (`KG 07`) e `REF COR` = número
+# da cor (`001`). No Fire o kit é modelo sem espaço + sufixo de cor: `KG07BR`,
+# `KG07PR`, `KG10ST` (conferido na Fire viva em 24/09/2026, SEQ 2133–2150 e
+# 3945–3954; nenhum KG na Nasmar `.4`). Sem a regra, todas as cores do mesmo
+# modelo saíam com `KG 07` — o colapso do NBA 4932 de novo.
+#
+# O modelo vem em branco (quantidades zeradas); os testes preenchem a coluna
+# TOTAL Kits em memória sobre o layout real do arquivo.
+
+_KINGS = "Planilha modelo cliente Kings.xlsx"
+
+# CODPROD_ALTERN dos 28 kits Kings na MM (.7), na ordem das linhas da planilha.
+_KINGS_FIRE = [
+    "KG07BR",
+    "KG07PR",
+    "KG08BR",
+    "KG08PR",
+    *[
+        f"KG{m}{c}"
+        for m in ("10", "11", "01", "02", "03", "04", "05", "06")
+        for c in ("BR", "PR", "ST")
+    ],
+]
+
+
+def _kings_preenchido(qtd: int = 10):
+    """Linhas reais do modelo Kings com TOTAL Kits e TOTAL R$ preenchidos."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    extracted = _rows(_KINGS)
+    rows = extracted["rows"]
+    header_idx, col_map = NasmarTemplateParser()._find_header_row(rows)
+    for row in rows[header_idx + 1 :]:
+        if row[col_map["ref"]]:
+            row[col_map["total_kits"]] = qtd
+            row[col_map["total_rs"]] = round(qtd * row[col_map["custo"]], 2)
+    return extracted
+
+
+def test_kings_modelo_em_branco_casa_o_template():
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert NasmarTemplateParser().can_parse(_rows(_KINGS)) is True
+
+
+def test_kings_codigo_e_o_do_fire():
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    order = NasmarTemplateParser().parse(_kings_preenchido())
+    assert [i.product_code for i in order.items] == _KINGS_FIRE
+
+
+def test_kings_quantidade_e_custo_nunca_a_sugestao():
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    order = NasmarTemplateParser().parse(_kings_preenchido(qtd=7))
+    primeiro = order.items[0]
+    assert primeiro.quantity == 7
+    assert primeiro.unit_price == 16.66  # CUSTO, não 39.99 (SUGESTÃO)
+    assert primeiro.obs == "Produto sem toalha com silicone"
+    assert "Branco" in primeiro.description
+    for item in order.items:
+        assert item.quantity * item.unit_price == pytest.approx(item.total_price, abs=0.01)
+
+
+@pytest.mark.parametrize(
+    ("ref", "ref_cor", "cor", "esperado"),
+    [
+        ("KG 07", "001", "Branco", "KG07BR"),
+        ("KG 07", "002", "Preto", "KG07PR"),
+        ("KG 10", "003", "Sortido (Branco, Mescla, Preto)", "KG10ST"),
+        # Digitado sem espaço, em minúscula, cor no feminino ou plural.
+        ("KG07", "002", "preta", "KG07PR"),
+        ("kg 05", "003", "Sortidas", "KG05ST"),
+        # Número da cor digitado como número (o Excel tira os zeros).
+        ("KG 07", "1", "Branco", "KG07BR"),
+        # Só uma das duas fontes preenchida: ela decide.
+        ("KG 07", "", "Branco", "KG07BR"),
+        ("KG 07", "002", "", "KG07PR"),
+    ],
+)
+def test_kings_codigo_da_cor(ref, ref_cor, cor, esperado):
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert NasmarTemplateParser()._codigo_kings(ref, ref_cor, cor) == esperado
+
+
+@pytest.mark.parametrize(
+    ("ref", "ref_cor", "cor"),
+    [
+        ("KG 07", "001", "Preto"),  # número e nome discordam: não escolhe
+        ("KG 07", "004", "Azul"),  # cor que não existe no Fire
+        ("KG 07", "", ""),  # sem cor nenhuma
+        ("KG07", "", ""),
+    ],
+)
+def test_kings_sem_cor_certa_nunca_vira_prefixo_de_codigo_do_fire(ref, ref_cor, cor):
+    """O importador de Excel do Fire casa por PREFIXO (BACKLOG 2.15): `KG07`
+    entraria como `KG07BR` sem ninguém ver. Sem cor confiável, o código leva um
+    espaço — não é prefixo de nenhum KG do Fire e cai na vinculação manual."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    codigo = NasmarTemplateParser()._codigo_kings(ref, ref_cor, cor)
+    assert codigo is not None and " " in codigo
+    assert not any(fire.startswith(codigo) for fire in _KINGS_FIRE)
+
+
+@pytest.mark.parametrize(
+    ("ref", "ref_cor", "cor"),
+    [
+        ("NB01", "NB01 - 1", "Branca"),
+        ("K3ABCCIL1FTS", "001", "Branco"),
+        ("AFK3S-A-100-3338", "100", "Branco"),
+        ("KG1", "001", "Branco"),
+        ("KG 071", "001", "Branco"),
+    ],
+)
+def test_kings_regra_nao_toca_os_outros_clientes(ref, ref_cor, cor):
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert NasmarTemplateParser()._codigo_kings(ref, ref_cor, cor) is None
+
+
 # ── FIX: Riachuelo ME — page-footer URL not imported as item ─────────────────
 
 
