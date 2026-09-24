@@ -23,6 +23,12 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
+_(nada ainda)_
+
+---
+
+## 20260924-1149
+
 1) **Pedido da Kings no modelo de kits entra com o produto certo.** Cada linha vai pro Fire com o código da cor (`KG07BR`, `KG07PR`, `KG10ST`...). Se a cor da linha vier diferente de Branco, Preto ou Sortido, o item aparece na revisão como produto não encontrado, para vincular à mão, em vez de entrar com o produto errado.
 
 2) **Aviso de troca de produto pelo Fire.** O importador de Excel do Fire procura o código pelo começo, e às vezes grava outro produto (foi o que trocou `NB01-3G` por `NB01-3GG` no pedido 4939). Agora a tela de revisão avisa antes: o item aparece com **"⚠ vira NB01-3GG"** na coluna Fire. Item que o portal achou e o Fire vai trocar: importe normalmente e troque o produto no pedido do Fire depois. Item sem correspondência: confira se o produto escolhido pelo Fire é o certo, ou vincule antes de importar. O aviso não trava a geração da planilha.
