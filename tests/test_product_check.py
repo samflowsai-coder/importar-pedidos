@@ -375,3 +375,217 @@ def test_is_blocking_ignores_no_product_match():
 def test_is_blocking_returns_false_when_check_unavailable():
     blocked, _ = product_check.is_blocking({"available": False, "items": []})
     assert blocked is False  # check off → segue (best-effort)
+
+
+# ---------------------------------------------------------------------------
+# BACKLOG 2.15 — palpite do importador de Excel do Fire (casa por PREFIXO)
+# ---------------------------------------------------------------------------
+#
+# O importador do Fire (`MECANICO=99`) fica com o primeiro produto da ordem
+# física cujo CODPROD_ALTERN COMEÇA com o código da planilha. O fake abaixo
+# guarda o catálogo em ordem física e responde cada query como o Firebird.
+
+
+def _fire_fisico(produtos, *, client_row=(1, "ACME"), falha_previsao=False):
+    """produtos: [(seq, codprod_altern, descricao, preco)] NA ORDEM FÍSICA."""
+    cur = MagicMock()
+    estado = {"rows": [], "previsoes": []}
+    por_seq = sorted(produtos)
+
+    def execute(sql, params=()):
+        if "FROM CADASTRO" in sql:
+            estado["rows"] = []
+        elif "STARTING WITH" in sql:
+            if falha_previsao:
+                raise RuntimeError("conexão caiu")
+            assert all(len(p) <= 30 for p in params), "Firebird: string right truncation"
+            estado["previsoes"].append(list(params))
+            estado["rows"] = [
+                (cod, seq, desc)
+                for seq, cod, desc, _ in produtos
+                if any(cod.startswith(p) for p in params)
+            ]
+        elif "CODPROD_ALTERN" in sql and " IN " in sql:
+            estado["rows"] = [(c, s, d, p) for s, c, d, p in por_seq if c.strip() in params]
+        elif "SEQ IN" in sql:
+            estado["rows"] = [(s, d, p) for s, c, d, p in por_seq if s in params]
+        else:
+            estado["rows"] = []
+
+    cur.execute.side_effect = execute
+    cur.fetchone.side_effect = lambda: client_row
+    cur.fetchall.side_effect = lambda: estado["rows"]
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    ctx = MagicMock()
+    ctx.__enter__.return_value = conn
+    ctx.__exit__.return_value = False
+    return ctx, estado
+
+
+def _check_fisico(mock_fb, produtos, codigos, **kw):
+    mock_fb.return_value.is_configured.return_value = True
+    ctx, estado = _fire_fisico(produtos, **kw)
+    mock_fb.return_value.connect.return_value = ctx
+    order = _order([{"product_code": c, "unit_price": 1.0} for c in codigos])
+    return product_check.check_order(order), estado
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_troca_no_fire_quando_o_prefixo_vem_antes_na_ordem_fisica(mock_fb):
+    """Pedido 4939: `NB01-3G` entrou no Fire como `NB01-3GG` (SEQ 3103)."""
+    produtos = [(3103, "NB01-3GG", "KIT NB01 GG", 1.0), (3102, "NB01-3G", "KIT NB01 G", 1.0)]
+    report, _ = _check_fisico(mock_fb, produtos, ["NB01-3G"])
+    item = report["items"][0]
+    assert item["fire_product_id"] == 3102  # o portal casa o exato
+    assert item["troca_no_fire"] == {
+        "fire_product_id": 3103,
+        "codigo": "NB01-3GG",
+        "descricao": "KIT NB01 GG",
+        "conferido": True,
+    }
+    assert report["summary"]["items_troca_no_fire"] == 1
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_sem_troca_quando_o_exato_vem_primeiro(mock_fb):
+    produtos = [(3102, "NB01-3G", "KIT NB01 G", 1.0), (3103, "NB01-3GG", "KIT NB01 GG", 1.0)]
+    report, _ = _check_fisico(mock_fb, produtos, ["NB01-3G"])
+    assert report["items"][0]["troca_no_fire"] is None
+    assert report["summary"]["items_troca_no_fire"] == 0
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_item_sem_match_que_o_fire_importaria_calado_como_outro(mock_fb):
+    """Pedido 4932: `NB01` não existe, e o Fire importou como o 1º `NB01-*`."""
+    produtos = [(3095, "NB01-1M", "KIT NB01 1M", 1.0), (3096, "NB01-1G", "KIT NB01 1G", 1.0)]
+    report, _ = _check_fisico(mock_fb, produtos, ["NB01"])
+    item = report["items"][0]
+    assert item["match"] is False
+    assert item["troca_no_fire"]["codigo"] == "NB01-1M"
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_item_sem_match_e_sem_prefixo_nao_avisa(mock_fb):
+    report, _ = _check_fisico(mock_fb, [(1, "KG07BR", "KIT", 1.0)], ["KG07 004"])
+    assert report["items"][0]["troca_no_fire"] is None
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_codigo_duplicado_no_fire_tambem_troca(mock_fb):
+    """Medido na Fire viva: dois produtos `5041G`. O portal fica com o menor SEQ
+    (ORDER BY SEQ); o Fire, com o primeiro da ordem física."""
+    produtos = [(20, "5041G", "MEIA NOVA", 1.0), (10, "5041G", "MEIA ANTIGA", 1.0)]
+    report, _ = _check_fisico(mock_fb, produtos, ["5041G"])
+    item = report["items"][0]
+    assert item["fire_product_id"] == 10
+    assert item["troca_no_fire"]["fire_product_id"] == 20
+    assert item["troca_no_fire"]["codigo"] == "5041G"
+
+
+@patch("app.erp.product_check.produto_depara_repo")
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.db")
+def test_item_vinculado_consulta_o_codigo_que_vai_no_xlsx(mock_db, mock_fb, mock_depara):
+    """O `depara_apply` troca o código do cliente pelo `fire_codigo` no export.
+    É esse que o Fire lê, então é esse que a previsão consulta."""
+    mock_db.connect.return_value.__enter__.return_value = MagicMock()
+    mock_depara.lookup.return_value = {
+        ("codigo", "REF-X"): {"fire_produto_id": "77", "fire_codigo": "77"},
+    }
+    produtos = [(5, "77A", "OUTRO", 1.0), (77, "KIT77", "KIT CERTO", 1.0)]
+    report, estado = _check_fisico(mock_fb, produtos, ["REF-X"])
+    item = report["items"][0]
+    assert item["match_source"] == "depara"
+    assert estado["previsoes"] == [["77"]]
+    assert item["troca_no_fire"]["fire_product_id"] == 5
+    # Não se sabe se o Fire tenta o SEQ antes do prefixo: pede conferência.
+    assert item["troca_no_fire"]["conferido"] is False
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_previsao_em_lotes_de_150(mock_fb):
+    codigos = [f"C{i:03d}" for i in range(200)]
+    produtos = [(i, f"C{i:03d}X", f"P{i}", 1.0) for i in range(200)]
+    report, estado = _check_fisico(mock_fb, produtos, codigos)
+    assert [len(lote) for lote in estado["previsoes"]] == [150, 50]
+    assert report["summary"]["items_troca_no_fire"] == 200
+    assert report["items"][199]["troca_no_fire"]["codigo"] == "C199X"
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_codigo_maior_que_a_coluna_nao_vai_pra_previsao(mock_fb):
+    """CODPROD_ALTERN é VARCHAR(30): parâmetro maior estoura truncamento no
+    Firebird. Código assim não é prefixo de nada — fica fora da query."""
+    longo = "X" * 31
+    report, estado = _check_fisico(mock_fb, [(1, "NB01-3G", "KIT", 1.0)], [longo, "NB01"])
+    assert estado["previsoes"] == [["NB01"]]
+    assert report["summary"]["troca_no_fire_checked"] is True
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_falha_na_previsao_nao_derruba_o_check(mock_fb):
+    produtos = [(3102, "NB01-3G", "KIT NB01 G", 1.0)]
+    report, _ = _check_fisico(mock_fb, produtos, ["NB01-3G"], falha_previsao=True)
+    assert report["available"] is True
+    assert report["items"][0]["fire_product_id"] == 3102
+    assert report["items"][0]["troca_no_fire"] is None
+    assert report["summary"]["troca_no_fire_checked"] is False
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_codigos_que_sao_prefixo_um_do_outro_no_mesmo_lote(mock_fb):
+    produtos = [(3103, "NB01-3GG", "GG", 1.0), (3102, "NB01-3G", "G", 1.0)]
+    report, estado = _check_fisico(mock_fb, produtos, ["NB01", "NB01-3G", "NB01-3G"])
+    assert len(estado["previsoes"]) == 1
+    assert [i["troca_no_fire"]["fire_product_id"] for i in report["items"]] == [3103] * 3
+    assert report["summary"]["items_troca_no_fire"] == 3
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_item_casado_por_ean_nao_afirma_troca(mock_fb):
+    """O XLSX leva a coluna EAN; se o Fire usa o EAN antes, não há troca."""
+    mock_fb.return_value.is_configured.return_value = True
+    ctx, cur = _make_fb_ctx_batched(ean_rows=[("789", 100, "CERTO", 1.0)])
+    execute = cur.execute.side_effect
+    fetchall = cur.fetchall.side_effect
+    linhas = {}
+
+    def execute_com_previsao(sql, params=()):
+        linhas["previsao"] = "STARTING WITH" in sql
+        return execute(sql, params)
+
+    cur.execute.side_effect = execute_com_previsao
+    cur.fetchall.side_effect = lambda: (
+        [("C1-X", 200, "OUTRO")] if linhas.get("previsao") else fetchall()
+    )
+    mock_fb.return_value.connect.return_value = ctx
+    order = _order([{"ean": "789", "product_code": "C1", "unit_price": 1.0}])
+    item = product_check.check_order(order)["items"][0]
+    assert item["match_source"] == "ean"
+    assert item["troca_no_fire"]["fire_product_id"] == 200
+    assert item["troca_no_fire"]["conferido"] is False
+
+
+def test_check_indisponivel_traz_as_chaves_novas():
+    with patch("app.erp.product_check.FirebirdConnection") as mock_fb:
+        mock_fb.return_value.is_configured.return_value = False
+        report = product_check.check_order(_order([{"product_code": "X"}]))
+    assert report["items"][0]["troca_no_fire"] is None
+    assert report["summary"]["items_troca_no_fire"] == 0
+    assert report["summary"]["troca_no_fire_checked"] is False
+
+
+def test_troca_no_fire_nao_bloqueia_a_exportacao():
+    """O XLSX está certo; o erro acontece dentro do Fire. Avisa, não trava."""
+    check = _check_with(
+        [
+            {
+                "product_code": "NB01-3G",
+                "price_status": "match",
+                "troca_no_fire": {"fire_product_id": 3103, "codigo": "NB01-3GG", "descricao": "X"},
+            }
+        ]
+    )
+    blocked, _ = product_check.is_blocking(check)
+    assert blocked is False
