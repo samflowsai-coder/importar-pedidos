@@ -178,7 +178,9 @@ mais os códigos duplicados (`5041G` nas duas). Pontas abertas:
 - **De-para exporta SEQ como código.** `fire_codigo` = `str(SEQ)`. Não sei se o
   importador do Fire tenta SEQ exato antes do prefixo de `CODPROD_ALTERN`. Prova
   barata: importar no Fire uma planilha com 1 item vinculado e ver o produto
-  gravado. Até lá, o aviso consulta o SEQ em texto como o Fire leria.
+  gravado. Na mesma importação, 1 item com EAN certo e código que colide por
+  prefixo com outro produto responde se o Fire usa o EAN antes. Até lá, esses
+  dois casos saem do aviso como `conferido: false` ("confira"), nunca "troca certa".
 - **Código com mais de 30 caracteres derruba o check inteiro.** A query de match
   exato (`find_products_by_codes_sql`, `IN (...)`) estoura "string right
   truncation" (coluna `VARCHAR(30)`) e o preview mostra "check indisponível". Bug

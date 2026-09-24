@@ -360,7 +360,16 @@ def _marcar_trocas_no_fire(
         if palpite is None or palpite[0] == entry["fire_product_id"]:
             continue
         seq, codprod, desc = palpite
-        entry["troca_no_fire"] = {"fire_product_id": seq, "codigo": codprod, "descricao": desc}
+        entry["troca_no_fire"] = {
+            "fire_product_id": seq,
+            "codigo": codprod,
+            "descricao": desc,
+            # Medido na Fire viva só para item casado por CODPROD_ALTERN ou sem
+            # match. Casado por EAN (o XLSX leva a coluna EAN) ou por vínculo
+            # (código = SEQ em texto), não se sabe se o importador usa outra
+            # chave antes do prefixo — a UI pede conferência, não afirma troca.
+            "conferido": entry["match_source"] in (None, "codprod_altern"),
+        }
         trocas += 1
     return trocas, True
 

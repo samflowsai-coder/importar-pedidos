@@ -2420,15 +2420,20 @@ function renderPreview(data) {
     // Dois casos, dois conselhos: item que o portal casou e o Fire troca é
     // erro certo; item sem correspondência o Fire casa sozinho pelo começo do
     // código — às vezes acerta (Riachuelo `…001` → `…001_RIAC`), então é conferir.
+    // Item casado por EAN ou vínculo: o comportamento do Fire não foi medido
+    // (`conferido: false`), então entra no grupo de conferir, nunca no certo.
     const comTroca = check.available ? (check.items || []).filter(i => i.troca_no_fire) : [];
-    const trocasCertas = comTroca.filter(i => i.match).length;
+    const trocasCertas = comTroca.filter(i => i.match && i.troca_no_fire.conferido).length;
     const palpites = comTroca.length - trocasCertas;
     const trocaBit = [
       trocasCertas > 0
         ? `<span style="color:var(--warn-strong);font-weight:600">⚠ O Fire vai gravar outro produto em ${trocasCertas} item(ns) ao importar esta planilha (marcados com "vira" na coluna Fire). Depois de importar, troque o produto desses itens no pedido do Fire.</span>`
         : '',
       palpites > 0
-        ? `<span style="color:var(--warn-strong)">⚠ ${palpites} item(ns) sem correspondência vão entrar no Fire com o produto que ele escolher pelo começo do código (marcados com "vira"). Confira se é o produto certo, ou vincule antes de importar.</span>`
+        ? `<span style="color:var(--warn-strong)">⚠ ${palpites} item(ns) podem entrar no Fire com o produto que ele escolher pelo começo do código (marcados com "vira"). Confira no pedido do Fire depois de importar.</span>`
+        : '',
+      check.available && s.troca_no_fire_checked === false
+        ? `<span style="color:var(--text-muted)">Previsão de troca pelo Fire indisponível nesta revisão.</span>`
         : '',
     ].filter(Boolean).map(b => `<div>${b}</div>`).join('');
 
@@ -2529,9 +2534,11 @@ function renderPreview(data) {
           const t = m.troca_no_fire;
           // Código duplicado no Fire: mesmo texto, outro produto — mostra o SEQ.
           const alvo = t.codigo === it.product_code ? `#${t.fire_product_id}` : t.codigo;
-          const oQueFazer = m.match
-            ? `em vez de #${m.fire_product_id}. Depois de importar, troque o produto deste item no pedido do Fire.`
-            : 'porque o código não existe no Fire. Confira se é o produto certo, ou vincule antes de importar.';
+          const oQueFazer = !m.match
+            ? 'porque o código não existe no Fire. Confira se é o produto certo, ou vincule antes de importar.'
+            : t.conferido
+              ? `em vez de #${m.fire_product_id}. Depois de importar, troque o produto deste item no pedido do Fire.`
+              : `se não usar ${m.match_source === 'ean' ? 'o EAN' : 'o vínculo'} (#${m.fire_product_id}). Confira no pedido do Fire depois de importar.`;
           const trocaTitle = `O importador de Excel do Fire casa o código pelo começo e vai gravar #${t.fire_product_id} · ${t.codigo} · ${t.descricao || ''}, ${oQueFazer}`;
           cell += `<div style="color:var(--warn-strong);font-weight:600;font-size:11px;margin-top:2px;white-space:nowrap"
                         title="${esc(trocaTitle)}">⚠ vira ${esc(alvo)}</div>`;

@@ -152,6 +152,10 @@ dentro do Fire).
   None) e código duplicado no Fire (mesmo texto, outro SEQ). `summary` ganha
   `items_troca_no_fire` e `troca_no_fire_checked` (False se a previsão falhou —
   a falha nunca derruba o check).
+- `troca_no_fire.conferido` = o item casou por `CODPROD_ALTERN` ou não casou —
+  os únicos casos em que o comportamento do Fire foi medido. Casado por EAN (o
+  XLSX leva a coluna EAN) ou por vínculo: `conferido: false`, e a UI pede
+  conferência em vez de afirmar a troca.
 - Código com mais de 30 caracteres fica fora da query: `CODPROD_ALTERN` é
   `VARCHAR(30)` nas duas Fire, e parâmetro maior estoura truncamento.
 - Fora de `is_blocking`. UI: `⚠ vira <código>` na coluna Fire + banner com dois

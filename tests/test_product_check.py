@@ -442,6 +442,7 @@ def test_troca_no_fire_quando_o_prefixo_vem_antes_na_ordem_fisica(mock_fb):
         "fire_product_id": 3103,
         "codigo": "NB01-3GG",
         "descricao": "KIT NB01 GG",
+        "conferido": True,
     }
     assert report["summary"]["items_troca_no_fire"] == 1
 
@@ -498,6 +499,8 @@ def test_item_vinculado_consulta_o_codigo_que_vai_no_xlsx(mock_db, mock_fb, mock
     assert item["match_source"] == "depara"
     assert estado["previsoes"] == [["77"]]
     assert item["troca_no_fire"]["fire_product_id"] == 5
+    # Não se sabe se o Fire tenta o SEQ antes do prefixo: pede conferência.
+    assert item["troca_no_fire"]["conferido"] is False
 
 
 @patch("app.erp.product_check.FirebirdConnection")
@@ -527,6 +530,49 @@ def test_falha_na_previsao_nao_derruba_o_check(mock_fb):
     assert report["available"] is True
     assert report["items"][0]["fire_product_id"] == 3102
     assert report["items"][0]["troca_no_fire"] is None
+    assert report["summary"]["troca_no_fire_checked"] is False
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_codigos_que_sao_prefixo_um_do_outro_no_mesmo_lote(mock_fb):
+    produtos = [(3103, "NB01-3GG", "GG", 1.0), (3102, "NB01-3G", "G", 1.0)]
+    report, estado = _check_fisico(mock_fb, produtos, ["NB01", "NB01-3G", "NB01-3G"])
+    assert len(estado["previsoes"]) == 1
+    assert [i["troca_no_fire"]["fire_product_id"] for i in report["items"]] == [3103] * 3
+    assert report["summary"]["items_troca_no_fire"] == 3
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_item_casado_por_ean_nao_afirma_troca(mock_fb):
+    """O XLSX leva a coluna EAN; se o Fire usa o EAN antes, não há troca."""
+    mock_fb.return_value.is_configured.return_value = True
+    ctx, cur = _make_fb_ctx_batched(ean_rows=[("789", 100, "CERTO", 1.0)])
+    execute = cur.execute.side_effect
+    fetchall = cur.fetchall.side_effect
+    linhas = {}
+
+    def execute_com_previsao(sql, params=()):
+        linhas["previsao"] = "STARTING WITH" in sql
+        return execute(sql, params)
+
+    cur.execute.side_effect = execute_com_previsao
+    cur.fetchall.side_effect = lambda: (
+        [("C1-X", 200, "OUTRO")] if linhas.get("previsao") else fetchall()
+    )
+    mock_fb.return_value.connect.return_value = ctx
+    order = _order([{"ean": "789", "product_code": "C1", "unit_price": 1.0}])
+    item = product_check.check_order(order)["items"][0]
+    assert item["match_source"] == "ean"
+    assert item["troca_no_fire"]["fire_product_id"] == 200
+    assert item["troca_no_fire"]["conferido"] is False
+
+
+def test_check_indisponivel_traz_as_chaves_novas():
+    with patch("app.erp.product_check.FirebirdConnection") as mock_fb:
+        mock_fb.return_value.is_configured.return_value = False
+        report = product_check.check_order(_order([{"product_code": "X"}]))
+    assert report["items"][0]["troca_no_fire"] is None
+    assert report["summary"]["items_troca_no_fire"] == 0
     assert report["summary"]["troca_no_fire_checked"] is False
 
 
