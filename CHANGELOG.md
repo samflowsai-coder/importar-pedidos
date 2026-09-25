@@ -23,6 +23,12 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
+_(nada ainda)_
+
+---
+
+## 20260925-1405
+
 1) **Pedido da Kings não leva mais "Produto atoalhado" (nem "sem toalha com silicone") para a observação do pedido no Fire.** Esse texto vinha da planilha da Kings e o Fire colocava só um deles na observação, confundindo a separação quando o pedido mistura os dois tipos. Nos outros clientes a observação continua igual (o "KIT 3" da Authentic Feet e da Magic Feet segue indo).
 
 ---
