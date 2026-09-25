@@ -1133,8 +1133,32 @@ def test_kings_quantidade_e_custo_nunca_a_sugestao():
     primeiro = order.items[0]
     assert primeiro.quantity == 7
     assert primeiro.unit_price == 16.66  # CUSTO, não 39.99 (SUGESTÃO)
-    assert primeiro.obs == "Produto sem toalha com silicone"
     assert "Branco" in primeiro.description
+
+
+def test_kings_obs_de_produto_nao_vira_obs_do_pedido():
+    """A coluna OBS do modelo Kings é atributo do produto ("Produto atoalhado",
+    "Produto sem toalha com silicone"). O item do Fire não tem OBS: o importador
+    grava a de uma linha só no OBS do PEDIDO. No 1279 (Nasmar, 25/09/2026) saiu
+    "Produto atoalhado" num pedido com 4 kits de silicone, e a separação se
+    confunde. A MM pediu pra tirar só da Kings."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    order = NasmarTemplateParser().parse(_kings_preenchido())
+    assert [i.obs for i in order.items] == [None] * 28
+
+
+def test_obs_dos_outros_clientes_do_template_continua_indo():
+    """AF/MF: o "KIT 3" da coluna OBS continua no pedido — a supervisão da MM
+    pediu pra manter (25/09/2026)."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    rows = [
+        [None, "REF.", "REF COR", "DESCRIÇÃO PRODUTO", "OBS", "TOTAL Kits", "TOTAL R$"],
+        [None, "AFK3S-A-100-3338", "100", "KIT", "KIT 3", 10, 121.80],
+    ]
+    order = NasmarTemplateParser().parse({"rows": rows, "text": "", "tables": []})
+    assert order.items[0].obs == "KIT 3"
 
 
 @pytest.mark.parametrize(

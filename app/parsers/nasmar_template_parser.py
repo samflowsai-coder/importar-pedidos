@@ -286,9 +286,13 @@ class NasmarTemplateParser(BaseParser):
             description = " - ".join(p for p in (produto, cor, tamanhos) if p)
 
             ref_cor = self._cell(row, col_map.get("ref_cor"))
-            codigo = self._codigo_kings(ref, ref_cor, cor) or self._codigo_variante(
-                ref, ref_cor, tamanhos
-            )
+            codigo_kings = self._codigo_kings(ref, ref_cor, cor)
+            codigo = codigo_kings or self._codigo_variante(ref, ref_cor, tamanhos)
+            # Kings: a coluna OBS é atributo do produto ("Produto atoalhado"). O
+            # item do Fire não tem OBS, e o importador grava a de UMA linha no
+            # OBS do pedido — no 1279 saiu "atoalhado" com 4 kits de silicone.
+            # A MM pediu pra tirar só da Kings; o "KIT 3" da AF/MF fica.
+            obs = None if codigo_kings else self._cell(row, col_map.get("obs")) or None
 
             items.append(OrderItem(
                 product_code=codigo,
@@ -296,7 +300,7 @@ class NasmarTemplateParser(BaseParser):
                 quantity=qty,
                 unit_price=self._to_number(self._raw(row, col_map.get("custo"))),
                 total_price=self._to_number(self._raw(row, col_map.get("total_rs"))),
-                obs=self._cell(row, col_map.get("obs")) or None,
+                obs=obs,
             ))
 
         return items
