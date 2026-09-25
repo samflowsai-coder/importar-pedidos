@@ -211,6 +211,14 @@ branco: quantidades zeradas, os testes preenchem em memória).
   e `KG07` sozinho entraria como `KG07BR` em silêncio (BACKLOG 2.15). A rede tem ~55
   franquias no `CADASTRO` da `.7`, cada loja com CNPJ próprio: o cliente é o CNPJ do
   cabeçalho, como na Tennis Station.
+- **Kings não leva a coluna OBS** (`obs=None` nas linhas `KG NN`). É atributo do
+  produto (`Produto atoalhado`, `Produto sem toalha com silicone`), e o item do
+  Fire não tem OBS: o importador de Excel grava a OBS de UMA linha no OBS do
+  PEDIDO. No 1279 (Nasmar, 25/09/2026) saiu "Produto atoalhado" num pedido com 4
+  kits de silicone. A MM pediu pra tirar só da Kings: o `KIT 3`/`KIT 2` da AF/MF
+  continua indo (a supervisão usa). Levantamento na Fire viva, OBS original de
+  792 pedidos via Excel: `KIT 3/2` 236, etiquetas amarelas da Centauro 108,
+  `Produto atoalhado` 29, `COM CABIDE` 24, `ICMS Deson…` 18, `39/44` (Beira Rio) 1.
 - **O preço é `CUSTO`, nunca `SUGESTÃO`.** `SUGESTÃO` é preço de venda ao consumidor
   (29,99 contra 12,18 de custo); entrar no ERP como unitário infla o pedido ~2,5x e
   passa em qualquer validador. Coberto por teste.
