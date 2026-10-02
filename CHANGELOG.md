@@ -27,6 +27,14 @@ _(nada ainda)_
 
 ---
 
+## 20261002-1430
+
+1) **Pedido da Beira Rio com uma só faixa de tamanho volta a abrir na revisão.** O pedido 14330456 (meias infantil e bebê, tamanhos 23/27 e 28/33) aparecia como "Formato não reconhecido ou pedido sem itens" porque o portal só entendia o layout antigo, com duas faixas por cor (33/38 e 39/44). Agora ele lê a faixa que está impressa no pedido e continua aceitando o layout antigo. A observação de cada linha traz a faixa (ex.: `23/27`).
+
+2) **Item da Beira Rio em PAR não perde mais o preço.** O portal só lia o preço quando a unidade era KIT; item em PAR entraria no Fire sem preço. Agora lê o preço em qualquer unidade.
+
+---
+
 ## 20260925-1405
 
 1) **Pedido da Kings não leva mais "Produto atoalhado" (nem "sem toalha com silicone") para a observação do pedido no Fire.** Esse texto vinha da planilha da Kings e o Fire colocava só um deles na observação, confundindo a separação quando o pedido mistura os dois tipos. Nos outros clientes a observação continua igual (o "KIT 3" da Authentic Feet e da Magic Feet segue indo).

@@ -139,6 +139,68 @@ def test_beira_rio_multi_variant_item():
     assert [i.product_code for i in order.items].count("1000626856") == 4
 
 
+# Layout de 10/2026: UMA grade por cor (`23/27 Total`, linha de qtd com 2 números),
+# em vez das duas do layout antigo (`33/38 39/44 Total`, 3 números). O parser exigia
+# as duas e devolvia 0 itens → "Formato não reconhecido ou pedido sem itens".
+_BEIRA_UMA_GRADE = "PEDIDO BEIRA RIO 14330456.pdf"
+
+
+def test_beira_rio_grade_unica_gera_itens():
+    """8 itens × 2 cores, cada cor com UMA faixa de tamanho = 16 linhas."""
+    order = _process(_BEIRA_UMA_GRADE)
+    assert order is not None
+    assert len(order.items) == 16
+
+
+def test_beira_rio_grade_unica_header():
+    order = _process(_BEIRA_UMA_GRADE)
+    assert order.header.order_number == "14330456"
+    assert order.header.issue_date == "30/09/2026"
+    assert "88.379.771" in (order.header.customer_cnpj or "")
+
+
+def test_beira_rio_grade_unica_soma_bate_com_total_do_pdf():
+    """Oráculo: `Total: 445.050,00` impresso no rodapé. A quantidade é em KIT e o
+    preço é por KIT; qualquer multiplicador ou linha perdida quebra a soma."""
+    order = _process(_BEIRA_UMA_GRADE)
+    total = sum(i.quantity * i.unit_price for i in order.items)
+    assert round(total, 2) == 445050.00
+
+
+def test_beira_rio_grade_unica_tamanho_vem_da_linha_nao_fixo():
+    """O tamanho é o impresso na linha da cor (`23/27`), não o `33/38` do layout antigo."""
+    order = _process(_BEIRA_UMA_GRADE)
+    by_code = {}
+    for i in order.items:
+        by_code.setdefault(i.product_code, []).append(i)
+    assert {i.obs for i in by_code["1000660704"]} == {"23/27"}
+    assert {i.obs for i in by_code["1000660780"]} == {"28/33"}
+    assert all(i.description.endswith(i.obs) for i in order.items)
+
+
+def test_beira_rio_grade_unica_primeiro_item():
+    first = _process(_BEIRA_UMA_GRADE).items[0]
+    assert first.product_code == "1000660704"
+    assert first.quantity == 3300.0
+    assert first.unit_price == 8.59
+    assert first.delivery_date == "10/12/2026"
+    assert first.obs == "23/27"
+
+
+def test_beira_rio_grade_unica_descricao_que_quebra_linha():
+    """`...CANO` / `MEDIO LISA -` em duas linhas: a cauda entra na descrição."""
+    order = _process(_BEIRA_UMA_GRADE)
+    item = next(i for i in order.items if i.product_code == "1000660780")
+    assert "CANO MEDIO LISA" in item.description
+
+
+def test_beira_rio_grade_unica_cores_distintas_do_mesmo_item():
+    order = _process(_BEIRA_UMA_GRADE)
+    rows = [i for i in order.items if i.product_code == "1000660974"]
+    assert [(r.quantity, r.obs) for r in rows] == [(3300.0, "23/27"), (3000.0, "23/27")]
+    assert "PRETO/PRETO/BRANCO" in rows[1].description
+
+
 # ── KoloshParser ─────────────────────────────────────────────────────────────
 
 
