@@ -219,6 +219,20 @@ class ERPExporter:
         suffix_part = f"_{suffix}" if suffix else ""
         return f"{name_clean}{cnpj_part}_Pedido_{num}{suffix_part}.xlsx"
 
+    @staticmethod
+    def _valor_total(item: OrderItem) -> float | None:
+        """Total da linha. O do documento manda; sem ele, quantidade x preço.
+
+        O importador de Excel do Fire converte a coluna em número: célula vazia estoura
+        `'' is not a valid floating point value` e o pedido entra pela metade. Sem preço
+        não há o que calcular, e então segue vazio.
+        """
+        if item.total_price is not None:
+            return item.total_price
+        if item.unit_price is None or item.quantity is None:
+            return None
+        return round(item.quantity * item.unit_price, 2)
+
     def _to_erp_rows(self, order: Order, items: list[OrderItem]) -> list[ERPRow]:
         customer_cnpj_digits = re.sub(r"[^\d]", "", order.header.customer_cnpj or "")
         # When order has no header-level CNPJ (e.g. Riachuelo), use delivery CNPJ as customer
@@ -255,7 +269,7 @@ class ERPExporter:
                     descricao=item.description or "",
                     quantidade=item.quantity or 0.0,
                     preco_unitario=item.unit_price,
-                    valor_total=item.total_price,
+                    valor_total=self._valor_total(item),
                     obs=item.obs,
                     data_entrega=item.delivery_date,
                     cnpj_local_entrega=delivery_cnpj_col,

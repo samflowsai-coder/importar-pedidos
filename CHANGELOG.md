@@ -27,6 +27,12 @@ _(nada ainda)_
 
 ---
 
+## 20261005-0858
+
+1) **Planilha para o Fire sempre sai com o total de cada linha.** Quando o pedido do cliente não traz o valor por linha (caso da Beira Rio), o portal agora calcula quantidade × preço. Antes a coluna ia vazia e o importador do Fire podia parar com o aviso "is not a valid floating point value", deixando o pedido só com o primeiro item. Pedidos que já trazem o total continuam com o valor do documento.
+
+---
+
 ## 20261002-1430
 
 1) **Pedido da Beira Rio com uma só faixa de tamanho volta a abrir na revisão.** O pedido 14330456 (meias infantil e bebê, tamanhos 23/27 e 28/33) aparecia como "Formato não reconhecido ou pedido sem itens" porque o portal só entendia o layout antigo, com duas faixas por cor (33/38 e 39/44). Agora ele lê a faixa que está impressa no pedido e continua aceitando o layout antigo. A observação de cada linha traz a faixa (ex.: `23/27`).
