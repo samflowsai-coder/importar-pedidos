@@ -75,12 +75,12 @@ Uma linha, chaves sempre presentes (valor `null` quando não se aplica):
            "valor_total":2033.2,"itens_sem_preco":0,"itens_sem_codigo":0,
            "pedido_ja_importado":{"import_id":"…","sha256":"…","quando":"…"}},
  "validacao":{"ok":true,"avisos":[]},
- "suspeito":{"sinais":["parser_generico","sem_cnpj"]},
+ "suspeito":{"sinais":["parser_generico","sem_cnpj"],"forte":true},
  "fire_check":{"available":true,"reason":null,"cliente":{"match":true,"fire_id":123,"razao":"…"},
                "itens":{"total":4,"match":4,"missing":0},"nao_encontrados":["…"],
                "preco":{"match":4,"mismatch":0,"sem_preco_fire":0,"sem_preco_pedido":0},
                "troca_no_fire":0},
- "resultado":"preview|importado|skip_duplicate|422|400|404|413|500|erro",
+ "resultado":"preview|importado|retido|pendencia_throttle|skip_duplicate|422|400|404|413|erro",
  "excecao":{"tipo":"…","msg":"…","onde":"arquivo.py:linha"},
  "ms_total":187}
 ```
@@ -95,25 +95,35 @@ máximo 20 elementos; linha com no máximo 16 KB (se estourar, derruba `nao_enco
 
 - `Diagnostico` (dataclass): `extracao`, `parser_usado`, `parsers_pulados`, `llm`,
   `parser_ms`, `validacao_ok`, `avisos`, `fmt`.
-- `sinais_suspeitos(order, diag) -> list[str]` (pura). Sinais: `parser_generico`,
-  `llm_usado`, `sem_cnpj`, `sem_cliente`, `numero_gerado`, `numero_parece_rotulo`
+- `sinais_suspeitos(order, diag, cnpj_ambiente=None) -> list[str]` (pura). Sinais:
+  `parser_generico`, `llm_usado`, `sem_cnpj` (cabeçalho E todos os itens sem CNPJ de
+  entrega), `sem_cliente`, `numero_gerado`, `numero_parece_rotulo`
   (`^(OBSERVA|CNPJ|TOTAL|DATA)`, case-insensitive), `item_parece_rotulo` (descrição
-  termina em `:` ou tem menos de 4 caracteres), `qtd_fracionada`, `qtd_todas_iguais`
-  (≥3 itens), `qtd_max_alta` (>10000), `valor_total_zero_com_qtd`,
-  `preco_ausente_em_todos`, `codigos_repetidos`, `validacao_reprovada`,
-  `cliente_igual_ao_ambiente` (CNPJ do cliente == CNPJ de algum ambiente ativo).
+  termina em `:` ou tem menos de 4 caracteres), `qtd_fracionada`, `qtd_max_alta`
+  (>10000), `preco_ausente_em_todos`, `codigos_repetidos` (mesma tupla código +
+  descrição + loja de entrega + data; código sozinho repetido é normal com várias
+  lojas/datas), `validacao_reprovada`, `cliente_igual_ao_ambiente` (CNPJ do cliente ==
+  CNPJ do ambiente DA LINHA; sem ambiente, sem sinal). Removidos por falso positivo:
+  `qtd_todas_iguais` (kits legítimos) e `valor_total_zero_com_qtd` (redundante com
+  `preco_ausente_em_todos`).
+- `suspeito.forte` = `true` se algum de `parser_generico`, `llm_usado`,
+  `item_parece_rotulo`, `numero_parece_rotulo`, `validacao_reprovada`,
+  `cliente_igual_ao_ambiente` está nos sinais; os demais são informativos. A linha base
+  (`rejeitado`) leva `{"sinais":[],"forte":false}`.
 - `resumo_fire_check(check) -> dict` (pura): `available`, `reason`, cliente, contagens,
   `nao_encontrados` (≤20 códigos), `preco`, `troca_no_fire`. Nunca copia `env`.
-- `cabecalho_candidato(rows) -> dict|None` (pura): primeira linha em `rows[:30]` com ≥3
-  células de texto sem dígito. Só essa linha.
-- `versao_portal() -> dict`: lê `applied_update.json` uma vez (cache de módulo);
+- `cabecalho_candidato(rows) -> dict|None` (pura): a linha de `rows[:30]` com MAIS
+  rótulos de texto sem dígito nem `@`, de 3 a 40 caracteres (≥3 rótulos; empate: a primeira). A primeira
+  linha com texto é o bloco de cadastro, não o cabeçalho. Só essa linha.
+- `versao_portal() -> dict`: lê `applied_update.json` (cache de módulo invalidado pela mtime);
   falha → `{"versao":"desconhecida","git_commit":null}`.
 - `sha_ja_visto(sha)` / `pedido_ja_importado(numero, cnpj, sha)`: consultas ao `imports`
   do ambiente ativo; qualquer erro → `None`. `pedido_ja_importado` olha 90 dias e exige
   sha diferente.
 - `escrever(linha: dict) -> None`: nunca levanta.
 - `registrar(origem, nome, raw=None, usuario=None, ambiente=None, copia=None)` →
-  context manager com `.diag`, `.processar(loaded) -> Order|None`, `.check = …`,
+  context manager com `.diag`, `.processar(loaded) -> Order|None`, `.falha(exc)` (exceção
+  que o chamador engole), `.check = …`, o sha e o `sha_ja_visto` saem do `__enter__`,
   `.resultado = …`. No `__exit__`: monta e escreve a linha; mapeia exceção com
   `status_code` (HTTPException, por duck typing) para `resultado=str(status_code)` e as
   demais para `etapa="erro"` + `excecao`; re-levanta.
@@ -152,12 +162,14 @@ Sink `leituras` e exclusão do canal nos dois sinks existentes.
 - `scan_environments._process_file`: `registrar(origem="worker")`; os `return` de
   `skip_duplicate` e pendência viram linha de `rejeitado`/`resultado`
   (`skip_duplicate`, `pendencia_throttle`). Extensão ignorada no scan: 1 linha por
-  arquivo (cache em memória do nome, para não repetir a cada 30 s).
+  arquivo (cache em memória do nome); `pendencia_throttle`: 1 linha por sha (set de
+  módulo), para não repetir a cada 30 s. O worker marca `importado` DEPOIS do insert.
 - CLI (`main.py`) fica de fora.
 
 ## Erros e limites
 
-- `logs/` sem permissão de escrita → warning no `pipeline.log` e o resto funciona.
+- `logs/` sem permissão de escrita → `_configurar_sink_leituras` devolve None com warning
+  e o resto funciona (o import de `logger.py` não levanta).
 - `applied_update.json` ilegível → versão "desconhecida".
 - Banco do ambiente indisponível → `sha_ja_visto`/`pedido_ja_importado` = `null`.
 - Fire fora do ar: o `fire_check.available=false` com `reason` (`FB_DATABASE_NOT_SET`,
@@ -166,7 +178,8 @@ Sink `leituras` e exclusão do canal nos dois sinks existentes.
 ## Testes
 
 - `tests/test_leituras_sinais.py`: um caso por sinal; a planilha `QUAN.` lida pelo
-  `GenericParser` dispara ≥5 sinais; AF093 (modelo antigo) dispara nenhum.
+  `GenericParser` dispara ≥5 sinais; AF093 (modelo antigo) dispara nenhum; todos os
+  arquivos de `samples/` têm `forte=false`, exceto o modelo em branco do Kings.
 - `tests/test_leituras_registrar.py`: linha em sucesso, em `HTTPException`, em exceção
   genérica (re-levanta, linha gravada com `excecao`), em rejeição; falha de escrita não
   quebra; serialização de `datetime`/`float`; truncamento de 16 KB; sem `env` na linha.

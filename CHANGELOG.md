@@ -23,7 +23,7 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
-_(nada ainda)_
+1) **O portal passa a registrar cada arquivo que lê, num arquivo de log para o suporte.** Nada muda na tela: o arquivo `logs\leituras.jsonl` (na pasta do portal) guarda, para cada planilha ou PDF recebido, qual leitor o interpretou, o que ele extraiu, se o cliente e os produtos foram achados no Fire, e se o arquivo parece ter sido lido errado ou já tinha sido importado. Quando uma operadora reclamar de um arquivo, o Samuel baixa esse arquivo pela VPN e descobre o motivo sem precisar pedir a planilha de novo.
 
 ---
 

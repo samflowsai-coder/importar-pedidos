@@ -2455,7 +2455,7 @@ def test_preview_da_pasta_guarda_copia_e_o_move_para_importados_continua(tmp_pat
 def test_arquivo_que_o_parser_nao_reconhece_ainda_e_guardado(monkeypatch):
     import app.pipeline
 
-    monkeypatch.setattr(app.pipeline, "process", lambda _loaded: None)
+    monkeypatch.setattr(app.pipeline, "process_detailed", lambda _loaded, diag=None: None)
 
     r = client.post(
         "/api/preview", files=[("file", ("misterio.pdf", b"%PDF-1.4 lixo", "application/pdf"))]

@@ -182,6 +182,27 @@ def _no_real_firebird(request):
         FirebirdConnection._connect_with = original
 
 
+@pytest.fixture(autouse=True)
+def _sem_sink_real_de_leituras():
+    """A suite nao grava no `logs/leituras.jsonl` real do repo.
+
+    O sink do canal `leituras` nasce no import de `app.utils.logger` apontando para
+    `<raiz>/logs`. Sem remove-lo, todo teste que passa por `registrar`/`escrever` sem
+    mock polui o arquivo de diagnostico com caminhos de tmp do pytest. Testes que
+    exercitam o sink fazem o proprio `logger.add`/`_configurar_sink_leituras(tmp)`.
+    """
+    from app.utils import logger as lg
+
+    id_ = getattr(lg, "_ID_SINK_LEITURAS", None)
+    if id_ is not None:
+        try:
+            lg.logger.remove(id_)
+        except ValueError:
+            pass  # ja removido por teste anterior
+        lg._ID_SINK_LEITURAS = None
+    yield
+
+
 @pytest.fixture
 def real_auth(monkeypatch):
     """Disable auth bypass — caller will exercise the real login flow."""

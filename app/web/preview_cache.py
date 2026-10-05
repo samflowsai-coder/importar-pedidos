@@ -22,6 +22,7 @@ class PreviewEntry:
     file_sha256: str | None = None
     check: dict | None = None       # product-match report against Fire
     consumed: bool = False
+    trace_id: str | None = None     # minted antes do parse; segue até o commit
 
 
 class PreviewConsumedError(Exception):
@@ -57,6 +58,7 @@ class PreviewCache:
         check: dict | None = None,
         original_path: str | None = None,
         file_sha256: str | None = None,
+        trace_id: str | None = None,
     ) -> PreviewEntry:
         preview_id = str(uuid.uuid4())
         entry = PreviewEntry(
@@ -70,6 +72,7 @@ class PreviewCache:
             check=check,
             original_path=original_path,
             file_sha256=file_sha256,
+            trace_id=trace_id,
         )
         with self._lock:
             self._evict_expired_locked()

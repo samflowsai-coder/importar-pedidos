@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 
+from app.observability import leituras
 from app.observability.trace import current_trace_id, new_trace_id, with_trace_id
 from app.persistence import context as env_context
 from app.persistence import invites_repo, sessions_repo, users_repo
@@ -491,18 +492,33 @@ def _arquivo_original_info(entry: dict) -> dict:
     return {"disponivel": disponivel, "nome": entry.get("source_filename") if disponivel else None}
 
 
-def _process_file(file_path: Path, output_path: Path, *, env: dict | None = None) -> dict:
+def _process_file(
+    file_path: Path,
+    output_path: Path,
+    *,
+    env: dict | None = None,
+    origem: str = "lote",
+    usuario: str | None = None,
+    copia=None,
+) -> dict:
     from app.ingestion.file_loader import LoadedFile
-    from app.pipeline import process
 
     ext = file_path.suffix.lower()
     raw = file_path.read_bytes()
     loaded = LoadedFile(path=file_path, extension=ext, raw=raw)
-    order = process(loaded)
-    if not order:
-        raise ValueError("Formato não reconhecido ou pedido sem itens")
-
-    exported = _run_exporters(order, output_path, env=env)
+    with leituras.registrar(
+        origem=origem,
+        nome=file_path.name,
+        raw=raw,
+        usuario=usuario,
+        ambiente=env.get("slug") if env else None,
+        copia=copia,
+    ) as L:
+        order = L.processar(loaded)
+        if not order:
+            raise ValueError("Formato não reconhecido ou pedido sem itens")
+        exported = _run_exporters(order, output_path, env=env)
+        L.resultado = "importado"
 
     return {
         "order_number": order.header.order_number,
@@ -1376,64 +1392,96 @@ def import_files(
     # `nullcontext()` e não muda nada.
     with _persist_ctx(env):
         for filename in body.files:
-            name = Path(filename).name  # strip any path component — security
-            src = watch / name
+            with with_trace_id():
+                name = Path(filename).name  # strip any path component — security
+                src = watch / name
 
-            if not src.exists() or not src.is_file():
-                errors.append(
-                    {"source": name, "error": "Arquivo não encontrado na pasta de entrada"}
-                )
-                continue
-            if src.suffix.lower() not in ALLOWED_EXTENSIONS:
-                errors.append({"source": name, "error": "Extensão não permitida"})
-                continue
+                slug = request_env.get("slug") if request_env else None
+                if not src.exists() or not src.is_file():
+                    leituras.rejeitado(
+                        "lote", name, "nao_encontrado", usuario=_user.email, ambiente=slug
+                    )
+                    errors.append(
+                        {"source": name, "error": "Arquivo não encontrado na pasta de entrada"}
+                    )
+                    continue
+                if src.suffix.lower() not in ALLOWED_EXTENSIONS:
+                    leituras.rejeitado(
+                        "lote",
+                        name,
+                        "extensao",
+                        src.suffix.lower(),
+                        usuario=_user.email,
+                        ambiente=slug,
+                    )
+                    errors.append({"source": name, "error": "Extensão não permitida"})
+                    continue
 
-            try:
-                recebido = _guardar_original(src.read_bytes(), name)
-                result = _process_file(src, output_path, env=request_env)
+                try:
+                    raw_guarda = src.read_bytes()
+                    try:
+                        recebido = _guardar_original(raw_guarda, name)
+                    except HTTPException as exc_guarda:
+                        leituras.rejeitado(
+                            "lote",
+                            name,
+                            "guarda_falhou",
+                            str(exc_guarda.detail),
+                            tamanho=len(raw_guarda),
+                            usuario=_user.email,
+                            ambiente=slug,
+                        )
+                        raise
+                    result = _process_file(
+                        src,
+                        output_path,
+                        env=request_env,
+                        usuario=_user.email,
+                        copia=recebido.path,
+                    )
 
-                dest = imp / name
-                if dest.exists():
-                    stem, suffix = src.stem, src.suffix
-                    dest = imp / f"{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}"
-                shutil.move(str(src), str(dest))
+                    dest = imp / name
+                    if dest.exists():
+                        stem, suffix = src.stem, src.suffix
+                        dest = imp / f"{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}"
+                    shutil.move(str(src), str(dest))
 
-                entry = _make_log_entry(
-                    source_filename=name,
-                    order_number=result["order_number"],
-                    customer=result["customer"],
-                    output_files=result["output_files"],
-                    status="success",
-                    snapshot=result.get("snapshot"),
-                    fire_codigo=result.get("fire_codigo"),
-                    db_result=result.get("db_result"),
-                    file_sha256=recebido.sha256,
-                    original_path=str(recebido.path),
-                )
-                _append_log(cfg, entry)
+                    entry = _make_log_entry(
+                        source_filename=name,
+                        order_number=result["order_number"],
+                        customer=result["customer"],
+                        output_files=result["output_files"],
+                        status="success",
+                        snapshot=result.get("snapshot"),
+                        fire_codigo=result.get("fire_codigo"),
+                        db_result=result.get("db_result"),
+                        file_sha256=recebido.sha256,
+                        original_path=str(recebido.path),
+                    )
+                    _append_log(cfg, entry)
 
-                results.append(
-                    {
-                        "source": name,
-                        "order": result["order_number"] or "—",
-                        "customer": result["customer"] or "—",
-                        "files": result["output_files"],
-                        "fire_codigo": result.get("fire_codigo"),
-                        "entry_id": entry["id"],
-                    }
-                )
+                    results.append(
+                        {
+                            "source": name,
+                            "order": result["order_number"] or "—",
+                            "customer": result["customer"] or "—",
+                            "files": result["output_files"],
+                            "fire_codigo": result.get("fire_codigo"),
+                            "entry_id": entry["id"],
+                        }
+                    )
 
-            except Exception as exc:
-                entry = _make_log_entry(
-                    source_filename=name,
-                    order_number=None,
-                    customer=None,
-                    output_files=[],
-                    status="error",
-                    error=str(exc),
-                )
-                _append_log(cfg, entry)
-                errors.append({"source": name, "error": str(exc)})
+                except Exception as exc:
+                    entry = _make_log_entry(
+                        source_filename=name,
+                        order_number=None,
+                        customer=None,
+                        output_files=[],
+                        status="error",
+                        error=str(exc),
+                    )
+                    _append_log(cfg, entry)
+                    errors.append({"source": name, "error": str(exc)})
 
     return JSONResponse({"results": results, "errors": errors})
 
@@ -1615,11 +1663,16 @@ def reimport_file(
     name = Path(body.filename).name
     src = imp / name
 
+    slug = request_env.get("slug") if request_env else None
     if not src.exists() or not src.is_file():
+        leituras.rejeitado("reimport", name, "nao_encontrado", usuario=_user.email, ambiente=slug)
         raise HTTPException(
             status_code=404, detail="Arquivo não encontrado em 'Pedidos importados'"
         )
     if src.suffix.lower() not in ALLOWED_EXTENSIONS:
+        leituras.rejeitado(
+            "reimport", name, "extensao", src.suffix.lower(), usuario=_user.email, ambiente=slug
+        )
         raise HTTPException(status_code=400, detail="Extensão não permitida")
 
     output_path = (
@@ -1633,42 +1686,45 @@ def reimport_file(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Erro ao criar diretório de saída: {exc}")
 
-    try:
-        with _persist_ctx(env):
-            result = _process_file(src, output_path, env=request_env)
-            entry = _make_log_entry(
-                source_filename=name,
-                order_number=result["order_number"],
-                customer=result["customer"],
-                output_files=result["output_files"],
-                status="success",
-                snapshot=result.get("snapshot"),
-                fire_codigo=result.get("fire_codigo"),
-                db_result=result.get("db_result"),
-            )
-            _append_log(cfg, entry)
-            return JSONResponse(
-                {
-                    "source": name,
-                    "order": result["order_number"] or "—",
-                    "customer": result["customer"] or "—",
-                    "files": result["output_files"],
-                    "fire_codigo": result.get("fire_codigo"),
-                    "entry_id": entry["id"],
-                }
-            )
-    except Exception as exc:
-        with _persist_ctx(env):
-            entry = _make_log_entry(
-                source_filename=name,
-                order_number=None,
-                customer=None,
-                output_files=[],
-                status="error",
-                error=str(exc),
-            )
-            _append_log(cfg, entry)
-        raise HTTPException(status_code=500, detail=str(exc))
+    with with_trace_id():
+        try:
+            with _persist_ctx(env):
+                result = _process_file(
+                    src, output_path, env=request_env, origem="reimport", usuario=_user.email
+                )
+                entry = _make_log_entry(
+                    source_filename=name,
+                    order_number=result["order_number"],
+                    customer=result["customer"],
+                    output_files=result["output_files"],
+                    status="success",
+                    snapshot=result.get("snapshot"),
+                    fire_codigo=result.get("fire_codigo"),
+                    db_result=result.get("db_result"),
+                )
+                _append_log(cfg, entry)
+                return JSONResponse(
+                    {
+                        "source": name,
+                        "order": result["order_number"] or "—",
+                        "customer": result["customer"] or "—",
+                        "files": result["output_files"],
+                        "fire_codigo": result.get("fire_codigo"),
+                        "entry_id": entry["id"],
+                    }
+                )
+        except Exception as exc:
+            with _persist_ctx(env):
+                entry = _make_log_entry(
+                    source_filename=name,
+                    order_number=None,
+                    customer=None,
+                    output_files=[],
+                    status="error",
+                    error=str(exc),
+                )
+                _append_log(cfg, entry)
+            raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/download")
@@ -1768,53 +1824,88 @@ async def preview_file(
     _user: User = Depends(require_user),
 ) -> JSONResponse:
     from app.ingestion.file_loader import LoadedFile
-    from app.pipeline import process
 
     filename = file.filename or "arquivo"
     ext = Path(filename).suffix.lower()
+    request_env = _request_environment(request)
+    slug = request_env.get("slug") if request_env else None
 
     if ext not in ALLOWED_EXTENSIONS:
+        leituras.rejeitado(
+            "upload", filename, "extensao", ext, usuario=_user.email, ambiente=slug
+        )
         raise HTTPException(status_code=400, detail=f"Tipo de arquivo não suportado: {ext}")
 
     raw = await file.read()
     if len(raw) > MAX_UPLOAD_BYTES:
+        leituras.rejeitado(
+            "upload", filename, "tamanho", tamanho=len(raw), usuario=_user.email, ambiente=slug
+        )
         raise HTTPException(
             status_code=413,
             detail=f"Arquivo excede o limite de {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
         )
 
-    recebido = _guardar_original(raw, filename)
-
-    tmp_path: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-            tmp.write(raw)
-            tmp_path = Path(tmp.name)
-
-        loaded = LoadedFile(path=tmp_path, extension=ext, raw=raw)
-        order = process(loaded)
-    finally:
-        if tmp_path and tmp_path.exists():
-            tmp_path.unlink()
-
-    if not order:
-        raise HTTPException(
-            status_code=422,
-            detail="Formato não reconhecido ou pedido sem itens",
+        recebido = _guardar_original(raw, filename)
+    except HTTPException as exc:
+        leituras.rejeitado(
+            "upload",
+            filename,
+            "guarda_falhou",
+            str(exc.detail),
+            tamanho=len(raw),
+            usuario=_user.email,
+            ambiente=slug,
         )
+        raise
 
-    from app.erp.product_check import check_order
+    # Trace mintado ANTES do parse: a linha de leitura e o `imports` do commit
+    # compartilham o mesmo trace_id.
+    with (
+        with_trace_id() as trace_id,
+        leituras.registrar(
+            origem="upload",
+            nome=filename,
+            raw=raw,
+            usuario=_user.email,
+            ambiente=slug,
+            copia=recebido.path,
+        ) as L,
+    ):
+        tmp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                tmp.write(raw)
+                tmp_path = Path(tmp.name)
 
-    check = check_order(order, env=_request_environment(request))
-    entry = get_cache().put(
-        order=order,
-        source_filename=filename,
-        source_bytes=raw,
-        source_ext=ext,
-        check=check,
-        original_path=str(recebido.path),
-        file_sha256=recebido.sha256,
-    )
+            loaded = LoadedFile(path=tmp_path, extension=ext, raw=raw)
+            order = L.processar(loaded)
+        finally:
+            if tmp_path and tmp_path.exists():
+                tmp_path.unlink()
+
+        if not order:
+            raise HTTPException(
+                status_code=422,
+                detail="Formato não reconhecido ou pedido sem itens",
+            )
+
+        from app.erp.product_check import check_order
+
+        check = check_order(order, env=request_env)
+        L.check = check
+        L.resultado = "preview"
+        entry = get_cache().put(
+            order=order,
+            source_filename=filename,
+            source_bytes=raw,
+            source_ext=ext,
+            check=check,
+            original_path=str(recebido.path),
+            file_sha256=recebido.sha256,
+            trace_id=trace_id,
+        )
     payload = _build_preview_payload(entry.preview_id, filename, order, check)
     # Bloco `roteamento`: só nos dois montadores de preview FRESCO (aqui e em
     # `preview_pending`) — não em `_build_preview_payload`, que também
@@ -1838,47 +1929,88 @@ def preview_pending(
 ) -> JSONResponse:
     """Preview a file already in the watch folder (no upload)."""
     from app.ingestion.file_loader import LoadedFile
-    from app.pipeline import process
 
     env = _env_da_pasta(request, body.env_slug)
     cfg = _cfg_para_env(env) if env is not None else _get_cfg_for_request(request)
     request_env = env if env is not None else _request_environment(request)
+    slug = request_env.get("slug") if request_env else None
     watch = Path(cfg["watch_dir"])
 
     name = Path(body.filename).name  # strip path components
     src = watch / name
     if not src.exists() or not src.is_file():
+        leituras.rejeitado(
+            "preview-pending", name, "nao_encontrado", usuario=_user.email, ambiente=slug
+        )
         raise HTTPException(status_code=404, detail="Arquivo não encontrado na pasta de entrada")
     ext = src.suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
+        leituras.rejeitado(
+            "preview-pending", name, "extensao", ext, usuario=_user.email, ambiente=slug
+        )
         raise HTTPException(status_code=400, detail=f"Tipo de arquivo não suportado: {ext}")
     if src.stat().st_size > MAX_UPLOAD_BYTES:
+        leituras.rejeitado(
+            "preview-pending",
+            name,
+            "tamanho",
+            tamanho=src.stat().st_size,
+            usuario=_user.email,
+            ambiente=slug,
+        )
         raise HTTPException(status_code=413, detail="Arquivo excede o limite")
 
     with _persist_ctx(env):
         raw = src.read_bytes()
-        recebido = _guardar_original(raw, name)
-        loaded = LoadedFile(path=src, extension=ext, raw=raw)
-        order = process(loaded)
-
-        if not order:
-            raise HTTPException(
-                status_code=422, detail="Formato não reconhecido ou pedido sem itens"
+        try:
+            recebido = _guardar_original(raw, name)
+        except HTTPException as exc:
+            leituras.rejeitado(
+                "preview-pending",
+                name,
+                "guarda_falhou",
+                str(exc.detail),
+                tamanho=len(raw),
+                usuario=_user.email,
+                ambiente=slug,
             )
+            raise
+        loaded = LoadedFile(path=src, extension=ext, raw=raw)
 
-        from app.erp.product_check import check_order
+        with (
+            with_trace_id() as trace_id,
+            leituras.registrar(
+                origem="preview-pending",
+                nome=name,
+                raw=raw,
+                usuario=_user.email,
+                ambiente=slug,
+                copia=recebido.path,
+            ) as L,
+        ):
+            order = L.processar(loaded)
 
-        check = check_order(order, env=request_env)
-        entry = get_cache().put(
-            order=order,
-            source_filename=name,
-            source_bytes=raw,
-            source_ext=ext,
-            source_path=str(src),
-            check=check,
-            original_path=str(recebido.path),
-            file_sha256=recebido.sha256,
-        )
+            if not order:
+                raise HTTPException(
+                    status_code=422, detail="Formato não reconhecido ou pedido sem itens"
+                )
+
+            from app.erp.product_check import check_order
+
+            check = check_order(order, env=request_env)
+            L.check = check
+            L.resultado = "preview"
+            entry = get_cache().put(
+                order=order,
+                source_filename=name,
+                source_bytes=raw,
+                source_ext=ext,
+                source_path=str(src),
+                check=check,
+                original_path=str(recebido.path),
+                file_sha256=recebido.sha256,
+                trace_id=trace_id,
+            )
         payload = _build_preview_payload(entry.preview_id, name, order, check)
         # Ver comentário equivalente em `preview_upload` (Achado 4, fix round 1).
         payload["roteamento"] = _roteamento_para_preview(order)
@@ -2021,8 +2153,9 @@ def commit_preview(
         raise HTTPException(status_code=409, detail="Preview já foi importado")
 
     with persist_ctx:
-        # Trace_id is minted at this boundary and travels with the pedido for life.
-        with with_trace_id() as trace_id:
+        # O trace_id nasce no preview (que abre a linha de leitura) e viaja com o
+        # pedido para sempre; o commit só o reaproveita.
+        with with_trace_id(entry.trace_id) as trace_id:
             log_entry = _make_log_entry(
                 source_filename=entry.source_filename,
                 order_number=order.header.order_number,
@@ -3450,7 +3583,6 @@ async def process_files(
 ) -> JSONResponse:
     from app.exporters.erp_exporter import ERPExporter
     from app.ingestion.file_loader import LoadedFile
-    from app.pipeline import process
 
     output_path = Path(output_dir).expanduser().resolve()
     try:
@@ -3472,12 +3604,16 @@ async def process_files(
         ext = Path(filename).suffix.lower()
 
         if ext not in ALLOWED_EXTENSIONS:
+            leituras.rejeitado("process-legado", filename, "extensao", ext, usuario=_user.email)
             errors.append({"source": filename, "error": f"Tipo de arquivo não suportado: {ext}"})
             continue
 
         raw = await upload.read()
 
         if len(raw) > MAX_UPLOAD_BYTES:
+            leituras.rejeitado(
+                "process-legado", filename, "tamanho", tamanho=len(raw), usuario=_user.email
+            )
             errors.append(
                 {
                     "source": filename,
@@ -3489,6 +3625,14 @@ async def process_files(
         try:
             _guardar_original(raw, filename)
         except HTTPException as exc:
+            leituras.rejeitado(
+                "process-legado",
+                filename,
+                "guarda_falhou",
+                str(exc.detail),
+                tamanho=len(raw),
+                usuario=_user.email,
+            )
             errors.append({"source": filename, "error": exc.detail})
             continue
         tmp_path: Path | None = None
@@ -3498,10 +3642,19 @@ async def process_files(
                 tmp_path = Path(tmp.name)
 
             loaded = LoadedFile(path=tmp_path, extension=ext, raw=raw)
-            order = process(loaded)
+            paths = None
+            with (
+                with_trace_id(),
+                leituras.registrar(
+                    origem="process-legado", nome=filename, raw=raw, usuario=_user.email
+                ) as L,
+            ):
+                order = L.processar(loaded)
+                if order:
+                    paths = exporter.export(order, str(output_path))
+                L.resultado = "importado" if order else "erro"
 
             if order:
-                paths = exporter.export(order, str(output_path))
                 results.append(
                     {
                         "source": filename,

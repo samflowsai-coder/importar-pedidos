@@ -46,10 +46,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.ingestion.file_loader import LoadedFile
+from app.observability import leituras
 from app.observability.trace import new_trace_id, with_trace_id
 from app.persistence import context as env_context
 from app.persistence import environments_repo, repo, roteamento_repo, router
-from app.pipeline import process as pipeline_process
 from app.utils.logger import logger
 
 VALID_EXTS = (".pdf", ".xls", ".xlsx")
@@ -105,13 +105,30 @@ def _already_imported(env_slug: str, sha: str, modo_atual: str) -> bool:
     return False
 
 
-def _candidate_files(watch_dir: Path) -> list[Path]:
+# Nomes de arquivo de extensão não suportada já registrados no log de leituras:
+# o scan roda a cada 30s e o arquivo continua na pasta — uma linha por nome.
+_EXTENSOES_REGISTRADAS: set[str] = set()
+# Idem para arquivo retido (pendência): uma linha por sha, não uma a cada scan.
+_PENDENCIAS_REGISTRADAS: set[str] = set()
+
+
+def _candidate_files(watch_dir: Path, ambiente: str | None = None) -> list[Path]:
     if not watch_dir.is_dir():
         return []
-    return [
-        p for p in sorted(watch_dir.iterdir())
-        if p.is_file() and p.suffix.lower() in VALID_EXTS
-    ]
+    candidatos = []
+    for p in sorted(watch_dir.iterdir()):
+        if not p.is_file():
+            continue
+        if p.suffix.lower() in VALID_EXTS:
+            candidatos.append(p)
+        elif p.name not in _EXTENSOES_REGISTRADAS:
+            _EXTENSOES_REGISTRADAS.add(p.name)
+            leituras.rejeitado(
+                origem="worker", nome=p.name, motivo="extensao",
+                detalhe=f"extensão {p.suffix.lower() or '(nenhuma)'} ignorada no scan",
+                ambiente=ambiente,
+            )
+    return candidatos
 
 
 def _move_to_imported(p: Path, watch_dir: Path, *, errored: bool = False) -> Path:
@@ -161,6 +178,11 @@ def _process_file(env: dict, p: Path) -> None:
             "scan.skip_duplicate sha={} env={} file={}",
             sha[:12], env["slug"], p.name,
         )
+        leituras.rejeitado(
+            origem="worker", nome=p.name, motivo="skip_duplicate",
+            detalhe=f"sha {sha[:12]} já importado", ambiente=env["slug"],
+            resultado="skip_duplicate",
+        )
         _move_to_imported(p, watch_dir)
         return
 
@@ -190,16 +212,25 @@ def _process_file(env: dict, p: Path) -> None:
                 "scan.pendencia_ainda_recente sha={} file={} visto_vezes={}",
                 sha[:12], p.name, pendencia["visto_vezes"] + 1,
             )
+            if sha not in _PENDENCIAS_REGISTRADAS:
+                _PENDENCIAS_REGISTRADAS.add(sha)
+                leituras.rejeitado(
+                    origem="worker", nome=p.name, motivo="pendencia_throttle",
+                    detalhe=f"retido há menos de {_PENDENCIA_REAVALIACAO_S}s",
+                    ambiente=env["slug"], resultado="pendencia_throttle",
+                )
             return
 
     raw = p.read_bytes()
     loaded = LoadedFile(path=p, extension=p.suffix.lower(), raw=raw)
 
     trace_id = new_trace_id()
-    with with_trace_id(trace_id):
+    with with_trace_id(trace_id), leituras.registrar(
+        origem="worker", nome=p.name, raw=raw, ambiente=env["slug"]
+    ) as leitura:
         order = None
         try:
-            order = pipeline_process(loaded)
+            order = leitura.processar(loaded)
         except Exception as exc:
             logger.error(
                 "scan.parse_error env={} file={} error={!r}",
@@ -221,6 +252,7 @@ def _process_file(env: dict, p: Path) -> None:
                 repo.insert_import(entry)
             except Exception as e:
                 logger.error("scan.insert_error_failed env={} {!r}", env["slug"], e)
+            leitura.resultado = "erro"
             _move_to_imported(p, watch_dir, errored=True)
             return
 
@@ -269,6 +301,7 @@ def _process_file(env: dict, p: Path) -> None:
                     "scan.retido_sem_ambiente env={} file={} motivo={}",
                     env["slug"], p.name, motivo,
                 )
+                leitura.resultado = "retido"
                 return
 
         entry = {
@@ -294,6 +327,7 @@ def _process_file(env: dict, p: Path) -> None:
         try:
             with env_context.active_env(env_alvo["id"], env_alvo["slug"]):
                 repo.insert_import(entry)
+                leitura.resultado = "importado"
                 # ACHADO 3 da revisão final: sem isto, um pedido roteado pelo
                 # degrau 'historico'/'memoria' em 'ligado' não deixava
                 # nenhum registro de POR QUE foi pra esta empresa — só o
@@ -347,6 +381,8 @@ def _process_file(env: dict, p: Path) -> None:
                 _move_to_imported(p, watch_dir)
         except Exception as e:
             logger.error("scan.insert_failed env={} file={} {!r}", env["slug"], p.name, e)
+            leitura.falha(e)
+            leitura.resultado = leitura.resultado or "erro"
 
 
 def run_scan() -> None:
@@ -357,7 +393,7 @@ def run_scan() -> None:
             continue
         with env_context.active_env(env["id"], env["slug"]):
             watch_dir = Path(env["watch_dir"])
-            for p in _candidate_files(watch_dir):
+            for p in _candidate_files(watch_dir, env["slug"]):
                 try:
                     _process_file(env, p)
                 except Exception as exc:

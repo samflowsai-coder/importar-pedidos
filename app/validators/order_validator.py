@@ -3,7 +3,7 @@ from app.utils.logger import logger
 
 
 class OrderValidator:
-    def validate(self, order: Order) -> bool:
+    def validate_detail(self, order: Order) -> list[str]:
         errors = []
 
         if not order.header.order_number:
@@ -18,9 +18,17 @@ class OrderValidator:
             if item.quantity is None or item.quantity <= 0:
                 errors.append(f"Item {i + 1}: quantidade inválida ({item.quantity})")
 
+        return errors
+
+    def log_errors(self, order: Order, errors: list[str]) -> None:
+        for e in errors:
+            logger.warning(f"Validação [{order.source_file}]: {e}")
+
+    def validate(self, order: Order) -> bool:
+        errors = self.validate_detail(order)
+
         if errors:
-            for e in errors:
-                logger.warning(f"Validação [{order.source_file}]: {e}")
+            self.log_errors(order, errors)
             return False
 
         return True

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 
 from app.classifiers.format_classifier import FileFormat, FormatClassifier
 from app.extractors.pdf_extractor import PDFExtractor
@@ -9,6 +10,7 @@ from app.ingestion.file_loader import LoadedFile
 from app.llm.fallback_parser import LLMFallbackParser
 from app.models.order import Order
 from app.normalizers.order_normalizer import OrderNormalizer
+from app.observability.leituras import Diagnostico, cabecalho_candidato
 from app.parsers.beira_rio_parser import BeiranRioParser
 from app.parsers.daju_parser import DajuParser
 from app.parsers.desmembramento_xls_parser import DesmembramentoXlsParser
@@ -46,27 +48,50 @@ _llm = LLMFallbackParser()
 
 
 def process(file: LoadedFile) -> Order | None:
+    return process_detailed(file)
+
+
+def process_detailed(file: LoadedFile, diag: Diagnostico | None = None) -> Order | None:
+    """Corpo de `process`, preenchendo `diag` (do chamador) ao longo do caminho."""
+    if diag is None:
+        diag = Diagnostico()
     logger.info(f"Processando: {file.path.name}")
 
     fmt = _classifier.classify(file)
+    diag.fmt = fmt.value if hasattr(fmt, "value") else str(fmt)
     if fmt == FileFormat.UNKNOWN:
         logger.warning(f"Formato desconhecido, ignorando: {file.path.name}")
         return None
 
     extracted = _pdf_extractor.extract(file) if fmt == FileFormat.PDF else _xls_extractor.extract(file)
+    rows = extracted.get("rows") or []
+    diag.extracao = {
+        "linhas": None if fmt == FileFormat.PDF else len(rows),
+        "abas": extracted.get("sheets") or [],
+        "cabecalho_candidato": cabecalho_candidato(rows),
+    }
 
     order = None
+    t0 = time.perf_counter()
     for parser in _parsers:
+        nome = parser.__class__.__name__
         if hasattr(parser, "can_parse") and not parser.can_parse(extracted):
+            diag.parsers_pulados.append({"nome": nome, "motivo": "can_parse"})
             continue
         order = parser.parse(extracted)
         if order is not None:
-            logger.debug(f"Parser {parser.__class__.__name__} extraiu o pedido")
+            diag.parser_usado = nome
+            logger.debug(f"Parser {nome} extraiu o pedido")
             break
+        diag.parsers_pulados.append({"nome": nome, "motivo": "none"})
+    diag.parser_ms = int((time.perf_counter() - t0) * 1000)
 
     if order is None:
         logger.info(f"Parsers sem resultado, ativando LLM fallback: {file.path.name}")
         order = _llm.parse(extracted, source_file=str(file.path))
+        diag.llm = {"tentado": True, "motivo": "ok" if order is not None else "sem_resultado"}
+    else:
+        diag.llm = {"tentado": False, "motivo": "nao_necessario"}
 
     if order is None:
         logger.error(f"Não foi possível extrair pedido de: {file.path.name}")
@@ -76,7 +101,10 @@ def process(file: LoadedFile) -> Order | None:
     _marcar_fornecedor(order, extracted)
     _numerar_se_ausente(order, file.raw)
     order = _normalizer.normalize(order)
-    _validator.validate(order)
+    avisos = _validator.validate_detail(order)
+    _validator.log_errors(order, avisos)
+    diag.avisos = list(avisos)
+    diag.validacao_ok = not avisos
 
     logger.info(f"Pedido {order.header.order_number!r} → {len(order.items)} item(s)")
     return order

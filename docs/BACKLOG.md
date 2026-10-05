@@ -190,6 +190,29 @@ mais os códigos duplicados (`5041G` nas duas). Pontas abertas:
   mostra isso; a causa (código truncado no parser do desmembramento) não foi
   investigada.
 
+### 2.16 Template de kits ignora `DATA DE FATURAMENTO` (mês de entrega)
+Achado em 05/10/2026 no lote Authentic Feet (AF072/AF082/AF108/AF119): as planilhas
+NOVEMBRO e DEZEMBRO de cada loja só diferem na célula `DATA DE FATURAMENTO` e o
+`NasmarTemplateParser` não a lê (`delivery_date = None` nos dois). O pedido de cada mês
+sai idêntico (mesmo número, CNPJ e itens), a operadora corrige a data à mão e o 2º
+pode bater em "pedido já existe" (1.5). Fix: ler o rótulo `DATA DE FATURAMENTO` do bloco de
+cabeçalho para `delivery_date` dos itens, e decidir como o mês vira data (1º dia? último?).
+**Decisão do Samuel/MM:** qual data o Fire espera para "DEZEMBRO".
+
+### 2.17 Pedido lido sem CNPJ ou com item "CNPJ:" passa sem alarme
+O pipeline descarta o retorno do validador e o preview deixa seguir um pedido sem
+cliente/CNPJ. Em 05/10/2026 isso deixou o `GenericParser` entregar lixo à operadora. A
+entrega 1 do log de leituras só **registra** os sinais (`suspeito.sinais`); decidir se o
+preview passa a avisar o operador ("este arquivo caiu no leitor genérico, confira") e/ou
+bloquear o commit sem CNPJ. Depende de algumas semanas do log em produção para calibrar
+os falsos positivos.
+
+### 2.18 Log de leituras, entrega 2
+Eventos pós-leitura no mesmo `logs/leituras.jsonl` (commit, export xlsx, envio ao Fire,
+bloqueio), campo de roteamento (`modo`, `degrau`, `env_sugerido`, `env_gravado`) e
+`sha_guardado` vs lido (2.11). Spec: `docs/superpowers/specs/2026-10-05-log-de-leituras-design.md`,
+seção "Fora desta entrega".
+
 ---
 
 ## 3. Bloqueado em terceiros
