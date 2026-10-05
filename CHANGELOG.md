@@ -27,6 +27,12 @@ _(nada ainda)_
 
 ---
 
+## 20261005-1136
+
+1) **Planilha da Authentic Feet com a coluna `QUAN.` ou `QUANT` volta a abrir certa.** O lote de 05/10 (AF072, AF082, AF108 e AF119) trazia o título da coluna de quantidade diferente do habitual (`TOTAL KITS`), e o portal lia o pedido errado: sem cliente nem CNPJ, com um item "CNPJ:" e quantidades trocadas. Agora ele lê cliente, CNPJ, quantidade e preço. As planilhas com `TOTAL KITS` continuam saindo iguais.
+
+---
+
 ## 20261005-0858
 
 1) **Planilha para o Fire sempre sai com o total de cada linha.** Quando o pedido do cliente não traz o valor por linha (caso da Beira Rio), o portal agora calcula quantidade × preço. Antes a coluna ia vazia e o importador do Fire podia parar com o aviso "is not a valid floating point value", deixando o pedido só com o primeiro item. Pedidos que já trazem o total continuam com o valor do documento.

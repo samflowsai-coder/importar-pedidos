@@ -279,3 +279,13 @@ não tocado. Confirmar com um segundo pedido real antes de confiar nele.
   lia `1.300` como `1.3`: pedido mil vezes menor, silencioso, aprovado pelo validador.
 - Sem este parser o arquivo caía no `GenericParser`, que extraía pedido `'DA'` e
   quantidades erradas — bug real observado no RED do TDD.
+
+## Template de kits (Nasmar): rótulos da coluna de quantidade
+
+O gate do `NasmarTemplateParser` exige `REF.`, `DESCRIÇÃO PRODUTO`, `TOTAL R$` e **um**
+rótulo de quantidade de `_ROTULOS_QUANTIDADE`: `TOTAL KITS`, `QUAN.`, `QUANT`, `QUANT.`
+(match normalizado, sem prefixo). Os três últimos vieram no lote Authentic Feet de
+05/10/2026 (9 planilhas AF072/AF082/AF108/AF119). Sem o rótulo o arquivo caía no
+`GenericParser` e saía sem cliente/CNPJ, com `CNPJ: ...` como item e qtd lida do REF COR.
+Quarta ocorrência da mesma classe (Magic Feet, Pulmão, Tennis Station, esta). Samples:
+`Pedido Authentic Feet AF0xx/AF108 ....xlsx`; testes em `tests/test_new_parsers.py`.

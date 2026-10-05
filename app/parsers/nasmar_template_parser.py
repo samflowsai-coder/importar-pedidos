@@ -59,7 +59,13 @@ _MAX_CELULAS_VAZIAS = 4
 # O match é por texto NORMALIZADO (upper + espaço colapsado), nunca por igualdade
 # literal: a Tennis Station digitou `TOTAL Kits` e o arquivo inteiro escapou do
 # parser por causa do caixa de duas letras.
-_HEADER_TOKENS = ("REF.", "DESCRIÇÃO PRODUTO", "TOTAL KITS", "TOTAL R$")
+#
+# A coluna de quantidade de kits tem mais de um rótulo: `TOTAL KITS` (AF/MF/Pulmão/
+# Tennis Station/Kings) e `QUAN.`/`QUANT`/`QUANT.` (lote Authentic Feet de
+# 05/10/2026, 9 planilhas). Só vale o rótulo que o comprador de fato digitou; nada
+# de prefixo (`QUANT*`), que casaria coluna alheia.
+_HEADER_TOKENS = ("REF.", "DESCRIÇÃO PRODUTO", "TOTAL R$")
+_ROTULOS_QUANTIDADE = ("TOTAL KITS", "QUAN.", "QUANT", "QUANT.")
 
 # Colunas opcionais: rótulo normalizado -> chave do col_map.
 _COLUNAS_OPCIONAIS = {
@@ -235,17 +241,21 @@ class NasmarTemplateParser(BaseParser):
         """Se `row` é o cabeçalho da tabela de kits, devolve o `col_map`; senão None.
 
         Fonte única da regra: é o gate do `can_parse` E o mapeamento de colunas. As
-        4 colunas de `_HEADER_TOKENS` são obrigatórias — o resto é opcional e cada
-        uma fica no índice da PRIMEIRA ocorrência.
+        colunas de `_HEADER_TOKENS` mais um rótulo de `_ROTULOS_QUANTIDADE` são
+        obrigatórias — o resto é opcional e cada uma fica no índice da PRIMEIRA
+        ocorrência.
         """
         cells = [_norm(c) for c in row]
         if not all(tok in cells for tok in _HEADER_TOKENS):
+            return None
+        col_qtd = next((cells.index(r) for r in _ROTULOS_QUANTIDADE if r in cells), None)
+        if col_qtd is None:
             return None
 
         col_map = {
             "ref": cells.index("REF."),
             "produto": cells.index("DESCRIÇÃO PRODUTO"),
-            "total_kits": cells.index("TOTAL KITS"),
+            "total_kits": col_qtd,
             "total_rs": cells.index("TOTAL R$"),
         }
         for j, c in enumerate(cells):

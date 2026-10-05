@@ -1489,3 +1489,50 @@ def test_sams_soma_dos_itens_bate_com_o_sumario_do_pdf(sample, total_mercadorias
     order = _process(sample)
     soma = sum(i.total_price or 0 for i in order.items)
     assert soma == pytest.approx(total_mercadorias, abs=0.01)
+
+
+# ── Authentic Feet (05/10/2026): o MESMO template, com `QUAN.` no lugar de TOTAL KITS ──
+#
+# Lote de 9 planilhas da MM: a coluna de quantidade de kits veio como `QUAN.`,
+# `QUANT` ou `QUANT.`. Sem a coluna `TOTAL KITS` o gate do template falhava, o
+# arquivo caía no GenericParser, e o pedido saía sem cliente/CNPJ, com
+# `CNPJ: 209430287110` como item e qtd 100/1 lida do REF COR do código do produto.
+# Quarta ocorrência da mesma classe de bug neste template.
+
+_AF_QUANTIDADE = [
+    "Pedido Authentic Feet AF072 QUAN.xlsx",
+    "Pedido Authentic Feet AF082 QUANT.xlsx",
+    "Pedido Authentic Feet AF108 QUANT ponto.xlsx",
+]
+
+
+@pytest.mark.parametrize("rotulo", ["QUAN.", "QUANT", "QUANT.", "Quant.", " QUANT  "])
+def test_template_aceita_rotulos_da_coluna_de_quantidade(rotulo):
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    cabecalho = ["REF.", "DESCRIÇÃO PRODUTO", rotulo, "TOTAL R$"]
+    col_map = NasmarTemplateParser()._match_header(cabecalho)
+    assert col_map is not None
+    assert col_map["total_kits"] == 2
+
+
+@pytest.mark.parametrize("sample", _AF_QUANTIDADE)
+def test_authentic_feet_quantidade_preco_e_cliente(sample):
+    order = _process(sample)
+    assert order is not None
+    assert [int(i.quantity) for i in order.items] == [50, 40, 40, 40]
+    assert {i.unit_price for i in order.items} == {11.96}
+    assert order.items[0].product_code == "AFK3S-A-100-3338"
+    assert order.header.customer_cnpj  # antes: None
+    assert "CNPJ" not in (order.items[0].description or "")
+
+
+def test_authentic_feet_modelo_antigo_total_kits_continua_igual():
+    """AF093 (05/10/2026), cabeçalho `TOTAL KITS`: funcionou na produção antes do
+    fix dos rótulos `QUAN.`/`QUANT` e tem que sair idêntico depois."""
+    order = _process("Pedido Authentic Feet AF093 TOTAL KITS.xlsx")
+    assert order is not None
+    assert order.header.customer_cnpj == "23.473.808/0016-78"
+    assert [int(i.quantity) for i in order.items] == [36, 60, 60, 48, 60, 60, 36, 36, 36, 36]
+    assert {i.unit_price for i in order.items} == {11.96, 15.32}
+    assert sum(i.total_price for i in order.items) == pytest.approx(6081.12, abs=0.01)
