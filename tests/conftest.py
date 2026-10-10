@@ -36,6 +36,9 @@ def pytest_configure(config):  # noqa: ARG001 — pytest hook signature
     # 07h/12h/18h locais. Testes que querem exercitar o loop/gatilho
     # periódico de propósito usam `monkeypatch.setenv` para religar.
     os.environ.setdefault("PORTAL_RECONCILE_PERIODICO", "0")
+    # Mesma cerca para a thread da SP1 (app/erp_eventos/runner.py): nenhum
+    # TestClient(app) sobe a vigia de pedidos do ERP.
+    os.environ.setdefault("PORTAL_ERP_VIGIA", "0")
 
 
 # Toda variavel que decide PARA ONDE o app conecta ou como ele fala com o

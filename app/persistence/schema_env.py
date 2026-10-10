@@ -97,7 +97,13 @@ CREATE TABLE IF NOT EXISTS flowpcp_decisoes_mapping (
     attempts        INTEGER NOT NULL DEFAULT 0,
     reconciliado_em TEXT,
     criado_em       TEXT NOT NULL DEFAULT (datetime('now')),
-    atualizado_em   TEXT NOT NULL DEFAULT (datetime('now'))
+    atualizado_em   TEXT NOT NULL DEFAULT (datetime('now')),
+    -- SP1 eco (ver COLUMN_MIGRATIONS para bancos que já existiam)
+    base             TEXT,
+    erp_codigo       INTEGER,
+    erp_codigos_json TEXT,
+    nova_data        TEXT,
+    aplicada_em      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS flowpcp_cursor_state (
@@ -148,6 +154,148 @@ CREATE TABLE IF NOT EXISTS produto_depara (
     criado_por      TEXT,
     UNIQUE (client_key, chave_tipo, chave_valor)
 );
+
+-- ── SP1: transporte de pedidos do ERP para o Flow (docs/ai/modules/erp_eventos.md) ──
+-- Nomes pelo papel (P-PROD-08): erp_*, base. Nenhuma tabela aqui tem FK para
+-- imports: pedido do ERP existe sem ter passado pelo Portal.
+
+-- Item do ERP ↔ item do pedido no Portal. `indice_original` é a posição do
+-- item em `order.items` — a mesma posição no array `itens` do /recebimento,
+-- que o Flow grava como `source_id_externo = <import_id>:<posição>`.
+-- origem: 'insert' (exportador, modo db) | 'xlsx' (casado pela planilha).
+CREATE TABLE IF NOT EXISTS erp_item_vinculo (
+    base                   TEXT NOT NULL,
+    erp_item_codigo        INTEGER NOT NULL,
+    erp_codigo             INTEGER NOT NULL,
+    import_id              TEXT NOT NULL,
+    indice_original        INTEGER NOT NULL,
+    origem                 TEXT NOT NULL,
+    produto_produtor       INTEGER,
+    produtor_resolvido_em  TEXT,
+    criado_em              TEXT NOT NULL,
+    PRIMARY KEY (base, erp_item_codigo)
+);
+
+-- O que cada XLSX gerado levou, linha a linha. É o que permite casar o
+-- pedido que a operadora importou no ERP com as linhas do Portal.
+CREATE TABLE IF NOT EXISTS erp_xlsx_linha (
+    import_id        TEXT NOT NULL,
+    arquivo          TEXT NOT NULL,
+    linha            INTEGER NOT NULL,
+    indice_original  INTEGER NOT NULL,
+    pedido_cliente   TEXT,
+    cnpj_cliente     TEXT,
+    quantidade       TEXT,
+    preco_unitario   TEXT,
+    gerado_em        TEXT NOT NULL,
+    PRIMARY KEY (import_id, arquivo, linha)
+);
+
+-- Último estado visto de cada pedido do ERP (contra ele a vigia calcula as
+-- mudanças). situacao: 'aberto' | 'encerrado' | 'excluido'.
+CREATE TABLE IF NOT EXISTS erp_pedido_estado (
+    base           TEXT NOT NULL,
+    erp_codigo     INTEGER NOT NULL,
+    situacao       TEXT NOT NULL,
+    estado_json    TEXT NOT NULL,
+    visto_em       TEXT NOT NULL,
+    atualizado_em  TEXT NOT NULL,
+    PRIMARY KEY (base, erp_codigo)
+);
+
+-- Marca d'água do seq, À PARTE do estado: apagar/recriar erp_pedido_estado
+-- não zera nem reaproveita seq (spec SP1 §4.1).
+CREATE TABLE IF NOT EXISTS erp_seq_marca (
+    base        TEXT NOT NULL,
+    erp_codigo  INTEGER NOT NULL,
+    ultimo_seq  INTEGER NOT NULL,
+    PRIMARY KEY (base, erp_codigo)
+);
+
+-- Fila de saída. Payload congelado na gravação: reenvio repete os mesmos
+-- bytes de evento. `unidade` agrupa o que não pode ser partido entre lotes.
+-- situacao: 'pendente' | 'aceito' | 'duplicado' | 'rejeitado'.
+CREATE TABLE IF NOT EXISTS erp_eventos_saida (
+    ordem          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id             TEXT NOT NULL UNIQUE,
+    base           TEXT NOT NULL,
+    erp_codigo     INTEGER NOT NULL,
+    seq            INTEGER,
+    tipo           TEXT NOT NULL,
+    unidade        TEXT NOT NULL,
+    payload_json   TEXT NOT NULL,
+    observado_em   TEXT NOT NULL,
+    situacao       TEXT NOT NULL DEFAULT 'pendente',
+    motivo         TEXT,
+    lote_id        TEXT,
+    enviado_em     TEXT,
+    respondido_em  TEXT,
+    criado_em      TEXT NOT NULL
+);
+
+-- Saúde do envio por base: espera, bloqueio, sinal de vida.
+-- bloqueio: NULL | 'credencial' | 'lote_invalido' | 'unidade_grande' | 'http_<status>'.
+CREATE TABLE IF NOT EXISTS erp_envio_estado (
+    base                  TEXT PRIMARY KEY,
+    proxima_tentativa_em  TEXT,
+    falhas_seguidas       INTEGER NOT NULL DEFAULT 0,
+    bloqueio              TEXT,
+    ultimo_http           INTEGER,
+    ultimo_erro           TEXT,
+    ultimo_202_em         TEXT,
+    ultima_vigia_em       TEXT,
+    sinal_pendente        INTEGER NOT NULL DEFAULT 0,
+    atualizado_em         TEXT NOT NULL
+);
+
+-- Foto noturna: uma por base por dia local; páginas congeladas na criação
+-- (totalPaginas constante, reenvio da mesma página = mesmo corpo).
+-- situacao: 'enviando' | 'completa' | 'expirada' | 'recusada' | 'nao_criada'
+-- (nao_criada = algum pedido fora do contrato; `motivo` diz qual).
+CREATE TABLE IF NOT EXISTS erp_foto (
+    foto_id         TEXT PRIMARY KEY,
+    base            TEXT NOT NULL,
+    dia             TEXT NOT NULL,
+    corte_em        TEXT NOT NULL,
+    total_paginas   INTEGER NOT NULL,
+    situacao        TEXT NOT NULL DEFAULT 'enviando',
+    criada_em       TEXT NOT NULL,
+    concluida_em    TEXT,
+    motivo          TEXT,
+    UNIQUE (base, dia)
+);
+
+CREATE TABLE IF NOT EXISTS erp_foto_pagina (
+    foto_id       TEXT NOT NULL,
+    pagina        INTEGER NOT NULL,
+    payload_json  TEXT NOT NULL,
+    enviada_em    TEXT,
+    PRIMARY KEY (foto_id, pagina)
+);
+
+-- Lote fiscal (emissor; quem produz o lote é a Fase 2 do roteamento,
+-- ainda não construída). A reserva existe ANTES do INSERT do pedido
+-- consolidado no ERP: enquanto houver reserva, a vigia segura pedido novo
+-- da base produtora para intermediário fiscal — o lote_fiscal entra na
+-- fila antes do pedido_visto do consolidado.
+CREATE TABLE IF NOT EXISTS erp_lote_reserva (
+    chave_lote    TEXT PRIMARY KEY,
+    base_espelho  TEXT NOT NULL,
+    reservado_em  TEXT NOT NULL
+);
+
+-- Um item de origem pertence a UM lote (PK).
+CREATE TABLE IF NOT EXISTS erp_lote_perna (
+    base_origem             TEXT NOT NULL,
+    erp_item_codigo_origem  INTEGER NOT NULL,
+    erp_codigo_origem       INTEGER NOT NULL,
+    chave_lote              TEXT NOT NULL,
+    produto_produtor        INTEGER NOT NULL,
+    quantidade              TEXT NOT NULL,
+    linha_lote              INTEGER NOT NULL,
+    criado_em               TEXT NOT NULL,
+    PRIMARY KEY (base_origem, erp_item_codigo_origem)
+);
 """
 
 INDEXES_SQL = """
@@ -174,6 +322,12 @@ CREATE INDEX IF NOT EXISTS idx_imports_fire_poll
     WHERE fire_codigo IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_depara_client ON produto_depara(client_key);
+
+CREATE INDEX IF NOT EXISTS idx_erp_item_vinculo_import ON erp_item_vinculo(import_id, indice_original);
+CREATE INDEX IF NOT EXISTS idx_erp_xlsx_linha_pedido   ON erp_xlsx_linha(pedido_cliente);
+CREATE INDEX IF NOT EXISTS idx_erp_estado_situacao     ON erp_pedido_estado(base, situacao);
+CREATE INDEX IF NOT EXISTS idx_erp_eventos_pendentes   ON erp_eventos_saida(base, situacao, ordem);
+CREATE INDEX IF NOT EXISTS idx_erp_lote_perna_chave    ON erp_lote_perna(chave_lote);
 """
 
 # Cada entrada: (table, column_name, ALTER TABLE DDL) — aplicada só se a coluna ainda não existir.
@@ -186,4 +340,12 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # Sem ela, a janela usava `fire_status_polled_at` (que o próprio poll
     # renova a cada tick) e nunca expirava — ver `list_pending_for_fire_poll`.
     ("imports", "reconciled_at", "ALTER TABLE imports ADD COLUMN reconciled_at TEXT"),
+    # SP1 — eco: o que a decisão do Flow mudou no ERP. `erp_codigos_json` porque
+    # o UPDATE por PEDIDO_CLIENTE + CLIENTE pode tocar mais de um pedido
+    # (BACKLOG 1.5); `erp_codigo` só quando tocou exatamente um.
+    ("flowpcp_decisoes_mapping", "base", "ALTER TABLE flowpcp_decisoes_mapping ADD COLUMN base TEXT"),
+    ("flowpcp_decisoes_mapping", "erp_codigo", "ALTER TABLE flowpcp_decisoes_mapping ADD COLUMN erp_codigo INTEGER"),
+    ("flowpcp_decisoes_mapping", "erp_codigos_json", "ALTER TABLE flowpcp_decisoes_mapping ADD COLUMN erp_codigos_json TEXT"),
+    ("flowpcp_decisoes_mapping", "nova_data", "ALTER TABLE flowpcp_decisoes_mapping ADD COLUMN nova_data TEXT"),
+    ("flowpcp_decisoes_mapping", "aplicada_em", "ALTER TABLE flowpcp_decisoes_mapping ADD COLUMN aplicada_em TEXT"),
 )

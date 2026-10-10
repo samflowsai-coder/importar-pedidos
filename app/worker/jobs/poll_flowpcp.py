@@ -11,7 +11,7 @@ from app.erp.connection import FirebirdConnection
 from app.integrations.flowpcp.client import FlowPCPClient
 from app.integrations.flowpcp.config import FlowPCPConfig, enabled_flowpcp_envs
 from app.integrations.flowpcp.poll_decisoes import poll_decisoes_once
-from app.persistence import environments_repo, router
+from app.persistence import environments_repo, erp_bases_repo, router
 from app.utils.logger import logger
 
 
@@ -42,13 +42,24 @@ def _build_client(cfg: FlowPCPConfig) -> FlowPCPClient:
     )
 
 
+def _erp_base(slug: str) -> str | None:
+    """Base do ERP (SP1) do ambiente, se configurada — liga o registro do eco."""
+    env = environments_repo.get_by_slug(slug)
+    cfg = erp_bases_repo.obter(env["id"]) if env else None
+    return cfg.base if cfg else None
+
+
 def run_poll_flowpcp() -> None:
     for slug, cfg in _list_flowpcp_envs():
         client = _build_client(cfg)
         try:
             with _open_env_conn(slug) as conn, _open_fire_conn(slug) as fire_conn:
                 n = poll_decisoes_once(
-                    client=client, fire_conn=fire_conn, conn=conn, config=cfg
+                    client=client,
+                    fire_conn=fire_conn,
+                    conn=conn,
+                    config=cfg,
+                    erp_base=_erp_base(slug),
                 )
             logger.info(f"flowpcp poll env={slug} decisoes={n}")
         except Exception as exc:  # noqa: BLE001 — um ambiente ruim não derruba os outros

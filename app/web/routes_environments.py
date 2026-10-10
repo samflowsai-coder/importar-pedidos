@@ -14,12 +14,16 @@ Endpoint `POST /{id}/test` valida pastas + tenta conexão Firebird.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from app.persistence import environments_repo
+from app.erp_eventos.canonico import formatar_instante
+from app.erp_eventos.foto import dia_local
+from app.persistence import environments_repo, erp_bases_repo, erp_estado_repo, erp_foto_repo
+from app.persistence import router as db_router
 from app.web.auth import require_admin
 
 router = APIRouter(prefix="/api/admin/environments", tags=["admin", "environments"])
@@ -161,6 +165,82 @@ def set_environment_intercompany(
     if data["revenda_slug"]:
         data["revenda_slug"] = data["revenda_slug"].strip().lower()
     return environments_repo.set_intercompany_config(env_id, **data)
+
+
+class ErpBaseRequest(BaseModel):
+    """SP1: esta empresa como uma base do ERP para o Flow (rotas de eventos e foto).
+
+    `token`: credencial `fpe_…` gerada no Flow para (tenant, base). None
+    mantém a atual, "" limpa, valor substitui. Nunca volta no GET."""
+
+    base: str = Field(..., min_length=1, max_length=32)
+    papel: str
+    tenant_id: str
+    destino_url: str
+    foto_hora: int | None = Field(default=None, ge=0, le=23)
+    ativo: bool = False
+    token: str | None = None
+
+
+def _erp_base_view(env_id: str) -> dict:
+    cfg = erp_bases_repo.obter(env_id)
+    view = {"config": erp_bases_repo.public_view(cfg), "envio": None, "fila": {}, "foto_hoje": None}
+    if cfg is None:
+        return view
+    with db_router.env_connect(cfg.env_slug) as conn:
+        envio = erp_estado_repo.obter_envio(conn, cfg.base)
+        view["fila"] = erp_estado_repo.contar(conn, cfg.base)
+        foto = erp_foto_repo.foto_do_dia(conn, cfg.base, dia_local(datetime.now(UTC)))
+    view["envio"] = {
+        "bloqueio": envio.bloqueio,
+        "ultimo_http": envio.ultimo_http,
+        "ultimo_erro": envio.ultimo_erro,
+        "ultimo_202_em": envio.ultimo_202_em,
+        "ultima_vigia_em": envio.ultima_vigia_em,
+        "proxima_tentativa_em": envio.proxima_tentativa_em,
+    }
+    view["foto_hoje"] = (
+        {"situacao": foto.situacao, "paginas": foto.total_paginas, "motivo": foto.motivo}
+        if foto
+        else None
+    )
+    return view
+
+
+@router.get("/{env_id}/erp-base")
+def get_environment_erp_base(env_id: str, _=Depends(require_admin)):
+    if environments_repo.get(env_id) is None:
+        raise HTTPException(status_code=404, detail="Ambiente não encontrado")
+    return _erp_base_view(env_id)
+
+
+@router.put("/{env_id}/erp-base")
+def set_environment_erp_base(env_id: str, payload: ErpBaseRequest, _=Depends(require_admin)):
+    if environments_repo.get(env_id) is None:
+        raise HTTPException(status_code=404, detail="Ambiente não encontrado")
+    try:
+        erp_bases_repo.salvar(env_id, **payload.model_dump())
+    except erp_bases_repo.ConfigErpInvalidaError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    cfg = erp_bases_repo.obter(env_id)
+    # Credencial nova resolve o 401: tira o bloqueio de credencial.
+    if payload.token and cfg is not None:
+        with db_router.env_connect(cfg.env_slug) as conn:
+            if erp_estado_repo.obter_envio(conn, cfg.base).bloqueio == "credencial":
+                erp_estado_repo.desbloquear(conn, cfg.base, formatar_instante(datetime.now(UTC)))
+    return _erp_base_view(env_id)
+
+
+@router.post("/{env_id}/erp-base/desbloquear")
+def unblock_environment_erp_base(env_id: str, _=Depends(require_admin)):
+    """Retoma o envio de uma base bloqueada (400/4xx/lote grande) depois que a
+    causa foi corrigida. O próximo lote repete os mesmos eventos."""
+    cfg = erp_bases_repo.obter(env_id)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="Base do ERP não configurada")
+    with db_router.env_connect(cfg.env_slug) as conn:
+        erp_estado_repo.desbloquear(conn, cfg.base, formatar_instante(datetime.now(UTC)))
+    return _erp_base_view(env_id)
 
 
 @router.post("/{env_id}/flowpcp/sync-catalogo")

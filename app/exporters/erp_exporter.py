@@ -34,17 +34,33 @@ COL_WIDTHS = [18, 40, 20, 18, 16, 50, 12, 16, 16, 35, 16, 22, 18]
 class ERPExporter:
     def export(self, order: Order, output_dir: str = "output") -> list[Path]:
         """Export order. Splits into multiple files if delivery locations differ."""
+        return [
+            self._write_file(order, items, output_dir, suffix=suffix)
+            for suffix, items in self._planilhas(order)
+        ]
+
+    def linhas_por_arquivo(self, order: Order) -> list[tuple[list[ERPRow], list[int]]]:
+        """Por arquivo, na ordem de `export`: as linhas gravadas e a posição de
+        cada linha em `order.items` (SP1: vínculo pela planilha). Puro: não
+        grava nada, e dá o mesmo resultado que o `export` do mesmo pedido."""
+        posicao = {id(item): n for n, item in enumerate(order.items)}
+        return [
+            (self._to_erp_rows(order, items), [posicao[id(item)] for item in items])
+            for _, items in self._planilhas(order)
+        ]
+
+    def _planilhas(self, order: Order) -> list[tuple[str | None, list[OrderItem]]]:
+        """(sufixo, itens) de cada arquivo, na ordem em que são gravados."""
         groups = self._group_by_delivery(order)
 
         if len(groups) <= 1:
             items = list(groups.values())[0] if groups else order.items
-            return [self._write_file(order, items, output_dir, suffix=None)]
+            return [(None, items)]
 
-        paths = []
-        for i, (key, items) in enumerate(sorted(groups.items()), 1):
-            suffix = self._suffix_for_group(items, fallback=str(i))
-            paths.append(self._write_file(order, items, output_dir, suffix=suffix))
-        return paths
+        return [
+            (self._suffix_for_group(items, fallback=str(i)), items)
+            for i, (key, items) in enumerate(sorted(groups.items()), 1)
+        ]
 
     def _suffix_for_group(self, items: list[OrderItem], fallback: str) -> str:
         """Sufixo legível para o nome do arquivo de cada loja."""

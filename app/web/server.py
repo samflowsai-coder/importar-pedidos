@@ -102,6 +102,7 @@ async def _no_cache_html(request: Request, call_next):
 
 # Ponte FlowPCP (Modelo B/OVERLAY): push best-effort do pedido novo após o
 # send-to-fire, só em ambientes com FlowPCP habilitado (MM).
+from app.erp_eventos import vinculo as erp_vinculo  # noqa: E402
 from app.integrations.flowpcp.hook import push_new_order  # noqa: E402
 
 # De-para de cliente intercompany: mostra no preview o cliente real que o
@@ -170,6 +171,17 @@ def _iniciar_reconciliacao_periodica() -> None:
     startup do FastAPI (só dorme e reconcilia, em loop, fora do event loop
     de request/response)."""
     threading.Thread(target=loop_periodico, name="reconcile-periodico", daemon=True).start()
+
+
+@app.on_event("startup")
+def _iniciar_erp_eventos() -> None:
+    """SP1: vigia + drenagem + foto dos pedidos do ERP para o Flow, numa thread
+    daemon do processo web (mesmo motivo da reconciliação acima). Só age em
+    bases ligadas em /admin/ambientes; `PORTAL_ERP_VIGIA=0` desliga."""
+    from app.erp_eventos import runner as erp_runner
+
+    if erp_runner.habilitado():
+        threading.Thread(target=erp_runner.loop, name="erp-eventos", daemon=True).start()
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────
@@ -2380,6 +2392,7 @@ def _send_one_to_fire(
 
             paths = ERPExporter().export(order, str(output_path))
             output_files = [{"name": p.name, "path": str(p)} for p in paths]
+            erp_vinculo.registrar_planilhas(import_id, order, paths)
 
         override = entry.get("cliente_override_codigo")
         # Multi-ambiente: usa creds do env atual em vez de env vars FB_*.
@@ -2447,6 +2460,15 @@ def _send_one_to_fire(
                 "cliente_override_codigo": override,
             },
         )
+
+        # SP1: vínculo exato item do ERP ↔ posição em order.items (best-effort).
+        if request_env:
+            erp_vinculo.registrar_insert(
+                import_id,
+                environment_id=request_env["id"],
+                erp_codigo=result.fire_codigo,
+                itens=result.itens,
+            )
 
         # Ponte FlowPCP (Modelo B/OVERLAY): notifica o pedido novo em paralelo
         # ao Fire — só em ambientes com FlowPCP habilitado (MM). Best-effort:
@@ -2607,6 +2629,7 @@ def _export_one_xlsx(
         output_path.mkdir(parents=True, exist_ok=True)
         paths = ERPExporter().export(order, str(output_path))
         output_files = [{"name": p.name, "path": str(p)} for p in paths]
+        erp_vinculo.registrar_planilhas(import_id, order, paths)
 
         repo.update_fire_metadata(import_id, output_files=output_files)
         repo.append_audit(import_id, "xlsx_exported", {"files": output_files})

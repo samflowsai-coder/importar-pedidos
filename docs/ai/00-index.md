@@ -22,6 +22,7 @@
 | Chamada HTTP de saída (Gestor, OpenRouter, qualquer API externa) | `http` | `modules/http.md` |
 | Integração Gestor de Produção (outbox, mapper, rota post-to-gestor) | `gestor` | `modules/gestor.md` |
 | Integração FlowPCP (push de pedido, decisões→Fire, catálogo, clientes) | `flowpcp` | `modules/flowpcp.md` |
+| Pedidos do ERP para o Flow (SP1: vigia, eventos, foto, vínculo exato, lote fiscal) | `erp_eventos` | `modules/erp_eventos.md` |
 | Auto-update do portal (pacote .zip, `/admin/atualizacao`, updater) | `updates` | `modules/updates.md` |
 | Webhooks inbound, HMAC, replay protection, idempotency | `security` + `gestor` | `modules/security.md`, `modules/gestor.md` (seção webhooks) |
 | Login, sessão, cookie, proteger rota nova com auth, criar usuário via CLI | `auth` | `modules/auth.md` |
@@ -53,6 +54,7 @@
 | observability | `tests/test_metrics.py` | `.venv/bin/pytest tests/test_metrics.py -v` |
 | leituras (log) | `tests/test_leituras_sinais.py`, `tests/test_leituras_registrar.py`, `tests/test_pipeline_detailed.py`, `tests/test_validator_detail.py`, `tests/test_web_leituras.py`, `tests/test_scan_environments_leituras.py` | `.venv/bin/pytest tests/test_leituras_sinais.py tests/test_leituras_registrar.py tests/test_pipeline_detailed.py tests/test_web_leituras.py tests/test_scan_environments_leituras.py -v` |
 | flowpcp | `tests/test_flowpcp_hook.py`, `tests/test_flowpcp_poll.py`, `tests/test_flowpcp_intercompany.py`, `tests/test_catalogo_sync.py`, `tests/test_clientes_sync.py` | `.venv/bin/pytest tests/test_flowpcp_hook.py tests/test_flowpcp_poll.py tests/test_flowpcp_intercompany.py -v` |
+| erp_eventos (SP1) | `tests/test_erp_eventos_*.py` | `.venv/bin/python -m pytest tests/test_erp_eventos_*.py -v` |
 | updates | `tests/test_update_package.py`, `tests/test_update_routes.py`, `tests/test_update_state.py` | `.venv/bin/pytest tests/test_update_package.py tests/test_update_routes.py tests/test_update_state.py -v` |
 | erp | `tests/test_product_check.py`, `tests/test_depara_cliente.py`, `tests/test_depara_apply.py`, `tests/test_smoke_erp_mapper.py`, `tests/test_firebird_*.py` | `.venv/bin/pytest tests/test_product_check.py tests/test_depara_cliente.py tests/test_depara_apply.py -v` |
 | routing | `tests/test_routing_documento.py`, `tests/test_routing_historico.py`, `tests/test_routing_ambiente.py`, `tests/test_decisao_ambiente_repo.py`, `tests/test_roteamento_repo.py`, `tests/test_routing_wiring.py`, `tests/test_routing_modo.py`, `tests/test_scan_environments_roteamento.py` | `.venv/bin/pytest tests/test_routing_ambiente.py tests/test_routing_wiring.py tests/test_scan_environments_roteamento.py -v` |

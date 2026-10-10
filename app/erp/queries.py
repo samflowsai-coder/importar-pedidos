@@ -424,3 +424,74 @@ def count_pedidos_cliente_desde_sql(n: int) -> str:
           AND REPLACE(REPLACE(REPLACE(REPLACE(
                 C.CPF_CNPJ, '.', ''), '/', ''), '-', ''), ' ', '') IN ({marks})
     """
+
+
+# ── SP1: vigia de pedidos do ERP (SÓ LEITURA) ─────────────────────────────────
+# Lidas dentro de `FirebirdConnection.connect_somente_leitura` (transação
+# READ ONLY + SNAPSHOT): mesmo que alguém troque um SELECT por UPDATE aqui, o
+# Firebird recusa. `tests/test_erp_eventos_origem.py::test_todo_sql_da_vigia_e_select`
+# também garante que todo SQL deste bloco começa com SELECT.
+#
+# "Aberto" = qualquer STATUS fora de FATURADO/CANCELADO — a mesma regra do
+# Flow para reabertura (spec SP1 §4.1) e de `modelo.esta_aberto`: sem caixa
+# (UPPER) e STATUS nulo conta como aberto (COALESCE), senão o pedido sairia da
+# lista sem nunca fechar. Medido: PEDIDO, FATURADO, CANCELADO e 1 "EM ANÁLISE".
+_CAB_VENDAS_ERP = """
+    SELECT V.CODIGO, TRIM(V.PEDIDO_CLIENTE), V.CLIENTE, TRIM(C.CPF_CNPJ),
+           TRIM(V.STATUS), V.DATA_PEDIDO, V.DT_ENTREGA
+    FROM CAB_VENDAS V
+    LEFT JOIN CADASTRO C ON C.CODIGO = V.CLIENTE
+"""
+
+LIST_PEDIDOS_ABERTOS_ERP = (
+    _CAB_VENDAS_ERP
+    + "    WHERE COALESCE(UPPER(TRIM(V.STATUS)), '') NOT IN ('FATURADO', 'CANCELADO')\n"
+)
+
+
+def _marcas(n: int) -> str:
+    if n < 1:
+        raise ValueError("IN () é SQL inválida no Firebird: n >= 1")
+    return ", ".join("?" for _ in range(n))
+
+
+def pedidos_erp_por_codigo_sql(n: int) -> str:
+    return _CAB_VENDAS_ERP + f"    WHERE V.CODIGO IN ({_marcas(n)})\n"
+
+
+def itens_erp_por_pedido_sql(n: int) -> str:
+    """(CODIGO, CODVENDA, CODPRODUTO, DESCRICAO, QTD, PRECO_UNITARIO, UNID, DT_ENTREGA_ITEM)."""
+    return (
+        "SELECT I.CODIGO, I.CODVENDA, I.CODPRODUTO, TRIM(I.DESCRICAO), I.QTD, "
+        "I.PRECO_UNITARIO, TRIM(I.UNID), I.DT_ENTREGA_ITEM "
+        f"FROM CORPO_VENDAS I WHERE I.CODVENDA IN ({_marcas(n)})"
+    )
+
+
+def faturado_erp_por_item_sql(n: int) -> str:
+    """Quantidade faturada ACUMULADA por item (spec SP1 §11: CORPO_VENDAS_NFS,
+    não os campos de NF do item, que são vazios). (COD_ITEMVENDA, SUM(QTD), MAX(CODNF))."""
+    return (
+        "SELECT N.COD_ITEMVENDA, SUM(N.QTD), MAX(N.CODNF) "
+        f"FROM CORPO_VENDAS_NFS N WHERE N.COD_ITEMVENDA IN ({_marcas(n)}) "
+        "GROUP BY N.COD_ITEMVENDA"
+    )
+
+
+def clientes_reais_por_pedidos_cliente_sql(n: int) -> str:
+    """Versão em lote de FIND_CLIENTE_REAL_BY_PEDIDO_CLIENTE: mesma ordem de
+    colunas, com o PEDIDO_CLIENTE (TRIM) na frente para agrupar."""
+    return (
+        "SELECT TRIM(V.PEDIDO_CLIENTE), V.CODIGO, V.STATUS, V.CODNF, "
+        "C.CODIGO, TRIM(C.NOME), TRIM(C.RAZAO_SOCIAL), TRIM(C.CPF_CNPJ) "
+        "FROM CAB_VENDAS V JOIN CADASTRO C ON C.CODIGO = V.CLIENTE "
+        f"WHERE TRIM(V.PEDIDO_CLIENTE) IN ({_marcas(n)})"
+    )
+
+
+# Eco: quais pedidos o UPDATE_DT_ENTREGA vai tocar (mesma chave dele).
+CODIGOS_POR_PEDIDO_CLIENTE_E_CLIENTE = """
+    SELECT CODIGO FROM CAB_VENDAS
+    WHERE TRIM(PEDIDO_CLIENTE) = ?
+      AND CLIENTE = ?
+"""

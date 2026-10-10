@@ -397,6 +397,64 @@
         <div id="sync-clientes-result" hidden style="margin-top:.75rem;font-size:.85em;line-height:1.6"></div>
       </div>
     </fieldset>
+
+    <!-- SP1: pedidos do ERP para o Flow — save próprio, como o FlowPCP. -->
+    <fieldset id="erp-fieldset" hidden>
+      <legend>Pedidos do ERP para o Flow</legend>
+      <p class="hint">
+        A cada 15 minutos o Portal lê os pedidos abertos do banco desta empresa (só leitura)
+        e envia ao Flow cada mudança: pedido novo, quantidade, preço, data de entrega,
+        faturamento, cancelamento. À noite envia uma foto completa. Cada empresa é uma
+        <strong>base</strong> no Flow, com credencial própria gerada lá. <strong>Produtora</strong>
+        fabrica e vende; <strong>intermediária</strong> revende o que a produtora fabrica.
+      </p>
+      <div class="row">
+        <label>
+          <span>Base (identificador no Flow)</span>
+          <input name="erp_base" placeholder="mm" autocomplete="off">
+        </label>
+        <label>
+          <span>Papel desta empresa</span>
+          <select name="erp_papel">
+            <option value="produtora">Produtora</option>
+            <option value="intermediaria">Intermediária</option>
+          </select>
+        </label>
+      </div>
+      <label>
+        <span>Endereço do Flow</span>
+        <input name="erp_destino_url" placeholder="https://flowpcp.fly.dev" autocomplete="off">
+      </label>
+      <label>
+        <span>Tenant ID no Flow</span>
+        <input name="erp_tenant_id" placeholder="UUID do tenant" autocomplete="off">
+      </label>
+      <label>
+        <span>Credencial da base (fpe_…; deixe vazio para manter a atual)</span>
+        <input name="erp_token" type="password" autocomplete="new-password">
+      </label>
+      <p class="hint" id="erp-token-hint"></p>
+      <label class="check">
+        <input type="checkbox" name="erp_token_remover">
+        <span>Remover a credencial salva (o envio para)</span>
+      </label>
+      <div class="row">
+        <label>
+          <span>Hora da foto noturna (0–23, a mesma configurada no Flow)</span>
+          <input name="erp_foto_hora" type="number" min="0" max="23" placeholder="sem foto">
+        </label>
+      </div>
+      <label class="check">
+        <input type="checkbox" name="erp_ativo">
+        <span>Enviar os pedidos desta empresa ao Flow</span>
+      </label>
+      <div id="erp-situacao" class="hint" hidden></div>
+      <div class="actions" style="margin-top:1rem">
+        <button type="button" id="btn-save-erp" class="btn btn-primary">Salvar envio de pedidos</button>
+        <button type="button" id="btn-desbloquear-erp" class="btn btn-secondary" hidden>Retomar envio</button>
+        <span id="erp-status" class="flowpcp-status" role="status" aria-live="polite"></span>
+      </div>
+    </fieldset>
   </main>
 
   <!-- Folder browser modal -->
@@ -615,6 +673,126 @@
         }
       } finally {
         btn.disabled = false;
+      }
+    });
+
+    // ── SP1: pedidos do ERP para o Flow ─────────────────────────────────
+    const erpFs = document.getElementById('erp-fieldset');
+    const ev = (n) => erpFs.querySelector('[name="' + n + '"]');
+    const erpStatus = document.getElementById('erp-status');
+    const erpDesbloquear = document.getElementById('btn-desbloquear-erp');
+    const BLOQUEIOS = {
+      credencial: 'o Flow recusou a credencial (401). Salve uma credencial nova.',
+      lote_invalido: 'o Flow recusou um lote inteiro (400). Corrija a causa e retome.',
+      unidade_grande: 'um pedido tem mais itens do que cabe num lote. Fale com o suporte.',
+      lote_grande_demais: 'um lote passou do tamanho máximo. Fale com o suporte.',
+    };
+
+    function erpMostrarSituacao(view) {
+      const box = document.getElementById('erp-situacao');
+      const env = view.envio;
+      if (!view.config || !env) { box.hidden = true; erpDesbloquear.hidden = true; return; }
+      const fila = view.fila || {};
+      const linhas = [];
+      if (env.bloqueio) {
+        linhas.push('<strong>Envio parado:</strong> ' + (BLOQUEIOS[env.bloqueio] || ('HTTP ' + env.ultimo_http + '.')));
+      }
+      linhas.push('Última leitura do ERP: ' + (env.ultima_vigia_em ? new Date(env.ultima_vigia_em).toLocaleString('pt-BR') : 'ainda não leu'));
+      linhas.push('Último lote aceito pelo Flow: ' + (env.ultimo_202_em ? new Date(env.ultimo_202_em).toLocaleString('pt-BR') : 'nenhum'));
+      linhas.push('Na fila: ' + (fila.pendente || 0) + ' · aceitos: ' + ((fila.aceito || 0) + (fila.duplicado || 0)) + ' · recusados: ' + (fila.rejeitado || 0));
+      if (view.foto_hoje) {
+        const f = view.foto_hoje;
+        linhas.push(f.situacao === 'nao_criada'
+          ? '<strong>Foto de hoje não criada:</strong> há pedido fora do contrato no ERP (veja o log do Portal).'
+          : 'Foto de hoje: ' + f.situacao + ' (' + f.paginas + ' página(s))');
+      }
+      box.innerHTML = linhas.join('<br>');
+      box.hidden = false;
+      erpDesbloquear.hidden = !env.bloqueio || env.bloqueio === 'credencial';
+    }
+
+    function erpPreencher(view) {
+      const c = view.config;
+      if (c) {
+        ev('erp_base').value = c.base;
+        ev('erp_papel').value = c.papel;
+        ev('erp_destino_url').value = c.destino_url;
+        ev('erp_tenant_id').value = c.tenant_id;
+        ev('erp_foto_hora').value = c.foto_hora ?? '';
+        ev('erp_ativo').checked = !!c.ativo;
+      }
+      document.getElementById('erp-token-hint').textContent = c && c.tem_token
+        ? 'Há uma credencial salva (cifrada). Ela nunca é mostrada.'
+        : c && c.token_ilegivel
+          ? 'A credencial salva não pode ser lida neste servidor (chave de cifra trocada). Cole a credencial de novo.'
+          : 'Nenhuma credencial salva: o envio não roda sem ela.';
+      erpMostrarSituacao(view);
+    }
+
+    async function erpChamar(metodo, sufixo, corpo) {
+      const r = await fetch('/api/admin/environments/' + envId + '/erp-base' + sufixo, {
+        method: metodo,
+        headers: corpo ? { 'Content-Type': 'application/json' } : {},
+        body: corpo ? JSON.stringify(corpo) : undefined,
+      });
+      if (r.status === 401) { location.href = '/login'; return null; }
+      const t = await r.text();
+      if (!r.ok) {
+        let msg;
+        try { msg = JSON.parse(t).detail || t; } catch { msg = t || ('Erro ' + r.status); }
+        throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      }
+      return JSON.parse(t);
+    }
+
+    if (isEdit) {
+      erpFs.hidden = false;
+      erpChamar('GET', '').then(v => v && erpPreencher(v)).catch(() => {});
+    }
+
+    document.getElementById('btn-save-erp').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      erpStatus.textContent = '';
+      erpStatus.className = 'flowpcp-status';
+      const hora = ev('erp_foto_hora').value.trim();
+      const payload = {
+        base: ev('erp_base').value.trim().toLowerCase(),
+        papel: ev('erp_papel').value,
+        destino_url: ev('erp_destino_url').value.trim(),
+        tenant_id: ev('erp_tenant_id').value.trim().toLowerCase(),
+        foto_hora: hora === '' ? null : parseInt(hora, 10),
+        ativo: ev('erp_ativo').checked,
+      };
+      const tok = ev('erp_token').value.trim();
+      if (ev('erp_token_remover').checked) payload.token = '';  // limpa
+      else if (tok !== '') payload.token = tok;  // vazio = mantém a atual
+      btn.disabled = true;
+      try {
+        const v = await erpChamar('PUT', '', payload);
+        if (!v) return;
+        ev('erp_token').value = '';
+        ev('erp_token_remover').checked = false;
+        erpPreencher(v);
+        erpStatus.textContent = '✓ Envio de pedidos salvo';
+        erpStatus.classList.add('ok');
+      } catch (err) {
+        erpStatus.textContent = '✗ ' + err.message;
+        erpStatus.classList.add('err');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    erpDesbloquear.addEventListener('click', async () => {
+      erpDesbloquear.disabled = true;
+      try {
+        const v = await erpChamar('POST', '/desbloquear');
+        if (v) { erpPreencher(v); erpStatus.textContent = '✓ Envio retomado'; erpStatus.className = 'flowpcp-status ok'; }
+      } catch (err) {
+        erpStatus.textContent = '✗ ' + err.message;
+        erpStatus.className = 'flowpcp-status err';
+      } finally {
+        erpDesbloquear.disabled = false;
       }
     });
 

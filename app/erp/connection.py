@@ -107,6 +107,27 @@ class FirebirdConnection:
             yield conn
 
     @contextmanager
+    def connect_somente_leitura(self, cfg: dict) -> Generator:
+        """Conexão para LER o ERP (vigia SP1, medições): transação READ ONLY +
+        SNAPSHOT (isc_tpb_read + isc_tpb_concurrency), NOWAIT.
+
+        - READ ONLY: o próprio Firebird recusa qualquer escrita nesta
+          transação — a garantia não depende de o SQL estar certo.
+        - SNAPSHOT: cabeçalhos, itens e notas lidos na mesma fotografia do
+          banco; um faturamento no meio da leitura não aparece pela metade.
+
+        Passa por `_connect_with` (a cerca de testes `_no_real_firebird`
+        continua valendo); o commit de saída de uma transação READ ONLY não
+        grava nada.
+        """
+        import fdb  # type: ignore[import]
+
+        tpb = bytes([fdb.isc_tpb_version3, fdb.isc_tpb_read, fdb.isc_tpb_concurrency, fdb.isc_tpb_nowait])
+        with self._connect_with(cfg) as conn:
+            conn.begin(tpb=tpb)
+            yield conn
+
+    @contextmanager
     def _connect_with(self, cfg: dict) -> Generator:
         # fdb (driver legado) — compatível com o cliente Firebird 2.5 do Fire
         # Sistemas. O firebird-driver (moderno) exige fbclient 3.0+, que os
