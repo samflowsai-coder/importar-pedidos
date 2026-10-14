@@ -184,6 +184,18 @@ def _iniciar_erp_eventos() -> None:
         threading.Thread(target=erp_runner.loop, name="erp-eventos", daemon=True).start()
 
 
+@app.on_event("startup")
+def _iniciar_envio_flowpcp() -> None:
+    """Fila do `/recebimento` e (com `PORTAL_FLOWPCP_DECISOES=1`) as decisões do
+    Flow, numa thread daemon do processo web: no Windows do cliente o worker
+    nunca roda (mesmo motivo da reconciliação acima). `PORTAL_FLOWPCP_ENVIO=0`
+    desliga (deploy docker, onde o worker faz esse trabalho)."""
+    from app.integrations.flowpcp import envio_portal
+
+    if envio_portal.envio_habilitado():
+        threading.Thread(target=envio_portal.loop, name="flowpcp-envio", daemon=True).start()
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────
 
 

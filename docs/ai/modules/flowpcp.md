@@ -20,6 +20,7 @@ acontece — uma falha aqui vira outbox/retry e **nunca** pode derrubar o fluxo 
 | `config.py` | `FlowPCPConfig` + `flowpcp_config_for_slug()` / `enabled_flowpcp_envs()` |
 | `hook.py` | `push_new_order(order, *, import_id, slug)` — o gatilho |
 | `exporter.py` | `FlowPCPExporter.enqueue()` → outbox (`target=flowpcp`) |
+| `envio_portal.py` | thread do processo web: entrega a fila (com triagem da fila acumulada) e, com interruptor, as decisões |
 | `client.py` | HTTP para o Flow (service token, timeout por ambiente) |
 | `mapper.py` / `schema.py` | `Order` → payload de `/recebimento` |
 | `intercompany.py` | **política** do de-para de cliente (quando aplica) |
@@ -53,8 +54,29 @@ Rotas admin: `PUT /api/admin/environments/{env_id}/flowpcp`,
 `push_new_order` é chamado em `app/web/server.py` **depois** do sucesso no Fire/XLS.
 Ele resolve o cliente (ver intercompany, abaixo), monta o payload e chama
 `FlowPCPExporter.enqueue()`, que **enfileira no outbox** com
-`idempotency_key = "send-{import_id}"`. Quem entrega e faz retry é o worker
-(`drain_outbox`). **Nunca há HTTP no request path** — a UI não espera o Flow.
+`idempotency_key = "send-{import_id}"`. Quem entrega e faz retry é uma thread do
+processo web (`envio_portal.py`, `flowpcp-envio`) — no Windows do cliente só o `ui.py`
+roda, e o worker (`drain_outbox`) nunca subiu lá: o envio ficou parado de 24/07 a 10/2026.
+O worker continua fazendo o mesmo em deploy docker, onde a thread fica desligada
+(`PORTAL_FLOWPCP_ENVIO=0` no `docker-compose.yml`). **Nunca há HTTP no request path** — a
+UI não espera o Flow.
+
+**Regra de envio** (`envio_portal.drenar_ambiente`, usada pela thread E pelo worker):
+- pedido com `imports.fire_codigo`, qualquer idade: só vai se segue aberto no ERP
+  (`CAB_VENDAS.STATUS`, READ ONLY, uma leitura por ciclo). Faturado, cancelado ou apagado
+  → `dead` com `last_error = "descartado: …"` e audit `flowpcp_descartado`;
+- sem código e com até 7 dias (`LIMITE_ATRASO`): vai (no modo xlsx o pedido ainda nem
+  entrou no ERP);
+- sem código e mais velha: `retido` + audit `flowpcp_retido`; volta sozinha à fila quando
+  a reconciliação preenche o `fire_codigo` (`outbox_repo.release_retained`);
+- ERP fora, ou ERP que não acha NENHUM de vários códigos (banco trocado): quem tem código
+  espera, com pausa de 5 min e nada é descartado; recentes vão antes das acumuladas;
+- falha de envio pausa o ambiente por 5 min (as outras linhas não queimam tentativa);
+- linha flowpcp **nunca morre por falha passageira** (rede, 5xx, 401/403/408/429): passado o
+  escalonamento (30 s…6 h), tenta a cada 6 h. Recusa definitiva (outro 4xx, payload
+  inválido) → `dead` com `last_error = "recusado: …"`. Linhas `retido` contam como pendentes
+  em `/metrics`; descartadas e recusadas contam como `dead` (o `last_error` diz qual). `next_attempt_at` é hora local, no formato de `outbox_repo._now()`
+  (antes era UTC com offset: no Brasil, 30 s viravam 3 h 30 s).
 
 Duplicata no outbox (`OutboxDuplicateError`) é no-op com log, não erro.
 
@@ -81,8 +103,10 @@ ambiguidade.
 
 `poll_decisoes_once` lê o cursor persistido (`flowpcp_cursor_state`), busca decisões,
 aplica o `UPDATE` da data de entrega no Fire e confirma de volta ao Flow. Job
-`poll_flowpcp` do worker, a cada 30s, **por ambiente habilitado** — um ambiente ruim não
-derruba os outros.
+`poll_flowpcp`, a cada 30s, **por ambiente habilitado** — um ambiente ruim não
+derruba os outros. Roda **só com `PORTAL_FLOWPCP_DECISOES=1`** (worker e processo web)
+(desligado por padrão: é escrita no ERP de produção, parada desde julho). O "Dry-run" da
+tela **não** é interruptor: ele confirma a decisão no Flow sem gravar no ERP.
 
 - Não achou o pedido pela chave do cliente real? Tenta de novo com
   `PEDIDO_CLIENTE + CNPJ da revenda` — no Fire o pedido continua no nome de quem faturou.

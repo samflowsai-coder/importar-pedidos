@@ -175,6 +175,10 @@ PORTAL_RECONCILE_PERIODICO=      # 0 desliga os gatilhos automáticos (periódic
 # SP1 — pedidos do ERP para o Flow (config por ambiente em /admin/ambientes)
 PORTAL_ERP_VIGIA=                # 0 desliga a vigia/envio; ausente = ligado (só age em base ativa)
 
+# FlowPCP — fila do /recebimento e decisões, numa thread do processo web
+PORTAL_FLOWPCP_ENVIO=            # 0 desliga a thread que entrega a fila do Flow; ausente = ligado
+PORTAL_FLOWPCP_DECISOES=         # 1 liga a leitura das decisões do Flow (ESCREVE DT_ENTREGA no Fire); ausente = desligado
+
 # Webhooks do Gestor
 WEBHOOK_SECRET_GESTOR=
 WEBHOOK_SECRET_GESTOR_PREVIOUS=  # janela de rotação

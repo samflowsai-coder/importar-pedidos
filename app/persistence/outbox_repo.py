@@ -167,6 +167,87 @@ def claim_next(target: str, *, now: str | None = None) -> OutboxRow | None:
     return _row_to_outbox(row) if row else None
 
 
+def list_due(
+    target: str,
+    *,
+    limit: int,
+    criado_depois: str | None = None,
+    criado_ate: str | None = None,
+    now: str | None = None,
+) -> list[OutboxRow]:
+    """Até `limit` linhas pendentes e vencidas de `target`, mais antigas primeiro,
+    opcionalmente só as criadas depois de / até um instante (mesmo formato de
+    `created_at`). Diferente de `claim_next`, quem chama pode deixar uma linha
+    para o próximo ciclo sem travar a fila."""
+    now = now or _now()
+    with db.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM outbox
+             WHERE target = ?
+               AND status = 'pending'
+               AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+               AND (? IS NULL OR created_at > ?)
+               AND (? IS NULL OR created_at <= ?)
+             ORDER BY created_at ASC, id ASC
+             LIMIT ?
+            """,
+            (target, now, criado_depois, criado_depois, criado_ate, criado_ate, limit),
+        ).fetchall()
+    return [_row_to_outbox(r) for r in rows]
+
+
+def mark_discarded(row_id: int, *, reason: str) -> None:
+    """Tira a linha da fila sem enviar (`dead`, sem contar tentativa); o
+    motivo fica em `last_error`."""
+    with db.connect() as conn:
+        conn.execute(
+            """
+            UPDATE outbox
+               SET status = 'dead',
+                   last_error = ?,
+                   next_attempt_at = NULL
+             WHERE id = ? AND status = 'pending'
+            """,
+            (reason[:1000], row_id),
+        )
+
+
+def mark_retained(row_id: int, *, reason: str) -> bool:
+    """Segura a linha (`retido`) sem enviar nem descartar: ela volta para a fila
+    sozinha com `release_retained`. True se a linha estava `pending`."""
+    with db.connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE outbox
+               SET status = 'retido',
+                   last_error = ?,
+                   next_attempt_at = NULL
+             WHERE id = ? AND status = 'pending'
+            """,
+            (reason[:1000], row_id),
+        )
+    return cur.rowcount == 1
+
+
+def release_retained(target: str) -> int:
+    """Devolve à fila as linhas `retido` cujo pedido já tem código no ERP
+    (`imports.fire_codigo`, preenchido pelo envio ao ERP ou pela reconciliação)."""
+    with db.connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE outbox
+               SET status = 'pending',
+                   last_error = NULL
+             WHERE target = ?
+               AND status = 'retido'
+               AND import_id IN (SELECT id FROM imports WHERE fire_codigo IS NOT NULL)
+            """,
+            (target,),
+        )
+    return cur.rowcount
+
+
 def mark_sent(
     row_id: int,
     *,
@@ -221,7 +302,11 @@ __all__ = [
     "enqueue",
     "find_by_idempotency_key",
     "get",
+    "list_due",
     "list_for_import",
+    "mark_discarded",
     "mark_failed",
+    "mark_retained",
     "mark_sent",
+    "release_retained",
 ]

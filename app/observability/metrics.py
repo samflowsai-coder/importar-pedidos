@@ -82,7 +82,7 @@ def update_outbox_metrics() -> None:
             row = conn.execute(
                 """
                 SELECT
-                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN status IN ('pending', 'retido') THEN 1 ELSE 0 END),
                     SUM(CASE WHEN status = 'dead'    THEN 1 ELSE 0 END)
                 FROM outbox
                 """

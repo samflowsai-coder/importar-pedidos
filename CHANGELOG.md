@@ -27,6 +27,16 @@ _(nada ainda)_
 
 ---
 
+## 20261014-1940
+
+1) **Os pedidos importados voltam a chegar ao Flow.** Desde 24/07 o envio estava parado: ele dependia de um programa auxiliar que não roda no servidor da MM. Agora o próprio portal entrega cada pedido ao Flow. Antes de enviar, o portal confere no Fire: pedido já faturado, cancelado ou apagado não vai ao Flow e o motivo fica registrado no histórico do pedido. Pedido parado que o portal ainda não achou no Fire fica guardado e segue sozinho quando a conferência com o Fire o encontrar.
+
+2) **A data de entrega decidida no Flow ainda NÃO volta para o Fire.** Essa parte continua desligada de propósito e só será ligada depois de conferir com o Flow as decisões que ficaram pendentes desde julho.
+
+3) **Novo bloco "Pedidos do ERP para o Flow" em Ambientes.** O portal passa a poder enviar ao Flow todos os pedidos abertos no Fire e as mudanças neles (quantidade, data, preço, itens, nota, status), mais uma foto completa por noite. Vem desligado: só começa depois de cadastrar o endereço, o tenant e a credencial do Flow e marcar "ligado".
+
+---
+
 ## 20261014-0949
 
 1) **Pedido do Sam's com PACK agora avisa na observação quantos kits separar.** Quando o Sam's pede um pack (ex.: `PACK C/36 KITS`), o relatório "Pedido p/ Separação" do Fire somava só os kits e o pack sumia da conta (pedido 06858299-0000: aparecia 1.872 kits, o certo são 1.908). Agora a observação do pedido sai assim: `06858299-0000 | CONTEM PACK: 1 PACK C/36 = 36 KITS | TOTAL A SEPARAR: 1.908 KITS (1.872 AVULSOS + 36 DENTRO DE PACK)`. O pedido continua entrando com o código e a quantidade do pack, como o Sam's pediu. Na revisão, a linha do pack mostra `pack c/ 36 · 36 kits` embaixo da quantidade. Pedido sem pack não muda.

@@ -3,6 +3,11 @@ services:
     restart: unless-stopped
     build: .
     env_file: .env
+    environment:
+      # O serviço worker abaixo já drena a fila do FlowPCP e lê as decisões;
+      # a thread do processo web (feita para o Windows, onde só o ui.py roda)
+      # faria o mesmo trabalho em dobro.
+      PORTAL_FLOWPCP_ENVIO: "0"
     ports:
       - "8000:8000"
     volumes:
