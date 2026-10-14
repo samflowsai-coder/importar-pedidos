@@ -140,10 +140,15 @@
 ### Task 17: Ambiente
 - [x] Firebird 2.5 (mesmo motor da produção) em container, porta 3056, cópias de trabalho em scratch; originais intocados. `mm` = `BKP_MM_AMERICANENSE_TERCA.fbk` (abril); `nasmar` = segunda cópia do mesmo `.fbk` (os `.fbk` da Confecção estão incompletos) — de quebra, `CODIGO` iguais nas duas bases.
 - [x] Vigia real contra a cópia: 323 pedidos → 3.198 eventos, 0 fora do contrato, 0,3 s.
-- [ ] Flow local (`feat/sp1-erp-eventos`, Supabase DEV, tenant `dddddddd-…`) com credenciais `fpe_` das duas bases.
+- [x] Flow local (pcp-app #307/#308/#309, Supabase DEV, tenant de teste `eeeeeeee-…`) com credenciais `fpe_` das duas bases. Cópias e scripts do E2E em `data/fire_copia/sp1/` (gitignored).
 
 ### Task 18: Roteiro
-- [ ] (i) lote vazio por base → 202 e sinal de vida; (ii) primeira carga das duas bases no ritmo; (iii) mudanças nas CÓPIAS (QTD, DT_ENTREGA, STATUS → FATURADO/CANCELADO/reabertura, item novo e removido, nota em `CORPO_VENDAS_NFS`, exclusão) → linha do tempo conferida no Flow; (iv) `lote_fiscal` sintético antes do consolidado; (v) foto das duas bases; (vi) reenvio idempotente (derrubar a resposta) e 401 com token errado.
+- [x] **E2E fechado em 2026-10-14, conferido nos dois lados:**
+  - (i)/(ii) primeira carga: 3.198 eventos por base em 7 lotes (476–500, nenhuma unidade partida), 3.198 aceitos, 0 rejeitados, ~20 s por base; sinal de vida das duas bases.
+  - (iii) roteiro de 12 passos (`roteiro.py`) nas duas bases: um evento por mudança, seq 9–19 contíguo, todos aceitos; linha do tempo do Flow igual ao gabarito (0 pendência de ordem).
+  - (iv) foto das duas bases: 321 abertos, 2/2 páginas, conciliada com 0 divergência, 0 `ausente_na_foto`.
+  - (v) reenvio de 5 eventos aceitos → 5 `duplicado`, 0 evento novo no Flow; 401 com token inexistente → base bloqueada, 0 reenvio; credencial certa → desbloqueio e 202.
+- [ ] `lote_fiscal` sintético: fica para quando a Fase 2 do roteamento existir (o emissor está coberto por teste).
 
 ## Execução — modelo e esforço
 
