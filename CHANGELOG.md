@@ -27,6 +27,12 @@ _(nada ainda)_
 
 ---
 
+## 20261014-0949
+
+1) **Pedido do Sam's com PACK agora avisa na observação quantos kits separar.** Quando o Sam's pede um pack (ex.: `PACK C/36 KITS`), o relatório "Pedido p/ Separação" do Fire somava só os kits e o pack sumia da conta (pedido 06858299-0000: aparecia 1.872 kits, o certo são 1.908). Agora a observação do pedido sai assim: `06858299-0000 | CONTEM PACK: 1 PACK C/36 = 36 KITS | TOTAL A SEPARAR: 1.908 KITS (1.872 AVULSOS + 36 DENTRO DE PACK)`. O pedido continua entrando com o código e a quantidade do pack, como o Sam's pediu. Na revisão, a linha do pack mostra `pack c/ 36 · 36 kits` embaixo da quantidade. Pedido sem pack não muda.
+
+---
+
 ## 20261005-1812
 
 1) **O portal passa a registrar cada arquivo que lê, num arquivo de log para o suporte.** Nada muda na tela: o arquivo `logs\leituras.jsonl` (na pasta do portal) guarda, para cada planilha ou PDF recebido, qual leitor o interpretou, o que ele extraiu, se o cliente e os produtos foram achados no Fire, e se o arquivo parece ter sido lido errado ou já tinha sido importado. Quando uma operadora reclamar de um arquivo, o Samuel baixa esse arquivo pela VPN e descobre o motivo sem precisar pedir a planilha de novo.
