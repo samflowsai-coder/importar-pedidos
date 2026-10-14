@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,3 +70,11 @@ def enabled_flowpcp_envs() -> dict[str, FlowPCPConfig]:
             env, service_token=environments_repo.get_flowpcp_token(env["id"])
         )
     return out
+
+
+def decisoes_habilitadas() -> bool:
+    """Interruptor da leitura das decisões do Flow, que ESCREVE `DT_ENTREGA` no
+    ERP de produção. Desligado por padrão; liga com `PORTAL_FLOWPCP_DECISOES=1`.
+    Vale para o worker e para a thread do processo web. O "Dry-run" da tela
+    não serve de interruptor: ele confirma a decisão no Flow sem gravar."""
+    return os.environ.get("PORTAL_FLOWPCP_DECISOES", "0").strip() == "1"

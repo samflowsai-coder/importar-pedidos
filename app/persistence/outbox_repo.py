@@ -213,6 +213,41 @@ def mark_discarded(row_id: int, *, reason: str) -> None:
         )
 
 
+def mark_retained(row_id: int, *, reason: str) -> bool:
+    """Segura a linha (`retido`) sem enviar nem descartar: ela volta para a fila
+    sozinha com `release_retained`. True se a linha estava `pending`."""
+    with db.connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE outbox
+               SET status = 'retido',
+                   last_error = ?,
+                   next_attempt_at = NULL
+             WHERE id = ? AND status = 'pending'
+            """,
+            (reason[:1000], row_id),
+        )
+    return cur.rowcount == 1
+
+
+def release_retained(target: str) -> int:
+    """Devolve à fila as linhas `retido` cujo pedido já tem código no ERP
+    (`imports.fire_codigo`, preenchido pelo envio ao ERP ou pela reconciliação)."""
+    with db.connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE outbox
+               SET status = 'pending',
+                   last_error = NULL
+             WHERE target = ?
+               AND status = 'retido'
+               AND import_id IN (SELECT id FROM imports WHERE fire_codigo IS NOT NULL)
+            """,
+            (target,),
+        )
+    return cur.rowcount
+
+
 def mark_sent(
     row_id: int,
     *,
@@ -271,5 +306,7 @@ __all__ = [
     "list_for_import",
     "mark_discarded",
     "mark_failed",
+    "mark_retained",
     "mark_sent",
+    "release_retained",
 ]

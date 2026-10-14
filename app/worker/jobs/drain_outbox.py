@@ -16,9 +16,9 @@ Backoff schedule (row.attempts is the count *before* this attempt):
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
-from app.integrations.flowpcp.client import FLOWPCP_TARGET_NAME, FlowPCPClient
+from app.integrations.flowpcp.client import FlowPCPClient
 from app.integrations.flowpcp.config import FlowPCPConfig, enabled_flowpcp_envs
 from app.integrations.flowpcp.schema import RecebimentoRequest
 from app.integrations.gestor.client import (
@@ -56,11 +56,11 @@ def run_drain_outbox() -> None:
 
             cfg = flowpcp_envs.get(slug)
             if cfg and cfg.enabled:
-                for _ in range(_BATCH):
-                    row = outbox_repo.claim_next(target=FLOWPCP_TARGET_NAME)
-                    if row is None:
-                        break
-                    _process_flowpcp_row(row, cfg)
+                # Mesma regra da thread do processo web: triagem pelo ERP
+                # (encerrado não vai), retenção da acumulada sem código.
+                from app.integrations.flowpcp import envio_portal  # noqa: PLC0415 — ciclo de import
+
+                envio_portal.drenar_ambiente(env, cfg)
     update_outbox_metrics()
 
 
@@ -89,24 +89,27 @@ def _process_flowpcp_row(row: OutboxRow, cfg: FlowPCPConfig) -> None:
             _handle_flowpcp_failure(row, str(exc))
 
 
+def _proxima_tentativa(delta_s: int) -> str:
+    """Mesmo relógio e formato de `outbox_repo._now()` (hora local, segundos):
+    `list_due`/`claim_next` comparam por texto. Em UTC com offset, 30 s viravam
+    3 h 30 s no Brasil."""
+    return (datetime.now() + timedelta(seconds=delta_s)).isoformat(timespec="seconds")
+
+
 def _handle_flowpcp_failure(row: OutboxRow, error: str) -> None:
-    if row.attempts >= len(_BACKOFF_S):
-        outbox_repo.mark_failed(row.id, error=error, dead=True)
-        logger.error(
-            "worker.drain flowpcp dead import_id={} attempts={}",
-            row.import_id,
-            row.attempts + 1,
-        )
-    else:
-        delta = _BACKOFF_S[row.attempts]
-        next_at = (datetime.now(UTC) + timedelta(seconds=delta)).isoformat()
-        outbox_repo.mark_failed(row.id, error=error, next_attempt_at=next_at)
-        logger.warning(
-            "worker.drain flowpcp retry import_id={} attempts={} next=+{}s",
-            row.import_id,
-            row.attempts + 1,
-            delta,
-        )
+    # Pedido nunca morre por falha de envio: Flow fora do ar ou credencial
+    # errada por um dia não pode apagar a fila. Passado o escalonamento, tenta
+    # a cada 6 h e grita no log.
+    delta = _BACKOFF_S[min(row.attempts, len(_BACKOFF_S) - 1)]
+    outbox_repo.mark_failed(row.id, error=error, next_attempt_at=_proxima_tentativa(delta))
+    log = logger.error if row.attempts >= len(_BACKOFF_S) else logger.warning
+    log(
+        "worker.drain flowpcp retry import_id={} attempts={} next=+{}s error={}",
+        row.import_id,
+        row.attempts + 1,
+        delta,
+        error[:200],
+    )
 
 
 def _process_row(row: OutboxRow) -> None:
@@ -155,8 +158,7 @@ def _handle_failure(row: OutboxRow, error: str) -> None:
         )
     else:
         delta = _BACKOFF_S[row.attempts]
-        next_at = (datetime.now(UTC) + timedelta(seconds=delta)).isoformat()
-        outbox_repo.mark_failed(row.id, error=error, next_attempt_at=next_at)
+        outbox_repo.mark_failed(row.id, error=error, next_attempt_at=_proxima_tentativa(delta))
         logger.warning(
             "worker.drain retry import_id={} attempts={} next=+{}s",
             row.import_id,

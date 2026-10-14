@@ -1,25 +1,36 @@
 """Envio ao FlowPCP de dentro do processo web (`ui.py`).
 
 No Windows do cliente só o `ui.py` roda (`scripts/setup-service.ps1`); o worker
-(`python -m app.worker`), onde vivem o drain do outbox e o poll de decisões,
+(`python -m app.worker`), onde viviam o drain do outbox e o poll de decisões,
 nunca subiu lá: o último pedido da MM chegou ao Flow pelo `/recebimento` em
 24/07/2026. Esta thread faz as duas coisas no processo que já roda, como a
-reconciliação e o SP1 (`app/web/server.py`).
+reconciliação e o SP1 (`app/web/server.py`). O worker usa a MESMA regra
+(`drain_outbox` chama `drenar_ambiente`), então rodar os dois não muda o que
+vai ao Flow.
 
-- **Fila do `/recebimento`**: a cada `TICK_S`, só o target flowpcp, só nos
-  ambientes com FlowPCP habilitado. O Gestor continua no worker.
-- **Fila acumulada**: linha com mais de `LIMITE_ATRASO` só vai se o pedido segue
-  aberto no ERP (`imports.fire_codigo` → `CAB_VENDAS.STATUS`, leitura READ
-  ONLY). Faturado, cancelado, apagado do ERP ou sem código conhecido sai da fila
-  com o motivo e não chega ao Flow: pedido encerrado virando demanda nova é pior
-  que não mandar (os abertos chegam ao Flow pelo SP1 de qualquer jeito). ERP
-  fora do ar: a linha antiga espera o próximo ciclo; as recentes seguem.
-- **Decisões do Flow** (escrita de `DT_ENTREGA` no ERP): só com
-  `PORTAL_FLOWPCP_DECISOES=1`; desligado por padrão. O "Dry-run" da tela não
-  serve de interruptor: ele CONFIRMA a decisão no Flow sem gravar no ERP.
+Regra de cada linha da fila (`target=flowpcp`):
+
+- **Pedido com código no ERP** (`imports.fire_codigo`), qualquer idade: só vai
+  se segue aberto (`CAB_VENDAS.STATUS`, leitura READ ONLY, uma por ciclo).
+  Faturado, cancelado ou apagado do ERP → `dead` com `last_error =
+  "descartado: …"` e audit `flowpcp_descartado`: pedido encerrado virando
+  demanda nova no Flow é pior que não mandar.
+- **Sem código, recente** (até `LIMITE_ATRASO`): vai. No modo xlsx o pedido
+  ainda nem entrou no ERP.
+- **Sem código, acumulada**: fica `retido` (nem vai, nem morre) e volta sozinha
+  para a fila quando a reconciliação achar o pedido no ERP
+  (`outbox_repo.release_retained`).
+- ERP fora: linha com código espera (pausa de `PAUSA_ERP` antes de tentar ler
+  de novo); linha sem código recente segue.
+- Recentes antes das acumuladas. A primeira falha de envio para o ambiente
+  neste ciclo (Flow fora, credencial errada): nenhuma linha queima tentativa
+  à toa. Linha nunca morre por falha de envio (`drain_outbox`).
+
+**Decisões do Flow** (escrita de `DT_ENTREGA` no ERP): só com
+`PORTAL_FLOWPCP_DECISOES=1` (`config.decisoes_habilitadas`), desligado por padrão.
 
 `PORTAL_FLOWPCP_ENVIO=0` desliga a thread inteira (deploy docker, onde o worker
-roda e faria o mesmo trabalho).
+faz o mesmo trabalho).
 """
 
 from __future__ import annotations
@@ -32,7 +43,12 @@ from datetime import datetime, timedelta
 from app.erp import queries
 from app.erp.connection import FirebirdConnection
 from app.integrations.flowpcp.client import FLOWPCP_TARGET_NAME
-from app.integrations.flowpcp.config import FlowPCPConfig, enabled_flowpcp_envs
+from app.integrations.flowpcp.config import (
+    FlowPCPConfig,
+    decisoes_habilitadas,
+    enabled_flowpcp_envs,
+)
+from app.observability.metrics import update_outbox_metrics
 from app.persistence import context as env_context
 from app.persistence import db, environments_repo, outbox_repo, repo
 from app.persistence.outbox_repo import OutboxRow
@@ -43,19 +59,23 @@ from app.worker.jobs.poll_flowpcp import run_poll_flowpcp
 TICK_S = 15.0
 INTERVALO_DECISOES = timedelta(seconds=30)
 LIMITE_ATRASO = timedelta(days=7)
+PAUSA_ERP = timedelta(minutes=5)
 LOTE = 20
 _ENCERRADOS = frozenset({"FATURADO", "CANCELADO"})
 _BLOCO_ERP = 200
+_RETIDO = (
+    "retido: fila acumulada sem pedido conhecido no ERP; volta sozinho quando "
+    "a reconciliação achar o pedido"
+)
 
 LerStatus = Callable[[dict, list[int]], dict[int, str]]
+
+# slug → até quando não tentar ler o ERP de novo (o fdb não tem timeout curto).
+_pausa_erp: dict[str, datetime] = {}
 
 
 def envio_habilitado() -> bool:
     return os.environ.get("PORTAL_FLOWPCP_ENVIO", "1").strip() != "0"
-
-
-def decisoes_habilitadas() -> bool:
-    return os.environ.get("PORTAL_FLOWPCP_DECISOES", "0").strip() == "1"
 
 
 def ler_status_erp(env: dict, codigos: list[int]) -> dict[int, str]:
@@ -80,12 +100,38 @@ def _codigos_erp(import_ids: list[str]) -> dict[str, int | None]:
         rows = conn.execute(
             f"SELECT id, fire_codigo FROM imports WHERE id IN ({marcas})", import_ids
         ).fetchall()
-    return {r["id"]: r["fire_codigo"] for r in rows}
+    return {
+        r["id"]: (int(r["fire_codigo"]) if r["fire_codigo"] is not None else None) for r in rows
+    }
+
+
+def _status_do_erp(
+    env: dict, codigos: list[int], agora: datetime, ler_status: LerStatus
+) -> dict[int, str] | None:
+    if not codigos:
+        return {}
+    slug = env["slug"]
+    if _pausa_erp.get(slug, datetime.min) > agora:
+        return None
+    try:
+        return ler_status(env, codigos)
+    except Exception as exc:  # noqa: BLE001 — ERP fora: as linhas com código esperam
+        _pausa_erp[slug] = agora + PAUSA_ERP
+        logger.warning(
+            f"flowpcp.envio env={slug}: leitura do ERP falhou, nova tentativa em "
+            f"{int(PAUSA_ERP.total_seconds() // 60)} min: {exc!r}"
+        )
+        return None
 
 
 def _descartar(row: OutboxRow, motivo: str, detalhe: dict) -> None:
     outbox_repo.mark_discarded(row.id, reason=f"descartado: {motivo}")
     repo.append_audit(row.import_id, "flowpcp_descartado", {"motivo": motivo, **detalhe})
+
+
+def _saiu_da_fila(row_id: int) -> bool:
+    atual = outbox_repo.get(row_id)
+    return atual is None or atual.status != "pending"
 
 
 def drenar_ambiente(
@@ -96,54 +142,53 @@ def drenar_ambiente(
     ler_status: LerStatus = ler_status_erp,
     enviar: Callable[[OutboxRow, FlowPCPConfig], None] = _process_flowpcp_row,
 ) -> dict[str, int]:
-    """Um ciclo da fila flowpcp de um ambiente (com o contexto do ambiente ativo).
-
-    Recentes primeiro: a fila acumulada nunca atrasa um pedido novo."""
+    """Um ciclo da fila flowpcp de um ambiente (com o contexto do ambiente ativo)."""
     agora = agora or datetime.now()
-    corte = (agora - LIMITE_ATRASO).isoformat(timespec="seconds")  # mesmo formato de created_at
-    conta = {"enviados": 0, "descartados": 0, "aguardando_erp": 0}
+    corte = (agora - LIMITE_ATRASO).isoformat(timespec="seconds")  # formato de created_at
+    conta = {"enviados": 0, "descartados": 0, "retidos": 0, "aguardando_erp": 0, "falhas": 0}
+    conta["liberados"] = outbox_repo.release_retained(FLOWPCP_TARGET_NAME)
 
     recentes = outbox_repo.list_due(FLOWPCP_TARGET_NAME, limit=LOTE, criado_depois=corte)
-    for row in recentes:
-        enviar(row, cfg)
-        conta["enviados"] += 1
-
     vagas = LOTE - len(recentes)
     atrasadas = (
         outbox_repo.list_due(FLOWPCP_TARGET_NAME, limit=vagas, criado_ate=corte) if vagas else []
     )
-    if not atrasadas:
+    linhas = recentes + atrasadas
+    if not linhas:
         return conta
 
-    codigos = _codigos_erp([r.import_id for r in atrasadas])
-    conhecidos = sorted({int(c) for c in codigos.values() if c is not None})
-    status: dict[int, str] | None = {}
-    if conhecidos:
-        try:
-            status = ler_status(env, conhecidos)
-        except Exception as exc:  # noqa: BLE001 — ERP fora: a linha antiga espera o próximo ciclo
-            logger.warning(f"flowpcp.envio env={env['slug']}: leitura do ERP falhou: {exc!r}")
-            status = None
+    ids_atrasadas = {r.id for r in atrasadas}
+    codigos = _codigos_erp([r.import_id for r in linhas])
+    conhecidos = sorted({c for c in codigos.values() if c is not None})
+    status = _status_do_erp(env, conhecidos, agora, ler_status)
 
-    for row in atrasadas:
+    for row in linhas:
         codigo = codigos.get(row.import_id)
         if codigo is None:
-            _descartar(row, "fila acumulada sem pedido conhecido no ERP", {"fire_codigo": None})
-            conta["descartados"] += 1
-            continue
-        if status is None:
+            if row.id in ids_atrasadas:
+                if outbox_repo.mark_retained(row.id, reason=_RETIDO):
+                    repo.append_audit(row.import_id, "flowpcp_retido", {"motivo": _RETIDO})
+                conta["retidos"] += 1
+                continue
+        elif status is None:
             conta["aguardando_erp"] += 1
             continue
-        situacao = status.get(int(codigo))
-        if situacao is None or situacao in _ENCERRADOS:
-            _descartar(
-                row,
-                f"fila acumulada, pedido {situacao or 'apagado'} no ERP",
-                {"fire_codigo": int(codigo), "status": situacao},
-            )
-            conta["descartados"] += 1
-            continue
+        else:
+            situacao = status.get(codigo)
+            if situacao is None or situacao in _ENCERRADOS:
+                _descartar(
+                    row,
+                    f"pedido {situacao or 'apagado'} no ERP",
+                    {"fire_codigo": codigo, "status": situacao},
+                )
+                conta["descartados"] += 1
+                continue
         enviar(row, cfg)
+        if not _saiu_da_fila(row.id):
+            # Flow fora ou credencial errada: para o ambiente neste ciclo em vez
+            # de queimar uma tentativa de cada linha do lote.
+            conta["falhas"] += 1
+            break
         conta["enviados"] += 1
     return conta
 
@@ -161,6 +206,7 @@ def drenar() -> None:
             continue
         if any(conta.values()):
             logger.info(f"flowpcp.envio env={slug} {conta}")
+    update_outbox_metrics()
 
 
 def ciclo(ultima_decisao: datetime, agora: datetime) -> datetime:

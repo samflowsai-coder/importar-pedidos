@@ -9,7 +9,11 @@ from __future__ import annotations
 
 from app.erp.connection import FirebirdConnection
 from app.integrations.flowpcp.client import FlowPCPClient
-from app.integrations.flowpcp.config import FlowPCPConfig, enabled_flowpcp_envs
+from app.integrations.flowpcp.config import (
+    FlowPCPConfig,
+    decisoes_habilitadas,
+    enabled_flowpcp_envs,
+)
 from app.integrations.flowpcp.poll_decisoes import poll_decisoes_once
 from app.persistence import environments_repo, erp_bases_repo, router
 from app.utils.logger import logger
@@ -50,6 +54,8 @@ def _erp_base(slug: str) -> str | None:
 
 
 def run_poll_flowpcp() -> None:
+    if not decisoes_habilitadas():
+        return  # escrita no ERP de produção: só com PORTAL_FLOWPCP_DECISOES=1
     for slug, cfg in _list_flowpcp_envs():
         client = _build_client(cfg)
         try:

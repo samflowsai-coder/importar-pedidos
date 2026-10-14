@@ -1,7 +1,7 @@
 """Tests for app.worker.jobs.drain_outbox."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, create_autospec, patch
 
@@ -90,7 +90,7 @@ def test_first_failure_schedules_retry_in_30s(mock_client, mock_outbox):
     assert kwargs.get("dead") is None or kwargs.get("dead") is False
     assert kwargs["next_attempt_at"] is not None
     next_dt = datetime.fromisoformat(kwargs["next_attempt_at"])
-    delta = (next_dt - datetime.now(UTC)).total_seconds()
+    delta = (next_dt - datetime.now()).total_seconds()  # hora local, como outbox_repo._now()
     assert 25 <= delta <= 35
 
 
@@ -162,7 +162,7 @@ def test_backoff_progression(mock_client, mock_outbox):
 
         _, kwargs = mock_outbox.mark_failed.call_args
         next_dt = datetime.fromisoformat(kwargs["next_attempt_at"])
-        delta = (next_dt - datetime.now(UTC)).total_seconds()
+        delta = (next_dt - datetime.now()).total_seconds()  # hora local, como outbox_repo._now()
         assert expected_delta - 5 <= delta <= expected_delta + 5, (
             f"attempts={idx}: expected ~{expected_delta}s, got {delta:.0f}s"
         )

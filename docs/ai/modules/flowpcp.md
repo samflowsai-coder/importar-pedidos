@@ -61,11 +61,19 @@ O worker continua fazendo o mesmo em deploy docker, onde a thread fica desligada
 (`PORTAL_FLOWPCP_ENVIO=0` no `docker-compose.yml`). **Nunca há HTTP no request path** — a
 UI não espera o Flow.
 
-**Fila acumulada** (linha com mais de 7 dias, `LIMITE_ATRASO`): só vai se o pedido segue
-aberto no ERP (`imports.fire_codigo` → `CAB_VENDAS.STATUS`, leitura READ ONLY, uma por
-ciclo). Faturado, cancelado, apagado ou sem `fire_codigo` → `dead` com
-`last_error = "descartado: …"` e audit `flowpcp_descartado`, sem chegar ao Flow. ERP fora:
-a linha antiga espera; as recentes vão antes, sempre.
+**Regra de envio** (`envio_portal.drenar_ambiente`, usada pela thread E pelo worker):
+- pedido com `imports.fire_codigo`, qualquer idade: só vai se segue aberto no ERP
+  (`CAB_VENDAS.STATUS`, READ ONLY, uma leitura por ciclo). Faturado, cancelado ou apagado
+  → `dead` com `last_error = "descartado: …"` e audit `flowpcp_descartado`;
+- sem código e com até 7 dias (`LIMITE_ATRASO`): vai (no modo xlsx o pedido ainda nem
+  entrou no ERP);
+- sem código e mais velha: `retido` + audit `flowpcp_retido`; volta sozinha à fila quando
+  a reconciliação preenche o `fire_codigo` (`outbox_repo.release_retained`);
+- ERP fora: quem tem código espera, com pausa de 5 min; recentes vão antes das acumuladas;
+  a primeira falha de envio para o ambiente no ciclo;
+- linha flowpcp **nunca morre por falha de envio**: passado o escalonamento (30 s…6 h),
+  tenta a cada 6 h. `next_attempt_at` é hora local, no formato de `outbox_repo._now()`
+  (antes era UTC com offset: no Brasil, 30 s viravam 3 h 30 s).
 
 Duplicata no outbox (`OutboxDuplicateError`) é no-op com log, não erro.
 
@@ -93,7 +101,7 @@ ambiguidade.
 `poll_decisoes_once` lê o cursor persistido (`flowpcp_cursor_state`), busca decisões,
 aplica o `UPDATE` da data de entrega no Fire e confirma de volta ao Flow. Job
 `poll_flowpcp`, a cada 30s, **por ambiente habilitado** — um ambiente ruim não
-derruba os outros. No processo web roda **só com `PORTAL_FLOWPCP_DECISOES=1`**
+derruba os outros. Roda **só com `PORTAL_FLOWPCP_DECISOES=1`** (worker e processo web)
 (desligado por padrão: é escrita no ERP de produção, parada desde julho). O "Dry-run" da
 tela **não** é interruptor: ele confirma a decisão no Flow sem gravar no ERP.
 

@@ -59,6 +59,7 @@ def test_run_poll_skips_disabled_envs(monkeypatch):
 
 
 def test_run_poll_invokes_once_per_enabled_env(monkeypatch):
+    monkeypatch.setenv("PORTAL_FLOWPCP_DECISOES", "1")
     cfg = FlowPCPConfig(enabled=True, base_url="x", service_token="t", tenant_id="mm")
     monkeypatch.setattr(job, "_list_flowpcp_envs", lambda: [("mm", cfg)])
     monkeypatch.setattr(job, "_open_env_conn", lambda slug: MagicMock())
@@ -115,7 +116,8 @@ def test_process_flowpcp_row_reschedules_on_failure(monkeypatch):
     assert failed["next_attempt_at"] is not None
 
 
-def test_process_flowpcp_row_marks_dead_after_max_attempts(monkeypatch):
+def test_process_flowpcp_row_never_dead_after_max_attempts(monkeypatch):
+    """Pedido não morre por falha de envio: passado o escalonamento, tenta a cada 6 h."""
     fake_client = MagicMock()
     fake_client.send_order.side_effect = RuntimeError("rede caiu")
     monkeypatch.setattr(drain, "FlowPCPClient", lambda **kw: fake_client)
@@ -124,8 +126,9 @@ def test_process_flowpcp_row_marks_dead_after_max_attempts(monkeypatch):
         drain.outbox_repo,
         "mark_failed",
         lambda rid, *, error, next_attempt_at=None, dead=False: failed.update(
-            id=rid, dead=dead
+            id=rid, dead=dead, next_attempt_at=next_attempt_at
         ),
     )
     drain._process_flowpcp_row(_flowpcp_outbox_row(attempts=99), _CFG)
-    assert failed["dead"] is True
+    assert failed["dead"] is False
+    assert failed["next_attempt_at"] is not None
