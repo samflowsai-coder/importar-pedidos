@@ -14,11 +14,14 @@ Backoff schedule (row.attempts is the count *before* this attempt):
   attempts=4 → retry in   6h
   attempts=5 → dead
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from app.integrations.flowpcp.client import FlowPCPClient
+from pydantic import ValidationError
+
+from app.integrations.flowpcp.client import FlowPCPClient, FlowPCPClientError
 from app.integrations.flowpcp.config import FlowPCPConfig, enabled_flowpcp_envs
 from app.integrations.flowpcp.schema import RecebimentoRequest
 from app.integrations.gestor.client import (
@@ -60,7 +63,10 @@ def run_drain_outbox() -> None:
                 # (encerrado não vai), retenção da acumulada sem código.
                 from app.integrations.flowpcp import envio_portal  # noqa: PLC0415 — ciclo de import
 
-                envio_portal.drenar_ambiente(env, cfg)
+                try:
+                    envio_portal.drenar_ambiente(env, cfg)
+                except Exception as exc:  # noqa: BLE001 — um ambiente ruim não derruba os outros
+                    logger.error("worker.drain flowpcp env={} falhou: {!r}", slug, exc)
     update_outbox_metrics()
 
 
@@ -86,7 +92,17 @@ def _process_flowpcp_row(row: OutboxRow, cfg: FlowPCPConfig) -> None:
                 row.idempotency_key,
             )
         except Exception as exc:  # noqa: BLE001 — falha vira backoff/dead, não derruba o lote
-            _handle_flowpcp_failure(row, str(exc))
+            _handle_flowpcp_failure(row, str(exc), definitivo=_recusa_definitiva(exc))
+
+
+def _recusa_definitiva(exc: Exception) -> bool:
+    """Reenviar o mesmo corpo daria a mesma resposta: payload inválido aqui ou
+    4xx de conteúdo do Flow. Credencial (401/403), timeout (408) e limite (429)
+    são do ambiente, não da linha: seguem tentando."""
+    if isinstance(exc, ValidationError):
+        return True
+    status = getattr(exc, "status_code", None) if isinstance(exc, FlowPCPClientError) else None
+    return status is not None and 400 <= status < 500 and status not in (401, 403, 408, 429)
 
 
 def _proxima_tentativa(delta_s: int) -> str:
@@ -96,7 +112,13 @@ def _proxima_tentativa(delta_s: int) -> str:
     return (datetime.now() + timedelta(seconds=delta_s)).isoformat(timespec="seconds")
 
 
-def _handle_flowpcp_failure(row: OutboxRow, error: str) -> None:
+def _handle_flowpcp_failure(row: OutboxRow, error: str, *, definitivo: bool = False) -> None:
+    if definitivo:
+        outbox_repo.mark_failed(row.id, error=f"recusado: {error}", dead=True)
+        logger.error(
+            "worker.drain flowpcp recusado import_id={} error={}", row.import_id, error[:200]
+        )
+        return
     # Pedido nunca morre por falha de envio: Flow fora do ar ou credencial
     # errada por um dia não pode apagar a fila. Passado o escalonamento, tenta
     # a cada 6 h e grita no log.

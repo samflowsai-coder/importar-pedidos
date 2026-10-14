@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -111,8 +112,10 @@ class Fake:
 @pytest.fixture(autouse=True)
 def _sem_pausa():
     envio_portal._pausa_erp.clear()
+    envio_portal._pausa_flow.clear()
     yield
     envio_portal._pausa_erp.clear()
+    envio_portal._pausa_flow.clear()
 
 
 def rodar(env, fake, agora=AGORA):
@@ -203,16 +206,49 @@ def test_erp_fora_segura_quem_tem_codigo_manda_o_resto_e_pausa(env):
     assert len(fake.lidos) == 2
 
 
-def test_falha_de_envio_para_o_ambiente_sem_queimar_o_lote(env):
+def test_falha_de_envio_pausa_o_ambiente_sem_queimar_a_fila(env):
     pedido("a", dias=1)
     pedido("b", dias=0.5)
     pedido("c", dias=0.2)
     fake = Fake(envio_falha={"a"})
 
     conta = rodar(env, fake)
-
     assert conta["falhas"] == 1 and fake.enviados == ["a"]
+    rodar(env, fake, agora=AGORA + timedelta(minutes=4))  # pausado: nem tenta
+    assert fake.enviados == ["a"]
     assert situacao("b") == ("pending", 0, None)
+    rodar(env, fake, agora=AGORA + timedelta(minutes=6))
+    assert fake.enviados == ["a", "b", "c"]  # "a" está em backoff próprio
+
+
+def test_erp_que_nao_acha_nenhum_pedido_nao_descarta_nada(env):
+    pedido("p1", dias=30, fire_codigo=101)
+    pedido("p2", dias=30, fire_codigo=102)
+    fake = Fake({})  # banco errado: nenhum código existe
+
+    conta = rodar(env, fake)
+
+    assert (conta["descartados"], conta["aguardando_erp"]) == (0, 2)
+    assert situacao("p1")[0] == "pending"
+
+
+def test_recusa_definitiva_morre_com_motivo_e_passageira_nao():
+    from pydantic import BaseModel, ValidationError
+
+    from app.integrations.flowpcp.client import FlowPCPClientError
+    from app.worker.jobs.drain_outbox import _recusa_definitiva
+
+    class M(BaseModel):
+        x: int
+
+    try:
+        M.model_validate({"x": "a"})
+    except ValidationError as exc:
+        assert _recusa_definitiva(exc)
+    assert _recusa_definitiva(FlowPCPClientError("x", status_code=422))
+    for passageira in (401, 403, 408, 429, 500, 503, None):
+        assert not _recusa_definitiva(FlowPCPClientError("x", status_code=passageira))
+    assert not _recusa_definitiva(RuntimeError("rede"))
 
 
 def test_fila_acumulada_grande_nao_atrasa_pedido_novo(env):
@@ -256,12 +292,25 @@ def test_falha_real_de_envio_volta_para_a_fila_no_relogio_local(env, monkeypatch
             "UPDATE outbox SET payload_json = ? WHERE import_id = 'x'",
             (json.dumps(_payload_recebimento("x")),),
         )
-    agora = datetime.now()
-    envio_portal.drenar_ambiente(env, CFG, agora=agora, ler_status=Fake().ler)
-    st, tentativas, _ = situacao("x")
-    assert (st, tentativas) == ("pending", 1)
-    depois = (agora + timedelta(seconds=31)).isoformat(timespec="seconds")
-    assert [r.import_id for r in outbox_repo.list_due("flowpcp", limit=5, now=depois)] == ["x"]
+    monkeypatch.setenv("TZ", "America/Sao_Paulo")  # a oeste de UTC: onde o bug aparecia
+    time.tzset()
+    try:
+        agora = datetime.now()
+        envio_portal.drenar_ambiente(env, CFG, agora=agora, ler_status=Fake().ler)
+        st, tentativas, _ = situacao("x")
+        assert (st, tentativas) == ("pending", 1)
+        proxima = outbox_repo.get(outbox_repo.list_for_import("x")[0].id).next_attempt_at
+        assert proxima is not None and "+" not in proxima and "Z" not in proxima
+
+        def vencidas(segundos):
+            now = (agora + timedelta(seconds=segundos)).isoformat(timespec="seconds")
+            return [r.import_id for r in outbox_repo.list_due("flowpcp", limit=5, now=now)]
+
+        assert vencidas(25) == []
+        assert vencidas(31) == ["x"]
+    finally:
+        monkeypatch.undo()
+        time.tzset()
 
 
 def test_linha_flowpcp_nunca_morre_por_falha_de_envio(env, monkeypatch):

@@ -22,9 +22,12 @@ Regra de cada linha da fila (`target=flowpcp`):
   (`outbox_repo.release_retained`).
 - ERP fora: linha com código espera (pausa de `PAUSA_ERP` antes de tentar ler
   de novo); linha sem código recente segue.
-- Recentes antes das acumuladas. A primeira falha de envio para o ambiente
-  neste ciclo (Flow fora, credencial errada): nenhuma linha queima tentativa
-  à toa. Linha nunca morre por falha de envio (`drain_outbox`).
+- ERP que devolve NENHUM de vários códigos (caminho do banco trocado, cópia
+  errada) não é "todos apagados": a leva espera, com log de erro.
+- Recentes antes das acumuladas. Falha de envio (Flow fora, credencial errada)
+  pausa o ambiente por `PAUSA_FLOW`: as outras linhas não queimam tentativa.
+  Linha nunca morre por falha passageira; recusa definitiva do Flow (4xx de
+  conteúdo) ou payload inválido vira `dead` com `recusado: …` (`drain_outbox`).
 
 **Decisões do Flow** (escrita de `DT_ENTREGA` no ERP): só com
 `PORTAL_FLOWPCP_DECISOES=1` (`config.decisoes_habilitadas`), desligado por padrão.
@@ -60,6 +63,7 @@ TICK_S = 15.0
 INTERVALO_DECISOES = timedelta(seconds=30)
 LIMITE_ATRASO = timedelta(days=7)
 PAUSA_ERP = timedelta(minutes=5)
+PAUSA_FLOW = timedelta(minutes=5)
 LOTE = 20
 _ENCERRADOS = frozenset({"FATURADO", "CANCELADO"})
 _BLOCO_ERP = 200
@@ -72,6 +76,8 @@ LerStatus = Callable[[dict, list[int]], dict[int, str]]
 
 # slug → até quando não tentar ler o ERP de novo (o fdb não tem timeout curto).
 _pausa_erp: dict[str, datetime] = {}
+# slug → até quando não tentar enviar de novo depois de uma falha de envio.
+_pausa_flow: dict[str, datetime] = {}
 
 
 def envio_habilitado() -> bool:
@@ -114,7 +120,7 @@ def _status_do_erp(
     if _pausa_erp.get(slug, datetime.min) > agora:
         return None
     try:
-        return ler_status(env, codigos)
+        lidos = ler_status(env, codigos)
     except Exception as exc:  # noqa: BLE001 — ERP fora: as linhas com código esperam
         _pausa_erp[slug] = agora + PAUSA_ERP
         logger.warning(
@@ -122,6 +128,16 @@ def _status_do_erp(
             f"{int(PAUSA_ERP.total_seconds() // 60)} min: {exc!r}"
         )
         return None
+    if len(codigos) > 1 and not lidos:
+        # Nenhum de vários pedidos existe? Mais provável o banco errado que todos
+        # apagados — "apagado" descarta para sempre, então espera e grita.
+        _pausa_erp[slug] = agora + PAUSA_ERP
+        logger.error(
+            f"flowpcp.envio env={slug}: o ERP não achou NENHUM de {len(codigos)} pedidos "
+            "— confira o banco configurado no ambiente; nada foi descartado"
+        )
+        return None
+    return lidos
 
 
 def _descartar(row: OutboxRow, motivo: str, detalhe: dict) -> None:
@@ -147,6 +163,8 @@ def drenar_ambiente(
     corte = (agora - LIMITE_ATRASO).isoformat(timespec="seconds")  # formato de created_at
     conta = {"enviados": 0, "descartados": 0, "retidos": 0, "aguardando_erp": 0, "falhas": 0}
     conta["liberados"] = outbox_repo.release_retained(FLOWPCP_TARGET_NAME)
+    if _pausa_flow.get(env["slug"], datetime.min) > agora:
+        return conta
 
     recentes = outbox_repo.list_due(FLOWPCP_TARGET_NAME, limit=LOTE, criado_depois=corte)
     vagas = LOTE - len(recentes)
@@ -185,8 +203,9 @@ def drenar_ambiente(
                 continue
         enviar(row, cfg)
         if not _saiu_da_fila(row.id):
-            # Flow fora ou credencial errada: para o ambiente neste ciclo em vez
-            # de queimar uma tentativa de cada linha do lote.
+            # Flow fora ou credencial errada: pausa o ambiente em vez de queimar
+            # uma tentativa de cada linha da fila.
+            _pausa_flow[env["slug"]] = agora + PAUSA_FLOW
             conta["falhas"] += 1
             break
         conta["enviados"] += 1

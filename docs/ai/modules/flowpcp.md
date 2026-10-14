@@ -69,10 +69,13 @@ UI não espera o Flow.
   entrou no ERP);
 - sem código e mais velha: `retido` + audit `flowpcp_retido`; volta sozinha à fila quando
   a reconciliação preenche o `fire_codigo` (`outbox_repo.release_retained`);
-- ERP fora: quem tem código espera, com pausa de 5 min; recentes vão antes das acumuladas;
-  a primeira falha de envio para o ambiente no ciclo;
-- linha flowpcp **nunca morre por falha de envio**: passado o escalonamento (30 s…6 h),
-  tenta a cada 6 h. `next_attempt_at` é hora local, no formato de `outbox_repo._now()`
+- ERP fora, ou ERP que não acha NENHUM de vários códigos (banco trocado): quem tem código
+  espera, com pausa de 5 min e nada é descartado; recentes vão antes das acumuladas;
+- falha de envio pausa o ambiente por 5 min (as outras linhas não queimam tentativa);
+- linha flowpcp **nunca morre por falha passageira** (rede, 5xx, 401/403/408/429): passado o
+  escalonamento (30 s…6 h), tenta a cada 6 h. Recusa definitiva (outro 4xx, payload
+  inválido) → `dead` com `last_error = "recusado: …"`. Linhas `retido` contam como pendentes
+  em `/metrics`; descartadas e recusadas contam como `dead` (o `last_error` diz qual). `next_attempt_at` é hora local, no formato de `outbox_repo._now()`
   (antes era UTC com offset: no Brasil, 30 s viravam 3 h 30 s).
 
 Duplicata no outbox (`OutboxDuplicateError`) é no-op com log, não erro.
