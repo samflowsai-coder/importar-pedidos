@@ -2543,12 +2543,17 @@ function renderPreview(data) {
           cell += `<div style="color:var(--warn-strong);font-weight:600;font-size:11px;margin-top:2px;white-space:nowrap"
                         title="${esc(trocaTitle)}">⚠ vira ${esc(alvo)}</div>`;
         }
+        // PACK: a quantidade é de packs; a nota mostra quantos kits vão dentro.
+        const packNote = it.qtd_por_embalagem
+          ? `<div style="color:var(--text-muted);font-size:11px;margin-top:2px;white-space:nowrap"
+                  title="Cada unidade é um PACK com ${it.qtd_por_embalagem} kits. O aviso vai na OBS do pedido.">pack c/ ${it.qtd_por_embalagem} · ${fmtQty((it.quantity || 0) * it.qtd_por_embalagem)} kits</div>`
+          : '';
         rows.push(`
           <tr>
             <td>${esc(it.description || '—')}</td>
             <td class="mono">${esc(it.product_code || '—')}</td>
             <td class="mono">${esc(it.ean || '—')}</td>
-            <td class="num">${fmtQty(it.quantity)}</td>
+            <td class="num">${fmtQty(it.quantity)}${packNote}</td>
             <td class="num">${it.unit_price != null ? fmtBRL(it.unit_price) : '—'}</td>
             <td class="num">${it.total_price != null ? fmtBRL(it.total_price) : '—'}</td>
             <td>${esc(deliv || '—')}</td>

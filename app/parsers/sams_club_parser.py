@@ -68,6 +68,7 @@ class SamsClubParser(BaseParser):
         if not items:
             return None
 
+        self._anotar_packs(items, header.order_number)
         return Order(header=header, items=items)
 
     # ------------------------------------------------------------------
@@ -134,25 +135,29 @@ class SamsClubParser(BaseParser):
         m = re.search(re.escape(_SIGNATURE_TEXT), text, re.IGNORECASE)
         return text[m.start() :] if m else text
 
-    def _build_item_lookup(self, text: str) -> dict[str, float]:
-        """Mapa {ean_produto: preço} da tabela 'Itens do Pedido'.
+    def _build_item_lookup(self, text: str) -> dict[str, tuple[float, int | None]]:
+        """Mapa {ean_produto: (preço, kits por pack)} da tabela 'Itens do Pedido'.
 
-        A seção Cross Docking não repete o preço — só a quantidade por loja.
+        A seção Cross Docking não repete preço nem embalagem — só a quantidade
+        por loja.
 
-        ⚠️ `Qtde na Emb.` (grupo 3) é lido e **descartado de propósito**: ver
+        ⚠️ `Qtde na Emb.` (grupo 3) só vira `qtd_por_embalagem`: ver
         `_parse_items`. Não usar como multiplicador.
         """
         section = self._items_section(text)
-        lookup: dict[str, float] = {}
+        lookup: dict[str, tuple[float, int | None]] = {}
         for m in _ITEM_RE.finditer(section):
             unit_price = self._parse_br_number(m.group(5))
-            lookup[m.group(2)] = unit_price if unit_price is not None else 0.0
+            lookup[m.group(2)] = (
+                unit_price if unit_price is not None else 0.0,
+                self._kits_por_pack(m.group(3)),
+            )
         return lookup
 
     def _parse_cross_docking(
         self,
         text: str,
-        item_lookup: dict[str, float],
+        item_lookup: dict[str, tuple[float, int | None]],
         header: OrderHeader,
     ) -> list[OrderItem]:
         """Parsea a seção 'Cross Docking' do PDF GRADE.
@@ -196,7 +201,7 @@ class SamsClubParser(BaseParser):
             if data_inicial == "00/00/0000":
                 data_inicial = fallback_date
 
-            unit_price = item_lookup.get(ean_produto)
+            unit_price, por_pack = item_lookup.get(ean_produto, (None, None))
             # 2 casas: a grade não traz total impresso, então ele nasce aqui —
             # sem arredondar, o float vaza (730.4400000000001) para o XLSX e
             # para CORPO_VENDAS.TOTAL.
@@ -213,6 +218,7 @@ class SamsClubParser(BaseParser):
                     delivery_date=data_inicial,
                     delivery_cnpj=cnpj,
                     delivery_ean=ean_local,
+                    qtd_por_embalagem=por_pack,
                 )
             )
         return items
@@ -258,15 +264,16 @@ class SamsClubParser(BaseParser):
     def _parse_items(self, text: str) -> list[OrderItem]:
         """Itens do layout consolidado.
 
-        ⚠️ `Qtde na Emb.` (grupo 3 do `_ITEM_RE`) NÃO é multiplicador. O produto
-        vendido é o KIT: `Qtde na Emb.` diz quantas peças vão dentro dele e
-        `Qtde Pedida` quantos kits o Sam's quer. `Preço Bruto` é o preço do kit,
-        e `Valor Total Item` fecha como `Qtde Pedida × Preço Bruto` nos três
-        samples — o pedido 06839396-0000 tem emb=22, pedida=1, bruto=694,98 e
-        total=694,98: um kit de 22, não 22 unidades.
+        ⚠️ `Qtde na Emb.` (grupo 3 do `_ITEM_RE`) NÃO é multiplicador. Com emb=1
+        o item é um kit avulso; com emb>1 é um PACK com N kits dentro (Fire .7:
+        `PACK C/36 KITS`, `PACK C/22 KITS`, UNIDADE='PACK'). `Qtde Pedida` conta
+        a unidade vendida (kit ou pack), `Preço Bruto` é o preço dela e `Valor
+        Total Item` fecha como `Qtde Pedida × Preço Bruto` — o pedido
+        06839396-0000 tem emb=22, pedida=1, bruto=694,98 e total=694,98: um pack
+        de 22 kits, não 22 unidades. O N vai para `qtd_por_embalagem`.
 
-        Até 2026-09 a quantidade saía como `emb × pedida`, então um kit de 22
-        entrava no Fire como 22 kits (22x o pedido real) e `QUANTIDADE ×
+        Até 2026-09 a quantidade saía como `emb × pedida`, então um pack de 22
+        entrava no Fire como 22 packs (22x o pedido real) e `QUANTIDADE ×
         PRECO_UNITARIO` não fechava com `VALOR_TOTAL` no XLSX. Passou meses
         despercebido porque emb=1 na esmagadora maioria dos itens (16 dos 18 do
         sample de janeiro).
@@ -302,9 +309,60 @@ class SamsClubParser(BaseParser):
                     delivery_cnpj=delivery_cnpj,
                     delivery_name=delivery_name,
                     delivery_ean=delivery_ean,
+                    qtd_por_embalagem=self._kits_por_pack(m.group(3)),
                 )
             )
         return items
+
+    def _kits_por_pack(self, emb: str) -> int | None:
+        """`Qtde na Emb.` > 1 → quantos kits o pack carrega; 1 (kit avulso) → None."""
+        valor = self._parse_br_number(emb)
+        return int(valor) if valor and valor > 1 else None
+
+    def _anotar_packs(self, items: list[OrderItem], order_number: str | None) -> None:
+        """Escreve na OBS quantos kits o pedido tem de verdade quando há PACK.
+
+        O relatório "Pedido p/ Separação" do Fire soma só a unidade KIT e o pack
+        some (chamado Camila 14/10, pedido 06858299-0000 = Fire 5065). A OBS sai
+        impressa nele. Três regras vêm do Fire, não de gosto:
+
+        - Começa pelo número do pedido: com OBS preenchida o importador de Excel
+          grava ela NO LUGAR do número (Kings 1279, HISTORICO do .4).
+        - Mesma OBS em todas as linhas: o importador grava a de uma linha só.
+        - Uma OBS por local de entrega: no GRADE cada loja vira um pedido, e o
+          exportador separa pelo mesmo CNPJ de entrega.
+        """
+        por_local: dict[str, list[OrderItem]] = {}
+        for it in items:
+            por_local.setdefault(it.delivery_cnpj or "", []).append(it)
+
+        for grupo in por_local.values():
+            packs: dict[int, float] = {}
+            avulsos = 0.0
+            for it in grupo:
+                if it.qtd_por_embalagem:
+                    packs[it.qtd_por_embalagem] = packs.get(it.qtd_por_embalagem, 0.0) + (
+                        it.quantity or 0.0
+                    )
+                else:
+                    avulsos += it.quantity or 0.0
+            if not packs:
+                continue
+
+            em_pack = sum(n * qtd for n, qtd in packs.items())
+            composicao = " + ".join(
+                f"{_fmt_int(qtd)} PACK C/{n}" for n, qtd in sorted(packs.items(), reverse=True)
+            )
+            partes = [
+                f"CONTEM PACK: {composicao} = {_fmt_int(em_pack)} KITS",
+                f"TOTAL A SEPARAR: {_fmt_int(avulsos + em_pack)} KITS"
+                f" ({_fmt_int(avulsos)} AVULSOS + {_fmt_int(em_pack)} DENTRO DE PACK)",
+            ]
+            if order_number:
+                partes.insert(0, order_number)
+            obs = " | ".join(partes)
+            for it in grupo:
+                it.obs = obs
 
     def _parse_delivery_location(self, text: str) -> tuple[str | None, str | None]:
         """CNPJ e nome do CD de entrega no layout consolidado.
@@ -338,3 +396,8 @@ class SamsClubParser(BaseParser):
     def _find(self, text: str, pattern: str) -> str | None:
         m = re.search(pattern, text, re.IGNORECASE)
         return m.group(1).strip() if m else None
+
+
+def _fmt_int(valor: float) -> str:
+    """1908.0 → '1.908' (milhar com ponto, como o Fire imprime)."""
+    return f"{round(valor):,}".replace(",", ".")

@@ -118,13 +118,32 @@ fornecedor é a **Nasmar**. Samples: `PEDIDO KOLOSH.pdf` (fev/26),
 
 Ambos layouts compartilham `_parse_header()` (regex `Número (?:do )?Pedido:` cobre as duas variações), mas ele recebe `grade=` porque a regra de cliente difere — ver abaixo. Detecção case-insensitive em `can_parse`.
 
-### `Qtde na Emb.` é o conteúdo do KIT, nunca multiplicador
+### `Qtde na Emb.` é o tamanho do PACK, nunca multiplicador
 
-O produto vendido é o **kit**: `Qtde na Emb.` diz quantas peças vão dentro dele,
-`Qtde Pedida` diz quantos kits o Sam's quer e `Preço Bruto` é o preço do kit.
-`Valor Total Item` fecha como `Qtde Pedida × Preço Bruto` nos quatro samples.
-Pedido 06839396-0000 (Camila, 10/09): emb=22, pedida=1, bruto=694,98,
-total=694,98 — **um kit de 22, não 22 unidades**.
+`Qtde na Emb.` = 1 é kit avulso; > 1 é um **PACK com N kits dentro** (conferido na
+Fire .7 em 14/10/2026: `PACK C/36 KITS`, `PACK C/22 KITS`, `PACK C/24 KITS`,
+UNIDADE='PACK'). `Qtde Pedida` conta a unidade vendida (kit ou pack) e `Preço
+Bruto` é o preço dela. `Valor Total Item` fecha como `Qtde Pedida × Preço Bruto`
+nos samples. Pedido 06839396-0000 (Camila, 10/09): emb=22, pedida=1,
+bruto=694,98, total=694,98 — **um pack de 22 kits, não 22 unidades**. O N vai
+para `OrderItem.qtd_por_embalagem` (None no avulso).
+
+### PACK avisado na OBS (`_anotar_packs`)
+
+O pedido entra com o EAN do pack — é o que o Sam's recebe e o que a nota fatura;
+converter para kits/pares é trabalho do Flow. Mas o relatório "Pedido p/ Separação"
+do Fire soma só a unidade KIT e o pack some (chamado Camila 14/10, 06858299-0000 =
+Fire 5065: imprime 1.872 kits, o certo é 1.908). Quando o pedido tem pack, todas as
+linhas daquele local de entrega recebem a mesma OBS:
+
+    06858299-0000 | CONTEM PACK: 1 PACK C/36 = 36 KITS | TOTAL A SEPARAR: 1.908 KITS (1.872 AVULSOS + 36 DENTRO DE PACK)
+
+- **Começa pelo número do pedido:** com OBS preenchida, o importador de Excel do
+  Fire grava ela *no lugar* do número (Kings 1279, `HISTORICO` do .4).
+- **Mesma OBS em todas as linhas:** o importador grava a OBS de uma linha só.
+- **Uma OBS por local de entrega:** no GRADE cada loja vira um pedido.
+- O preview mostra `pack c/ 36 · 36 kits` embaixo da quantidade
+  (`qtd_por_embalagem` no payload).
 
 Até 2026-09 a quantidade saía como `emb × pedida` nos dois layouts (no GRADE,
 `packs × pack_size`). Consequência: kit entrava no Fire com 22x (ou 36x) a

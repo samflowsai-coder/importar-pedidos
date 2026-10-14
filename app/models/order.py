@@ -30,6 +30,10 @@ class OrderItem(BaseModel):
     delivery_cnpj: str | None = None
     delivery_name: str | None = None
     delivery_ean: str | None = None
+    # Quantos kits vêm dentro de UMA unidade vendida, quando ela é um PACK
+    # (Sam's: `Qtde na Emb.` > 1). Informativo: `quantity` continua sendo de
+    # packs, nunca multiplicar. None = item vendido avulso.
+    qtd_por_embalagem: int | None = None
 
 
 class Order(BaseModel):

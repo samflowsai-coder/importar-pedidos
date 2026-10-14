@@ -374,6 +374,7 @@ def _build_preview_payload(
                 "delivery_date": it.delivery_date,
                 "delivery_cnpj": it.delivery_cnpj,
                 "delivery_name": it.delivery_name,
+                "qtd_por_embalagem": it.qtd_por_embalagem,
             }
         )
 
