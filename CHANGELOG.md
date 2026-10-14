@@ -23,6 +23,12 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
+_(nada ainda)_
+
+---
+
+## 20261014-1940
+
 1) **Os pedidos importados voltam a chegar ao Flow.** Desde 24/07 o envio estava parado: ele dependia de um programa auxiliar que não roda no servidor da MM. Agora o próprio portal entrega cada pedido ao Flow. Antes de enviar, o portal confere no Fire: pedido já faturado, cancelado ou apagado não vai ao Flow e o motivo fica registrado no histórico do pedido. Pedido parado que o portal ainda não achou no Fire fica guardado e segue sozinho quando a conferência com o Fire o encontrar.
 
 2) **A data de entrega decidida no Flow ainda NÃO volta para o Fire.** Essa parte continua desligada de propósito e só será ligada depois de conferir com o Flow as decisões que ficaram pendentes desde julho.
