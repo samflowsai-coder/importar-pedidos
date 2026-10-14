@@ -36,6 +36,9 @@ def pytest_configure(config):  # noqa: ARG001 — pytest hook signature
     # 07h/12h/18h locais. Testes que querem exercitar o loop/gatilho
     # periódico de propósito usam `monkeypatch.setenv` para religar.
     os.environ.setdefault("PORTAL_RECONCILE_PERIODICO", "0")
+    # Mesma cerca para a thread da SP1 (app/erp_eventos/runner.py): nenhum
+    # TestClient(app) sobe a vigia de pedidos do ERP.
+    os.environ.setdefault("PORTAL_ERP_VIGIA", "0")
 
 
 # Toda variavel que decide PARA ONDE o app conecta ou como ele fala com o
@@ -180,6 +183,27 @@ def _no_real_firebird(request):
         yield
     finally:
         FirebirdConnection._connect_with = original
+
+
+@pytest.fixture(autouse=True)
+def _sem_sink_real_de_leituras():
+    """A suite nao grava no `logs/leituras.jsonl` real do repo.
+
+    O sink do canal `leituras` nasce no import de `app.utils.logger` apontando para
+    `<raiz>/logs`. Sem remove-lo, todo teste que passa por `registrar`/`escrever` sem
+    mock polui o arquivo de diagnostico com caminhos de tmp do pytest. Testes que
+    exercitam o sink fazem o proprio `logger.add`/`_configurar_sink_leituras(tmp)`.
+    """
+    from app.utils import logger as lg
+
+    id_ = getattr(lg, "_ID_SINK_LEITURAS", None)
+    if id_ is not None:
+        try:
+            lg.logger.remove(id_)
+        except ValueError:
+            pass  # ja removido por teste anterior
+        lg._ID_SINK_LEITURAS = None
+    yield
 
 
 @pytest.fixture

@@ -20,16 +20,22 @@ class XLSExtractor:
     def _extract_xlsx(self, raw: bytes) -> dict:
         wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
         rows = []
+        sheets = []
         for sheet in wb.worksheets:
+            antes = len(rows)
             for row in sheet.iter_rows(values_only=True):
                 if any(cell is not None for cell in row):
                     rows.append(list(row))
-        return {"rows": rows, "tables": [rows], "text": self._make_text(rows)}
+            sheets.append({"name": sheet.title, "rows": len(rows) - antes})
+        return {"rows": rows, "tables": [rows], "text": self._make_text(rows), "sheets": sheets}
 
     def _extract_xls(self, raw: bytes) -> dict:
         wb = xlrd.open_workbook(file_contents=raw)
         rows = []
+        sheets = []
         for sheet in wb.sheets():
+            antes = len(rows)
             for i in range(sheet.nrows):
                 rows.append(sheet.row_values(i))
-        return {"rows": rows, "tables": [rows], "text": self._make_text(rows)}
+            sheets.append({"name": sheet.name, "rows": len(rows) - antes})
+        return {"rows": rows, "tables": [rows], "text": self._make_text(rows), "sheets": sheets}

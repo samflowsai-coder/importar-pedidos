@@ -44,6 +44,11 @@
      ou --bg — mede 4.81:1 e 5.02:1 respectivamente (--warn sozinho mede
      3.05:1 sobre --surface, abaixo do mínimo AA de 4.5:1). */
   --warn-strong:    #B45309;
+  /* Texto de aviso sobre --warn-bg (selo .badge-warn). O tingido do fundo
+     come contraste: sobre --warn-bg em --surface, --warn mede 2.82:1 e
+     --warn-strong 4.44:1 — os dois abaixo do AA de 4.5:1 pra texto de 10px.
+     Âmbar-800 mede 6.27:1. */
+  --warn-ink:       #92400E;
 
   /* Contorno de componente de UI (não de texto) — borda de controles
      interativos que precisam de 3:1 pelo WCAG 1.4.11 e não passam com

@@ -33,6 +33,16 @@ Firebird fora do ar, a decisão nunca confirma e **segura o cursor** do poll.
 charset) suprime o de-para do ambiente inteiro por 45s.
 **Fix:** armar só em volta do `connect_with_config`.
 
+### 1.5 Idempotência do modo `db` barra pedido legítimo
+`CHECK_ORDER_EXISTS` (`app/erp/queries.py`) trata `PEDIDO_CLIENTE + CLIENTE` como chave
+única, e ela não é: na Fire viva (21/09/2026), **198 de 324** pedidos de 2026 da Nasmar
+e **276 de 1137** da MM repetem a chave de outro pedido. O código de loja da H2S4 volta
+todo mês (`AW064` 8x, `AF203` 6x), e a MM digita texto livre (`NASMAR` 12x). Dormente
+porque produção roda `EXPORT_MODE=xlsx`; no dia em que ligar `db`, o segundo pedido
+legítimo da loja vira `FirebirdOrderAlreadyExistsError`.
+**Bloqueia `EXPORT_MODE=db`.** Fix: a chave precisa de mais uma perna (data do pedido
+ou hash do arquivo), ou a idempotência sai do Fire e fica no portal.
+
 ---
 
 ## 2. Dívida e melhorias
@@ -114,22 +124,94 @@ justamente o que identifica o formato — se perde antes de chegar ao modelo.
 sinalizar truncamento. Custo continua zero nos formatos que já têm parser — o LLM só
 entra onde hoje o dado sai errado de graça.
 
-### 2.9 Pedido sem número entra no Fire com `PEDIDO_CLIENTE = NULL`
+### 2.9 Número do pedido editável no preview
 
-`app/erp/mapper.py:64` faz `pedido_cliente = (order.header.order_number or "")[:20] or None`.
-Sem número não há **chave de idempotência** (o Fire deduplica por
-`PEDIDO_CLIENTE` + `CLIENTE`) e a reconciliação não tem por onde casar. Não existe
-edição de número no preview: `CommitRequest` só carrega `preview_id`
-(`app/web/server.py:1564`), não há rota nem campo.
+Pedido sem número no documento recebe `SN-<hash>` do pipeline e o preview mostra o
+selo "Gerado pelo portal" (ver `docs/ai/modules/pipeline.md`). Falta a operadora poder
+**trocar** pelo número real quando o cliente informar: `CommitRequest` só carrega
+`preview_id` (`app/web/server.py`), não há rota nem campo. Guardar cada troca como par
+(arquivo, número) — é o dado que diz se o parser devia ter achado o número.
 
-Acontece hoje, em produção, nos pedidos "Pulmão" do Grupo Afeet — e agora também na
-Tennis Station quando o comprador não preenche `Ordem de compra`. No template antigo
-(AF/MF) o número sai da `FANTASIA`, apelido digitado livre: é daí que vem o `AF76` vs
-`AF076` que ficou aberto na reconciliação.
+### 2.10 Reconciliação com chave repetida
+Mesmo dado do 1.5: `PEDIDO_CLIENTE + CNPJ` casa N pedidos do Fire quando é código de
+loja (`AF198` todo mês). Hoje a guarda de 90 dias e `_escolher_representante` escolhem
+um. **Fix:** desempatar por data e total, e depois do 1º casamento gravar o `CODIGO`
+do Fire no import e parar de depender do número.
 
-**O que destrava:** campo editável de número no preview (`CommitRequest` +
-rota + UI), ou bloquear o commit de pedido sem número. Decisão do Samuel — hoje o
-comportamento é aceitar em silêncio, com warning só no log.
+### 2.11 Dedup por hash só existe no worker
+`imports.file_sha256` só é checado em `app/worker/jobs/scan_environments.py`. Upload
+web e lote aceitam o mesmo arquivo de novo sem aviso. Barato de portar; independe do
+número do pedido.
+**Mesma raiz:** lote (`server.py`, `_guardar_original(src.read_bytes())` e depois
+`_process_file` lê de novo) e worker (`_sha256(p)` em chunks, depois `p.read_bytes()`)
+leem o arquivo **duas vezes**. Arquivo ainda sendo copiado no share dá `file_sha256`
+diferente do que foi parseado — e o `SN-<hash>` deixa de ser o prefixo dele. Fix: ler
+uma vez e passar os mesmos bytes para a guarda, o hash e o parse.
+
+### 2.12 Desmembramento NBA sai com texto como número
+`PEDIDO NBA 3.xlsx` vira `order_number = 'NBA DEZEMBRO'` no `DesmembramentoXlsParser` —
+mesma classe do FANTASIA-nome corrigido no template (2026-09-21): texto repetível vira
+PEDIDO_CLIENTE e xPed da nota.
+
+### 2.13 Texto em `--warn` abaixo do AA
+`--warn` (#D97706) mede 3.05:1 sobre `--surface`. O `.badge-warn` passou a usar
+`--warn-ink` (6.27:1), mas `index.html` ainda usa `var(--warn)` como cor de texto em
+`.toolbar-path.missing`, no aviso "item(s) sem match no Fire" e no status `parsed`.
+No celular, o rodapé do modal "Revisar pedido" quebra palavra por palavra.
+
+### 2.14 Preview não avisa quando itens diferentes dividem o mesmo código
+O pedido 4932 entrou com 12 linhas e 2 códigos, e nada no caminho percebeu:
+`product_check` deduplica os códigos num `set` e apaga a pista. Guarda barata e
+independente de parser: avisar no preview quando N itens com descrições diferentes
+têm o mesmo `product_code`. É a rede para o próximo parser que gravar o modelo no
+lugar da variante.
+
+### 2.15 Troca de produto pelo importador de Excel do Fire — aviso no portal feito, restam 3 pontas
+
+O aviso (`troca_no_fire`) foi implementado em 24/09/2026 — detalhe em
+`docs/ai/modules/erp.md`. O defeito de origem continua sendo do Fire (casa por
+prefixo, primeiro da ordem física); medido em 24/09: 33 trocas na MM, 5 na Nasmar,
+mais os códigos duplicados (`5041G` nas duas). Pontas abertas:
+
+- **Chamado com a Fire Sistemas** (mensagem pronta, a MM envia). Quando responderem,
+  revisar a previsão: ela reproduz o comportamento medido, não o código deles.
+- **De-para exporta SEQ como código.** `fire_codigo` = `str(SEQ)`. Não sei se o
+  importador do Fire tenta SEQ exato antes do prefixo de `CODPROD_ALTERN`. Prova
+  barata: importar no Fire uma planilha com 1 item vinculado e ver o produto
+  gravado. Na mesma importação, 1 item com EAN certo e código que colide por
+  prefixo com outro produto responde se o Fire usa o EAN antes. Até lá, esses
+  dois casos saem do aviso como `conferido: false` ("confira"), nunca "troca certa".
+- **Código com mais de 30 caracteres derruba o check inteiro.** A query de match
+  exato (`find_products_by_codes_sql`, `IN (...)`) estoura "string right
+  truncation" (coluna `VARCHAR(30)`) e o preview mostra "check indisponível". Bug
+  antigo; a query nova do aviso já filtra.
+- Desmembramento AF/MF: nos samples, 0 de 570 / 276 itens casam no portal e o
+  Fire casaria todos por prefixo (`AFK2E-L-` → `AFK2E-L-100-3338`). O aviso agora
+  mostra isso; a causa (código truncado no parser do desmembramento) não foi
+  investigada.
+
+### 2.16 Template de kits ignora `DATA DE FATURAMENTO` (mês de entrega)
+Achado em 05/10/2026 no lote Authentic Feet (AF072/AF082/AF108/AF119): as planilhas
+NOVEMBRO e DEZEMBRO de cada loja só diferem na célula `DATA DE FATURAMENTO` e o
+`NasmarTemplateParser` não a lê (`delivery_date = None` nos dois). O pedido de cada mês
+sai idêntico (mesmo número, CNPJ e itens), a operadora corrige a data à mão e o 2º
+pode bater em "pedido já existe" (1.5). Fix: ler o rótulo `DATA DE FATURAMENTO` do bloco de
+cabeçalho para `delivery_date` dos itens, e decidir como o mês vira data (1º dia? último?).
+**Decisão do Samuel/MM:** qual data o Fire espera para "DEZEMBRO".
+
+### 2.17 Pedido lido sem CNPJ ou com item "CNPJ:" passa sem alarme
+O pipeline descarta o retorno do validador e o preview deixa seguir um pedido sem
+cliente/CNPJ. Em 05/10/2026 isso deixou o `GenericParser` entregar lixo à operadora. A
+entrega 1 do log de leituras só **registra** os sinais (`suspeito.sinais`); decidir se o
+preview passa a avisar o operador ("este arquivo caiu no leitor genérico, confira") e/ou
+bloquear o commit sem CNPJ. Depende de algumas semanas do log em produção para calibrar
+os falsos positivos.
+
+### 2.18 Log de leituras, entrega 2
+Eventos pós-leitura no mesmo `logs/leituras.jsonl` (commit, export xlsx, envio ao Fire,
+bloqueio), campo de roteamento (`modo`, `degrau`, `env_sugerido`, `env_gravado`) e
+`sha_guardado` vs lido (2.11). Spec: `docs/superpowers/specs/2026-10-05-log-de-leituras-design.md`,
+seção "Fora desta entrega".
 
 ---
 
@@ -176,6 +258,11 @@ Mandar o CNPJ certo faz o Flow achar ou criar o cliente, mas **a marca fica vazi
 Corrigir o histórico exige patch do lado do Flow, mesmo padrão do
 `tools/reprocessar_prazos_flow.py`. **Escopo:** os que estavam abertos no `.7` no
 momento do corte.
+
+### 3.7 Fiscal confirmar o `SN-<hash>` na nota — **portão do deploy do número gerado**
+O Fire copia `PEDIDO_CLIENTE` pro xPed da NF-e (15 chars). Pedido sem ordem de compra
+passa a sair com `SN-6CF05353` ali, onde hoje já saem `NASMAR`, `STUDIO Z`, nome de loja.
+Confirmar com o Elias (fiscal MM) antes de subir o pacote.
 
 ---
 

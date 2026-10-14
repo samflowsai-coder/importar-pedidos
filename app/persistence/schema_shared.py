@@ -160,6 +160,27 @@ CREATE TABLE IF NOT EXISTS roteamento_pendencia (
     visto_em      TEXT NOT NULL,
     visto_vezes   INTEGER NOT NULL DEFAULT 1
 );
+
+-- SP1: cada ambiente é UMA base do ERP para o Flow (P-PROD-08: o papel e o
+-- identificador da base são configuração, nunca código). Credencial própria
+-- por (ambiente, base), cifrada (secret_store) — não mexe no
+-- flowpcp_service_token_enc das rotas antigas. papel: 'produtora' |
+-- 'intermediaria', validado no repo (sem CHECK de propósito).
+CREATE TABLE IF NOT EXISTS erp_bases (
+    environment_id  TEXT NOT NULL REFERENCES environments(id),
+    base            TEXT NOT NULL,
+    papel           TEXT NOT NULL,
+    tenant_id       TEXT NOT NULL,
+    destino_url     TEXT NOT NULL,
+    token_enc       TEXT,
+    foto_hora       INTEGER,
+    ativo           INTEGER NOT NULL DEFAULT 0,
+    criado_em       TEXT NOT NULL,
+    atualizado_em   TEXT NOT NULL,
+    PRIMARY KEY (environment_id, base),
+    UNIQUE (environment_id),
+    UNIQUE (tenant_id, base)
+);
 """
 
 INDEXES_SQL = """

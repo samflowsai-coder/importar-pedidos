@@ -34,17 +34,33 @@ COL_WIDTHS = [18, 40, 20, 18, 16, 50, 12, 16, 16, 35, 16, 22, 18]
 class ERPExporter:
     def export(self, order: Order, output_dir: str = "output") -> list[Path]:
         """Export order. Splits into multiple files if delivery locations differ."""
+        return [
+            self._write_file(order, items, output_dir, suffix=suffix)
+            for suffix, items in self._planilhas(order)
+        ]
+
+    def linhas_por_arquivo(self, order: Order) -> list[tuple[list[ERPRow], list[int]]]:
+        """Por arquivo, na ordem de `export`: as linhas gravadas e a posição de
+        cada linha em `order.items` (SP1: vínculo pela planilha). Puro: não
+        grava nada, e dá o mesmo resultado que o `export` do mesmo pedido."""
+        posicao = {id(item): n for n, item in enumerate(order.items)}
+        return [
+            (self._to_erp_rows(order, items), [posicao[id(item)] for item in items])
+            for _, items in self._planilhas(order)
+        ]
+
+    def _planilhas(self, order: Order) -> list[tuple[str | None, list[OrderItem]]]:
+        """(sufixo, itens) de cada arquivo, na ordem em que são gravados."""
         groups = self._group_by_delivery(order)
 
         if len(groups) <= 1:
             items = list(groups.values())[0] if groups else order.items
-            return [self._write_file(order, items, output_dir, suffix=None)]
+            return [(None, items)]
 
-        paths = []
-        for i, (key, items) in enumerate(sorted(groups.items()), 1):
-            suffix = self._suffix_for_group(items, fallback=str(i))
-            paths.append(self._write_file(order, items, output_dir, suffix=suffix))
-        return paths
+        return [
+            (self._suffix_for_group(items, fallback=str(i)), items)
+            for i, (key, items) in enumerate(sorted(groups.items()), 1)
+        ]
 
     def _suffix_for_group(self, items: list[OrderItem], fallback: str) -> str:
         """Sufixo legível para o nome do arquivo de cada loja."""
@@ -219,6 +235,20 @@ class ERPExporter:
         suffix_part = f"_{suffix}" if suffix else ""
         return f"{name_clean}{cnpj_part}_Pedido_{num}{suffix_part}.xlsx"
 
+    @staticmethod
+    def _valor_total(item: OrderItem) -> float | None:
+        """Total da linha. O do documento manda; sem ele, quantidade x preço.
+
+        O importador de Excel do Fire converte a coluna em número: célula vazia estoura
+        `'' is not a valid floating point value` e o pedido entra pela metade. Sem preço
+        não há o que calcular, e então segue vazio.
+        """
+        if item.total_price is not None:
+            return item.total_price
+        if item.unit_price is None or item.quantity is None:
+            return None
+        return round(item.quantity * item.unit_price, 2)
+
     def _to_erp_rows(self, order: Order, items: list[OrderItem]) -> list[ERPRow]:
         customer_cnpj_digits = re.sub(r"[^\d]", "", order.header.customer_cnpj or "")
         # When order has no header-level CNPJ (e.g. Riachuelo), use delivery CNPJ as customer
@@ -255,7 +285,7 @@ class ERPExporter:
                     descricao=item.description or "",
                     quantidade=item.quantity or 0.0,
                     preco_unitario=item.unit_price,
-                    valor_total=item.total_price,
+                    valor_total=self._valor_total(item),
                     obs=item.obs,
                     data_entrega=item.delivery_date,
                     cnpj_local_entrega=delivery_cnpj_col,

@@ -23,6 +23,70 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
+_(nada ainda)_
+
+---
+
+## 20261014-0949
+
+1) **Pedido do Sam's com PACK agora avisa na observação quantos kits separar.** Quando o Sam's pede um pack (ex.: `PACK C/36 KITS`), o relatório "Pedido p/ Separação" do Fire somava só os kits e o pack sumia da conta (pedido 06858299-0000: aparecia 1.872 kits, o certo são 1.908). Agora a observação do pedido sai assim: `06858299-0000 | CONTEM PACK: 1 PACK C/36 = 36 KITS | TOTAL A SEPARAR: 1.908 KITS (1.872 AVULSOS + 36 DENTRO DE PACK)`. O pedido continua entrando com o código e a quantidade do pack, como o Sam's pediu. Na revisão, a linha do pack mostra `pack c/ 36 · 36 kits` embaixo da quantidade. Pedido sem pack não muda.
+
+---
+
+## 20261005-1812
+
+1) **O portal passa a registrar cada arquivo que lê, num arquivo de log para o suporte.** Nada muda na tela: o arquivo `logs\leituras.jsonl` (na pasta do portal) guarda, para cada planilha ou PDF recebido, qual leitor o interpretou, o que ele extraiu, se o cliente e os produtos foram achados no Fire, e se o arquivo parece ter sido lido errado ou já tinha sido importado. Quando uma operadora reclamar de um arquivo, o Samuel baixa esse arquivo pela VPN e descobre o motivo sem precisar pedir a planilha de novo.
+
+---
+
+## 20261005-1136
+
+1) **Planilha da Authentic Feet com a coluna `QUAN.` ou `QUANT` volta a abrir certa.** O lote de 05/10 (AF072, AF082, AF108 e AF119) trazia o título da coluna de quantidade diferente do habitual (`TOTAL KITS`), e o portal lia o pedido errado: sem cliente nem CNPJ, com um item "CNPJ:" e quantidades trocadas. Agora ele lê cliente, CNPJ, quantidade e preço. As planilhas com `TOTAL KITS` continuam saindo iguais.
+
+---
+
+## 20261005-0858
+
+1) **Planilha para o Fire sempre sai com o total de cada linha.** Quando o pedido do cliente não traz o valor por linha (caso da Beira Rio), o portal agora calcula quantidade × preço. Antes a coluna ia vazia e o importador do Fire podia parar com o aviso "is not a valid floating point value", deixando o pedido só com o primeiro item. Pedidos que já trazem o total continuam com o valor do documento.
+
+---
+
+## 20261002-1430
+
+1) **Pedido da Beira Rio com uma só faixa de tamanho volta a abrir na revisão.** O pedido 14330456 (meias infantil e bebê, tamanhos 23/27 e 28/33) aparecia como "Formato não reconhecido ou pedido sem itens" porque o portal só entendia o layout antigo, com duas faixas por cor (33/38 e 39/44). Agora ele lê a faixa que está impressa no pedido e continua aceitando o layout antigo. A observação de cada linha traz a faixa (ex.: `23/27`).
+
+2) **Item da Beira Rio em PAR não perde mais o preço.** O portal só lia o preço quando a unidade era KIT; item em PAR entraria no Fire sem preço. Agora lê o preço em qualquer unidade.
+
+---
+
+## 20260925-1405
+
+1) **Pedido da Kings não leva mais "Produto atoalhado" (nem "sem toalha com silicone") para a observação do pedido no Fire.** Esse texto vinha da planilha da Kings e o Fire colocava só um deles na observação, confundindo a separação quando o pedido mistura os dois tipos. Nos outros clientes a observação continua igual (o "KIT 3" da Authentic Feet e da Magic Feet segue indo).
+
+---
+
+## 20260924-1149
+
+1) **Pedido da Kings no modelo de kits entra com o produto certo.** Cada linha vai pro Fire com o código da cor (`KG07BR`, `KG07PR`, `KG10ST`...). Se a cor da linha vier diferente de Branco, Preto ou Sortido, o item aparece na revisão como produto não encontrado, para vincular à mão, em vez de entrar com o produto errado.
+
+2) **Aviso de troca de produto pelo Fire.** O importador de Excel do Fire procura o código pelo começo, e às vezes grava outro produto (foi o que trocou `NB01-3G` por `NB01-3GG` no pedido 4939). Agora a tela de revisão avisa antes: o item aparece com **"⚠ vira NB01-3GG"** na coluna Fire. Item que o portal achou e o Fire vai trocar: importe normalmente e troque o produto no pedido do Fire depois. Item sem correspondência: confira se o produto escolhido pelo Fire é o certo, ou vincule antes de importar. O aviso não trava a geração da planilha.
+
+---
+
+## 20260921-1347
+
+1) **Pedido NBA no modelo de kits entra com o produto certo.** Cada linha agora vai pro Fire com o código da sua cor e do seu tamanho (`NB01-1M`, `NB01-3G`, `NB03-1GG`...). Antes, todas as linhas de um mesmo modelo entravam como um produto só — foi o que aconteceu no pedido 4932.
+
+2) **Pedido que chega sem número de ordem de compra ganha um número do portal**, que começa com `SN-` (ex.: `SN-6CF05353`). Na tela de revisão ele aparece com o selo laranja **"Gerado pelo portal"**. Esse número vai pro Fire e sai na nota fiscal no campo do pedido do cliente. Antes ia o nome da loja, a data do pedido, ou o campo ficava em branco.
+
+3) **O nome da loja no campo Fantasia não vira mais número do pedido.** O código de loja da Authentic Feet e da Magic Feet (`AF198`, `MF048`) continua valendo como número, igual sempre foi.
+
+4) Se aparecer o selo "Gerado pelo portal" num pedido que **tem** número no documento, não envie: avise o Samuel, porque o portal deveria ter lido aquele número.
+
+---
+
+## 20260912-1053
+
 1) **Nasce desligado — esta versão não muda nada no seu dia até você ligar.** Tudo daqui pra baixo, dos itens 2 ao 7, só acontece depois que um **administrador** entra em **Configurações → Roteamento** (`/admin/roteamento`, só admin vê) e vira a chave. Instalar esta versão e não mexer em nada deixa o portal exatamente como ele é hoje.
 
 2) A chave nova tem **três posições**, não duas. Em **Desligado** (como vem) nada acontece. Em **Observando** o portal calcula qual empresa *receberia* cada pedido e anota, **sem agir** — ele continua gravando onde você mandar, e a tela mostra em quantos pedidos ele acertaria. É pra você conferir antes de confiar. Em **Ligado** ele passa a agir pelo que calculou.

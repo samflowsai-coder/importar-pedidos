@@ -98,6 +98,7 @@ Cada linha aponta pro doc que tem o detalhe. Este mapa é roteamento, não refer
 | `app/http/` | cliente HTTP de saída + políticas de retry | `modules/http.md` |
 | `app/integrations/gestor/` | Gestor de Produção: outbox, mapper, webhooks | `modules/gestor.md` |
 | `app/integrations/flowpcp/` | FlowPCP: push de pedido, catálogo, clientes, intercompany | `modules/flowpcp.md` |
+| `app/erp_eventos/` | SP1: pedidos abertos do ERP → Flow (vigia, eventos, foto), só leitura no ERP | `modules/erp_eventos.md` |
 | `app/worker/` | APScheduler: `drain_outbox`, `poll_fire`, `poll_flowpcp`, `retention`, `scan_environments` | `modules/worker.md` |
 | `app/updates/` | auto-update pelo próprio portal (`/admin/atualizacao`) | `modules/updates.md` |
 | `app/observability/` | métricas Prometheus (`/metrics`) + `trace_id` | `modules/observability.md` |
@@ -170,6 +171,9 @@ PORTAL_RECONCILE_PERIODICO=      # 0 desliga os gatilhos automáticos (periódic
                                  # no processo web + job do worker). O botão
                                  # "Verificar no Fire" continua funcionando.
                                  # Qualquer outro valor, ou ausente = ligado.
+
+# SP1 — pedidos do ERP para o Flow (config por ambiente em /admin/ambientes)
+PORTAL_ERP_VIGIA=                # 0 desliga a vigia/envio; ausente = ligado (só age em base ativa)
 
 # Webhooks do Gestor
 WEBHOOK_SECRET_GESTOR=

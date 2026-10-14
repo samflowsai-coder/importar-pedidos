@@ -247,3 +247,21 @@ def test_hook_nao_levanta_quando_get_by_slug_falha_no_encadeamento_real(monkeypa
     monkeypatch.setattr(hook, "FlowPCPClient", lambda **_kw: MagicMock(), raising=False)
 
     hook.push_new_order(_order(), import_id="imp-1", slug="mm")  # não pode levantar
+
+
+def test_numero_gerado_pelo_portal_nao_e_chave_na_revenda(monkeypatch):
+    """`SN-<hash>` nunca foi digitado no Fire da revenda: o resolver recebe
+    `None` e responde `sem_chave` sem abrir conexão, como antes do número
+    gerado existir. Com o `.4` fora do ar, a consulta travaria o preview."""
+    monkeypatch.setattr(ic.environments_repo, "get_by_slug", lambda s: _env())
+    visto = {}
+
+    def _fake(chave, *, revenda_slug):
+        visto["chave"] = chave
+        return ResolucaoCliente(False, motivo="sem_chave")
+
+    monkeypatch.setattr(ic, "resolver_cliente_real", _fake)
+    order = _order(numero="SN-C0D15422")
+    order.header.order_number_gerado = True
+    ic.resolucao_para(order, slug="mm")
+    assert visto == {"chave": None}

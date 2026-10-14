@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app import pipeline
 from app.persistence import context as env_context
 from app.persistence import environments_repo, repo, roteamento_repo, router
 from app.routing import ambiente as routing
@@ -108,7 +109,7 @@ def _envelhecer_pendencia(sha: str, *, horas: float) -> None:
 
 def test_desligado_importa_no_ambiente_da_pasta(dois_ambientes, monkeypatch):
     roteamento_repo.set_modo("desligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
     _arquivo(dois_ambientes)
     scan_environments.run_scan()
     assert len(_imports("mm")) == 1  # a pasta manda, como hoje
@@ -117,7 +118,7 @@ def test_desligado_importa_no_ambiente_da_pasta(dois_ambientes, monkeypatch):
 
 def test_ligado_importa_no_ambiente_do_documento(dois_ambientes, monkeypatch):
     roteamento_repo.set_modo("ligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
     _arquivo(dois_ambientes)
     scan_environments.run_scan()
     assert len(_imports("nasmar")) == 1
@@ -127,7 +128,7 @@ def test_ligado_importa_no_ambiente_do_documento(dois_ambientes, monkeypatch):
 def test_ligado_sem_resposta_retem_o_arquivo_e_nao_importa(dois_ambientes, monkeypatch):
     """Nunca um ambiente default. O arquivo fica na pasta e vira pendencia."""
     roteamento_repo.set_modo("ligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(None))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(None))
     p = _arquivo(dois_ambientes)
     scan_environments.run_scan()
     assert _imports("mm") == []
@@ -141,7 +142,7 @@ def test_ligado_sem_resposta_retem_o_arquivo_e_nao_importa(dois_ambientes, monke
 
 def test_pendencia_nao_infla_a_cada_varredura(dois_ambientes, monkeypatch):
     roteamento_repo.set_modo("ligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(None))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(None))
     _arquivo(dois_ambientes)
     scan_environments.run_scan()
     scan_environments.run_scan()
@@ -152,7 +153,7 @@ def test_pendencia_nao_infla_a_cada_varredura(dois_ambientes, monkeypatch):
 
 def test_observando_importa_na_pasta_e_grava_sombra(dois_ambientes, monkeypatch):
     roteamento_repo.set_modo("observando", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
     _arquivo(dois_ambientes)
     scan_environments.run_scan()
     assert len(_imports("mm")) == 1
@@ -168,7 +169,7 @@ def test_observando_com_falha_do_roteador_importa_na_pasta_sem_sombra(dois_ambie
     """Contrato igual à Task 10: exceção do roteador em 'observando' vira log
     e o arquivo é importado normalmente na pasta varrida, sem sombra."""
     roteamento_repo.set_modo("observando", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
     monkeypatch.setattr(routing, "deps_padrao", _explode)
     _arquivo(dois_ambientes)
     scan_environments.run_scan()
@@ -180,7 +181,7 @@ def test_ligado_com_falha_do_roteador_retem_o_arquivo(dois_ambientes, monkeypatc
     """Sem humano pra perguntar, falha do roteador em 'ligado' NÃO cai pro
     ambiente varrido em silêncio — vira retenção, igual a 'não soube responder'."""
     roteamento_repo.set_modo("ligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
     monkeypatch.setattr(routing, "deps_padrao", _explode)
     p = _arquivo(dois_ambientes)
     scan_environments.run_scan()
@@ -196,7 +197,7 @@ def test_duplicidade_e_global_arquivo_roteado_nao_reimporta_na_pasta_original(
     """Pedido roteado pra Nasmar; se o mesmo arquivo aparecer de novo na pasta
     da MM (mesmo sha256), não pode reimportar — o sha é único no Portal."""
     roteamento_repo.set_modo("ligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
     _arquivo(dois_ambientes)
     scan_environments.run_scan()
     assert len(_imports("nasmar")) == 1
@@ -219,7 +220,7 @@ def test_ligado_slug_fantasma_retem_em_vez_de_importar_na_pasta(dois_ambientes, 
     reintroduzir "importa no que estava varrendo" que a feature existe pra
     matar."""
     roteamento_repo.set_modo("ligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
 
     def _deps_fantasma():
         return routing.Deps(
@@ -246,7 +247,7 @@ def test_skip_duplicata_limpa_a_pendencia(dois_ambientes, monkeypatch):
     jeito, e a pendência que existia deixa de descrever a realidade — a
     varredura seguinte, que cai em skip_duplicate, tem que limpá-la."""
     roteamento_repo.set_modo("ligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(None))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(None))
     _arquivo(dois_ambientes)
     scan_environments.run_scan()
     assert roteamento_repo.contar_pendencias() == 1
@@ -275,13 +276,13 @@ def test_pendencia_resolvida_pelo_proprio_watcher_sai_da_fila(dois_ambientes, mo
     pedido do mesmo cliente), a pendência tem que sumir da fila sozinha —
     "ele tem que sair sozinho", não virar skip permanente."""
     roteamento_repo.set_modo("ligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(None))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(None))
     _arquivo(dois_ambientes)
     scan_environments.run_scan()
     assert roteamento_repo.contar_pendencias() == 1
 
     _envelhecer_pendencia(_SHA_ARQUIVO_PADRAO, horas=2)
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
     scan_environments.run_scan()
     assert len(_imports("nasmar")) == 1
     assert roteamento_repo.contar_pendencias() == 0
@@ -295,11 +296,11 @@ def test_pendencia_retida_nao_reparseia_dentro_de_uma_hora(dois_ambientes, monke
     roteamento_repo.set_modo("ligado", por="t")
     chamadas = []
 
-    def _pipeline(f):
+    def _pipeline(f, d=None):
         chamadas.append(1)
         return _order(None)
 
-    monkeypatch.setattr(scan_environments, "pipeline_process", _pipeline)
+    monkeypatch.setattr(pipeline, "process_detailed", _pipeline)
     _arquivo(dois_ambientes)
     scan_environments.run_scan()
     scan_environments.run_scan()
@@ -314,11 +315,11 @@ def test_pendencia_reavaliada_depois_de_uma_hora(dois_ambientes, monkeypatch):
     roteamento_repo.set_modo("ligado", por="t")
     chamadas = []
 
-    def _pipeline(f):
+    def _pipeline(f, d=None):
         chamadas.append(1)
         return _order(None)
 
-    monkeypatch.setattr(scan_environments, "pipeline_process", _pipeline)
+    monkeypatch.setattr(pipeline, "process_detailed", _pipeline)
     _arquivo(dois_ambientes)
     scan_environments.run_scan()
     assert len(chamadas) == 1
@@ -339,14 +340,14 @@ def test_desligado_reverte_pendencia_retida_de_imediato(dois_ambientes, monkeypa
     promessa dos três estados é 'volta a qualquer momento, sem deploy' — o
     throttle de 1h não pode atrasar essa volta."""
     roteamento_repo.set_modo("ligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(None))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(None))
     p = _arquivo(dois_ambientes)
     scan_environments.run_scan()
     assert roteamento_repo.contar_pendencias() == 1
     assert p.exists()
 
     roteamento_repo.set_modo("desligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
     scan_environments.run_scan()
 
     assert len(_imports("mm")) == 1, "desligado importa na pasta, como hoje"
@@ -360,13 +361,13 @@ def test_observando_reverte_pendencia_retida_de_imediato(dois_ambientes, monkeyp
     que a chave sai de 'ligado' — 'observando' nunca cria pendência sozinho
     (só importa e grava sombra), então o arquivo tem que fluir normalmente."""
     roteamento_repo.set_modo("ligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(None))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(None))
     p = _arquivo(dois_ambientes)
     scan_environments.run_scan()
     assert roteamento_repo.contar_pendencias() == 1
 
     roteamento_repo.set_modo("observando", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
     scan_environments.run_scan()
 
     assert len(_imports("mm")) == 1, "observando importa na pasta varrida"
@@ -381,7 +382,7 @@ def test_desligado_mesmo_arquivo_em_duas_pastas_gera_dois_pedidos(dois_ambientes
     cada uma; a dedupe global só existe pra quando o roteador pode mover o
     arquivo pra fora da pasta onde ele apareceu."""
     roteamento_repo.set_modo("desligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
     _arquivo(dois_ambientes, slug="mm", nome="PEDIDO.pdf")
     _arquivo(dois_ambientes, slug="nasmar", nome="PEDIDO.pdf")
 
@@ -396,7 +397,7 @@ def test_ligado_mesmo_arquivo_em_duas_pastas_gera_um_pedido_so(dois_ambientes, m
     no Portal inteiro — o segundo arquivo (mesmo conteúdo) é skip_duplicate,
     não um segundo pedido."""
     roteamento_repo.set_modo("ligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
     _arquivo(dois_ambientes, slug="mm", nome="PEDIDO.pdf")
     _arquivo(dois_ambientes, slug="nasmar", nome="PEDIDO.pdf")
 
@@ -423,7 +424,7 @@ def test_ligado_audit_carrega_degrau_e_explicacao(dois_ambientes, monkeypatch):
     explicacao}. Em 'ligado' `env_slug` É o destino (documento resolveu e o
     roteador vale) — `modo` confirma isso pra quem lê o registro."""
     roteamento_repo.set_modo("ligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
     _arquivo(dois_ambientes)
     scan_environments.run_scan()
 
@@ -449,7 +450,7 @@ def test_observando_audit_env_slug_e_a_sugestao_nao_o_destino(dois_ambientes, mo
     senão quem lê `env_slug` sozinho daqui a meses concluiria que o pedido
     foi pra nasmar, o oposto do que aconteceu."""
     roteamento_repo.set_modo("observando", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
     _arquivo(dois_ambientes)
     scan_environments.run_scan()
 
@@ -470,7 +471,7 @@ def test_desligado_audit_nao_carrega_roteamento(dois_ambientes, monkeypatch):
     """Em 'desligado' o roteador nem é chamado — o bloco `roteamento` do
     audit tem que ser `None`, não um degrau inventado."""
     roteamento_repo.set_modo("desligado", por="t")
-    monkeypatch.setattr(scan_environments, "pipeline_process", lambda f: _order(NASMAR))
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
     _arquivo(dois_ambientes)
     scan_environments.run_scan()
 

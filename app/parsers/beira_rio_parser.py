@@ -17,11 +17,17 @@ _MONTH_MAP = {
 # Detects the start of an item block: 10-digit code followed immediately by an uppercase letter
 _ITEM_BLOCK_RE = re.compile(r"(?=^\d{10}[A-Z])", re.MULTILINE)
 
-# Color/size header line: "103927 CINZA/BRANCO/PRETO 33/38 39/44 Total"
-_COLOR_LINE_RE = re.compile(r"\d{2}/\d{2}\s+\d{2}/\d{2}\s+Total")
+# Color/size header line. O layout traz 1 ou 2 faixas de tamanho antes do "Total":
+#   "103927 CINZA/BRANCO/PRETO 33/38 39/44 Total"   (layout 2025: duas faixas)
+#   "8414 BRANCO/BRANCO/BRANCO 23/27 Total"          (layout 10/2026: uma faixa)
+_SIZES = r"(?:\d{2}/\d{2}\s+)+"
+_COLOR_LINE_RE = re.compile(rf"{_SIZES}Total")
+_COLOR_PARTS_RE = re.compile(rf"^(?:\d+\s+)?(.+?)\s+({_SIZES})Total")
 
-# Quantity line: "17/02/2026 9.000,000 9.000,000 18.000,000"
-_QTY_LINE_RE = re.compile(r"^(\d{2}/\d{2}/\d{4})\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)", re.MULTILINE)
+# Quantity line: data + uma quantidade por faixa + total.
+#   "17/02/2026 9.000,000 9.000,000 18.000,000"  (2 faixas + total)
+#   "10/12/2026 3.300,000 3.300,000"             (1 faixa + total)
+_QTY_LINE_RE = re.compile(r"(\d{2}/\d{2}/\d{4})((?:\s+[\d.,]+)+)")
 
 
 class BeiranRioParser(BaseParser):
@@ -90,7 +96,8 @@ class BeiranRioParser(BaseParser):
 
         # ── Line 1: item_code + description + price ──────────────────
         line1 = lines[0].strip()
-        m1 = re.match(r"(\d{10})(.+?)\s+\d{8}\s+KIT\s+([\d,]+)", line1)
+        # A unidade varia por item (KIT, PAR): o preço vem depois dela, qualquer que seja.
+        m1 = re.match(r"(\d{10})(.+?)\s+\d{8}\s+[A-Z]{2,4}\s+([\d,]+)", line1)
         if m1:
             item_code = m1.group(1)
             desc_part = m1.group(2).strip().rstrip(" -").strip()
@@ -129,42 +136,34 @@ class BeiranRioParser(BaseParser):
             line = lines[i].strip()
 
             if _COLOR_LINE_RE.search(line):
-                # Extract color text: everything before "NN/NN NN/NN Total"
-                cm = re.match(r"^(?:\d+\s+)?(.+?)\s+\d{2}/\d{2}\s+\d{2}/\d{2}\s+Total", line)
+                cm = _COLOR_PARTS_RE.match(line)
                 color = cm.group(1).strip() if cm else None
+                sizes = cm.group(2).split() if cm else []
 
                 # Next meaningful line: date + quantities
                 i += 1
                 while i < len(lines) and not lines[i].strip():
                     i += 1
-                if i < len(lines):
-                    qty_line = lines[i].strip()
-                    mq = re.match(r"(\d{2}/\d{2}/\d{4})\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)", qty_line)
+                if i < len(lines) and sizes:
+                    mq = _QTY_LINE_RE.match(lines[i].strip())
                     if mq:
                         delivery_date = mq.group(1)
-                        qty_small = self._parse_br_number(mq.group(2))
-                        qty_large = self._parse_br_number(mq.group(3))
-
-                        full_desc = f"{desc_part} {color}" if color else desc_part
-
-                        if qty_small and qty_small > 0:
-                            result.append(OrderItem(
-                                product_code=item_code,
-                                description=f"{full_desc} 33/38",
-                                quantity=qty_small,
-                                unit_price=price,
-                                delivery_date=delivery_date,
-                                obs="33/38",
-                            ))
-                        if qty_large and qty_large > 0:
-                            result.append(OrderItem(
-                                product_code=item_code,
-                                description=f"{full_desc} 39/44",
-                                quantity=qty_large,
-                                unit_price=price,
-                                delivery_date=delivery_date,
-                                obs="39/44",
-                            ))
+                        numbers = mq.group(2).split()
+                        # Um número por faixa, mais o total. Qualquer outra
+                        # contagem é layout que não conhecemos: não chuta.
+                        if len(numbers) == len(sizes) + 1:
+                            full_desc = f"{desc_part} {color}" if color else desc_part
+                            for size, raw_qty in zip(sizes, numbers):
+                                qty = self._parse_br_number(raw_qty)
+                                if qty and qty > 0:
+                                    result.append(OrderItem(
+                                        product_code=item_code,
+                                        description=f"{full_desc} {size}",
+                                        quantity=qty,
+                                        unit_price=price,
+                                        delivery_date=delivery_date,
+                                        obs=size,
+                                    ))
             i += 1
 
         return result

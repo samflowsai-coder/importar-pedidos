@@ -37,6 +37,48 @@ Dois subsistemas independentes: propagação de `trace_id` por request/job
 - **Em produção:** restringir ao range de IP do Prometheus no reverse-proxy/firewall.
   Não expor na internet.
 
+## Log de leituras (`logs/leituras.jsonl`)
+
+Uma linha JSON por arquivo que o portal lê (upload, pasta/worker, lote, reimport,
+`/api/process` legado) e uma linha `etapa="rejeitado"` por arquivo barrado antes do parse
+(extensão, tamanho, não encontrado, guarda do original). **Sem tela:** o arquivo é baixado do
+servidor e lido aqui. Spec: `docs/superpowers/specs/2026-10-05-log-de-leituras-design.md`.
+
+- **Código:** `app/observability/leituras.py` (`registrar`, `rejeitado`, `escrever`,
+  `sinais_suspeitos`, `resumo_fire_check`); `pipeline.process_detailed(file, diag)` preenche o
+  `Diagnostico` (parser usado/pulados, cabeçalho candidato, avisos do validador); `process()`
+  continua sendo o wrapper stateless.
+- **Arquivo:** `<raiz do app>/logs/leituras.jsonl` (ancorado em `app/utils/logger.py::LOG_DIR`,
+  não no CWD; o caminho absoluto sai no log de inicialização). Rotação 10 MB, 30 dias.
+- **Nunca é portão:** falha ao gravar vira `logger.warning` e o fluxo segue. Sem texto livre
+  da planilha, sem `env`/senha; do cabeçalho entra UMA linha de rótulos curtos.
+- **Chaves de ligação:** `trace_id` (mintado ANTES do parse; o commit do mesmo preview
+  reusa, então casa com `imports.trace_id`, `audit_log` e `pipeline.log`) e `arquivo.sha256`
+  (casa com `imports.file_sha256` e com a cópia em `recebidos/`).
+- **Como ler** (`jq`): filtro de trabalho `jq -c 'select(.suspeito.forte)'`
+  (`forte` = `parser_generico`, `llm_usado`, `item_parece_rotulo`, `numero_parece_rotulo`,
+  `validacao_reprovada` ou `cliente_igual_ao_ambiente`); `select(.suspeito.sinais|length>0)`
+  traz também os informativos;
+  um arquivo `jq -c 'select(.arquivo.sha256|startswith("ab12"))'`; só falhas de leitura
+  `jq -c 'select(.resultado|IN("422","erro"))'`; Fire fora do ar
+  `jq -c 'select(.fire_check.available==false)'`.
+- **Como decidir a causa:** parser genérico/LLM em `parser.usado` + `extracao.cabecalho_candidato`
+  = formato novo ou título de coluna diferente (leitura); `fire_check.available=false` =
+  Fire fora do ar, não cadastro; `fire_check.cliente.match=false` com `available=true` =
+  cliente não cadastrado pelo CNPJ; `arquivo.sha_ja_visto`/`pedido.pedido_ja_importado` =
+  duplicidade; `etapa="rejeitado"` = nunca chegou ao parse.
+- **`resultado`:** `retido`, `pendencia_throttle`, `skip_duplicate`, `importado`, `preview`,
+  `erro`, `400`, `404`, `413`, `422`. `"500"` nunca é produzido (exceção genérica vira `"erro"`).
+- **Sinais informativos esperados** (não são defeito): `numero_gerado` em NBA/Tennis
+  Station/Pulmão; `sem_cliente` em Desmembramento/Tennis Station/Pulmão;
+  `preco_ausente_em_todos` em Desmembramento.
+- **Worker:** não roda no cliente Windows (só o `ui.py`), então linhas `origem=worker` só
+  existem em docker.
+- **Armadilhas:** `resultado="importado"` é marcado logo depois do parse em `_process_file`
+  e `/api/process`, e no worker DEPOIS do insert; falha posterior do export/insert NÃO reescreve a linha (os eventos
+  pós-leitura são a entrega 2, `docs/BACKLOG.md` 2.18). A exceção que o chamador engole (scan do
+  worker) é capturada em `registrar.processar`, então entra na linha mesmo assim.
+
 ## Como adicionar uma nova métrica
 
 1. Declarar o objeto em `app/observability/metrics.py` (Counter/Gauge/Histogram).

@@ -5,6 +5,10 @@ from pydantic import BaseModel
 
 class OrderHeader(BaseModel):
     order_number: str | None = None
+    # True quando o documento não trazia número e o pipeline gerou `SN-<hash>`
+    # (ver app/pipeline.py). O número vai pro Fire e pra nota fiscal como se
+    # fosse do cliente; a marca é o que deixa o preview avisar isso.
+    order_number_gerado: bool = False
     issue_date: str | None = None
     customer_name: str | None = None
     customer_cnpj: str | None = None
@@ -26,6 +30,10 @@ class OrderItem(BaseModel):
     delivery_cnpj: str | None = None
     delivery_name: str | None = None
     delivery_ean: str | None = None
+    # Quantos kits vêm dentro de UMA unidade vendida, quando ela é um PACK
+    # (Sam's: `Qtde na Emb.` > 1). Informativo: `quantity` continua sendo de
+    # packs, nunca multiplicar. None = item vendido avulso.
+    qtd_por_embalagem: int | None = None
 
 
 class Order(BaseModel):

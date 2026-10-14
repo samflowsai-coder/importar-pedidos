@@ -53,6 +53,8 @@ ignore = [
 # N815: campos pydantic em camelCase casam o contrato JSON do front (watchDir/outputDir/exportMode)
 # N806: _DUMMY_HASH é constante local em UPPER_CASE
 "app/web/server.py" = ["N815", "N806"]
+# N815: espelho do Zod do Flow — campos camelCase são o contrato JSON (SP1)
+"app/erp_eventos/contrato.py" = ["N815"]
 # Constantes locais em UPPER_CASE (intencional)
 "app/parsers/desmembramento_xls_parser.py" = ["N806"]
 # Exceção de domínio sem sufixo Error; rename é refactor, fora do escopo deste chore

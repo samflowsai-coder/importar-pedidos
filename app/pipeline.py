@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import time
+
 from app.classifiers.format_classifier import FileFormat, FormatClassifier
 from app.extractors.pdf_extractor import PDFExtractor
 from app.extractors.xls_extractor import XLSExtractor
@@ -7,6 +10,7 @@ from app.ingestion.file_loader import LoadedFile
 from app.llm.fallback_parser import LLMFallbackParser
 from app.models.order import Order
 from app.normalizers.order_normalizer import OrderNormalizer
+from app.observability.leituras import Diagnostico, cabecalho_candidato
 from app.parsers.beira_rio_parser import BeiranRioParser
 from app.parsers.daju_parser import DajuParser
 from app.parsers.desmembramento_xls_parser import DesmembramentoXlsParser
@@ -44,27 +48,50 @@ _llm = LLMFallbackParser()
 
 
 def process(file: LoadedFile) -> Order | None:
+    return process_detailed(file)
+
+
+def process_detailed(file: LoadedFile, diag: Diagnostico | None = None) -> Order | None:
+    """Corpo de `process`, preenchendo `diag` (do chamador) ao longo do caminho."""
+    if diag is None:
+        diag = Diagnostico()
     logger.info(f"Processando: {file.path.name}")
 
     fmt = _classifier.classify(file)
+    diag.fmt = fmt.value if hasattr(fmt, "value") else str(fmt)
     if fmt == FileFormat.UNKNOWN:
         logger.warning(f"Formato desconhecido, ignorando: {file.path.name}")
         return None
 
     extracted = _pdf_extractor.extract(file) if fmt == FileFormat.PDF else _xls_extractor.extract(file)
+    rows = extracted.get("rows") or []
+    diag.extracao = {
+        "linhas": None if fmt == FileFormat.PDF else len(rows),
+        "abas": extracted.get("sheets") or [],
+        "cabecalho_candidato": cabecalho_candidato(rows),
+    }
 
     order = None
+    t0 = time.perf_counter()
     for parser in _parsers:
+        nome = parser.__class__.__name__
         if hasattr(parser, "can_parse") and not parser.can_parse(extracted):
+            diag.parsers_pulados.append({"nome": nome, "motivo": "can_parse"})
             continue
         order = parser.parse(extracted)
         if order is not None:
-            logger.debug(f"Parser {parser.__class__.__name__} extraiu o pedido")
+            diag.parser_usado = nome
+            logger.debug(f"Parser {nome} extraiu o pedido")
             break
+        diag.parsers_pulados.append({"nome": nome, "motivo": "none"})
+    diag.parser_ms = int((time.perf_counter() - t0) * 1000)
 
     if order is None:
         logger.info(f"Parsers sem resultado, ativando LLM fallback: {file.path.name}")
         order = _llm.parse(extracted, source_file=str(file.path))
+        diag.llm = {"tentado": True, "motivo": "ok" if order is not None else "sem_resultado"}
+    else:
+        diag.llm = {"tentado": False, "motivo": "nao_necessario"}
 
     if order is None:
         logger.error(f"Não foi possível extrair pedido de: {file.path.name}")
@@ -72,11 +99,39 @@ def process(file: LoadedFile) -> Order | None:
 
     order.source_file = str(file.path)
     _marcar_fornecedor(order, extracted)
+    _numerar_se_ausente(order, file.raw)
     order = _normalizer.normalize(order)
-    _validator.validate(order)
+    avisos = _validator.validate_detail(order)
+    _validator.log_errors(order, avisos)
+    diag.avisos = list(avisos)
+    diag.validacao_ok = not avisos
 
     logger.info(f"Pedido {order.header.order_number!r} → {len(order.items)} item(s)")
     return order
+
+
+def _numerar_se_ausente(order: Order, raw: bytes) -> None:
+    """Pedido sem número no documento recebe `SN-` + 8 hex do sha256 do arquivo.
+
+    O `order_number` vira `PEDIDO_CLIENTE` no Fire, que o copia para a nota
+    fiscal (xPed, cortado em 15 — por isso 11 caracteres). Em modo xlsx é o
+    único campo que liga o pedido do portal à linha do Fire: sem ele o pedido
+    fica órfão, sem reconciliação. O portal gera aqui, marca
+    `order_number_gerado` e o preview avisa. (Um parser que invente número com
+    texto do documento escapa disto — ver docs/BACKLOG.md, desmembramento NBA.)
+
+    Determinístico: o mesmo arquivo dá o mesmo número (reimport, preview de
+    novo, worker). É o prefixo do `imports.file_sha256` quando os dois leem os
+    mesmos bytes — lote e worker leem o arquivo duas vezes (ver
+    docs/BACKLOG.md). O hífen seguido de 8 caracteres nunca casa o corte de
+    sufixo de loja da reconciliação (`app/erp/numero_pedido.py`).
+    """
+    if (order.header.order_number or "").strip():
+        return
+    numero = f"SN-{hashlib.sha256(raw).hexdigest()[:8].upper()}"
+    order.header.order_number = numero
+    order.header.order_number_gerado = True
+    logger.warning(f"Documento sem número de pedido — número gerado pelo portal: {numero}")
 
 
 def _marcar_fornecedor(order: Order, extracted: dict) -> None:

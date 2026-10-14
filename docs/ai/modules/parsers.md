@@ -118,13 +118,32 @@ fornecedor é a **Nasmar**. Samples: `PEDIDO KOLOSH.pdf` (fev/26),
 
 Ambos layouts compartilham `_parse_header()` (regex `Número (?:do )?Pedido:` cobre as duas variações), mas ele recebe `grade=` porque a regra de cliente difere — ver abaixo. Detecção case-insensitive em `can_parse`.
 
-### `Qtde na Emb.` é o conteúdo do KIT, nunca multiplicador
+### `Qtde na Emb.` é o tamanho do PACK, nunca multiplicador
 
-O produto vendido é o **kit**: `Qtde na Emb.` diz quantas peças vão dentro dele,
-`Qtde Pedida` diz quantos kits o Sam's quer e `Preço Bruto` é o preço do kit.
-`Valor Total Item` fecha como `Qtde Pedida × Preço Bruto` nos quatro samples.
-Pedido 06839396-0000 (Camila, 10/09): emb=22, pedida=1, bruto=694,98,
-total=694,98 — **um kit de 22, não 22 unidades**.
+`Qtde na Emb.` = 1 é kit avulso; > 1 é um **PACK com N kits dentro** (conferido na
+Fire .7 em 14/10/2026: `PACK C/36 KITS`, `PACK C/22 KITS`, `PACK C/24 KITS`,
+UNIDADE='PACK'). `Qtde Pedida` conta a unidade vendida (kit ou pack) e `Preço
+Bruto` é o preço dela. `Valor Total Item` fecha como `Qtde Pedida × Preço Bruto`
+nos samples. Pedido 06839396-0000 (Camila, 10/09): emb=22, pedida=1,
+bruto=694,98, total=694,98 — **um pack de 22 kits, não 22 unidades**. O N vai
+para `OrderItem.qtd_por_embalagem` (None no avulso).
+
+### PACK avisado na OBS (`_anotar_packs`)
+
+O pedido entra com o EAN do pack — é o que o Sam's recebe e o que a nota fatura;
+converter para kits/pares é trabalho do Flow. Mas o relatório "Pedido p/ Separação"
+do Fire soma só a unidade KIT e o pack some (chamado Camila 14/10, 06858299-0000 =
+Fire 5065: imprime 1.872 kits, o certo é 1.908). Quando o pedido tem pack, todas as
+linhas daquele local de entrega recebem a mesma OBS:
+
+    06858299-0000 | CONTEM PACK: 1 PACK C/36 = 36 KITS | TOTAL A SEPARAR: 1.908 KITS (1.872 AVULSOS + 36 DENTRO DE PACK)
+
+- **Começa pelo número do pedido:** com OBS preenchida, o importador de Excel do
+  Fire grava ela *no lugar* do número (Kings 1279, `HISTORICO` do .4).
+- **Mesma OBS em todas as linhas:** o importador grava a OBS de uma linha só.
+- **Uma OBS por local de entrega:** no GRADE cada loja vira um pedido.
+- O preview mostra `pack c/ 36 · 36 kits` embaixo da quantidade
+  (`qtd_por_embalagem` no payload).
 
 Até 2026-09 a quantidade saía como `emb × pedida` nos dois layouts (no GRADE,
 `packs × pack_size`). Consequência: kit entrava no Fire com 22x (ou 36x) a
@@ -167,9 +186,11 @@ aberto — ver `docs/BACKLOG.md`. Sem caso real reportado, o comportamento antig
 
 `NasmarTemplateParser` (`app/parsers/nasmar_template_parser.py`) cobre o template de
 pedido de kits do **próprio fornecedor** (Nasmar/MM). Um template, N clientes:
-Authentic Feet, Magic Feet, "Pulmão" do Grupo Afeet e Tennis Station. Samples:
-`Pedido Authentic Fit.xlsx`, `Pedido Magic Feet MF048.xlsx`,
-`Pedido Grupo Afeet Pulmao.xlsx`, `PEDIDO TENNIS STATION.xlsx`.
+Authentic Feet, Magic Feet, "Pulmão" do Grupo Afeet, Tennis Station, NBA e Kings.
+Samples: `Pedido Authentic Fit.xlsx`, `Pedido Magic Feet MF048.xlsx`,
+`Pedido Grupo Afeet Pulmao.xlsx`, `PEDIDO TENNIS STATION.xlsx`,
+`PEDIDO NBA MOGI SHOPPING.xlsx`, `Planilha modelo cliente Kings.xlsx` (modelo em
+branco: quantidades zeradas, os testes preenchem em memória).
 
 - **`_match_header(row)` é fonte única** do gate e do `col_map` — `can_parse` e
   `_find_header_row` chamam a mesma função. Antes eram duas cópias literais da mesma
@@ -184,14 +205,52 @@ Authentic Feet, Magic Feet, "Pulmão" do Grupo Afeet e Tennis Station. Samples:
 - **A quantidade real é `TOTAL KITS`.** Sem este parser o arquivo cai no `GenericParser`,
   que lê a coluna `REF COR` (cor) como quantidade — bug real de produção, três vezes
   (Magic Feet, Pulmão, Tennis Station).
+- **O código é a VARIANTE, e `REF.` nem sempre é a variante** (`_codigo_variante`).
+  AF/MF/Pulmão/TS: `REF.` já vem completo (`AFK3S-A-100-3338`) e `REF COR` é só a cor
+  (`100`). NBA: `REF.` é o modelo (`NB01`), `REF COR` é modelo + cor (`NB01 - 1`) e o
+  tamanho vem com letra (`M - 33-38`); o Fire (`.4`, `CODPROD_ALTERN`) cadastra
+  `NB01-1M`, mesmo código que o desmembramento NBA (`PEDIDO NBA 3.xlsx`) já traz
+  pronto. Regra: se `REF COR` = `REF.` + `-` + cor, o código é `REF COR` sem espaço +
+  letra do tamanho; senão, `REF.`. Gravando o modelo, o pedido 4932 (NBA Mogi,
+  21/09/2026) saiu com 12 linhas e só 2 códigos, nenhum existente no Fire, e a MM
+  relatou 2 produtos no Fire. Mecanismo provável, não conferido em produção: o de-para
+  é por código por cliente (`depara_apply`), então um vínculo `NB01` → kit arrasta as
+  6 linhas do modelo para o mesmo produto.
+- **Kings tem regra própria, restrita à família `KG NN`** (`_codigo_kings`, tentada
+  antes de `_codigo_variante`; devolve None para qualquer `REF.` fora de
+  `KG\s*\d{2}`, então nenhum outro cliente passa por ela). `REF.` = modelo (`KG 07`),
+  `REF COR` = número da cor (`001`), `DESCRIÇÃO COR` = nome (`Branco`). No Fire da MM
+  (`.7`, conferido 24/09/2026, 28 kits, SEQ 2133–2150 e 3945–3954; nenhum na Nasmar
+  `.4`) o código é modelo sem espaço + sufixo: `KG07BR`, `KG07PR`, `KG10ST`. O tamanho
+  já está no modelo. Cor: `001`/`002`/`003` (aceita `1` e o `1.0` do `.xls`) e
+  Branco/Preto/Sortido, com o nome casado INTEIRO (`Preto/Branco` não decide nada;
+  Sortido aceita a composição entre parênteses); se só uma fonte é legível ela
+  decide, se discordam nenhuma decide. **Sem cor confiável o código
+  leva espaço** (`KG07 004`), porque o importador de Excel do Fire casa por prefixo
+  e `KG07` sozinho entraria como `KG07BR` em silêncio (BACKLOG 2.15). A rede tem ~55
+  franquias no `CADASTRO` da `.7`, cada loja com CNPJ próprio: o cliente é o CNPJ do
+  cabeçalho, como na Tennis Station.
+- **Kings não leva a coluna OBS** (`obs=None` nas linhas `KG NN`). É atributo do
+  produto (`Produto atoalhado`, `Produto sem toalha com silicone`), e o item do
+  Fire não tem OBS: o importador de Excel grava a OBS de UMA linha no OBS do
+  PEDIDO. No 1279 (Nasmar, 25/09/2026) saiu "Produto atoalhado" num pedido com 4
+  kits de silicone. A MM pediu pra tirar só da Kings: o `KIT 3`/`KIT 2` da AF/MF
+  continua indo (a supervisão usa). Levantamento na Fire viva, OBS original de
+  792 pedidos via Excel: `KIT 3/2` 236, etiquetas amarelas da Centauro 108,
+  `Produto atoalhado` 29, `COM CABIDE` 24, `ICMS Deson…` 18, `39/44` (Beira Rio) 1.
 - **O preço é `CUSTO`, nunca `SUGESTÃO`.** `SUGESTÃO` é preço de venda ao consumidor
   (29,99 contra 12,18 de custo); entrar no ERP como unitário infla o pedido ~2,5x e
   passa em qualquer validador. Coberto por teste.
-- **Número do pedido: `Ordem de compra` → `FANTASIA` → `DATA DO PEDIDO`.** O campo
-  `Ordem de compra:` só existe no template da Tennis Station, e onde existir ganha.
-  `FANTASIA` é apelido digitado livre pelo comprador e só é fallback porque o template
-  antigo não tem campo de número — é de lá que vem o `AF76` vs `AF076` aberto na
-  reconciliação com o Fire. `_coerce_text` evita o `'4417.0'` do float do openpyxl.
+- **Número do pedido: `Ordem de compra` → `FANTASIA` com forma de código de loja →
+  None.** O campo `Ordem de compra:` só existe no template da Tennis Station, e onde
+  existir (com ao menos um dígito) ganha. `FANTASIA` é apelido digitado livre e só vale
+  se casar `_CODIGO_DE_LOJA` (`AF198`, `MF048`, `AF090 - 3`, `AF-198`): é a convenção
+  da MM no PEDIDO_CLIENTE do Fire pra H2S4, e a reconciliação depende dela (é daí o
+  `AF76` vs `AF076`). Nome de loja não vira número: o FANTASIA da NBA (`NBA Store Mogi
+  Shopping`) entrou no Fire e na nota como `NBA STORE MOGI SHOPP` (pedido 4932,
+  21/09/2026). A `DATA DO PEDIDO` saiu da cadeia (dois pedidos no mesmo dia colidem).
+  Sem número, o parser devolve None e o pipeline gera `SN-<hash>` — ver
+  `modules/pipeline.md`. `_coerce_text` evita o `'4417.0'` do float do openpyxl.
 - **Números: use o valor CRU da célula** (`_raw`), não o stringificado (`_cell`, só
   para campos textuais). `_to_number` é tipo-consciente: texto só-com-ponto usa a regra
   do último grupo — 3 dígitos = milhar (`1.300` → 1300), senão decimal (`300.0` → 300.0).
@@ -209,8 +268,8 @@ Authentic Feet, Magic Feet, "Pulmão" do Grupo Afeet e Tennis Station. Samples:
 
 **Lacunas conhecidas (Tennis Station, 1 sample só) — ver `docs/BACKLOG.md`:**
 o sample real veio com `Ordem de compra`, `RAZÃO SOCIAL` e `DATA DO PEDIDO` em branco →
-`order_number = None` → `mapper.py:64` grava `PEDIDO_CLIENTE = NULL` no Fire, sem chave
-de idempotência, e a reconciliação não casa (mesmo estado do Pulmão hoje). E o CNPJ
+o parser devolve `order_number = None` e o pipeline gera `SN-<hash>` (antes entrava
+`PEDIDO_CLIENTE = NULL` no Fire, sem reconciliação — mesmo estado do Pulmão). E o CNPJ
 capturado é o **primeiro de uma lista escondida de 39 CNPJs** de filiais do grupo TS nas
 colunas X+ (lista de validação do dropdown) — pode ser escolha do comprador ou default
 não tocado. Confirmar com um segundo pedido real antes de confiar nele.
@@ -239,3 +298,13 @@ não tocado. Confirmar com um segundo pedido real antes de confiar nele.
   lia `1.300` como `1.3`: pedido mil vezes menor, silencioso, aprovado pelo validador.
 - Sem este parser o arquivo caía no `GenericParser`, que extraía pedido `'DA'` e
   quantidades erradas — bug real observado no RED do TDD.
+
+## Template de kits (Nasmar): rótulos da coluna de quantidade
+
+O gate do `NasmarTemplateParser` exige `REF.`, `DESCRIÇÃO PRODUTO`, `TOTAL R$` e **um**
+rótulo de quantidade de `_ROTULOS_QUANTIDADE`: `TOTAL KITS`, `QUAN.`, `QUANT`, `QUANT.`
+(match normalizado, sem prefixo). Os três últimos vieram no lote Authentic Feet de
+05/10/2026 (9 planilhas AF072/AF082/AF108/AF119). Sem o rótulo o arquivo caía no
+`GenericParser` e saía sem cliente/CNPJ, com `CNPJ: ...` como item e qtd lida do REF COR.
+Quarta ocorrência da mesma classe (Magic Feet, Pulmão, Tennis Station, esta). Samples:
+`Pedido Authentic Feet AF0xx/AF108 ....xlsx`; testes em `tests/test_new_parsers.py`.

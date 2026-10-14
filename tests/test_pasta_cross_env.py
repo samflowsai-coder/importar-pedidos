@@ -140,7 +140,7 @@ def test_ligado_com_cookie_e_env_slug_ausente_usa_cookie(portal, tmp_path, monke
     # `test_web_server.py`. `_guardar_original` roda ANTES do parse, então a
     # prova de qual pasta foi lida já existe em disco quando o mock devolve
     # `None`.
-    monkeypatch.setattr(app.pipeline, "process", lambda _loaded: None)
+    monkeypatch.setattr(app.pipeline, "process_detailed", lambda _loaded, diag=None: None)
 
     roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
     portal.cookies.set("portal_env", environments_repo.get_by_slug("mm")["id"])

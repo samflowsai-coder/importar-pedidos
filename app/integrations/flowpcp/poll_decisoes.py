@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
 
-from app.erp.fire_update import update_dt_entrega
+from app.erp.fire_update import codigos_da_chave, data_no_fire, update_dt_entrega
+from app.erp_eventos.canonico import formatar_instante
+from app.erp_eventos.eco import registrar_aplicacao
 from app.integrations.flowpcp.client import FlowPCPClient
 from app.integrations.flowpcp.config import FlowPCPConfig
 from app.integrations.flowpcp.schema import (
@@ -41,6 +44,7 @@ def processar_decisao(
     fire_conn,
     conn: sqlite3.Connection,
     config: FlowPCPConfig,
+    erp_base: str | None = None,
 ) -> bool:
     """Processa uma decisão. Retorna True se ela foi CONFIRMADA (reconciliada →
     sai do feed do Flow); False se não confirmou e deve ser re-tentada no próximo
@@ -81,6 +85,7 @@ def processar_decisao(
         )
         return True
 
+    cnpj_aplicado = decisao.cliente_cnpj
     try:
         rows = update_dt_entrega(
             fire_conn,
@@ -112,6 +117,7 @@ def processar_decisao(
             logger.error(f"flowpcp UPDATE Fire (retry revenda) falhou decisao={decisao.id}: {exc}")
             return False
         if rows:
+            cnpj_aplicado = config.intercompany_cnpj
             logger.info(
                 f"flowpcp pedido {decisao.pedido_erp} não achado pelo cliente real "
                 f"(decisao={decisao.id}) — resolvido com a revenda intercompany"
@@ -134,6 +140,8 @@ def processar_decisao(
             return True
         return False  # ainda não encontrado → re-tenta no próximo poll
 
+    if erp_base:
+        _registrar_eco(fire_conn, conn, decisao, erp_base=erp_base, cnpj=cnpj_aplicado, config=config)
     _confirmar(
         client,
         conn,
@@ -145,12 +153,32 @@ def processar_decisao(
     return True
 
 
+def _registrar_eco(fire_conn, conn, decisao: DecisaoFlowPCP, *, erp_base: str, cnpj, config) -> None:
+    """SP1: guarda quais pedidos do ERP este UPDATE tocou e a data gravada,
+    para a vigia marcar o `data_entrega_alterada` como eco (`correlacaoId`).
+    Best-effort: o UPDATE já foi feito; perder o eco só tira o rótulo."""
+    try:
+        codigos = codigos_da_chave(fire_conn, pedido_cliente=decisao.pedido_erp, cliente_cnpj=cnpj)
+        registrar_aplicacao(
+            conn,
+            decisao.id,
+            base=erp_base,
+            erp_codigos=codigos,
+            nova_data=data_no_fire(decisao.prazo_pactuado, config.timezone),
+            agora=formatar_instante(datetime.now(UTC)),
+        )
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001 — ver docstring
+        logger.warning(f"flowpcp eco não registrado decisao={decisao.id}: {exc!r}")
+
+
 def poll_decisoes_once(
     *,
     client: FlowPCPClient,
     fire_conn,
     conn: sqlite3.Connection,
     config: FlowPCPConfig,
+    erp_base: str | None = None,
 ) -> int:
     if not config.enabled:
         return 0
@@ -160,7 +188,12 @@ def poll_decisoes_once(
     for decisao in resp.decisoes:
         try:
             confirmada = processar_decisao(
-                decisao, client=client, fire_conn=fire_conn, conn=conn, config=config
+                decisao,
+                client=client,
+                fire_conn=fire_conn,
+                conn=conn,
+                config=config,
+                erp_base=erp_base,
             )
         except Exception as exc:  # noqa: BLE001 — uma decisão ruim não derruba o lote
             logger.error(f"flowpcp erro processando decisão {decisao.id}: {exc}")

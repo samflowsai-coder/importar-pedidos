@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app import pipeline
 from app.persistence import db, environments_repo, router
 from app.worker.jobs import scan_environments
 
@@ -58,7 +59,7 @@ def test_picks_up_new_pdf_and_inserts_import(two_envs):
     pdf = Path(mm["watch_dir"]) / "pedido-001.pdf"
     pdf.write_bytes(b"%PDF-1.4\nfake")
 
-    with patch.object(scan_environments, "pipeline_process", return_value=_fake_order()):
+    with patch.object(pipeline, "process_detailed", return_value=_fake_order()):
         scan_environments.run_scan()
 
     # arquivo movido pra Pedidos importados
@@ -79,12 +80,12 @@ def test_idempotent_by_sha(two_envs):
     content = b"%PDF-1.4\nidempotent"
     (Path(mm["watch_dir"]) / "a.pdf").write_bytes(content)
 
-    with patch.object(scan_environments, "pipeline_process", return_value=_fake_order("X")):
+    with patch.object(pipeline, "process_detailed", return_value=_fake_order("X")):
         scan_environments.run_scan()
 
     # mesmo conteúdo recolocado com nome diferente
     (Path(mm["watch_dir"]) / "b.pdf").write_bytes(content)
-    with patch.object(scan_environments, "pipeline_process", return_value=_fake_order("X")) as m:
+    with patch.object(pipeline, "process_detailed", return_value=_fake_order("X")) as m:
         scan_environments.run_scan()
         # pipeline NÃO foi chamado pra "b.pdf" (sha já existe)
         assert m.call_count == 0
@@ -100,7 +101,7 @@ def test_iterates_multiple_envs(two_envs):
     (Path(mm["watch_dir"]) / "mm.pdf").write_bytes(b"AAA")
     (Path(nm["watch_dir"]) / "nm.pdf").write_bytes(b"BBB")
 
-    with patch.object(scan_environments, "pipeline_process",
+    with patch.object(pipeline, "process_detailed",
                       side_effect=[_fake_order("MM-1"), _fake_order("NM-1")]):
         scan_environments.run_scan()
 
@@ -124,7 +125,7 @@ def test_pipeline_failure_records_error(two_envs):
     mm, _ = two_envs
     (Path(mm["watch_dir"]) / "broken.pdf").write_bytes(b"junk")
 
-    with patch.object(scan_environments, "pipeline_process", return_value=None):
+    with patch.object(pipeline, "process_detailed", return_value=None):
         scan_environments.run_scan()
 
     # arquivo movido para com_erro
@@ -150,13 +151,13 @@ def test_continues_when_one_env_fails(two_envs, monkeypatch):
 
     call_count = {"n": 0}
 
-    def fake_process(loaded):
+    def fake_process(loaded, diag=None):
         call_count["n"] += 1
         if call_count["n"] == 1:
             raise RuntimeError("boom")
         return _fake_order("OK")
 
-    with patch.object(scan_environments, "pipeline_process", side_effect=fake_process):
+    with patch.object(pipeline, "process_detailed", side_effect=fake_process):
         scan_environments.run_scan()
 
     # Pelo menos um foi processado mesmo com erro no outro

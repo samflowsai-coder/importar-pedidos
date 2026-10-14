@@ -40,7 +40,12 @@ def resolucao_para(order: Order, *, slug: str) -> ResolucaoCliente | None:
         if cnpj_digits(order.header.customer_cnpj) != alvo:
             return None
 
-        return resolver_cliente_real(order.header.order_number, revenda_slug=revenda_slug)
+        # Número gerado pelo portal (`SN-<hash>`) nunca foi digitado no Fire da
+        # revenda: consultar com ele é uma ida ao banco que não casa — e, com o
+        # Fire da revenda fora do ar, trava o preview. Mesmo caminho de antes,
+        # quando o pedido chegava sem número: `sem_chave`.
+        chave = None if order.header.order_number_gerado else order.header.order_number
+        return resolver_cliente_real(chave, revenda_slug=revenda_slug)
     except Exception as exc:  # noqa: BLE001 — cinto e suspensório: nunca pode derrubar o push
         logger.warning(f"intercompany: resolucao_para falhou (import slug={slug}): {exc}")
         return ResolucaoCliente(False, motivo="erro_conexao")

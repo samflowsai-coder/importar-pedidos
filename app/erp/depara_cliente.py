@@ -18,7 +18,10 @@ from dataclasses import dataclass, field
 
 from app.erp.cnpj import cnpj_digits
 from app.erp.connection import FirebirdConnection
-from app.erp.queries import FIND_CLIENTE_REAL_BY_PEDIDO_CLIENTE
+from app.erp.queries import (
+    FIND_CLIENTE_REAL_BY_PEDIDO_CLIENTE,
+    clientes_reais_por_pedidos_cliente_sql,
+)
 from app.persistence import environments_repo
 from app.utils.logger import logger
 
@@ -122,6 +125,72 @@ def resolver_cliente_real(chave: str | None, *, revenda_slug: str) -> ResolucaoC
         _CACHE[cache_key] = resultado
     return resultado
 
+
+# Chaves por ida ao banco no lote (mesmo limite da reconciliação).
+_BLOCO_LOTE = 200
+
+
+def resolver_clientes_reais(chaves: list[str], *, revenda_slug: str) -> dict[str, ResolucaoCliente]:
+    """`resolver_cliente_real` para N chaves numa conexão só (vigia SP1).
+
+    Mesma regra (`_decidir`), mesmo cache positivo e mesmo cool-down. Nunca
+    levanta: falha de conexão vira `erro_conexao` para todas as chaves que
+    não estavam no cache.
+    """
+    limpas = sorted({(c or "").strip() for c in chaves} - {""})
+    saida: dict[str, ResolucaoCliente] = {}
+    faltam = []
+    for chave in limpas:
+        em_cache = _CACHE.get((revenda_slug, chave))
+        if em_cache is not None:
+            saida[chave] = em_cache
+        else:
+            faltam.append(chave)
+    if not faltam:
+        return saida
+
+    def _falha(motivo: str) -> dict[str, ResolucaoCliente]:
+        for chave in faltam:
+            saida[chave] = ResolucaoCliente(False, motivo=motivo, revenda_slug=revenda_slug)
+        return saida
+
+    falha_em = _FALHA_RECENTE.get(revenda_slug)
+    if falha_em is not None and (_clock() - falha_em) < _ERRO_CONEXAO_COOLDOWN_S:
+        return _falha("erro_conexao")
+    try:
+        env = environments_repo.get_by_slug(revenda_slug)
+    except Exception as exc:  # noqa: BLE001 — nunca levanta
+        logger.warning(f"depara_cliente: lookup do ambiente '{revenda_slug}' falhou: {exc}")
+        return _falha("erro_conexao")
+    if env is None:
+        return _falha("config_invalida")
+    try:
+        cfg = environments_repo.to_fb_config(env)
+        linhas: list = []
+        with FirebirdConnection().connect_somente_leitura(cfg) as conn:
+            cur = conn.cursor()
+            try:
+                for i in range(0, len(faltam), _BLOCO_LOTE):
+                    bloco = faltam[i : i + _BLOCO_LOTE]
+                    cur.execute(clientes_reais_por_pedidos_cliente_sql(len(bloco)), bloco)
+                    linhas.extend(cur.fetchall())
+            finally:
+                cur.close()
+    except Exception as exc:  # noqa: BLE001 — nunca levanta
+        logger.warning(f"depara_cliente: leitura em lote da revenda falhou: {exc}")
+        _FALHA_RECENTE[revenda_slug] = _clock()
+        return _falha("erro_conexao")
+    _FALHA_RECENTE.pop(revenda_slug, None)
+
+    por_chave: dict[str, list] = {}
+    for r in linhas:
+        por_chave.setdefault((r[0] or "").strip(), []).append(r[1:])
+    for chave in faltam:
+        resultado = _decidir(por_chave.get(chave, []), revenda_slug=revenda_slug)
+        if resultado.resolvido:
+            _CACHE[(revenda_slug, chave)] = resultado
+        saida[chave] = resultado
+    return saida
 
 def _decidir(rows: list, *, revenda_slug: str) -> ResolucaoCliente:
     """Regra pura: só resolve com UM CNPJ distinto, válido, entre os hits.

@@ -31,12 +31,15 @@ class FirebirdExportResult:
         fire_codigo: int | None = None,
         skipped: bool = False,
         skip_reason: str | None = None,
+        itens: list[tuple[int, int]] | None = None,
     ) -> None:
         self.order_number = order_number
         self.items_inserted = items_inserted
         self.fire_codigo = fire_codigo
         self.skipped = skipped
         self.skip_reason = skip_reason
+        # SP1: (CORPO_VENDAS.CODIGO, posição em order.items) de cada item inserido.
+        self.itens = itens or []
 
     def to_dict(self) -> dict:
         return {
@@ -56,14 +59,25 @@ class FirebirdExportResult:
         )
 
 
-def _to_erp_rows(order: Order) -> list[ERPRow]:
-    """Flatten Order to ERPRow list (mirrors ERPExporter logic)."""
+def _to_erp_rows_indexados(order: Order) -> list[tuple[int, ERPRow]]:
+    """Flatten Order to (posição em order.items, ERPRow), na ordem do INSERT.
+
+    A ordem do INSERT é a dos grupos por local de entrega — não a de
+    `order.items`. A posição vem pela identidade do item, nunca por contador:
+    é ela que o /recebimento do Flow usa como `indiceOriginal` (SP1)."""
     from app.exporters.erp_exporter import ERPExporter
     exporter = ERPExporter()
-    all_rows: list[ERPRow] = []
+    posicao = {id(item): n for n, item in enumerate(order.items)}
+    saida: list[tuple[int, ERPRow]] = []
     for bucket in exporter._group_by_delivery(order).values():
-        all_rows.extend(exporter._to_erp_rows(order, bucket))
-    return all_rows
+        rows = exporter._to_erp_rows(order, bucket)
+        saida.extend(zip([posicao[id(item)] for item in bucket], rows, strict=True))
+    return saida
+
+
+def _to_erp_rows(order: Order) -> list[ERPRow]:
+    """Flatten Order to ERPRow list (mirrors ERPExporter logic)."""
+    return [row for _, row in _to_erp_rows_indexados(order)]
 
 
 def _valor_total(rows: list[ERPRow]) -> Decimal:
@@ -203,7 +217,8 @@ class FirebirdExporter:
         #    (CODFIGFISCAL difere MM x Nasmar), default medido se ausente.
         #    OBS fica None aqui — carrega a lista de pedidos de origem do
         #    lote intercompany, que e um call-site futuro.
-        erp_rows = _to_erp_rows(order)
+        indexados = _to_erp_rows_indexados(order)
+        erp_rows = [row for _, row in indexados]
         valor_total = _valor_total(erp_rows)
         dt_entrega = _menor_dt_entrega(erp_rows)
         perfil = perfil_para(self._env)
@@ -229,7 +244,8 @@ class FirebirdExporter:
         #    e o 16o valor do INSERT — anexado aqui, fora da tupla do mapper
         #    (que tem 15 elementos).
         items_inserted = 0
-        for row in erp_rows:
+        itens: list[tuple[int, int]] = []
+        for indice, row in indexados:
             product_seq, unid = self._find_product(cur, row)
             cur.execute(queries.GET_NEXT_CORPOVENDAS_CODIGO)
             item_pk: int = cur.fetchone()[0]
@@ -238,6 +254,7 @@ class FirebirdExporter:
             )
             cur.execute(queries.INSERT_CORPO_VENDAS, (*item_params, perfil.cfop_principal))
             items_inserted += 1
+            itens.append((item_pk, indice))
 
         cur.close()
         logger.info(
@@ -248,6 +265,7 @@ class FirebirdExporter:
             order_number=order.header.order_number,
             items_inserted=items_inserted,
             fire_codigo=header_pk,
+            itens=itens,
         )
 
     def _find_client(self, cur, cnpj: str | None) -> int | None:

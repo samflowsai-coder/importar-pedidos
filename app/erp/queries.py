@@ -205,6 +205,21 @@ def find_products_by_codes_sql(n: int) -> str:
     )
 
 
+def prever_import_fire_sql(n: int) -> str:
+    """Palpite do importador de Excel do Fire. Retorna (CODPROD_ALTERN, SEQ, DESCRICAO).
+
+    O importador do Fire (`MECANICO=99`) não busca o código exato: casa por
+    PREFIXO e fica com o primeiro registro da ordem física. Esta query reproduz
+    isso em lote: sem ORDER BY de propósito, o chamador fica com a primeira
+    linha que começa com cada código. Conferido na Fire viva contra
+    `SELECT FIRST 1 ... STARTING WITH ?` um a um: 620/620 iguais (24/09/2026,
+    MM e Nasmar). Ver BACKLOG 2.15.
+    """
+    return "SELECT CODPROD_ALTERN, SEQ, DESCRICAO FROM PRODUTOS WHERE " + " OR ".join(
+        ["CODPROD_ALTERN STARTING WITH ?"] * n
+    )
+
+
 def find_products_by_seqs_sql(n: int) -> str:
     """SELECT batelado por SEQ. Retorna (SEQ, DESCRICAO, PRECO_VENDA)."""
     placeholders = ", ".join(["?"] * n)
@@ -409,3 +424,74 @@ def count_pedidos_cliente_desde_sql(n: int) -> str:
           AND REPLACE(REPLACE(REPLACE(REPLACE(
                 C.CPF_CNPJ, '.', ''), '/', ''), '-', ''), ' ', '') IN ({marks})
     """
+
+
+# ── SP1: vigia de pedidos do ERP (SÓ LEITURA) ─────────────────────────────────
+# Lidas dentro de `FirebirdConnection.connect_somente_leitura` (transação
+# READ ONLY + SNAPSHOT): mesmo que alguém troque um SELECT por UPDATE aqui, o
+# Firebird recusa. `tests/test_erp_eventos_origem.py::test_todo_sql_da_vigia_e_select`
+# também garante que todo SQL deste bloco começa com SELECT.
+#
+# "Aberto" = qualquer STATUS fora de FATURADO/CANCELADO — a mesma regra do
+# Flow para reabertura (spec SP1 §4.1) e de `modelo.esta_aberto`: sem caixa
+# (UPPER) e STATUS nulo conta como aberto (COALESCE), senão o pedido sairia da
+# lista sem nunca fechar. Medido: PEDIDO, FATURADO, CANCELADO e 1 "EM ANÁLISE".
+_CAB_VENDAS_ERP = """
+    SELECT V.CODIGO, TRIM(V.PEDIDO_CLIENTE), V.CLIENTE, TRIM(C.CPF_CNPJ),
+           TRIM(V.STATUS), V.DATA_PEDIDO, V.DT_ENTREGA
+    FROM CAB_VENDAS V
+    LEFT JOIN CADASTRO C ON C.CODIGO = V.CLIENTE
+"""
+
+LIST_PEDIDOS_ABERTOS_ERP = (
+    _CAB_VENDAS_ERP
+    + "    WHERE COALESCE(UPPER(TRIM(V.STATUS)), '') NOT IN ('FATURADO', 'CANCELADO')\n"
+)
+
+
+def _marcas(n: int) -> str:
+    if n < 1:
+        raise ValueError("IN () é SQL inválida no Firebird: n >= 1")
+    return ", ".join("?" for _ in range(n))
+
+
+def pedidos_erp_por_codigo_sql(n: int) -> str:
+    return _CAB_VENDAS_ERP + f"    WHERE V.CODIGO IN ({_marcas(n)})\n"
+
+
+def itens_erp_por_pedido_sql(n: int) -> str:
+    """(CODIGO, CODVENDA, CODPRODUTO, DESCRICAO, QTD, PRECO_UNITARIO, UNID, DT_ENTREGA_ITEM)."""
+    return (
+        "SELECT I.CODIGO, I.CODVENDA, I.CODPRODUTO, TRIM(I.DESCRICAO), I.QTD, "
+        "I.PRECO_UNITARIO, TRIM(I.UNID), I.DT_ENTREGA_ITEM "
+        f"FROM CORPO_VENDAS I WHERE I.CODVENDA IN ({_marcas(n)})"
+    )
+
+
+def faturado_erp_por_item_sql(n: int) -> str:
+    """Quantidade faturada ACUMULADA por item (spec SP1 §11: CORPO_VENDAS_NFS,
+    não os campos de NF do item, que são vazios). (COD_ITEMVENDA, SUM(QTD), MAX(CODNF))."""
+    return (
+        "SELECT N.COD_ITEMVENDA, SUM(N.QTD), MAX(N.CODNF) "
+        f"FROM CORPO_VENDAS_NFS N WHERE N.COD_ITEMVENDA IN ({_marcas(n)}) "
+        "GROUP BY N.COD_ITEMVENDA"
+    )
+
+
+def clientes_reais_por_pedidos_cliente_sql(n: int) -> str:
+    """Versão em lote de FIND_CLIENTE_REAL_BY_PEDIDO_CLIENTE: mesma ordem de
+    colunas, com o PEDIDO_CLIENTE (TRIM) na frente para agrupar."""
+    return (
+        "SELECT TRIM(V.PEDIDO_CLIENTE), V.CODIGO, V.STATUS, V.CODNF, "
+        "C.CODIGO, TRIM(C.NOME), TRIM(C.RAZAO_SOCIAL), TRIM(C.CPF_CNPJ) "
+        "FROM CAB_VENDAS V JOIN CADASTRO C ON C.CODIGO = V.CLIENTE "
+        f"WHERE TRIM(V.PEDIDO_CLIENTE) IN ({_marcas(n)})"
+    )
+
+
+# Eco: quais pedidos o UPDATE_DT_ENTREGA vai tocar (mesma chave dele).
+CODIGOS_POR_PEDIDO_CLIENTE_E_CLIENTE = """
+    SELECT CODIGO FROM CAB_VENDAS
+    WHERE TRIM(PEDIDO_CLIENTE) = ?
+      AND CLIENTE = ?
+"""

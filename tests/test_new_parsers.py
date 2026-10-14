@@ -139,6 +139,68 @@ def test_beira_rio_multi_variant_item():
     assert [i.product_code for i in order.items].count("1000626856") == 4
 
 
+# Layout de 10/2026: UMA grade por cor (`23/27 Total`, linha de qtd com 2 números),
+# em vez das duas do layout antigo (`33/38 39/44 Total`, 3 números). O parser exigia
+# as duas e devolvia 0 itens → "Formato não reconhecido ou pedido sem itens".
+_BEIRA_UMA_GRADE = "PEDIDO BEIRA RIO 14330456.pdf"
+
+
+def test_beira_rio_grade_unica_gera_itens():
+    """8 itens × 2 cores, cada cor com UMA faixa de tamanho = 16 linhas."""
+    order = _process(_BEIRA_UMA_GRADE)
+    assert order is not None
+    assert len(order.items) == 16
+
+
+def test_beira_rio_grade_unica_header():
+    order = _process(_BEIRA_UMA_GRADE)
+    assert order.header.order_number == "14330456"
+    assert order.header.issue_date == "30/09/2026"
+    assert "88.379.771" in (order.header.customer_cnpj or "")
+
+
+def test_beira_rio_grade_unica_soma_bate_com_total_do_pdf():
+    """Oráculo: `Total: 445.050,00` impresso no rodapé. A quantidade é em KIT e o
+    preço é por KIT; qualquer multiplicador ou linha perdida quebra a soma."""
+    order = _process(_BEIRA_UMA_GRADE)
+    total = sum(i.quantity * i.unit_price for i in order.items)
+    assert round(total, 2) == 445050.00
+
+
+def test_beira_rio_grade_unica_tamanho_vem_da_linha_nao_fixo():
+    """O tamanho é o impresso na linha da cor (`23/27`), não o `33/38` do layout antigo."""
+    order = _process(_BEIRA_UMA_GRADE)
+    by_code = {}
+    for i in order.items:
+        by_code.setdefault(i.product_code, []).append(i)
+    assert {i.obs for i in by_code["1000660704"]} == {"23/27"}
+    assert {i.obs for i in by_code["1000660780"]} == {"28/33"}
+    assert all(i.description.endswith(i.obs) for i in order.items)
+
+
+def test_beira_rio_grade_unica_primeiro_item():
+    first = _process(_BEIRA_UMA_GRADE).items[0]
+    assert first.product_code == "1000660704"
+    assert first.quantity == 3300.0
+    assert first.unit_price == 8.59
+    assert first.delivery_date == "10/12/2026"
+    assert first.obs == "23/27"
+
+
+def test_beira_rio_grade_unica_descricao_que_quebra_linha():
+    """`...CANO` / `MEDIO LISA -` em duas linhas: a cauda entra na descrição."""
+    order = _process(_BEIRA_UMA_GRADE)
+    item = next(i for i in order.items if i.product_code == "1000660780")
+    assert "CANO MEDIO LISA" in item.description
+
+
+def test_beira_rio_grade_unica_cores_distintas_do_mesmo_item():
+    order = _process(_BEIRA_UMA_GRADE)
+    rows = [i for i in order.items if i.product_code == "1000660974"]
+    assert [(r.quantity, r.obs) for r in rows] == [(3300.0, "23/27"), (3000.0, "23/27")]
+    assert "PRETO/PRETO/BRANCO" in rows[1].description
+
+
 # ── KoloshParser ─────────────────────────────────────────────────────────────
 
 
@@ -481,6 +543,114 @@ def test_sams_grade_per_store_split():
         assert any("SAMS_LOJA_0576_31" in n for n in names)
 
 
+# ── SamsClubParser: PACK de N kits avisado na OBS ────────────────────────────
+#
+# `Qtde na Emb.` > 1 é um PACK com N kits dentro (Fire .7: SEQ 2646 `PACK C/36
+# KITS`, UNIDADE='PACK'). O pedido entra com o EAN do pack — é o que o Sam's
+# recebe —, mas o relatório de separação do Fire soma só os kits e o pack some
+# (chamado Camila 14/10, pedido 06858299-0000 = Fire 5065). O aviso vai na OBS,
+# que o relatório imprime, e começa pelo número do pedido porque o importador
+# de Excel do Fire troca o número pela OBS quando ela vem preenchida.
+
+SAMS_PACK = "PEDIDO SAMS CLUB 06858299 PACK.pdf"
+
+
+def test_sams_pack_nao_muda_quantidade_nem_ean():
+    order = _process(SAMS_PACK)
+    pack = order.items[-1]
+    assert pack.ean == "7898686879200"
+    assert pack.quantity == 1.0
+    assert pack.unit_price == 773.28
+    assert pack.qtd_por_embalagem == 36
+    assert all(i.qtd_por_embalagem is None for i in order.items[:-1])
+    assert sum(i.quantity for i in order.items) == 1873.0
+
+
+def test_sams_pack_obs_avisa_o_total_a_separar():
+    order = _process(SAMS_PACK)
+    esperado = (
+        "06858299-0000 | CONTEM PACK: 1 PACK C/36 = 36 KITS"
+        " | TOTAL A SEPARAR: 1.908 KITS (1.872 AVULSOS + 36 DENTRO DE PACK)"
+    )
+    # Mesma OBS em todas as linhas: o importador do Fire grava a de uma só.
+    assert {i.obs for i in order.items} == {esperado}
+
+
+@pytest.mark.parametrize(
+    "arquivo,trecho",
+    [
+        (
+            "PEDIDO SAMS CLUB.pdf",
+            "CONTEM PACK: 11 PACK C/36 = 396 KITS"
+            " | TOTAL A SEPARAR: 1.365 KITS (969 AVULSOS + 396 DENTRO DE PACK)",
+        ),
+        (
+            "PEDIDO SAMS CLUB 06839396.pdf",
+            "06839396-0000 | CONTEM PACK: 1 PACK C/22 = 22 KITS"
+            " | TOTAL A SEPARAR: 34 KITS (12 AVULSOS + 22 DENTRO DE PACK)",
+        ),
+    ],
+)
+def test_sams_pack_obs_nos_samples_antigos(arquivo, trecho):
+    order = _process(arquivo)
+    obs = {i.obs for i in order.items}
+    assert len(obs) == 1
+    assert trecho in obs.pop()
+
+
+def test_sams_sem_pack_nao_ganha_obs():
+    order = _process(SAMS_CD_DF)
+    assert all(i.obs is None for i in order.items)
+    assert all(i.qtd_por_embalagem is None for i in order.items)
+
+
+def test_sams_grade_obs_e_por_loja():
+    """Cada loja vira um pedido no Fire: a conta do pack é a dela, não a do total."""
+    order = _process(GRADE_FILE)
+    por_loja: dict[str, list] = {}
+    for it in order.items:
+        por_loja.setdefault(it.delivery_cnpj, []).append(it)
+
+    for itens in por_loja.values():
+        obs = {i.obs for i in itens}
+        assert len(obs) == 1
+        packs = sum(i.quantity for i in itens if i.qtd_por_embalagem)
+        avulsos = sum(i.quantity for i in itens if not i.qtd_por_embalagem)
+        texto = obs.pop()
+        assert texto.startswith("06611415-0000 | CONTEM PACK: ")
+        assert f"= {int(packs * 36)} KITS" in texto
+        assert f"({int(avulsos)} AVULSOS" in texto.replace(".", "")
+
+    total_packs = sum(i.quantity for i in order.items if i.qtd_por_embalagem)
+    assert total_packs == 6.0
+
+
+def test_sams_pack_obs_chega_no_xlsx():
+    import tempfile
+
+    import openpyxl
+
+    from app.exporters.erp_exporter import ERPExporter
+
+    order = _process(SAMS_PACK)
+    with tempfile.TemporaryDirectory() as tmp:
+        (path,) = ERPExporter().export(order, tmp)
+        ws = openpyxl.load_workbook(path).active
+        cabecalho = [c.value for c in ws[1]]
+        col = cabecalho.index("OBS")
+        valores = {row[col] for row in ws.iter_rows(min_row=2, values_only=True)}
+    assert len(valores) == 1
+    assert valores.pop().startswith("06858299-0000 | CONTEM PACK")
+
+
+def test_sams_pack_chega_no_preview():
+    from app.web.server import _build_preview_payload
+
+    payload = _build_preview_payload("pid", SAMS_PACK, _process(SAMS_PACK))
+    assert payload["items"][-1]["qtd_por_embalagem"] == 36
+    assert payload["items"][0]["qtd_por_embalagem"] is None
+
+
 # ── KallanXlsParser ──────────────────────────────────────────────────────────
 
 
@@ -729,23 +899,92 @@ def test_ordem_de_compra_tem_precedencia_sobre_fantasia():
     assert order.header.order_number == "TS-4417"
 
 
-def test_sample_tennis_station_entra_sem_numero_de_pedido():
-    """Documenta a lacuna conhecida: com `Ordem de compra`, FANTASIA e DATA DO
-    PEDIDO todos em branco, o pedido entra sem número — e `mapper.py` grava
-    PEDIDO_CLIENTE = NULL no Fire, sem chave de idempotência. Não há edição de
-    número no preview (`CommitRequest` só carrega `preview_id`). Mesmo estado do
-    Pulmão hoje em produção."""
+def test_sample_tennis_station_recebe_numero_gerado_pelo_portal():
+    """`Ordem de compra`, FANTASIA e DATA DO PEDIDO em branco: o parser não
+    inventa (devolve None) e o pipeline gera `SN-` + hash do arquivo. Antes
+    entrava com PEDIDO_CLIENTE = NULL no Fire, sem reconciliação."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert NasmarTemplateParser().parse(_rows(_TS)).header.order_number is None
     order = _process(_TS)
-    assert order.header.order_number is None
+    assert order.header.order_number.startswith("SN-")
+    assert order.header.order_number_gerado is True
 
 
 def test_ordem_de_compra_nao_muda_o_numero_dos_pedidos_antigos():
     """Não-regressão: o campo novo não existe no template AF/MF, então a cadeia
-    de fallback (FANTASIA) tem que continuar valendo lá."""
+    de fallback (FANTASIA com código de loja) tem que continuar valendo lá."""
     assert _process("Pedido Authentic Fit.xlsx").header.order_number == "AF198"
     # 'mf048' no arquivo; o OrderNormalizer faz .upper() depois do parser.
     assert _process("Pedido Magic Feet MF048.xlsx").header.order_number == "MF048"
-    assert _process("Pedido Grupo Afeet Pulmao.xlsx").header.order_number is None
+    assert _process("Pedido Grupo Afeet Pulmao.xlsx").header.order_number.startswith("SN-")
+
+
+# ── Número do pedido: só de campo que é número ───────────────────────────────
+#
+# O FANTASIA muda de sentido por cliente. Na H2S4 é o código da loja (`AF198.`,
+# `mf048`) e é a convenção da própria MM no Fire — a reconciliação depende dele.
+# Na NBA é o NOME da loja: o pedido 4932 (21/09/2026) entrou com PEDIDO_CLIENTE
+# `NBA STORE MOGI SHOPP`, que o Fire copia para a nota fiscal. E a DATA colide
+# quando a loja manda dois pedidos no mesmo dia. Nenhum dos dois é número.
+
+
+def _cabecalho_template(*campos):
+    """Linhas mínimas do template: os campos pedidos + cabeçalho + 1 item."""
+    return [
+        *[[None, rotulo, None, valor, None, None, None] for rotulo, valor in campos],
+        [None, "REF.", "DESCRIÇÃO PRODUTO", "TOTAL Kits", "TOTAL R$", None, None],
+        [None, "K3ABCCIL1FTS", "KIT", 10, 121.80, None, None],
+    ]
+
+
+def _numero(*campos):
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    rows = _cabecalho_template(*campos)
+    return NasmarTemplateParser().parse({"rows": rows, "text": "", "tables": []}).header
+
+
+@pytest.mark.parametrize(
+    "fantasia", ["AF198.", "mf048", "AF090 - 3", "AF127 - 66", "AF-198", "AF76", "AF017-99"]
+)
+def test_fantasia_com_codigo_de_loja_continua_sendo_o_numero(fantasia):
+    assert _numero(("FANTASIA:", fantasia)).order_number == fantasia.rstrip(".")
+
+
+# Nome de loja com dígito é a mesma classe do 4932: repete em todo pedido da
+# loja e vai pra nota. A forma medida na Fire é 2 letras + 2 a 4 dígitos.
+@pytest.mark.parametrize(
+    "fantasia",
+    [
+        "NBA Store Mogi Shopping",
+        "TS",
+        "LOJA CENTRO",
+        "LOJA 10",
+        "NBA 3",
+        "RIO 2",
+        "CD 1",
+        "SHOP 12",
+    ],
+)
+def test_fantasia_com_nome_de_loja_nao_vira_numero(fantasia):
+    assert _numero(("FANTASIA:", fantasia)).order_number is None
+
+
+def test_data_do_pedido_nao_vira_numero():
+    header = _numero(("DATA DO PEDIDO:", "16/09/2026"))
+    assert header.order_number is None
+    assert header.issue_date == "16/09/2026"
+
+
+def test_ordem_de_compra_sem_digito_nao_vira_numero():
+    """`SEM OC`, `-`, `N/A` no campo da OC não são número de pedido."""
+    header = _numero(("Ordem de compra:", "SEM OC"), ("FANTASIA:", "AF198"))
+    assert header.order_number == "AF198"
+
+
+def test_ordem_de_compra_so_com_zero_nao_vira_numero():
+    assert _numero(("Ordem de compra:", "0")).order_number is None
 
 
 # ── O template também tinha a bomba da Daju ──────────────────────────────────
@@ -929,6 +1168,233 @@ def test_nba_store_as_customer_name():
     store_names = {i.delivery_name for i in order.items if i.delivery_name}
     # Every item should have a delivery_name set
     assert len(store_names) == 21, f"Expected 21 distinct store names, got {len(store_names)}"
+
+
+# ── NBA no template de kits: REF. é o MODELO, não a variante ─────────────────
+#
+# Pedido 4932 (Camila, 21/09/2026), NBA Store Mogi Shopping. Mesmo template do
+# Authentic Feet, preenchido de outro jeito: lá `REF.` já é a variante completa
+# (`AFK3S-A-100-3338`) e `REF COR` é só a cor (`100`); aqui `REF.` é o modelo
+# (`NB01`), `REF COR` é modelo + cor (`NB01 - 1`) e o tamanho vem com letra
+# (`M - 33-38`). O parser gravava `REF.` como código: 12 linhas com só 2 códigos
+# distintos, nenhum existe no Fire, e o pedido entrou com 2 produtos. No catálogo
+# da Nasmar (.4) o kit é `NB01-1M` — o mesmo código que o desmembramento NBA já
+# traz pronto (`PEDIDO NBA 3.xlsx`).
+
+_NBA_MOGI = "PEDIDO NBA MOGI SHOPPING.xlsx"
+
+
+def test_nba_template_codigo_e_a_variante_do_fire():
+    order = _process(_NBA_MOGI)
+    assert order is not None
+    # Modelo x cor (1 = branca, 3 = preta) x tamanho, na ordem da planilha.
+    esperado = [f"{m}-{c}{t}" for m in ("NB01", "NB03") for c in "13" for t in ("M", "G", "GG")]
+    assert [i.product_code for i in order.items] == esperado
+
+
+def test_nba_template_soma_bate_com_o_totalizador_da_planilha():
+    """Linha 23 do arquivo: 150 kits, R$ 5.832,71."""
+    order = _process(_NBA_MOGI)
+    assert sum(int(i.quantity) for i in order.items) == 150
+    assert sum(i.total_price for i in order.items) == pytest.approx(5832.71, abs=0.01)
+
+
+@pytest.mark.parametrize(
+    ("ref", "ref_cor", "tamanhos", "esperado"),
+    [
+        # NBA: REF. é o modelo -> compõe REF COR + letra do tamanho.
+        ("NB01", "NB01 - 1", "M - 33-38", "NB01-1M"),
+        ("NB03", "NB03 - 3", "GG - 45-48", "NB03-3GG"),
+        # AF / MF / TS: REF. já é a variante, REF COR é só a cor. Intocado.
+        ("AFK3S-A-100-3338", "100", "33 - 38", "AFK3S-A-100-3338"),
+        ("MFK3C-B-100-1922", "100", "19 - 22", "MFK3C-B-100-1922"),
+        ("K3ABCCIL1FTS", "001", "33 - 38", "K3ABCCIL1FTS"),
+        # Cor que COMEÇA com o REF sem ser REF + "-" + cor não é modelo.
+        ("10", "100", "33 - 38", "10"),
+        # Sem REF COR não há de onde compor.
+        ("NB01", "", "M - 33-38", "NB01"),
+        # Letra colada à numeração, com outro separador digitado à mão.
+        ("NB01", "NB01 - 1", "M/33-38", "NB01-1M"),
+        ("NB01", "NB01 - 1", "M 33-38", "NB01-1M"),
+        # Sem letra legível: o tamanho vai junto e o código segue distinto por
+        # linha (não casa no Fire, cai na vinculação manual, nunca colapsa).
+        ("NB01", "NB01 - 1", "33 - 38", "NB01-1 33-38"),
+        ("NB01", "NB01 - 1", "P/M - 33-38", "NB01-1 P/M-33-38"),
+        ("NB01", "NB01 - 1", "ÚNICO", "NB01-1 ÚNICO"),
+        ("NB01", "NB01 - 1", "", "NB01-1"),
+    ],
+)
+def test_template_codigo_da_variante(ref, ref_cor, tamanhos, esperado):
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert NasmarTemplateParser()._codigo_variante(ref, ref_cor, tamanhos) == esperado
+
+
+def test_tamanhos_sem_letra_nunca_dividem_o_codigo():
+    """O modo de falha do 4932 com outro gatilho: TAMANHOS digitado sem a letra.
+    Se as três linhas de tamanho da mesma cor saíssem com o mesmo código, um
+    vínculo de-para as juntaria num produto só."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    p = NasmarTemplateParser()
+    codigos = {p._codigo_variante("NB01", "NB01 - 1", t) for t in ("33-38", "39-44", "45-48")}
+    assert len(codigos) == 3
+
+
+# ── Kings: o template do fornecedor com código de modelo + número de cor ─────
+#
+# A rede Kings (~55 franquias, cada loja com CNPJ próprio, todas na MM `.7`)
+# recebeu o template de kits com `REF.` = modelo (`KG 07`) e `REF COR` = número
+# da cor (`001`). No Fire o kit é modelo sem espaço + sufixo de cor: `KG07BR`,
+# `KG07PR`, `KG10ST` (conferido na Fire viva em 24/09/2026, SEQ 2133–2150 e
+# 3945–3954; nenhum KG na Nasmar `.4`). Sem a regra, todas as cores do mesmo
+# modelo saíam com `KG 07` — o colapso do NBA 4932 de novo.
+#
+# O modelo vem em branco (quantidades zeradas); os testes preenchem a coluna
+# TOTAL Kits em memória sobre o layout real do arquivo.
+
+_KINGS = "Planilha modelo cliente Kings.xlsx"
+
+# CODPROD_ALTERN dos 28 kits Kings na MM (.7), na ordem das linhas da planilha.
+_KINGS_FIRE = [
+    "KG07BR",
+    "KG07PR",
+    "KG08BR",
+    "KG08PR",
+    *[
+        f"KG{m}{c}"
+        for m in ("10", "11", "01", "02", "03", "04", "05", "06")
+        for c in ("BR", "PR", "ST")
+    ],
+]
+
+
+def _kings_preenchido(qtd: int = 10):
+    """Linhas reais do modelo Kings com TOTAL Kits e TOTAL R$ preenchidos."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    extracted = _rows(_KINGS)
+    rows = extracted["rows"]
+    header_idx, col_map = NasmarTemplateParser()._find_header_row(rows)
+    for row in rows[header_idx + 1 :]:
+        if row[col_map["ref"]]:
+            row[col_map["total_kits"]] = qtd
+            row[col_map["total_rs"]] = round(qtd * row[col_map["custo"]], 2)
+    return extracted
+
+
+def test_kings_modelo_em_branco_casa_o_template():
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert NasmarTemplateParser().can_parse(_rows(_KINGS)) is True
+
+
+def test_kings_codigo_e_o_do_fire():
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    order = NasmarTemplateParser().parse(_kings_preenchido())
+    assert [i.product_code for i in order.items] == _KINGS_FIRE
+
+
+def test_kings_quantidade_e_custo_nunca_a_sugestao():
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    order = NasmarTemplateParser().parse(_kings_preenchido(qtd=7))
+    primeiro = order.items[0]
+    assert primeiro.quantity == 7
+    assert primeiro.unit_price == 16.66  # CUSTO, não 39.99 (SUGESTÃO)
+    assert "Branco" in primeiro.description
+
+
+def test_kings_obs_de_produto_nao_vira_obs_do_pedido():
+    """A coluna OBS do modelo Kings é atributo do produto ("Produto atoalhado",
+    "Produto sem toalha com silicone"). O item do Fire não tem OBS: o importador
+    grava a de uma linha só no OBS do PEDIDO. No 1279 (Nasmar, 25/09/2026) saiu
+    "Produto atoalhado" num pedido com 4 kits de silicone, e a separação se
+    confunde. A MM pediu pra tirar só da Kings."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    order = NasmarTemplateParser().parse(_kings_preenchido())
+    assert [i.obs for i in order.items] == [None] * 28
+
+
+def test_obs_dos_outros_clientes_do_template_continua_indo():
+    """AF/MF: o "KIT 3" da coluna OBS continua no pedido — a supervisão da MM
+    pediu pra manter (25/09/2026)."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    rows = [
+        [None, "REF.", "REF COR", "DESCRIÇÃO PRODUTO", "OBS", "TOTAL Kits", "TOTAL R$"],
+        [None, "AFK3S-A-100-3338", "100", "KIT", "KIT 3", 10, 121.80],
+    ]
+    order = NasmarTemplateParser().parse({"rows": rows, "text": "", "tables": []})
+    assert order.items[0].obs == "KIT 3"
+
+
+@pytest.mark.parametrize(
+    ("ref", "ref_cor", "cor", "esperado"),
+    [
+        ("KG 07", "001", "Branco", "KG07BR"),
+        ("KG 07", "002", "Preto", "KG07PR"),
+        ("KG 10", "003", "Sortido (Branco, Mescla, Preto)", "KG10ST"),
+        # Digitado sem espaço, em minúscula, cor no feminino ou plural.
+        ("KG07", "002", "preta", "KG07PR"),
+        ("kg 05", "003", "Sortidas", "KG05ST"),
+        # Número da cor digitado como número (o Excel tira os zeros; o .xls
+        # devolve float, que vira "1.0").
+        ("KG 07", "1", "Branco", "KG07BR"),
+        ("KG 07", "2.0", "Preto", "KG07PR"),
+        # Só uma das duas fontes preenchida: ela decide.
+        ("KG 07", "", "Branco", "KG07BR"),
+        ("KG 07", "002", "", "KG07PR"),
+    ],
+)
+def test_kings_codigo_da_cor(ref, ref_cor, cor, esperado):
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert NasmarTemplateParser()._codigo_kings(ref, ref_cor, cor) == esperado
+
+
+@pytest.mark.parametrize(
+    ("ref", "ref_cor", "cor"),
+    [
+        ("KG 07", "001", "Preto"),  # número e nome discordam: não escolhe
+        ("KG 07", "2.0", "Branco"),  # idem, com o float do .xls
+        # Nome editado sem número: não adivinha pelo começo do texto.
+        ("KG 07", "", "Preto/Branco"),
+        ("KG 07", "", "Branco, Mescla, Preto"),
+        ("KG 07", "", "Brancoxyz"),
+        ("KG 07", "²", "Branco, Mescla"),  # dígito não-ASCII não derruba o arquivo
+        ("KG 07", "004", "Azul"),  # cor que não existe no Fire
+        ("KG 07", "", ""),  # sem cor nenhuma
+        ("KG07", "", ""),
+    ],
+)
+def test_kings_sem_cor_certa_nunca_vira_prefixo_de_codigo_do_fire(ref, ref_cor, cor):
+    """O importador de Excel do Fire casa por PREFIXO (BACKLOG 2.15): `KG07`
+    entraria como `KG07BR` sem ninguém ver. Sem cor confiável, o código leva um
+    espaço — não é prefixo de nenhum KG do Fire e cai na vinculação manual."""
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    codigo = NasmarTemplateParser()._codigo_kings(ref, ref_cor, cor)
+    assert codigo is not None and " " in codigo
+    assert not any(fire.startswith(codigo) for fire in _KINGS_FIRE)
+
+
+@pytest.mark.parametrize(
+    ("ref", "ref_cor", "cor"),
+    [
+        ("NB01", "NB01 - 1", "Branca"),
+        ("K3ABCCIL1FTS", "001", "Branco"),
+        ("AFK3S-A-100-3338", "100", "Branco"),
+        ("KG1", "001", "Branco"),
+        ("KG 071", "001", "Branco"),
+    ],
+)
+def test_kings_regra_nao_toca_os_outros_clientes(ref, ref_cor, cor):
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    assert NasmarTemplateParser()._codigo_kings(ref, ref_cor, cor) is None
 
 
 # ── FIX: Riachuelo ME — page-footer URL not imported as item ─────────────────
@@ -1131,3 +1597,50 @@ def test_sams_soma_dos_itens_bate_com_o_sumario_do_pdf(sample, total_mercadorias
     order = _process(sample)
     soma = sum(i.total_price or 0 for i in order.items)
     assert soma == pytest.approx(total_mercadorias, abs=0.01)
+
+
+# ── Authentic Feet (05/10/2026): o MESMO template, com `QUAN.` no lugar de TOTAL KITS ──
+#
+# Lote de 9 planilhas da MM: a coluna de quantidade de kits veio como `QUAN.`,
+# `QUANT` ou `QUANT.`. Sem a coluna `TOTAL KITS` o gate do template falhava, o
+# arquivo caía no GenericParser, e o pedido saía sem cliente/CNPJ, com
+# `CNPJ: 209430287110` como item e qtd 100/1 lida do REF COR do código do produto.
+# Quarta ocorrência da mesma classe de bug neste template.
+
+_AF_QUANTIDADE = [
+    "Pedido Authentic Feet AF072 QUAN.xlsx",
+    "Pedido Authentic Feet AF082 QUANT.xlsx",
+    "Pedido Authentic Feet AF108 QUANT ponto.xlsx",
+]
+
+
+@pytest.mark.parametrize("rotulo", ["QUAN.", "QUANT", "QUANT.", "Quant.", " QUANT  "])
+def test_template_aceita_rotulos_da_coluna_de_quantidade(rotulo):
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    cabecalho = ["REF.", "DESCRIÇÃO PRODUTO", rotulo, "TOTAL R$"]
+    col_map = NasmarTemplateParser()._match_header(cabecalho)
+    assert col_map is not None
+    assert col_map["total_kits"] == 2
+
+
+@pytest.mark.parametrize("sample", _AF_QUANTIDADE)
+def test_authentic_feet_quantidade_preco_e_cliente(sample):
+    order = _process(sample)
+    assert order is not None
+    assert [int(i.quantity) for i in order.items] == [50, 40, 40, 40]
+    assert {i.unit_price for i in order.items} == {11.96}
+    assert order.items[0].product_code == "AFK3S-A-100-3338"
+    assert order.header.customer_cnpj  # antes: None
+    assert "CNPJ" not in (order.items[0].description or "")
+
+
+def test_authentic_feet_modelo_antigo_total_kits_continua_igual():
+    """AF093 (05/10/2026), cabeçalho `TOTAL KITS`: funcionou na produção antes do
+    fix dos rótulos `QUAN.`/`QUANT` e tem que sair idêntico depois."""
+    order = _process("Pedido Authentic Feet AF093 TOTAL KITS.xlsx")
+    assert order is not None
+    assert order.header.customer_cnpj == "23.473.808/0016-78"
+    assert [int(i.quantity) for i in order.items] == [36, 60, 60, 48, 60, 60, 36, 36, 36, 36]
+    assert {i.unit_price for i in order.items} == {11.96, 15.32}
+    assert sum(i.total_price for i in order.items) == pytest.approx(6081.12, abs=0.01)

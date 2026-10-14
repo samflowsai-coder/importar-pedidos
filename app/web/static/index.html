@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/tokens.css?v=2">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=3">
   <link rel="stylesheet" href="/static/css/shell.css?v=3">
   <script src="/static/js/shell.js?v=3" defer></script>
   <style>
@@ -40,7 +40,7 @@
       text-transform: uppercase;
     }
     .badge-ok   { background: var(--success-bg); color: var(--success); }
-    .badge-warn { background: var(--warn-bg);    color: var(--warn);    }
+    .badge-warn { background: var(--warn-bg);    color: var(--warn-ink); }
 
     /* Firebird indicator */
     .fb-indicator {
@@ -849,6 +849,8 @@
         <div>
           <div class="preview-field-label">Pedido</div>
           <div class="preview-field-value" id="pvOrderNumber">—</div>
+          <span id="pvNumeroGerado" class="badge badge-warn hidden" style="display:inline-block;white-space:nowrap"
+                title="O documento não traz ordem de compra. O portal gerou este número a partir do arquivo; ele vai pro Fire e sai na nota fiscal do cliente. Se o documento tiver um número, avise antes de enviar.">Gerado pelo portal</span>
         </div>
         <div>
           <div class="preview-field-label">Data</div>
@@ -2288,6 +2290,9 @@ function renderPreview(data) {
 
   const h = data.header || {};
   document.getElementById('pvOrderNumber').textContent = h.order_number || '—';
+  // Documento sem ordem de compra: o número é do portal (`SN-<hash>`), não do
+  // cliente. Vai pro Fire e pra nota fiscal — a operadora precisa saber.
+  document.getElementById('pvNumeroGerado').classList.toggle('hidden', !h.order_number_gerado);
   document.getElementById('pvIssueDate').textContent = h.issue_date || '—';
   const name = h.customer_name || '—';
   const nameEl = document.getElementById('pvCustomerName');
@@ -2409,11 +2414,35 @@ function renderPreview(data) {
         : `<span style="color:var(--success)">✓ ${s.items_matched}/${s.items_total} itens com match no Fire</span>`;
     }
 
+    // ── Troca pelo importador do Fire (BACKLOG 2.15) — avisa, não bloqueia ────
+    // O XLSX sai certo; o importador de Excel do Fire casa o código por
+    // prefixo e grava outro produto. O conserto é no pedido do Fire.
+    // Dois casos, dois conselhos: item que o portal casou e o Fire troca é
+    // erro certo; item sem correspondência o Fire casa sozinho pelo começo do
+    // código — às vezes acerta (Riachuelo `…001` → `…001_RIAC`), então é conferir.
+    // Item casado por EAN ou vínculo: o comportamento do Fire não foi medido
+    // (`conferido: false`), então entra no grupo de conferir, nunca no certo.
+    const comTroca = check.available ? (check.items || []).filter(i => i.troca_no_fire) : [];
+    const trocasCertas = comTroca.filter(i => i.match && i.troca_no_fire.conferido).length;
+    const palpites = comTroca.length - trocasCertas;
+    const trocaBit = [
+      trocasCertas > 0
+        ? `<span style="color:var(--warn-strong);font-weight:600">⚠ O Fire vai gravar outro produto em ${trocasCertas} item(ns) ao importar esta planilha (marcados com "vira" na coluna Fire). Depois de importar, troque o produto desses itens no pedido do Fire.</span>`
+        : '',
+      palpites > 0
+        ? `<span style="color:var(--warn-strong)">⚠ ${palpites} item(ns) podem entrar no Fire com o produto que ele escolher pelo começo do código (marcados com "vira"). Confira no pedido do Fire depois de importar.</span>`
+        : '',
+      check.available && s.troca_no_fire_checked === false
+        ? `<span style="color:var(--text-muted)">Previsão de troca pelo Fire indisponível nesta revisão.</span>`
+        : '',
+    ].filter(Boolean).map(b => `<div>${b}</div>`).join('');
+
     // ── Render: stacked vertically ───────────────────────────────────────────
     banner.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:6px;width:100%">
         <div>${clientBit}</div>
         ${priceBit ? `<div>${priceBit}</div>` : ''}
+        ${trocaBit}
       </div>`;
     banner.classList.remove('hidden');
   } else if (banner) {
@@ -2501,12 +2530,30 @@ function renderPreview(data) {
             cell = okBadge;
           }
         }
+        if (check && check.available && m && m.troca_no_fire) {
+          const t = m.troca_no_fire;
+          // Código duplicado no Fire: mesmo texto, outro produto — mostra o SEQ.
+          const alvo = t.codigo === it.product_code ? `#${t.fire_product_id}` : t.codigo;
+          const oQueFazer = !m.match
+            ? 'porque o código não existe no Fire. Confira se é o produto certo, ou vincule antes de importar.'
+            : t.conferido
+              ? `em vez de #${m.fire_product_id}. Depois de importar, troque o produto deste item no pedido do Fire.`
+              : `se não usar ${m.match_source === 'ean' ? 'o EAN' : 'o vínculo'} (#${m.fire_product_id}). Confira no pedido do Fire depois de importar.`;
+          const trocaTitle = `O importador de Excel do Fire casa o código pelo começo e vai gravar #${t.fire_product_id} · ${t.codigo} · ${t.descricao || ''}, ${oQueFazer}`;
+          cell += `<div style="color:var(--warn-strong);font-weight:600;font-size:11px;margin-top:2px;white-space:nowrap"
+                        title="${esc(trocaTitle)}">⚠ vira ${esc(alvo)}</div>`;
+        }
+        // PACK: a quantidade é de packs; a nota mostra quantos kits vão dentro.
+        const packNote = it.qtd_por_embalagem
+          ? `<div style="color:var(--text-muted);font-size:11px;margin-top:2px;white-space:nowrap"
+                  title="Cada unidade é um PACK com ${it.qtd_por_embalagem} kits. O aviso vai na OBS do pedido.">pack c/ ${it.qtd_por_embalagem} · ${fmtQty((it.quantity || 0) * it.qtd_por_embalagem)} kits</div>`
+          : '';
         rows.push(`
           <tr>
             <td>${esc(it.description || '—')}</td>
             <td class="mono">${esc(it.product_code || '—')}</td>
             <td class="mono">${esc(it.ean || '—')}</td>
-            <td class="num">${fmtQty(it.quantity)}</td>
+            <td class="num">${fmtQty(it.quantity)}${packNote}</td>
             <td class="num">${it.unit_price != null ? fmtBRL(it.unit_price) : '—'}</td>
             <td class="num">${it.total_price != null ? fmtBRL(it.total_price) : '—'}</td>
             <td>${esc(deliv || '—')}</td>

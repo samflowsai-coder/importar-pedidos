@@ -13,6 +13,35 @@ _ESPACO = re.compile(r"\s+")
 # é decimal, não milhar. Mesma regra do DajuParser (helper duplicado por dívida
 # conhecida — ver docs/BACKLOG.md; a casa manda copiar do vizinho, não inventar).
 _MILHAR_BR = re.compile(r"\d{1,3}(?:\.\d{3})+")
+# Letra do tamanho no início da célula TAMANHOS, colada à numeração:
+# `M - 33-38`, `GG - 45-48`, `M/33-38`, `M 33-38`. O template do AF/MF/TS traz
+# só a numeração (`33 - 38`) e não casa; `P/M - 33-38` também não (letra ambígua).
+_LETRA_TAMANHO = re.compile(r"([A-Z]{1,3})\s*[-/]?\s*\d")
+# Código de loja da H2S4 no FANTASIA: é a convenção da MM no PEDIDO_CLIENTE do
+# Fire, e a reconciliação depende dela. Forma medida na Fire viva (21/09/2026):
+# 675 de 700 códigos são 2 letras + 2 a 4 dígitos (`AF198`, `AW064`, `MF048`,
+# `AF76`), às vezes com sufixo de loja (`AF090 - 3`). Nome de loja não casa, nem
+# com dígito: `NBA Store Mogi Shopping`, `LOJA 10`, `NBA 3`, `CD 1`.
+_CODIGO_DE_LOJA = re.compile(r"[A-Z]{2}\s*-?\s*\d{2,4}(\s*-\s*\d{1,4})?")
+
+# Modelo da linha Kings: `KG 07`, `KG07`. Exatamente 2 dígitos — é a forma de
+# todos os 28 kits KG no Fire da MM (`.7`, conferido em 24/09/2026).
+_MODELO_KINGS = re.compile(r"KG\s*(\d{2})")
+# Sufixo de cor do kit Kings no Fire (`KG07BR`), pelas duas fontes do template:
+# o número em REF COR e o nome em DESCRIÇÃO COR. Só as 3 cores que existem lá.
+_COR_KINGS_POR_NUMERO = {1: "BR", 2: "PR", 3: "ST"}
+# Número da cor como o openpyxl/xlrd entregam: `001`, `1` ou `1.0` (o .xls
+# devolve todo número como float). Só dígitos ASCII — `²` passa no isdigit()
+# e quebra o int().
+_NUMERO_COR_KINGS = re.compile(r"0*([0-9]{1,3})(?:\.0+)?")
+# Nome da cor. Branco/Preto só valem sozinhos: `Preto/Branco` ou `Branco,
+# Mescla, Preto` escolheriam um código REAL e errado — melhor cair na
+# vinculação manual. Sortido vem com a composição entre parênteses.
+_COR_KINGS_POR_NOME = (
+    (re.compile(r"BRANC[OA]S?"), "BR"),
+    (re.compile(r"PRET[OA]S?"), "PR"),
+    (re.compile(r"SORTID[OA]S?(\s*\(.*\))?"), "ST"),
+)
 
 # Quantas células vazias seguidas o `_next_raw` atravessa antes de desistir do
 # campo. Medido nos 4 samples do template: o valor nunca está a mais de 2 células
@@ -30,10 +59,17 @@ _MAX_CELULAS_VAZIAS = 4
 # O match é por texto NORMALIZADO (upper + espaço colapsado), nunca por igualdade
 # literal: a Tennis Station digitou `TOTAL Kits` e o arquivo inteiro escapou do
 # parser por causa do caixa de duas letras.
-_HEADER_TOKENS = ("REF.", "DESCRIÇÃO PRODUTO", "TOTAL KITS", "TOTAL R$")
+#
+# A coluna de quantidade de kits tem mais de um rótulo: `TOTAL KITS` (AF/MF/Pulmão/
+# Tennis Station/Kings) e `QUAN.`/`QUANT`/`QUANT.` (lote Authentic Feet de
+# 05/10/2026, 9 planilhas). Só vale o rótulo que o comprador de fato digitou; nada
+# de prefixo (`QUANT*`), que casaria coluna alheia.
+_HEADER_TOKENS = ("REF.", "DESCRIÇÃO PRODUTO", "TOTAL R$")
+_ROTULOS_QUANTIDADE = ("TOTAL KITS", "QUAN.", "QUANT", "QUANT.")
 
 # Colunas opcionais: rótulo normalizado -> chave do col_map.
 _COLUNAS_OPCIONAIS = {
+    "REF COR": "ref_cor",
     "DESCRIÇÃO COR": "cor",
     "TAMANHOS": "tamanhos",
     "OBS": "obs",
@@ -125,7 +161,16 @@ class NasmarTemplateParser(BaseParser):
         # livre e só serve de fallback porque o template antigo (AF/MF) não tem
         # campo de número: foi de lá que saiu o `AF76` vs `AF076` que ficou aberto
         # na reconciliação com o Fire. Onde os dois existirem, o campo próprio ganha.
-        order_number = ordem_compra or fantasia or issue_date
+        #
+        # Só vale o que tem forma de número. O FANTASIA da NBA é o nome da loja e
+        # entrou no Fire (e na nota) como `NBA STORE MOGI SHOPP` — pedido 4932,
+        # 21/09/2026. A DATA saiu da cadeia: dois pedidos no mesmo dia colidem.
+        # Sem número, devolve None e o pipeline gera um (`SN-<hash>`).
+        if ordem_compra and not any(c in "123456789" for c in ordem_compra):
+            ordem_compra = None
+        if fantasia and not _CODIGO_DE_LOJA.fullmatch(fantasia.upper()):
+            fantasia = None
+        order_number = ordem_compra or fantasia
 
         return OrderHeader(
             order_number=order_number,
@@ -196,17 +241,21 @@ class NasmarTemplateParser(BaseParser):
         """Se `row` é o cabeçalho da tabela de kits, devolve o `col_map`; senão None.
 
         Fonte única da regra: é o gate do `can_parse` E o mapeamento de colunas. As
-        4 colunas de `_HEADER_TOKENS` são obrigatórias — o resto é opcional e cada
-        uma fica no índice da PRIMEIRA ocorrência.
+        colunas de `_HEADER_TOKENS` mais um rótulo de `_ROTULOS_QUANTIDADE` são
+        obrigatórias — o resto é opcional e cada uma fica no índice da PRIMEIRA
+        ocorrência.
         """
         cells = [_norm(c) for c in row]
         if not all(tok in cells for tok in _HEADER_TOKENS):
+            return None
+        col_qtd = next((cells.index(r) for r in _ROTULOS_QUANTIDADE if r in cells), None)
+        if col_qtd is None:
             return None
 
         col_map = {
             "ref": cells.index("REF."),
             "produto": cells.index("DESCRIÇÃO PRODUTO"),
-            "total_kits": cells.index("TOTAL KITS"),
+            "total_kits": col_qtd,
             "total_rs": cells.index("TOTAL R$"),
         }
         for j, c in enumerate(cells):
@@ -246,16 +295,91 @@ class NasmarTemplateParser(BaseParser):
             tamanhos = self._cell(row, col_map.get("tamanhos")) or ""
             description = " - ".join(p for p in (produto, cor, tamanhos) if p)
 
+            ref_cor = self._cell(row, col_map.get("ref_cor"))
+            codigo_kings = self._codigo_kings(ref, ref_cor, cor)
+            codigo = codigo_kings or self._codigo_variante(ref, ref_cor, tamanhos)
+            # Kings: a coluna OBS é atributo do produto ("Produto atoalhado"). O
+            # item do Fire não tem OBS, e o importador grava a de UMA linha no
+            # OBS do pedido — no 1279 saiu "atoalhado" com 4 kits de silicone.
+            # A MM pediu pra tirar só da Kings; o "KIT 3" da AF/MF fica.
+            obs = None if codigo_kings else self._cell(row, col_map.get("obs")) or None
+
             items.append(OrderItem(
-                product_code=ref,
+                product_code=codigo,
                 description=description or None,
                 quantity=qty,
                 unit_price=self._to_number(self._raw(row, col_map.get("custo"))),
                 total_price=self._to_number(self._raw(row, col_map.get("total_rs"))),
-                obs=self._cell(row, col_map.get("obs")) or None,
+                obs=obs,
             ))
 
         return items
+
+    def _codigo_variante(self, ref: str, ref_cor: str, tamanhos: str) -> str:
+        """Código do produto no Fire (`CODPROD_ALTERN`), que é sempre a VARIANTE.
+
+        O template chega preenchido de dois jeitos:
+
+        - AF / MF / Pulmão / TS: `REF.` já é a variante (`AFK3S-A-100-3338`) e
+          `REF COR` é só a cor (`100`). Devolve `REF.`.
+        - NBA: `REF.` é o modelo (`NB01`), `REF COR` é modelo + cor (`NB01 - 1`)
+          e o tamanho vem com letra (`M - 33-38`). A variante no Fire é
+          `NB01-1M`. Gravar o modelo fez as 6 linhas de cada modelo virarem um
+          produto só (pedido 4932, 21/09/2026).
+
+        O sinal de "REF. é modelo" é `REF COR` ser exatamente `REF.` + `-` + cor,
+        não só começar com ele: `10` / `100` é coincidência, não composição.
+
+        Sem letra de tamanho legível, o código leva o tamanho como veio
+        (`NB01-1 33-38`): não existe no Fire e cai na vinculação manual, mas
+        cada tamanho continua sendo um código distinto. Devolver só `REF COR`
+        faria as linhas de tamanho da mesma cor dividirem um código — e um
+        vínculo de-para por código as colapsaria de novo, como no 4932.
+        """
+        cor = _ESPACO.sub("", ref_cor).upper()
+        modelo = _ESPACO.sub("", ref).upper()
+        if not cor.startswith(modelo + "-") or cor == modelo + "-":
+            return ref
+        tam = tamanhos.strip().upper()
+        m = _LETRA_TAMANHO.match(tam)
+        if m:
+            return cor + m.group(1)
+        tam = _ESPACO.sub("", tam)
+        return f"{cor} {tam}" if tam else cor
+
+    def _codigo_kings(self, ref: str, ref_cor: str, cor: str) -> str | None:
+        """Código do kit Kings no Fire, ou None se a linha não é da família KG.
+
+        A Kings recebe o template com `REF.` = modelo (`KG 07`), `REF COR` = número
+        da cor (`001`) e `DESCRIÇÃO COR` = nome (`Branco`). No Fire o kit é modelo
+        sem espaço + sufixo de cor: `KG07BR`, `KG07PR`, `KG10ST`. O tamanho já
+        está no modelo (`KG07` = 34-38, `KG08` = 39-44).
+
+        A cor sai do número E do nome. Se um só estiver legível, ele decide; se os
+        dois discordarem, nenhum decide. Sem cor confiável, devolve o modelo com a
+        cor como veio, separados por espaço (`KG07 004`): o importador de Excel do
+        Fire casa por PREFIXO, e `KG07` sozinho entraria como `KG07BR` sem aviso.
+        Com o espaço, não é prefixo de nenhum KG e cai na vinculação manual.
+        """
+        m = _MODELO_KINGS.fullmatch(ref.strip().upper())
+        if not m:
+            return None
+        modelo = f"KG{m.group(1)}"
+
+        por_numero = None
+        n = _NUMERO_COR_KINGS.fullmatch(ref_cor.strip())
+        if n:
+            por_numero = _COR_KINGS_POR_NUMERO.get(int(n.group(1)))
+        nome = _ESPACO.sub(" ", cor).strip().upper()
+        por_nome = next((suf for rx, suf in _COR_KINGS_POR_NOME if rx.fullmatch(nome)), None)
+
+        if por_numero and por_nome and por_numero != por_nome:
+            sufixo = None
+        else:
+            sufixo = por_numero or por_nome
+        if sufixo:
+            return modelo + sufixo
+        return f"{modelo} {ref_cor.strip() or cor.strip() or 'SEM COR'}"
 
     # ------------------------------------------------------------------
     # Helpers locais
