@@ -543,6 +543,114 @@ def test_sams_grade_per_store_split():
         assert any("SAMS_LOJA_0576_31" in n for n in names)
 
 
+# ── SamsClubParser: PACK de N kits avisado na OBS ────────────────────────────
+#
+# `Qtde na Emb.` > 1 é um PACK com N kits dentro (Fire .7: SEQ 2646 `PACK C/36
+# KITS`, UNIDADE='PACK'). O pedido entra com o EAN do pack — é o que o Sam's
+# recebe —, mas o relatório de separação do Fire soma só os kits e o pack some
+# (chamado Camila 14/10, pedido 06858299-0000 = Fire 5065). O aviso vai na OBS,
+# que o relatório imprime, e começa pelo número do pedido porque o importador
+# de Excel do Fire troca o número pela OBS quando ela vem preenchida.
+
+SAMS_PACK = "PEDIDO SAMS CLUB 06858299 PACK.pdf"
+
+
+def test_sams_pack_nao_muda_quantidade_nem_ean():
+    order = _process(SAMS_PACK)
+    pack = order.items[-1]
+    assert pack.ean == "7898686879200"
+    assert pack.quantity == 1.0
+    assert pack.unit_price == 773.28
+    assert pack.qtd_por_embalagem == 36
+    assert all(i.qtd_por_embalagem is None for i in order.items[:-1])
+    assert sum(i.quantity for i in order.items) == 1873.0
+
+
+def test_sams_pack_obs_avisa_o_total_a_separar():
+    order = _process(SAMS_PACK)
+    esperado = (
+        "06858299-0000 | CONTEM PACK: 1 PACK C/36 = 36 KITS"
+        " | TOTAL A SEPARAR: 1.908 KITS (1.872 AVULSOS + 36 DENTRO DE PACK)"
+    )
+    # Mesma OBS em todas as linhas: o importador do Fire grava a de uma só.
+    assert {i.obs for i in order.items} == {esperado}
+
+
+@pytest.mark.parametrize(
+    "arquivo,trecho",
+    [
+        (
+            "PEDIDO SAMS CLUB.pdf",
+            "CONTEM PACK: 11 PACK C/36 = 396 KITS"
+            " | TOTAL A SEPARAR: 1.365 KITS (969 AVULSOS + 396 DENTRO DE PACK)",
+        ),
+        (
+            "PEDIDO SAMS CLUB 06839396.pdf",
+            "06839396-0000 | CONTEM PACK: 1 PACK C/22 = 22 KITS"
+            " | TOTAL A SEPARAR: 34 KITS (12 AVULSOS + 22 DENTRO DE PACK)",
+        ),
+    ],
+)
+def test_sams_pack_obs_nos_samples_antigos(arquivo, trecho):
+    order = _process(arquivo)
+    obs = {i.obs for i in order.items}
+    assert len(obs) == 1
+    assert trecho in obs.pop()
+
+
+def test_sams_sem_pack_nao_ganha_obs():
+    order = _process(SAMS_CD_DF)
+    assert all(i.obs is None for i in order.items)
+    assert all(i.qtd_por_embalagem is None for i in order.items)
+
+
+def test_sams_grade_obs_e_por_loja():
+    """Cada loja vira um pedido no Fire: a conta do pack é a dela, não a do total."""
+    order = _process(GRADE_FILE)
+    por_loja: dict[str, list] = {}
+    for it in order.items:
+        por_loja.setdefault(it.delivery_cnpj, []).append(it)
+
+    for itens in por_loja.values():
+        obs = {i.obs for i in itens}
+        assert len(obs) == 1
+        packs = sum(i.quantity for i in itens if i.qtd_por_embalagem)
+        avulsos = sum(i.quantity for i in itens if not i.qtd_por_embalagem)
+        texto = obs.pop()
+        assert texto.startswith("06611415-0000 | CONTEM PACK: ")
+        assert f"= {int(packs * 36)} KITS" in texto
+        assert f"({int(avulsos)} AVULSOS" in texto.replace(".", "")
+
+    total_packs = sum(i.quantity for i in order.items if i.qtd_por_embalagem)
+    assert total_packs == 6.0
+
+
+def test_sams_pack_obs_chega_no_xlsx():
+    import tempfile
+
+    import openpyxl
+
+    from app.exporters.erp_exporter import ERPExporter
+
+    order = _process(SAMS_PACK)
+    with tempfile.TemporaryDirectory() as tmp:
+        (path,) = ERPExporter().export(order, tmp)
+        ws = openpyxl.load_workbook(path).active
+        cabecalho = [c.value for c in ws[1]]
+        col = cabecalho.index("OBS")
+        valores = {row[col] for row in ws.iter_rows(min_row=2, values_only=True)}
+    assert len(valores) == 1
+    assert valores.pop().startswith("06858299-0000 | CONTEM PACK")
+
+
+def test_sams_pack_chega_no_preview():
+    from app.web.server import _build_preview_payload
+
+    payload = _build_preview_payload("pid", SAMS_PACK, _process(SAMS_PACK))
+    assert payload["items"][-1]["qtd_por_embalagem"] == 36
+    assert payload["items"][0]["qtd_por_embalagem"] is None
+
+
 # ── KallanXlsParser ──────────────────────────────────────────────────────────
 
 
