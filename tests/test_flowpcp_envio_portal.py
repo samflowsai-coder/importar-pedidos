@@ -286,15 +286,17 @@ def test_falha_real_de_envio_volta_para_a_fila_no_relogio_local(env, monkeypatch
             pass
 
     monkeypatch.setattr(drain, "FlowPCPClient", FlowFora)
-    pedido("x", dias=0)
-    with db.connect() as conn:
-        conn.execute(
-            "UPDATE outbox SET payload_json = ? WHERE import_id = 'x'",
-            (json.dumps(_payload_recebimento("x")),),
-        )
-    monkeypatch.setenv("TZ", "America/Sao_Paulo")  # a oeste de UTC: onde o bug aparecia
+    # Fuso a oeste de UTC (onde o bug aparecia), fixado ANTES de enfileirar:
+    # `enqueue` grava next_attempt_at no relógio local do processo.
+    monkeypatch.setenv("TZ", "America/Sao_Paulo")
     time.tzset()
     try:
+        pedido("x", dias=0)
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE outbox SET payload_json = ? WHERE import_id = 'x'",
+                (json.dumps(_payload_recebimento("x")),),
+            )
         agora = datetime.now()
         envio_portal.drenar_ambiente(env, CFG, agora=agora, ler_status=Fake().ler)
         st, tentativas, _ = situacao("x")
