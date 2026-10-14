@@ -23,7 +23,11 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
-_(nada ainda)_
+1) **Os pedidos importados voltam a chegar ao Flow.** Desde 24/07 o envio estava parado: ele dependia de um programa auxiliar que não roda no servidor da MM. Agora o próprio portal entrega cada pedido ao Flow. Dos pedidos que ficaram parados nesse tempo, só seguem os que ainda estão abertos no Fire; os já faturados, cancelados ou apagados saem da fila sem ir ao Flow, com o motivo registrado no histórico do pedido.
+
+2) **A data de entrega decidida no Flow ainda NÃO volta para o Fire.** Essa parte continua desligada de propósito e só será ligada depois de conferir com o Flow as decisões que ficaram pendentes desde julho.
+
+3) **Novo bloco "Pedidos do ERP para o Flow" em Ambientes.** O portal passa a poder enviar ao Flow todos os pedidos abertos no Fire e as mudanças neles (quantidade, data, preço, itens, nota, status), mais uma foto completa por noite. Vem desligado: só começa depois de cadastrar o endereço, o tenant e a credencial do Flow e marcar "ligado".
 
 ---
 

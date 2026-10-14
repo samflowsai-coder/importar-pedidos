@@ -20,6 +20,7 @@ acontece — uma falha aqui vira outbox/retry e **nunca** pode derrubar o fluxo 
 | `config.py` | `FlowPCPConfig` + `flowpcp_config_for_slug()` / `enabled_flowpcp_envs()` |
 | `hook.py` | `push_new_order(order, *, import_id, slug)` — o gatilho |
 | `exporter.py` | `FlowPCPExporter.enqueue()` → outbox (`target=flowpcp`) |
+| `envio_portal.py` | thread do processo web: entrega a fila (com triagem da fila acumulada) e, com interruptor, as decisões |
 | `client.py` | HTTP para o Flow (service token, timeout por ambiente) |
 | `mapper.py` / `schema.py` | `Order` → payload de `/recebimento` |
 | `intercompany.py` | **política** do de-para de cliente (quando aplica) |
@@ -53,8 +54,18 @@ Rotas admin: `PUT /api/admin/environments/{env_id}/flowpcp`,
 `push_new_order` é chamado em `app/web/server.py` **depois** do sucesso no Fire/XLS.
 Ele resolve o cliente (ver intercompany, abaixo), monta o payload e chama
 `FlowPCPExporter.enqueue()`, que **enfileira no outbox** com
-`idempotency_key = "send-{import_id}"`. Quem entrega e faz retry é o worker
-(`drain_outbox`). **Nunca há HTTP no request path** — a UI não espera o Flow.
+`idempotency_key = "send-{import_id}"`. Quem entrega e faz retry é uma thread do
+processo web (`envio_portal.py`, `flowpcp-envio`) — no Windows do cliente só o `ui.py`
+roda, e o worker (`drain_outbox`) nunca subiu lá: o envio ficou parado de 24/07 a 10/2026.
+O worker continua fazendo o mesmo em deploy docker, onde a thread fica desligada
+(`PORTAL_FLOWPCP_ENVIO=0` no `docker-compose.yml`). **Nunca há HTTP no request path** — a
+UI não espera o Flow.
+
+**Fila acumulada** (linha com mais de 7 dias, `LIMITE_ATRASO`): só vai se o pedido segue
+aberto no ERP (`imports.fire_codigo` → `CAB_VENDAS.STATUS`, leitura READ ONLY, uma por
+ciclo). Faturado, cancelado, apagado ou sem `fire_codigo` → `dead` com
+`last_error = "descartado: …"` e audit `flowpcp_descartado`, sem chegar ao Flow. ERP fora:
+a linha antiga espera; as recentes vão antes, sempre.
 
 Duplicata no outbox (`OutboxDuplicateError`) é no-op com log, não erro.
 
@@ -81,8 +92,10 @@ ambiguidade.
 
 `poll_decisoes_once` lê o cursor persistido (`flowpcp_cursor_state`), busca decisões,
 aplica o `UPDATE` da data de entrega no Fire e confirma de volta ao Flow. Job
-`poll_flowpcp` do worker, a cada 30s, **por ambiente habilitado** — um ambiente ruim não
-derruba os outros.
+`poll_flowpcp`, a cada 30s, **por ambiente habilitado** — um ambiente ruim não
+derruba os outros. No processo web roda **só com `PORTAL_FLOWPCP_DECISOES=1`**
+(desligado por padrão: é escrita no ERP de produção, parada desde julho). O "Dry-run" da
+tela **não** é interruptor: ele confirma a decisão no Flow sem gravar no ERP.
 
 - Não achou o pedido pela chave do cliente real? Tenta de novo com
   `PEDIDO_CLIENTE + CNPJ da revenda` — no Fire o pedido continua no nome de quem faturou.
