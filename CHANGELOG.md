@@ -23,7 +23,7 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
-_(nada ainda)_
+1) **A foto completa da madrugada só vai para o Flow depois das mudanças que vieram antes dela.** Como as mudanças dos pedidos esperam os horários de envio, um pedido faturado à noite ficaria na foto das 5h antes de o Flow saber do faturamento. Agora, na hora da foto, o portal manda primeiro as mudanças que estavam esperando e só então a foto. É a única exceção aos horários de envio.
 
 ---
 

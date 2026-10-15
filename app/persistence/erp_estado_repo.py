@@ -111,6 +111,15 @@ def pendentes(conn: sqlite3.Connection, base: str, limite: int = 1000) -> list[P
     return [Pendente(r["ordem"], r["id"], r["unidade"], r["payload_json"]) for r in rows]
 
 
+def pendentes_ate(conn: sqlite3.Connection, base: str, corte_em: str) -> int:
+    """Eventos ainda pendentes observados até `corte_em` (mesmo formato UTC)."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM erp_eventos_saida WHERE base = ? AND situacao = 'pendente' "
+        "AND observado_em <= ?",
+        (base, corte_em),
+    ).fetchone()[0]
+
+
 def marcar_enviados(conn: sqlite3.Connection, ids: list[str], lote_id: str, agora: str) -> None:
     conn.executemany(
         "UPDATE erp_eventos_saida SET lote_id = ?, enviado_em = ? WHERE id = ?",

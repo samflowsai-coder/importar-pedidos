@@ -5,6 +5,9 @@
 - `corteEm` = instante ANTES da leitura; a leitura é um snapshot read-only, e
   a vigia da base não roda junto (mesma trava), então todo evento depois tem
   `observadoEm > corteEm`;
+- a fila só sai nas janelas de envio, mas a foto não: antes da primeira
+  página, os eventos com `observadoEm <= corteEm` ainda pendentes saem
+  (`runner._enviar_foto`), e a foto espera enquanto houver algum;
 - páginas montadas e congeladas na criação (≤ 200 pedidos e ≤ 4,5 MB cada,
   `totalPaginas` constante); envio em série, uma página só depois do 202 da
   anterior; reenvio repete o mesmo corpo;

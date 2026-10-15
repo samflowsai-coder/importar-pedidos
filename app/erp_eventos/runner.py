@@ -172,19 +172,44 @@ def processar_base(cfg: BaseErpConfig, *, agora: datetime | None = None) -> None
                 lambda: _criar_foto(cfg, fb_cfg, resolver_clientes, resolver_produtores),
             ):
                 _FALHA_ERP[chave] = agora
-        cliente = ClienteErpEventos(
-            destino_url=cfg.destino_url, tenant_id=cfg.tenant_id, token=cfg.token or ""
-        )
-        try:
-            _etapa(cfg, "envio da foto", lambda: foto.enviar(cfg, cliente=cliente, ritmo=_ritmo))
-        finally:
-            cliente.close()
+        _etapa(cfg, "envio da foto", lambda: _enviar_foto(cfg))
         if _retencao_devida(cfg, agora):
             _etapa(cfg, "retenção", lambda: _reter(cfg, agora))
     except Exception as exc:  # noqa: BLE001 — uma base ruim não derruba as outras nem a thread
         logger.error(f"erp_eventos: base '{cfg.base}' falhou neste ciclo: {exc!r}")
     finally:
         lock.release()
+
+
+def _enviar_foto(cfg: BaseErpConfig) -> None:
+    """A foto só sai depois de tudo o que foi observado ATÉ o corte dela.
+
+    A fila só sai nas janelas, mas a foto sai no `foto_hora` (5h): sem isto, um
+    pedido faturado às 19h estaria na foto antes de o Flow receber o evento, e
+    a conciliação da manhã divergiria. Exceção única às janelas (decisão do
+    Samuel, 14/10/2026): na hora da foto, a fila anterior ao corte sai antes."""
+    with router.env_connect(cfg.env_slug) as conn:
+        f = erp_foto_repo.em_envio(conn, cfg.base)
+        devendo = erp_estado_repo.pendentes_ate(conn, cfg.base, f.corte_em) if f else 0
+    if f is None:
+        return
+    cliente = ClienteErpEventos(
+        destino_url=cfg.destino_url, tenant_id=cfg.tenant_id, token=cfg.token or ""
+    )
+    try:
+        if devendo:
+            drenagem.drenar(cfg, cliente=cliente, ritmo=_ritmo)
+            with router.env_connect(cfg.env_slug) as conn:
+                devendo = erp_estado_repo.pendentes_ate(conn, cfg.base, f.corte_em)
+            if devendo:
+                logger.info(
+                    f"erp_eventos: foto {f.foto_id} da base '{cfg.base}' aguarda {devendo} "
+                    "evento(s) anteriores ao corte"
+                )
+                return
+        foto.enviar(cfg, cliente=cliente, ritmo=_ritmo)
+    finally:
+        cliente.close()
 
 
 def _relogio() -> datetime:
