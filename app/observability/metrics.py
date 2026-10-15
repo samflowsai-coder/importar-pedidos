@@ -68,7 +68,7 @@ reconcile_fire_last_run_ok: Gauge = Gauge(
 flowpcp_janela_pedidos: Gauge = Gauge(
     "portal_flowpcp_janela_pedidos",
     "Pedidos tratados pela fila do Flow em cada janela de envio (últimas 8), "
-    "por resultado: enviado | descartado | retido | falha.",
+    "por resultado: enviado | recusado | descartado | retido. Contagem lida do banco.",
     ["janela", "resultado"],
 )
 

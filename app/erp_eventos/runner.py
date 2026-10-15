@@ -37,6 +37,7 @@ from app.persistence import (
     router,
 )
 from app.persistence.erp_bases_repo import BaseErpConfig
+from app.utils.janelas_envio import inicio_da_janela, janela_aberta
 from app.utils.logger import logger
 
 TICK_S = 30.0
@@ -170,7 +171,11 @@ def processar_base(cfg: BaseErpConfig, *, agora: datetime | None = None) -> None
             destino_url=cfg.destino_url, tenant_id=cfg.tenant_id, token=cfg.token or ""
         )
         try:
-            _etapa(cfg, "drenagem", lambda: drenagem.drenar(cfg, cliente=cliente, ritmo=_ritmo))
+            # Lotes só nas janelas de envio (8h/11h/14h/17h, seg-sáb); fora delas
+            # a vigia segue enfileirando. A foto não segue as janelas.
+            if janela_aberta(agora) is not None:
+                _etapa(cfg, "sinal de vida da janela", lambda: _garantir_lote_na_janela(cfg, agora))
+                _etapa(cfg, "drenagem", lambda: drenagem.drenar(cfg, cliente=cliente, ritmo=_ritmo))
             _etapa(cfg, "envio da foto", lambda: foto.enviar(cfg, cliente=cliente, ritmo=_ritmo))
         finally:
             cliente.close()
@@ -180,6 +185,17 @@ def processar_base(cfg: BaseErpConfig, *, agora: datetime | None = None) -> None
         logger.error(f"erp_eventos: base '{cfg.base}' falhou neste ciclo: {exc!r}")
     finally:
         lock.release()
+
+
+def _garantir_lote_na_janela(cfg: BaseErpConfig, agora: datetime) -> None:
+    """Pelo menos um lote por janela, mesmo vazio: o Flow usa o 202 como sinal
+    de vida e alerta se uma janela passar sem nada. Sem 202 desde o início desta
+    janela → pede o lote vazio (a drenagem o manda se a fila estiver vazia)."""
+    inicio = formatar_instante(inicio_da_janela(agora))
+    with router.env_connect(cfg.env_slug) as conn:
+        envio = erp_estado_repo.obter_envio(conn, cfg.base)
+        if not envio.sinal_pendente and (envio.ultimo_202_em or "") < inicio:
+            erp_estado_repo.pedir_sinal_de_vida(conn, cfg.base, formatar_instante(agora))
 
 
 def _etapa(cfg: BaseErpConfig, nome: str, fn) -> bool:

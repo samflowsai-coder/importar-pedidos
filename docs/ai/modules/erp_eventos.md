@@ -45,8 +45,12 @@ Spec: `pcp-app/docs/superpowers/specs/2026-10-03-sp1-transporte-pedidos-fire-des
    `produtoProdutor`, vínculo xlsx dos novos) → **uma transação**: estado + marca do
    `seq` + eventos. Lê tudo de novo a cada ciclo (medido: 323 pedidos em 0,3 s na cópia);
    não depende de `ULT_ALT_DTHR`, que não está provado mudar com item ou nota.
-2. **drenagem**: lotes em série; lote vazio quando não há pendente e a vigia acabou de
-   rodar (sinal de vida — o Flow só conta o 202).
+2. **drenagem**: só nas **janelas de envio** (8h, 11h, 14h, 17h, seg-sáb, Brasília;
+   `app/utils/janelas_envio.py`, `PORTAL_FLOW_JANELAS`); fora delas a vigia segue
+   enfileirando. Lotes em série. **Pelo menos um lote por janela**: sem 202 desde o
+   início da janela, o runner pede o lote vazio (`_garantir_lote_na_janela`), mesmo com
+   o ERP fora — o Flow usa o 202 como sinal de vida e alerta janela sem nada. A foto
+   não segue as janelas.
 3. **foto**: no `foto_hora` local, uma por base por dia; páginas congeladas. Pedido fora
    do contrato → a foto do dia fica `nao_criada` (com o motivo, visível na tela) e não é
    tentada de novo até amanhã — uma foto sem ele diria ao Flow que saiu de aberto.

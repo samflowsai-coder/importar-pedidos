@@ -116,6 +116,7 @@ def _proxima_tentativa(delta_s: int) -> str:
 def _handle_flowpcp_failure(row: OutboxRow, error: str, *, definitivo: bool = False) -> None:
     if definitivo:
         outbox_repo.mark_failed(row.id, error=f"recusado: {error}", dead=True)
+        repo.append_audit(row.import_id, "flowpcp_recusado", {"erro": error[:500]})
         logger.error(
             "worker.drain flowpcp recusado import_id={} error={}", row.import_id, error[:200]
         )
