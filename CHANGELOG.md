@@ -27,6 +27,14 @@ _(nada ainda)_
 
 ---
 
+## 20261015-1258
+
+1) **O catálogo de produtos do Fire vai para o Flow sozinho, todo dia às 5h.** Antes ele só ia quando alguém mandava à mão (a última vez foi em julho), e todo produto cadastrado depois disso chegava no Flow como "produto desconhecido". Agora, nas empresas com "Enviar catálogo ao Flow" ligado, o catálogo é atualizado no Flow toda madrugada.
+
+2) **O catálogo enviado passa a ter tudo o que a fábrica vende.** A opção "só meias" mandava apenas os produtos marcados como MEIAS no Fire e deixava de fora cuecas, meias infantis e kits novos sem essa marcação (57 dos produtos dos pedidos abertos da MM). Agora ela manda as meias e também todo produto que aparece num pedido aberto ou num pedido dos últimos 12 meses. Tecido e cadastros que nunca venderam continuam de fora.
+
+---
+
 ## 20261015-0846
 
 1) **"Verificar no Fire" volta a funcionar.** Desde 27/08 a conferência com o Fire falhava em toda rodada, na MM e na Nasmar, porque havia na lista um pedido com número de cliente maior do que o Fire aceita (mais de 20 caracteres), e o Fire recusava a consulta inteira por causa dele. Agora esse número fica de fora (ele não existe no Fire) e os outros pedidos voltam a ser conferidos: os que já estão cadastrados no Fire saem de "em revisão" sozinhos e os pedidos antigos guardados voltam a seguir para o Flow.

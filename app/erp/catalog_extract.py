@@ -28,8 +28,9 @@ def extract_produtos(fire_conn, *, apenas_meias: bool = False) -> list[ProdutoFi
     codigo = fire_produto_id = str(SEQ) (o cliente usa o sequencial).
     tipo: 'kit' se o SEQ é pai em PRODUTOS_KIT (IS_KIT=1), senão 'simples'.
 
-    `apenas_meias=True` restringe ao subgrupo MEIAS (flowpcp_catalogo_apenas_meias);
-    default False preserva o comportamento atual (PRODUTOS inteiro)."""
+    `apenas_meias=True` (flowpcp_catalogo_apenas_meias) restringe ao que a fábrica
+    vende: subgrupo MEIAS + produto em pedido aberto ou dos últimos 12 meses
+    (`LIST_PRODUTOS_CATALOGO_MEIAS`); False = PRODUTOS inteiro."""
     query = LIST_PRODUTOS_CATALOGO_MEIAS if apenas_meias else LIST_PRODUTOS_CATALOGO
     cur = fire_conn.cursor()
     try:

@@ -323,10 +323,13 @@ LIST_PRODUTOS_CATALOGO = """
     ORDER BY P.SEQ
 """
 
-# Variante filtrada: só o subgrupo MEIAS (marcação feita no Fire — Parte 2 do
-# rollout, ver flowpcp_catalogo_apenas_meias). Fail-safe: se o subgrupo MEIAS
-# ainda não existir em GRUPO_PRODUTOS_SUB, a subquery não acha nada e a query
-# retorna 0 linhas (nunca "vaza" o catálogo inteiro por engano).
+# Variante filtrada (flowpcp_catalogo_apenas_meias): o que a fábrica vende —
+# subgrupo MEIAS, mais todo produto que aparece em pedido aberto ou em pedido
+# dos últimos 12 meses. Só o subgrupo deixava de fora o que vende sem a
+# marcação (cuecas, ACTVITTA infantil, kits Kings novos): em 15/10/2026, 57 dos
+# 424 produtos dos pedidos abertos da MM, e o pedido chegava ao Flow como
+# "produto desconhecido". Com o recorte: 863 produtos, os 424 cobertos.
+# Fora continua o que nunca vendeu (tecido cru, cadastro morto).
 LIST_PRODUTOS_CATALOGO_MEIAS = """
     SELECT P.SEQ, P.DESCRICAO, P.UNIDADE, P.CODIGO_EAN13, P.BLOQUEADO,
            CASE WHEN EXISTS (
@@ -335,6 +338,12 @@ LIST_PRODUTOS_CATALOGO_MEIAS = """
     FROM PRODUTOS P
     WHERE P.CODSUBGRUPO IN (
         SELECT CODIGO FROM GRUPO_PRODUTOS_SUB WHERE UPPER(TRIM(DESCRICAO)) = 'MEIAS'
+    )
+       OR EXISTS (
+        SELECT 1 FROM CORPO_VENDAS I JOIN CAB_VENDAS V ON V.CODIGO = I.CODVENDA
+        WHERE I.CODPRODUTO = P.SEQ
+          AND (TRIM(V.STATUS) = 'PEDIDO'
+               OR V.DATA_PEDIDO >= DATEADD(-12 MONTH TO CURRENT_DATE))
     )
     ORDER BY P.SEQ
 """
