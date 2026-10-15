@@ -1,6 +1,6 @@
 # Composição de kits e vínculo com o Apontaê no catálogo (lado Portal)
 
-**Data:** 15/10/2026 · **Status:** revisão 2, depois da revisão independente (armadilhas de ponta a ponta)
+**Data:** 15/10/2026 · **Status:** revisão 3: C3 decidido (kit/pack sem composição no Fire vai sem a chave)
 **Par do lado Flow:** `pcp-app` `docs/superpowers/specs/2026-10-15-catalogo-erp-fase2-composicao-vinculo-mes-design.md`
 (Fase 2, Fatias A e B). Contrato fechado com a sessão do Flow em 15/10.
 
@@ -29,6 +29,7 @@ do Fire (revisão da MM + validação do fiscal); tela de kits no Portal (§8).
 | Composição divergente entre Fire e Flow: vale sempre o Fire | Samuel (via sessão Flow) | 15/10 |
 | Código do par no Apontaê fica no código alternativo do Fire, só o número | Samuel (opção A) + medição | 15/10 |
 | Ordem: Flow aceita no staging (Fatia A) → Portal manda → Flow grava (Fatia B) | as duas sessões | 15/10 |
+| Kit/pack sem composição no Fire vai **sem a chave**; o PCP pode cadastrar uma composição provisória no Flow, que o Fire substitui quando for corrigido. "Congelar composição" fica para depois | Samuel (C3, opção 1) | 15/10 |
 
 ## 3. Contrato (aditivo em `catalogo.produtos.v1`)
 
@@ -85,7 +86,7 @@ O Portal só afirma o que leu. Na dúvida, omite a chave, e o Flow não mexe.
 |---|---|
 | leitura de `PRODUTOS_KIT` falhou | **ausente em todos os itens** do lote |
 | `simples` sem linha em `PRODUTOS_KIT` | `[]` |
-| kit/pack sem linha em `PRODUTOS_KIT` | **decisão do Samuel (C3)**: ausente (recomendado) ou `[]` |
+| kit/pack sem linha em `PRODUTOS_KIT` | ausente (C3): o Flow mantém a dele, inclusive a provisória do PCP |
 | composição válida | a lista |
 | algum filho fora do payload (excluído com `excluir=` ou fora do recorte) | ausente nesse item |
 | filho repetido no mesmo pai | ausente nesse item |
@@ -105,11 +106,21 @@ base errada ou cópia vazia não pode virar "nenhum kit tem composição".
 o Portal registra `quantidade diverge do nome` no log e no resumo. Pega erro de
 digitação na carga da MM (12 no lugar de 2 vira OP 6× maior).
 
+**Consequência do C3:** apagar no Fire a composição de um kit não chega ao Flow
+(o kit passa a ir sem a chave e o Flow mantém a última). O caminho certo é corrigir a
+composição, não apagar. Para não ficar invisível, o Portal registra no log e no
+resumo quantos kits/packs foram sem composição, e o Flow avisa quando um kit com
+composição vinda do ERP deixa de receber a chave.
+
+Quando a MM corrigir um kit que tinha composição provisória no Flow, o Fire substitui
+(vale sempre o Fire). No ajuste em massa isso pode passar da trava de substituição;
+aí o apply é manual, com `confirmar_substituicao=1` e o ok do Samuel.
+
 Medido no Fire da MM em 15/10 (recorte de 1.026):
 
 - 271 produtos com composição, nenhum caiu nas regras de omissão;
-- 321 kits/packs sem composição iriam com `[]`. Hoje nenhum deles tem composição no
-  Flow, então o `[]` não remove nada;
+- 321 kits/packs sem composição vão sem a chave (C3). O PCP pode cadastrar a
+  composição deles no Flow como provisória enquanto a MM corrige o Fire;
 - os 263 kits com composição no Flow têm composição idêntica no Fire (263/263).
 
 As travas do Flow seguram só o tipo de mudança em massa: remoção (mais de 10 kits
@@ -183,6 +194,7 @@ para os pares duplicados. Enquanto o interruptor estiver ligado para o ambiente,
   pack corretamente. No Portal isso pede guardar a composição na cópia local (tabela
   nova → migração) e uma tela. Spec própria, depois que a composição estiver fluindo.
 - **Ajuste em massa no Fire** a partir da planilha revisada pela MM, depois do fiscal.
+- **"Congelar composição" no Flow** (o Fire deixa de substituir um kit específico): adiado, a provisória cobre a urgência.
 - **Ligar o envio diário em `gravar`** só depois do Fire corrigido (listrado Sam's) e
   sem exclusão pendente.
 
@@ -198,3 +210,4 @@ para os pares duplicados. Enquanto o interruptor estiver ligado para o ambiente,
 | Código do Apontaê digitado errado liga a outra meia | Flow confere o nome normalizado contra o Apontaê (`nomeDivergente` não grava); ação de admin para corrigir |
 | Edição do Fire pela metade lida no meio | Flow só remove ou tira filhos depois de duas leituras iguais |
 | QTD errado na carga da MM | conferência contra a quantidade do nome, no log e no resumo |
+| Composição apagada no Fire não chega ao Flow (C3) | contagem de kits sem composição no resumo; aviso do Flow para kit de origem ERP que deixou de receber a chave |
