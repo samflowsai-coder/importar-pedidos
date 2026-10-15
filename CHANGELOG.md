@@ -27,6 +27,12 @@ _(nada ainda)_
 
 ---
 
+## 20261015-0846
+
+1) **"Verificar no Fire" volta a funcionar.** Desde 27/08 a conferência com o Fire falhava em toda rodada, na MM e na Nasmar, porque havia na lista um pedido com número de cliente maior do que o Fire aceita (mais de 20 caracteres), e o Fire recusava a consulta inteira por causa dele. Agora esse número fica de fora (ele não existe no Fire) e os outros pedidos voltam a ser conferidos: os que já estão cadastrados no Fire saem de "em revisão" sozinhos e os pedidos antigos guardados voltam a seguir para o Flow.
+
+---
+
 ## 20261014-2242
 
 1) **A foto completa da madrugada só sai na hora dela.** Antes, ao ligar o envio de pedidos à noite, o portal tirava a foto do dia na hora e mandava junto todos os pedidos, fora dos horários de envio (aconteceu em 14/10 às 22h20). Agora a foto só sai dentro da hora configurada (às 5h, das 5:00 às 5:59).

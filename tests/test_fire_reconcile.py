@@ -570,3 +570,34 @@ def test_sem_data_utilizavel_o_desempate_volta_a_ser_o_menor_codigo(monkeypatch)
         data_pedido=None,
     )
     assert buscar_no_fire([candidato], env_slug="mm")["i1"].fire_codigo == 905
+
+
+# ── Número maior que a coluna do Fire (produção, 27/08 a 15/10) ──
+# CAB_VENDAS.PEDIDO_CLIENTE tem 20 caracteres nas duas bases; um parâmetro mais
+# longo faz o Firebird recusar a consulta inteira ("Value of parameter (70) is
+# too long, expected 20, found 26"), e um único número ruim derrubava a
+# reconciliação de todos os outros pedidos do ambiente.
+
+
+def test_numero_maior_que_a_coluna_nao_derruba_os_outros(monkeypatch):
+    fake_conn = _plugar(monkeypatch, [_linha("6702645869", 900, "12.345.678/0001-99")])
+    longo = "X" * 26
+    cands = [
+        Candidato("i1", "6702645869", None, "12.345.678/0001-99", (), "2026-08-01"),
+        Candidato("i2", longo, None, "12.345.678/0001-99", (), "2026-08-01"),
+    ]
+    achados, erro_conexao = _buscar_no_fire_detalhado(cands, env_slug="mm")
+    assert erro_conexao is False
+    assert achados["i1"].fire_codigo == 900
+    assert "i2" not in achados
+    enviados = [p for _, params in fake_conn.cursor().executados for p in params]
+    assert longo not in enviados
+    assert all(len(p) <= 20 for p in enviados)
+
+
+def test_so_numeros_longos_nao_consulta_e_nao_e_erro(monkeypatch):
+    fake_conn = _plugar(monkeypatch, [])
+    cand = Candidato("i1", "Y" * 21, None, "12.345.678/0001-99", (), "2026-08-01")
+    achados, erro_conexao = _buscar_no_fire_detalhado([cand], env_slug="nasmar")
+    assert (achados, erro_conexao) == ({}, False)
+    assert fake_conn.cursor().executados == []
