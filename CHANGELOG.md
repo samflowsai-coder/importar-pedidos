@@ -23,6 +23,12 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
+_(nada ainda)_
+
+---
+
+## 20261014-2238
+
 1) **A foto completa da madrugada só sai na hora dela.** Antes, ao ligar o envio de pedidos à noite, o portal tirava a foto do dia na hora e mandava junto todos os pedidos, fora dos horários de envio (aconteceu em 14/10 às 22h20). Agora a foto só sai dentro da hora configurada (às 5h, das 5:00 às 5:59).
 
 2) **Tela "Pedidos do ERP para o Flow" mais clara.** O campo Base já vem preenchido com o identificador do ambiente (antes o "mm" era só um exemplo cinza e o salvar dava erro), os exemplos dos campos deixam de parecer valores de verdade, e os erros aparecem em português dizendo qual campo corrigir.
