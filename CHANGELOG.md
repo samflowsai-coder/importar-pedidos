@@ -27,7 +27,7 @@ _(nada ainda)_
 
 ---
 
-## 20261014-2238
+## 20261014-2242
 
 1) **A foto completa da madrugada só sai na hora dela.** Antes, ao ligar o envio de pedidos à noite, o portal tirava a foto do dia na hora e mandava junto todos os pedidos, fora dos horários de envio (aconteceu em 14/10 às 22h20). Agora a foto só sai dentro da hora configurada (às 5h, das 5:00 às 5:59).
 
