@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from app.erp_eventos.canonico import formatar_instante
@@ -244,7 +244,12 @@ def unblock_environment_erp_base(env_id: str, _=Depends(require_admin)):
 
 
 @router.post("/{env_id}/flowpcp/sync-catalogo")
-def sync_catalogo_flowpcp(env_id: str, apply: bool = False, _=Depends(require_admin)):
+def sync_catalogo_flowpcp(
+    env_id: str,
+    apply: bool = False,
+    excluir: str | None = Query(default=None, pattern=r"^\s*\d+(\s*,\s*\d+)*\s*$"),
+    _=Depends(require_admin),
+):
     """Full-load do catálogo (produtos Fire → FlowPCP), direção IDA.
 
     Lê TODOS os produtos (`PRODUTOS`) do Fire do ambiente e empurra pro Flow.
@@ -252,6 +257,8 @@ def sync_catalogo_flowpcp(env_id: str, apply: bool = False, _=Depends(require_ad
       NÃO escreve no catálogo do Flow. Seguro pra rodar quando quiser.
     - `apply=true`: **promove** — o Flow linka + grava de verdade (Fase 1). Exige
       o `/catalogo` do Flow com o promote no ar (senão devolve 422 → 502 aqui).
+    - `excluir=3174,3381`: SEQs que não vão ao Flow nesta rodada (cadastro com
+      problema no Fire); a cópia local continua com tudo.
     Blocking (Firebird + HTTP) → FastAPI roda esta rota `def` no threadpool.
     """
     env = environments_repo.get(env_id)
@@ -262,8 +269,9 @@ def sync_catalogo_flowpcp(env_id: str, apply: bool = False, _=Depends(require_ad
 
     from app.integrations.flowpcp.catalogo_sync import CatalogoLocalResult, run_catalogo_sync
 
+    fora = frozenset(s.strip() for s in excluir.split(",")) if excluir else frozenset()
     try:
-        rep = run_catalogo_sync(env["slug"], dry_run=not apply, full_sync=True)
+        rep = run_catalogo_sync(env["slug"], dry_run=not apply, full_sync=True, fora_do_envio=fora)
     except Exception as exc:  # noqa: BLE001 — vira erro HTTP legível pro operador
         raise HTTPException(502, f"Falha no sync de catálogo: {exc}") from exc
     if rep is None:
@@ -271,7 +279,10 @@ def sync_catalogo_flowpcp(env_id: str, apply: bool = False, _=Depends(require_ad
     if isinstance(rep, CatalogoLocalResult):
         # Gate OFF: catálogo atualizado só no importador — nada foi ao Flow.
         return {"local_only": True, "itens": rep.itens, "extraido_em": rep.extraido_em}
-    return rep.model_dump()
+    corpo = rep.model_dump()
+    if fora:
+        corpo["fora_do_envio"] = sorted(fora, key=int)
+    return corpo
 
 
 @router.post("/{env_id}/flowpcp/sync-clientes")

@@ -636,3 +636,59 @@ def test_put_flowpcp_aceita_catalogo_apenas_meias(setup):
     )
     assert r.status_code == 200
     assert r.json()["flowpcp_catalogo_apenas_meias"] == 1
+
+
+def _env_mm_habilitado(setup):
+    env = environments_repo.create(
+        slug="mm",
+        name="MM",
+        watch_dir=str(setup),
+        output_dir=str(setup),
+        fb_path=str(setup / "x.fdb"),
+    )
+    _enable_flowpcp(env["id"])
+    return env
+
+
+def test_sync_catalogo_excluir_chega_no_sync_e_volta_na_resposta(setup, monkeypatch):
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+
+    capturado = {}
+    monkeypatch.setattr(
+        cs, "run_catalogo_sync", lambda slug, **kw: capturado.update(kw) or _FakeReport()
+    )
+    r = _client().post(
+        f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?apply=true&excluir=3174, 3381,3174"
+    )
+    assert r.status_code == 200
+    assert capturado["fora_do_envio"] == frozenset({"3174", "3381"})
+    assert r.json()["fora_do_envio"] == ["3174", "3381"]
+
+
+def test_sync_catalogo_sem_excluir_nao_tira_nada(setup, monkeypatch):
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+
+    capturado = {}
+    monkeypatch.setattr(
+        cs, "run_catalogo_sync", lambda slug, **kw: capturado.update(kw) or _FakeReport()
+    )
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo")
+    assert r.status_code == 200
+    assert capturado["fora_do_envio"] == frozenset()
+    assert "fora_do_envio" not in r.json()
+
+
+def test_sync_catalogo_excluir_invalido_e_422(setup, monkeypatch):
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+
+    chamado = []
+    monkeypatch.setattr(cs, "run_catalogo_sync", lambda *a, **k: chamado.append(1))
+    for ruim in ("3174,abc", "3174;3381", "-1", ","):
+        r = _client().post(
+            f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?excluir={ruim}"
+        )
+        assert r.status_code == 422, ruim
+    assert chamado == []

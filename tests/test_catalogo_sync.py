@@ -182,3 +182,51 @@ def test_flag_apenas_meias_false_chega_no_extract(monkeypatch):
     """catalogo_apenas_meias=False → extract_produtos(apenas_meias=False) (default: tudo)."""
     captura = _run_sync_capturando_flag(monkeypatch, catalogo_apenas_meias=False)
     assert captura["apenas_meias"] is False
+
+
+def test_fora_do_envio_tira_do_flow_mas_mantem_na_copia_local(monkeypatch):
+    """Exclusão pontual do envio (15/10/2026: 10 pares do listrado Sam's têm 2
+    cadastros no Fire e iam virar par duplicado no Flow). A cópia local segue
+    sendo o Fire inteiro: só o payload ao Flow perde os itens."""
+    dtos = [
+        ProdutoFireDTO("3174", "3174", "BRANCO COM PRETO", "PAR", None, True, "simples"),
+        ProdutoFireDTO("3381", "3381", "KIT C/5", "KIT", None, True, "kit"),
+        ProdutoFireDTO("2149", "2149", "KIT 3 CANO ALTO KINGS", "KIT", None, True, "kit"),
+    ]
+    monkeypatch.setattr(catalogo_sync, "extract_produtos", lambda conn, **kw: dtos)
+
+    class _Cfg:
+        enabled = True
+        catalogo_push = True
+
+    monkeypatch.setattr(catalogo_sync, "flowpcp_config_for_slug", lambda slug: _Cfg())
+    fake_client = _FakeClient()
+    env_conn = _FakeEnvConn()
+    catalogo_sync.run_catalogo_sync(
+        "mm",
+        dry_run=True,
+        full_sync=True,
+        now_iso="t",
+        fora_do_envio=frozenset({"3174", "3381", "9999"}),
+        _client=fake_client,
+        _fire_conn=object(),
+        _env_conn=env_conn,
+    )
+    assert [i.fireProdutoId for i in fake_client.sent.itens] == ["2149"]
+    assert len(env_conn.rows) == 3  # cópia local completa
+
+
+def test_sem_fora_do_envio_manda_tudo(monkeypatch):
+    dtos = [ProdutoFireDTO("1", "1", "X", "PC", None, True, "simples")]
+    monkeypatch.setattr(catalogo_sync, "extract_produtos", lambda conn, **kw: dtos)
+
+    class _Cfg:
+        enabled = True
+        catalogo_push = True
+
+    monkeypatch.setattr(catalogo_sync, "flowpcp_config_for_slug", lambda slug: _Cfg())
+    fake_client = _FakeClient()
+    catalogo_sync.run_catalogo_sync(
+        "mm", now_iso="t", _client=fake_client, _fire_conn=object(), _env_conn=_FakeEnvConn()
+    )
+    assert len(fake_client.sent.itens) == 1

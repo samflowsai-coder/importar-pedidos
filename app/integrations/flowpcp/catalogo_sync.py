@@ -40,6 +40,7 @@ def run_catalogo_sync(
     dry_run: bool = True,
     full_sync: bool = True,
     now_iso: str | None = None,
+    fora_do_envio: frozenset[str] = frozenset(),
     _client=None,
     _fire_conn=None,
     _env_conn=None,
@@ -52,6 +53,10 @@ def run_catalogo_sync(
     - `CatalogoReconciliacaoResponse` — enviado ao Flow (gate ON)
     - `CatalogoLocalResult` — só cópia local atualizada (gate OFF)
     - `None` — ambiente sem FlowPCP habilitado
+    `fora_do_envio`: SEQs que não vão ao Flow nesta rodada (a cópia local continua
+    com o Fire inteiro). Existe para segurar cadastro com problema no Fire sem
+    travar o resto: em 15/10/2026, 10 pares do listrado Sam's tinham 2 cadastros
+    e virariam par duplicado no Flow. Só o envio manual usa; o diário não.
     `_client`/`_fire_conn`/`_env_conn` são injeção de teste (default constrói os reais)."""
     cfg = flowpcp_config_for_slug(slug)
     if cfg is None or not getattr(cfg, "enabled", False):
@@ -81,17 +86,23 @@ def run_catalogo_sync(
         logger.info(f"catalogo sync env={slug}: envio ao Flow DESLIGADO (catalogo_push=0)")
         return CatalogoLocalResult(itens=len(dtos), extraido_em=extraido_em)
 
+    enviados = [d for d in dtos if d.fire_produto_id not in fora_do_envio]
+    if fora_do_envio:
+        logger.info(
+            f"catalogo sync env={slug}: {len(dtos) - len(enviados)} itens fora do envio "
+            f"(pedidos: {sorted(fora_do_envio)})"
+        )
     client = _client or _build_client(cfg)
     try:
         request = build_catalogo_request(
-            dtos,
+            enviados,
             dry_run=dry_run,
             full_sync=full_sync,
             importador_versao=_IMPORTADOR_VERSAO,
             extraido_em=extraido_em,
         )
         logger.info(
-            f"catalogo sync env={slug} itens={len(dtos)} dry_run={dry_run} full_sync={full_sync}"
+            f"catalogo sync env={slug} itens={len(enviados)} dry_run={dry_run} full_sync={full_sync}"
         )
         return client.send_catalogo(request)
     finally:

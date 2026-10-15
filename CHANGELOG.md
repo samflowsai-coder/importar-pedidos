@@ -27,6 +27,12 @@ _(nada ainda)_
 
 ---
 
+## 20261015-2000
+
+1) **O envio manual do catálogo ao Flow pode deixar produtos de fora.** Quando um cadastro do Fire tem problema (por exemplo, o mesmo par cadastrado duas vezes), dá para mandar o catálogo sem ele, em vez de segurar o catálogo inteiro até o Fire ser corrigido. O catálogo do portal continua com todos os produtos. O envio diário não muda.
+
+---
+
 ## 20261015-1810
 
 1) **Kits e packs chegam ao Flow como kit e pack, nunca como par.** O catálogo só marcava como kit o produto que tinha a composição cadastrada no Fire; os kits sem composição (como os Kings e os POLO MATCH) iam como se fossem um par, e o Flow poderia mandar produzir o kit inteiro como se fosse uma meia. Agora todo produto com unidade KIT ou PACK, ou com KIT ou PACK no nome, vai como kit ou pack. Kit sem composição fica parado no Flow com o aviso "sem composição cadastrada" até a composição ser cadastrada no Fire.
