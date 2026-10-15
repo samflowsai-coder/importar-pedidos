@@ -17,7 +17,7 @@ class CatalogoProdutoItem(BaseModel):
     ean: str | None = None
     ativo: bool
     tipo: str | None = (
-        None  # 'kit' | 'simples' — derivado de PRODUTOS_KIT (CODTIPOPROD do Fire não é usado).
+        None  # 'pack' | 'kit' | 'simples' — catalog_extract._tipo (CODTIPOPROD do Fire não é usado).
     )
 
 

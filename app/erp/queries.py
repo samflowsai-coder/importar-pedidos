@@ -312,8 +312,9 @@ UPDATE_DT_ENTREGA = """
 # ── Catálogo de produtos (sync Fire→Flow, Fase 0) ─────────────────────────────
 # Subconjunto de IDENTIDADE de PRODUTOS. SEQ é a PK durável (imutável) E o código
 # que o cliente usa (codigo = str(SEQ)). BLOQUEADO ∈ {'Sim','Nao'} → ativo =
-# (BLOQUEADO <> 'Sim'). IS_KIT = 1 se o SEQ é pai em PRODUTOS_KIT (215 kits) →
-# tipo 'kit'/'simples'. CODPROD_ALTERN ignorado (grade-code não-único).
+# (BLOQUEADO <> 'Sim'). IS_KIT = 1 se o SEQ é pai em PRODUTOS_KIT; o tipo final
+# (pack/kit/simples) sai de catalog_extract._tipo, que também olha unidade e nome.
+# CODPROD_ALTERN ignorado (grade-code não-único).
 LIST_PRODUTOS_CATALOGO = """
     SELECT P.SEQ, P.DESCRICAO, P.UNIDADE, P.CODIGO_EAN13, P.BLOQUEADO,
            CASE WHEN EXISTS (
@@ -330,25 +331,36 @@ LIST_PRODUTOS_CATALOGO = """
 # o nome tem (CUECA/BOXER, CONTAINING ignora caixa). Só o subgrupo deixava de
 # fora meias vendidas sem a marcação (ACTVITTA infantil, Kings, Oxer): 45 dos
 # 424 produtos dos pedidos abertos da MM em 15/10, e o pedido chegava ao Flow
-# como "produto desconhecido". Com o recorte: 847 produtos. Fora continua o que
-# nunca vendeu (tecido cru, cadastro morto).
+# como "produto desconhecido". Fora continua o que nunca vendeu (tecido cru,
+# cadastro morto).
+# Mais os componentes, em qualquer nível (PACK → KIT → par): o par não é
+# vendido, é o que o Flow produz; sem isto os pares dos kits ficavam só no Flow
+# (181 na MM em 15/10, com OP e vínculo ao Apontaê). 1.026 produtos na MM.
+# O DISTINCT + JOIN no fim é de propósito: `IN (SELECT ... FROM RECORTE)`
+# reavalia a CTE por linha no Firebird 2.5 (passou de 2 min; o JOIN leva 1 s).
 LIST_PRODUTOS_CATALOGO_MEIAS = """
+    WITH RECURSIVE RECORTE (SEQ) AS (
+        SELECT P.SEQ FROM PRODUTOS P
+        WHERE P.CODSUBGRUPO IN (
+            SELECT CODIGO FROM GRUPO_PRODUTOS_SUB WHERE UPPER(TRIM(DESCRICAO)) = 'MEIAS'
+        )
+           OR (EXISTS (
+                   SELECT 1 FROM CORPO_VENDAS I JOIN CAB_VENDAS V ON V.CODIGO = I.CODVENDA
+                   WHERE I.CODPRODUTO = P.SEQ
+                     AND (TRIM(V.STATUS) = 'PEDIDO'
+                          OR V.DATA_PEDIDO >= DATEADD(-12 MONTH TO CURRENT_DATE))
+               )
+               AND P.DESCRICAO NOT CONTAINING 'CUECA'
+               AND P.DESCRICAO NOT CONTAINING 'BOXER')
+        UNION ALL
+        SELECT K.CODPRODUTO FROM PRODUTOS_KIT K JOIN RECORTE R ON K.CODPRODUTO_PAI = R.SEQ
+    )
     SELECT P.SEQ, P.DESCRICAO, P.UNIDADE, P.CODIGO_EAN13, P.BLOQUEADO,
            CASE WHEN EXISTS (
                SELECT 1 FROM PRODUTOS_KIT K WHERE K.CODPRODUTO_PAI = P.SEQ
            ) THEN 1 ELSE 0 END AS IS_KIT
-    FROM PRODUTOS P
-    WHERE P.CODSUBGRUPO IN (
-        SELECT CODIGO FROM GRUPO_PRODUTOS_SUB WHERE UPPER(TRIM(DESCRICAO)) = 'MEIAS'
-    )
-       OR (EXISTS (
-               SELECT 1 FROM CORPO_VENDAS I JOIN CAB_VENDAS V ON V.CODIGO = I.CODVENDA
-               WHERE I.CODPRODUTO = P.SEQ
-                 AND (TRIM(V.STATUS) = 'PEDIDO'
-                      OR V.DATA_PEDIDO >= DATEADD(-12 MONTH TO CURRENT_DATE))
-           )
-           AND P.DESCRICAO NOT CONTAINING 'CUECA'
-           AND P.DESCRICAO NOT CONTAINING 'BOXER')
+    FROM (SELECT DISTINCT SEQ FROM RECORTE) R
+    JOIN PRODUTOS P ON P.SEQ = R.SEQ
     ORDER BY P.SEQ
 """
 
@@ -405,8 +417,7 @@ def FIND_ORDERS_BY_PEDIDO_CLIENTE(n: int) -> str:
     """
     if n <= 0:
         raise ValueError(
-            "FIND_ORDERS_BY_PEDIDO_CLIENTE requer n >= 1 "
-            "(IN () é SQL inválida no Firebird)"
+            "FIND_ORDERS_BY_PEDIDO_CLIENTE requer n >= 1 (IN () é SQL inválida no Firebird)"
         )
     marcadores = ", ".join("?" for _ in range(n))
     return f"""

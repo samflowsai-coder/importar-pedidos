@@ -27,6 +27,14 @@ _(nada ainda)_
 
 ---
 
+## 20261015-1810
+
+1) **Kits e packs chegam ao Flow como kit e pack, nunca como par.** O catálogo só marcava como kit o produto que tinha a composição cadastrada no Fire; os kits sem composição (como os Kings e os POLO MATCH) iam como se fossem um par, e o Flow poderia mandar produzir o kit inteiro como se fosse uma meia. Agora todo produto com unidade KIT ou PACK, ou com KIT ou PACK no nome, vai como kit ou pack. Kit sem composição fica parado no Flow com o aviso "sem composição cadastrada" até a composição ser cadastrada no Fire.
+
+2) **Os pares que formam os kits passam a ir no catálogo.** O par não é vendido sozinho, então ficava fora do catálogo enviado, e os pares que a fábrica produz existiam só no Flow, sem ligação com o Fire. Agora vão junto todos os produtos que compõem um kit ou pack do catálogo, em qualquer nível (pack, kit, par).
+
+---
+
 ## 20261015-1308
 
 1) **O catálogo de produtos do Fire vai para o Flow sozinho, todo dia às 5h, por enquanto só como conferência.** Antes ele só ia quando alguém mandava à mão (a última vez foi em julho), e todo produto cadastrado depois disso chegava no Flow como "produto desconhecido". Agora, nas empresas com "Enviar catálogo ao Flow" ligado, o catálogo vai toda madrugada para o Flow comparar com o dele, sem gravar nada. A gravação diária só é ligada depois que a primeira gravação do catálogo for conferida e aprovada.
