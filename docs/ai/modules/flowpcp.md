@@ -139,6 +139,19 @@ log diz `envio ao Flow DESLIGADO`.
 desde o início da hora. Falha antes da cópia local pausa 10 min. O promote do
 Flow não desativa produto só do Flow (sai como `flowOnly` no relatório).
 
+**Tipo e recorte** (`catalog_extract._tipo`, desde 15/10/2026): para o Flow,
+`simples` = par e vira OP; kit/pack sem composição fica fora do pool. Por isso
+`pack` = unidade PACK ou PACK no nome; `kit` = pai em `PRODUTOS_KIT`, unidade KIT
+ou KIT no nome; o resto é `simples`. O promote atualiza o tipo dos já casados.
+O recorte "só meias" inclui os componentes (CTE recursiva sobre `PRODUTOS_KIT`),
+porque o par não é vendido e sem isso ficava só no Flow (trava de 5 níveis
+contra ciclo; componente cueca fora). A composição em si (`componentes`) ainda
+não vai no payload. **Portão antes de gravar:** o promote casa por
+`fire_produto_id`, código e nome; par só do Flow (`APT-…`, sem
+`fire_produto_id`) com nome diferente do Fire vira produto novo ao lado dele
+(par duplicado). Conferir no dryRun `fireOnly`/`nomeAmbiguo` dos pares antes do
+`apply=true`.
+
 Tabelas locais em `modules/persistence.md`. Ferramentas de linha de comando:
 `tools/sync_catalogo_fire.py`, `tools/configurar_flowpcp.py`.
 
