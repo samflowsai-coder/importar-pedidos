@@ -35,6 +35,13 @@ from app.utils.logger import logger
 # pedidos pendentes viram ~2 idas ao banco, não 308.
 _BLOCO = 200
 
+# Tamanho de CAB_VENDAS.PEDIDO_CLIENTE nas duas bases de produção (MM e
+# Nasmar). Parâmetro mais longo que a coluna faz o Firebird recusar a consulta
+# INTEIRA ("Value of parameter (70) is too long, expected 20, found 26") — um
+# número assim nunca existe no Fire, então sai da consulta em vez de derrubar a
+# reconciliação dos demais (aconteceu em produção de 27/08 a 15/10).
+_TAMANHO_PEDIDO_CLIENTE = 20
+
 # Guarda temporal: descarta match cujo DATA_PEDIDO no Fire é mais antigo que
 # "data do candidato − 90 dias". Números curtos e sequenciais (K01, MF048,
 # AF198) se repetem entre anos no MESMO cliente — sem isto, um K01 de 2024 do
@@ -230,11 +237,18 @@ def _buscar_no_fire_detalhado(
 
 
 def _todos_numeros(candidatos: list[Candidato]) -> list[str]:
-    """Une as variantes de número de todos os candidatos, sem duplicatas."""
+    """Une as variantes de número de todos os candidatos, sem duplicatas e sem
+    as que não cabem na coluna do Fire."""
     vistos: set[str] = set()
     numeros: list[str] = []
     for candidato in candidatos:
         for variante in variantes(candidato.numero):
+            if len(variante) > _TAMANHO_PEDIDO_CLIENTE:
+                logger.info(
+                    f"fire_reconcile: número '{variante}' ({candidato.import_id}) tem mais de "
+                    f"{_TAMANHO_PEDIDO_CLIENTE} caracteres, não existe no Fire; fora da consulta"
+                )
+                continue
             if variante not in vistos:
                 vistos.add(variante)
                 numeros.append(variante)

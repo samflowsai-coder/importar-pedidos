@@ -271,6 +271,12 @@ escreve nada; devolve um dict `import_id → Achado` para
 `app/reconcile/runner.py` decidir e gravar (ver `state.md`, seção
 `found_in_fire`).
 
+Número com mais de 20 caracteres (`_TAMANHO_PEDIDO_CLIENTE`, o tamanho de
+`CAB_VENDAS.PEDIDO_CLIENTE` nas duas bases) sai da consulta em
+`_todos_numeros`, com log: o Firebird recusa o bloco inteiro quando um
+parâmetro passa do tamanho da coluna, e um único número desses deixou a
+reconciliação em `erro_conexao` de 27/08 a 15/10.
+
 ### Chave dupla, três caminhos
 
 `_decidir_candidato` (`fire_reconcile.py:305`) tenta, na ordem, o primeiro
