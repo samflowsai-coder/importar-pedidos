@@ -143,7 +143,8 @@ pelo diário.
 | `app/integrations/flowpcp/client.py` | apply (`dryRun=false`) **sem repetição** em timeout de leitura e com timeout próprio de 300 s; o dry-run segue com a política atual. O Flow não lê `Idempotency-Key` e passa a ter um apply por vez (409) |
 | `app/web/routes_environments.py` | `confirmar_remocao` e `confirmar_substituicao` na rota manual; 409 do Flow vira "já há uma gravação em andamento" |
 | `app/web/static/admin-ambiente-edit.html` | mostra os blocos `composicao` e `vinculoMes` do relatório, as travas ativas e `leitura_ok`; texto da confirmação diz que o apply troca composição e cria vínculo com o Apontaê |
-| `app/integrations/flowpcp/catalogo_diario.py` | o resumo registra os blocos de composição e vínculo; trava ativa vira WARNING; em `gravar` com composição ligada, recusa enquanto houver exclusão pendente (§6) |
+| `app/integrations/flowpcp/catalogo_diario.py` | o resumo registra os blocos de composição e vínculo; trava ativa, leitura com falha ou `erpSemChave` > 0 viram WARNING; nunca manda as confirmações. A exclusão guardada (§6) chega pelo sync, sem código no diário |
+| `app/http/client.py` · `app/http/policies.py` | `post_json` aceita uma política de repetição por chamada; política nova do apply: repete só quando a conexão nem abriu |
 
 A cópia local (`catalogo_fire`) não muda nesta entrega: nada no Portal lê composição
 hoje (§8).
@@ -169,9 +170,11 @@ migração de schema.
 
 **Diário em `gravar` com composição ligada:** a exclusão `excluir=` vale por rodada e
 o diário não a conhece; com composição, os kits C/5 do listrado passariam a apontar
-para os pares duplicados. Enquanto o interruptor estiver ligado para o ambiente,
+para os pares duplicados. Quando definida,
 `PORTAL_FLOWPCP_CATALOGO_EXCLUIR_<SLUG>` (lista de SEQs) é aplicada pelo envio manual
-**e** pelo diário. Assim a exclusão fica guardada sem migração.
+**e** pelo diário, com a composição ligada ou não (o par duplicado do listrado é
+problema mesmo sem composição). Assim a exclusão fica guardada sem migração. Valor
+inválido ou SEQ que não está no extract: o envio falha sem mandar nada.
 
 ## 7. Testes
 
