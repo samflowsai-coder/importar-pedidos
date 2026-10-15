@@ -64,7 +64,8 @@ def run_drain_outbox() -> None:
                 from app.integrations.flowpcp import envio_portal  # noqa: PLC0415 — ciclo de import
 
                 try:
-                    envio_portal.drenar_ambiente(env, cfg)
+                    if envio_portal.janela_aberta() is not None:
+                        envio_portal.drenar_ambiente(env, cfg)
                 except Exception as exc:  # noqa: BLE001 — um ambiente ruim não derruba os outros
                     logger.error("worker.drain flowpcp env={} falhou: {!r}", slug, exc)
     update_outbox_metrics()
@@ -115,6 +116,7 @@ def _proxima_tentativa(delta_s: int) -> str:
 def _handle_flowpcp_failure(row: OutboxRow, error: str, *, definitivo: bool = False) -> None:
     if definitivo:
         outbox_repo.mark_failed(row.id, error=f"recusado: {error}", dead=True)
+        repo.append_audit(row.import_id, "flowpcp_recusado", {"erro": error[:500]})
         logger.error(
             "worker.drain flowpcp recusado import_id={} error={}", row.import_id, error[:200]
         )

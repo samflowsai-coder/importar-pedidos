@@ -24,6 +24,7 @@ from tests.test_erp_eventos_origem import pedidos_foto
 
 TENANT = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 NOITE = datetime(2026, 10, 10, 2, 30, tzinfo=UTC)  # 23:30 em São Paulo
+JANELA_14H = datetime(2026, 10, 15, 17, 10, tzinfo=UTC)  # quinta, 14:10 em São Paulo
 
 
 @pytest.fixture
@@ -66,9 +67,75 @@ def test_vigia_e_foto_quebradas_nao_impedem_a_drenagem(cfg, monkeypatch):
     monkeypatch.setattr(runner, "_criar_foto", quebra)
     monkeypatch.setattr(drenagem, "drenar", lambda *a, **k: chamadas.append("drenar"))
     monkeypatch.setattr(foto, "enviar", lambda *a, **k: chamadas.append("foto"))
-    runner.processar_base(cfg, agora=NOITE)
+    monkeypatch.setattr(runner, "_relogio", lambda: JANELA_14H)
+    runner.processar_base(cfg, agora=JANELA_14H)
     assert chamadas == ["drenar", "foto"]
     assert (cfg.environment_id, cfg.base) in runner._FALHA_ERP  # próxima tentativa só em 5 min
+
+
+def test_fora_da_janela_nao_manda_lote_mas_a_foto_segue(cfg, monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(runner, "_vigiar", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "_criar_foto", lambda *a, **k: None)
+    monkeypatch.setattr(drenagem, "drenar", lambda *a, **k: chamadas.append("drenar"))
+    monkeypatch.setattr(foto, "enviar", lambda *a, **k: chamadas.append("foto"))
+    monkeypatch.setattr(runner, "_relogio", lambda: NOITE)
+    runner.processar_base(cfg, agora=NOITE)  # 23:30: fora de qualquer janela
+    assert chamadas == ["foto"]
+
+
+def _envio(cfg):
+    with router.env_connect(cfg.env_slug) as conn:
+        return erp_estado_repo.obter_envio(conn, cfg.base)
+
+
+def test_janela_sem_lote_ainda_pede_o_lote_vazio_de_sinal_de_vida(cfg):
+    with router.env_connect(cfg.env_slug) as conn:  # último 202 na janela anterior (11h)
+        erp_estado_repo.registrar_202(conn, cfg.base, "2026-10-15T14:30:00.000+00:00")
+    runner._garantir_lote_na_janela(cfg, JANELA_14H)
+    assert _envio(cfg).sinal_pendente
+
+
+def test_janela_que_ja_teve_lote_nao_pede_outro(cfg):
+    with router.env_connect(cfg.env_slug) as conn:  # 14:05 em São Paulo
+        erp_estado_repo.registrar_202(conn, cfg.base, "2026-10-15T17:05:00.000+00:00")
+    runner._garantir_lote_na_janela(cfg, JANELA_14H)
+    assert not _envio(cfg).sinal_pendente
+
+
+def test_lote_vazio_da_janela_sai_mesmo_sem_vigia(cfg, monkeypatch):
+    """ERP fora a manhã toda: a vigia não roda, mas a janela manda o sinal de vida."""
+    monkeypatch.setattr(runner, "_vigiar", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(foto, "enviar", lambda *a, **k: None)
+    lotes = []
+
+    class Flow:
+        def __init__(self, **kw):
+            pass
+
+        def enviar_lote(self, lote_id, eventos):
+            lotes.append(eventos)
+            return RespostaHttp(202, {"resultados": []}, None)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(runner, "ClienteErpEventos", Flow)
+    monkeypatch.setattr(runner, "_ritmo", Ritmo(0))
+    monkeypatch.setattr(runner, "_relogio", lambda: JANELA_14H)
+    runner.processar_base(cfg, agora=JANELA_14H)
+    assert lotes == [[]]
+
+
+def test_sinal_de_vida_da_janela_sai_antes_da_vigia(cfg, monkeypatch):
+    """Vigia travada no ERP não pode segurar o lote da janela."""
+    ordem = []
+    monkeypatch.setattr(runner, "_relogio", lambda: JANELA_14H)
+    monkeypatch.setattr(runner, "_lotes_da_janela", lambda c: ordem.append("lotes"))
+    monkeypatch.setattr(runner, "_vigiar", lambda *a, **k: ordem.append("vigia"))
+    monkeypatch.setattr(foto, "enviar", lambda *a, **k: None)
+    runner.processar_base(cfg, agora=JANELA_14H)
+    assert ordem == ["lotes", "vigia"]
 
 
 def test_vigia_que_falhou_espera_5_minutos(cfg, monkeypatch):
