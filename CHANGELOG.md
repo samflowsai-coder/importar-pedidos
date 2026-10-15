@@ -23,6 +23,12 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
+_(nada ainda)_
+
+---
+
+## 20261014-2136
+
 1) **Tudo que vai para o Flow sai em 4 horários por dia, não mais na hora.** Os pedidos importados e as mudanças dos pedidos do Fire (quando o bloco "Pedidos do ERP para o Flow" estiver ligado) saem às 8h, 11h, 14h e 17h, de segunda a sábado. Entre um horário e outro tudo fica só aguardando; nada se perde. Em cada horário o portal manda pelo menos um aviso de que está vivo, mesmo sem pedido novo. A foto completa da madrugada continua no mesmo horário. Cada horário deixa registrado quantos pedidos foram enviados, recusados pelo Flow, descartados (já faturados, cancelados ou apagados no Fire) e guardados.
 
 ---

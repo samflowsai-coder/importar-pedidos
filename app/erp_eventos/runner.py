@@ -145,6 +145,11 @@ def processar_base(cfg: BaseErpConfig, *, agora: datetime | None = None) -> None
         # drenagem do que já está na fila nem o sinal de vida (revisão C1).
         # ERP fora do ar: vigia e foto tentam de novo em 5 min, não a cada 30 s
         # (`fdb` não tem timeout; host inalcançável segura a conexão).
+        # Lotes só nas janelas de envio (8h/11h/14h/17h, seg-sáb), e ANTES de ler
+        # o ERP: uma vigia travada (fdb sem timeout) não segura o sinal de vida
+        # da janela. O que a vigia enfileirar agora sai no próximo tick.
+        _etapa(cfg, "lotes da janela", lambda: _lotes_da_janela(cfg))
+
         chave = (cfg.environment_id, cfg.base)
         falhou_em = _FALHA_ERP.get(chave)
         erp_liberado = falhou_em is None or agora - falhou_em >= PAUSA_APOS_FALHA
@@ -171,11 +176,6 @@ def processar_base(cfg: BaseErpConfig, *, agora: datetime | None = None) -> None
             destino_url=cfg.destino_url, tenant_id=cfg.tenant_id, token=cfg.token or ""
         )
         try:
-            # Lotes só nas janelas de envio (8h/11h/14h/17h, seg-sáb); fora delas
-            # a vigia segue enfileirando. A foto não segue as janelas.
-            if janela_aberta(agora) is not None:
-                _etapa(cfg, "sinal de vida da janela", lambda: _garantir_lote_na_janela(cfg, agora))
-                _etapa(cfg, "drenagem", lambda: drenagem.drenar(cfg, cliente=cliente, ritmo=_ritmo))
             _etapa(cfg, "envio da foto", lambda: foto.enviar(cfg, cliente=cliente, ritmo=_ritmo))
         finally:
             cliente.close()
@@ -185,6 +185,24 @@ def processar_base(cfg: BaseErpConfig, *, agora: datetime | None = None) -> None
         logger.error(f"erp_eventos: base '{cfg.base}' falhou neste ciclo: {exc!r}")
     finally:
         lock.release()
+
+
+def _relogio() -> datetime:
+    return datetime.now(UTC)
+
+
+def _lotes_da_janela(cfg: BaseErpConfig) -> None:
+    agora = _relogio()  # hora do envio, não a do início do tick
+    if janela_aberta(agora) is None:
+        return  # fora da janela: a fila só cresce; a foto não segue as janelas
+    _garantir_lote_na_janela(cfg, agora)
+    cliente = ClienteErpEventos(
+        destino_url=cfg.destino_url, tenant_id=cfg.tenant_id, token=cfg.token or ""
+    )
+    try:
+        drenagem.drenar(cfg, cliente=cliente, ritmo=_ritmo)
+    finally:
+        cliente.close()
 
 
 def _garantir_lote_na_janela(cfg: BaseErpConfig, agora: datetime) -> None:

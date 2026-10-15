@@ -67,6 +67,7 @@ def test_vigia_e_foto_quebradas_nao_impedem_a_drenagem(cfg, monkeypatch):
     monkeypatch.setattr(runner, "_criar_foto", quebra)
     monkeypatch.setattr(drenagem, "drenar", lambda *a, **k: chamadas.append("drenar"))
     monkeypatch.setattr(foto, "enviar", lambda *a, **k: chamadas.append("foto"))
+    monkeypatch.setattr(runner, "_relogio", lambda: JANELA_14H)
     runner.processar_base(cfg, agora=JANELA_14H)
     assert chamadas == ["drenar", "foto"]
     assert (cfg.environment_id, cfg.base) in runner._FALHA_ERP  # próxima tentativa só em 5 min
@@ -78,6 +79,7 @@ def test_fora_da_janela_nao_manda_lote_mas_a_foto_segue(cfg, monkeypatch):
     monkeypatch.setattr(runner, "_criar_foto", lambda *a, **k: None)
     monkeypatch.setattr(drenagem, "drenar", lambda *a, **k: chamadas.append("drenar"))
     monkeypatch.setattr(foto, "enviar", lambda *a, **k: chamadas.append("foto"))
+    monkeypatch.setattr(runner, "_relogio", lambda: NOITE)
     runner.processar_base(cfg, agora=NOITE)  # 23:30: fora de qualquer janela
     assert chamadas == ["foto"]
 
@@ -120,8 +122,20 @@ def test_lote_vazio_da_janela_sai_mesmo_sem_vigia(cfg, monkeypatch):
 
     monkeypatch.setattr(runner, "ClienteErpEventos", Flow)
     monkeypatch.setattr(runner, "_ritmo", Ritmo(0))
+    monkeypatch.setattr(runner, "_relogio", lambda: JANELA_14H)
     runner.processar_base(cfg, agora=JANELA_14H)
     assert lotes == [[]]
+
+
+def test_sinal_de_vida_da_janela_sai_antes_da_vigia(cfg, monkeypatch):
+    """Vigia travada no ERP não pode segurar o lote da janela."""
+    ordem = []
+    monkeypatch.setattr(runner, "_relogio", lambda: JANELA_14H)
+    monkeypatch.setattr(runner, "_lotes_da_janela", lambda c: ordem.append("lotes"))
+    monkeypatch.setattr(runner, "_vigiar", lambda *a, **k: ordem.append("vigia"))
+    monkeypatch.setattr(foto, "enviar", lambda *a, **k: None)
+    runner.processar_base(cfg, agora=JANELA_14H)
+    assert ordem == ["lotes", "vigia"]
 
 
 def test_vigia_que_falhou_espera_5_minutos(cfg, monkeypatch):

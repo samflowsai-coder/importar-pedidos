@@ -177,7 +177,7 @@ PORTAL_ERP_VIGIA=                # 0 desliga a vigia/envio; ausente = ligado (s�
 
 # FlowPCP — fila do /recebimento e decisões, numa thread do processo web
 PORTAL_FLOWPCP_ENVIO=            # 0 desliga a thread que entrega a fila do Flow; ausente = ligado
-PORTAL_FLOW_JANELAS=          # horas das janelas de envio ao Flow (seg-sáb, 1 h cada); ausente = 8,11,14,17
+PORTAL_FLOW_JANELAS=             # horas das janelas de envio ao Flow (seg-sáb, 1 h cada); ausente = 8,11,14,17
 PORTAL_FLOWPCP_DECISOES=         # 1 liga a leitura das decisões do Flow (ESCREVE DT_ENTREGA no Fire); ausente = desligado
 
 # Webhooks do Gestor
