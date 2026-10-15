@@ -61,6 +61,11 @@ O worker continua fazendo o mesmo em deploy docker, onde a thread fica desligada
 (`PORTAL_FLOWPCP_ENVIO=0` no `docker-compose.yml`). **Nunca há HTTP no request path** — a
 UI não espera o Flow.
 
+**Janelas de envio:** a fila só sai em janelas de 1 h às 8h, 11h, 14h e 17h (Brasília),
+segunda a sábado (`envio_portal.JANELAS`, `PORTAL_FLOWPCP_JANELAS`); fora delas o pedido
+só enfileira. Resumo por janela no log (`janela … fechada: {…}`) e em `/metrics`
+(`portal_flowpcp_janela_pedidos{janela,resultado}`, últimas 8). Vale para thread e worker.
+
 **Regra de envio** (`envio_portal.drenar_ambiente`, usada pela thread E pelo worker):
 - pedido com `imports.fire_codigo`, qualquer idade: só vai se segue aberto no ERP
   (`CAB_VENDAS.STATUS`, READ ONLY, uma leitura por ciclo). Faturado, cancelado ou apagado

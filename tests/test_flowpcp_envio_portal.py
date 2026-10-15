@@ -345,6 +345,7 @@ def test_worker_usa_a_mesma_regra(env, monkeypatch):
 
     chamadas = []
     monkeypatch.setattr(drain, "enabled_flowpcp_envs", lambda: {"mm": CFG})
+    monkeypatch.setattr(envio_portal, "janela_aberta", lambda agora=None: "2026-10-15 08h")
     monkeypatch.setattr(
         envio_portal, "drenar_ambiente", lambda e, c: chamadas.append((e["slug"], c))
     )
@@ -398,3 +399,95 @@ def test_interruptor_da_thread(monkeypatch):
     assert envio_portal.envio_habilitado()
     monkeypatch.setenv("PORTAL_FLOWPCP_ENVIO", "0")
     assert not envio_portal.envio_habilitado()
+
+
+# ── Janelas de envio: 8h, 11h, 14h, 17h, segunda a sábado (Brasília) ─────────
+
+SP = envio_portal.FUSO
+
+
+@pytest.mark.parametrize(
+    ("quando", "esperado"),
+    [
+        (datetime(2026, 10, 15, 8, 0, tzinfo=SP), "2026-10-15 08h"),  # quinta
+        (datetime(2026, 10, 15, 8, 59, tzinfo=SP), "2026-10-15 08h"),
+        (datetime(2026, 10, 15, 9, 0, tzinfo=SP), None),
+        (datetime(2026, 10, 15, 7, 59, tzinfo=SP), None),
+        (datetime(2026, 10, 15, 11, 30, tzinfo=SP), "2026-10-15 11h"),
+        (datetime(2026, 10, 15, 14, 0, tzinfo=SP), "2026-10-15 14h"),
+        (datetime(2026, 10, 15, 17, 45, tzinfo=SP), "2026-10-15 17h"),
+        (datetime(2026, 10, 15, 18, 0, tzinfo=SP), None),
+        (datetime(2026, 10, 17, 8, 10, tzinfo=SP), "2026-10-17 08h"),  # sábado
+        (datetime(2026, 10, 18, 8, 10, tzinfo=SP), None),  # domingo
+        (datetime(2026, 10, 15, 11, 0, tzinfo=envio_portal.ZoneInfo("UTC")), "2026-10-15 08h"),
+    ],
+)
+def test_janela_aberta(monkeypatch, quando, esperado):
+    monkeypatch.delenv("PORTAL_FLOWPCP_JANELAS", raising=False)
+    assert envio_portal.janela_aberta(quando) == esperado
+
+
+def test_janelas_configuraveis_e_valor_invalido_cai_no_padrao(monkeypatch):
+    monkeypatch.setenv("PORTAL_FLOWPCP_JANELAS", "9, 15")
+    assert envio_portal.janela_aberta(datetime(2026, 10, 15, 9, 5, tzinfo=SP)) == "2026-10-15 09h"
+    assert envio_portal.janela_aberta(datetime(2026, 10, 15, 8, 5, tzinfo=SP)) is None
+    monkeypatch.setenv("PORTAL_FLOWPCP_JANELAS", "8,xx")
+    assert envio_portal.janela_aberta(datetime(2026, 10, 15, 8, 5, tzinfo=SP)) == "2026-10-15 08h"
+
+
+@pytest.fixture
+def _janelas_limpas(monkeypatch):
+    monkeypatch.delenv("PORTAL_FLOWPCP_JANELAS", raising=False)
+    envio_portal._resumos.clear()
+    envio_portal._janela_corrente = None
+    yield
+    envio_portal._resumos.clear()
+    envio_portal._janela_corrente = None
+
+
+def test_fora_da_janela_nada_sai(monkeypatch, _janelas_limpas):
+    chamadas = []
+    monkeypatch.setattr(envio_portal, "enabled_flowpcp_envs", lambda: chamadas.append(1) or {})
+    assert envio_portal.drenar(datetime(2026, 10, 15, 10, 0, tzinfo=SP)) is None
+    assert chamadas == []
+
+
+def test_janela_soma_os_pedidos_e_fecha_com_resumo(env, monkeypatch, _janelas_limpas):
+    from app.observability.metrics import flowpcp_janela_pedidos
+
+    contas = iter(
+        [
+            {"enviados": 20, "descartados": 3, "retidos": 1, "falhas": 0},
+            {"enviados": 7, "descartados": 0, "retidos": 0, "falhas": 0},
+        ]
+    )
+    monkeypatch.setattr(envio_portal, "enabled_flowpcp_envs", lambda: {"mm": CFG})
+    monkeypatch.setattr(envio_portal, "drenar_ambiente", lambda e, c: next(contas))
+    logs = []
+    monkeypatch.setattr(envio_portal.logger, "info", logs.append)
+
+    oito = datetime(2026, 10, 15, 8, 0, tzinfo=SP)
+    envio_portal.drenar(oito)
+    envio_portal.drenar(oito + timedelta(minutes=1))
+    envio_portal.drenar(oito + timedelta(hours=1))  # 9h: fecha
+
+    assert envio_portal._resumos["2026-10-15 08h"] == {
+        "enviados": 27,
+        "descartados": 3,
+        "retidos": 1,
+        "falhas": 0,
+    }
+    valor = flowpcp_janela_pedidos.labels(janela="2026-10-15 08h", resultado="enviado")._value.get()
+    assert valor == 27
+    assert any("janela 2026-10-15 08h fechada" in linha for linha in logs)
+
+
+def test_worker_fora_da_janela_nao_drena(env, monkeypatch):
+    import app.worker.jobs.drain_outbox as drain
+
+    chamadas = []
+    monkeypatch.setattr(drain, "enabled_flowpcp_envs", lambda: {"mm": CFG})
+    monkeypatch.setattr(envio_portal, "janela_aberta", lambda agora=None: None)
+    monkeypatch.setattr(envio_portal, "drenar_ambiente", lambda e, c: chamadas.append(1))
+    drain.run_drain_outbox()
+    assert chamadas == []

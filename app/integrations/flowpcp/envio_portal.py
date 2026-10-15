@@ -29,6 +29,13 @@ Regra de cada linha da fila (`target=flowpcp`):
   Linha nunca morre por falha passageira; recusa definitiva do Flow (4xx de
   conteúdo) ou payload inválido vira `dead` com `recusado: …` (`drain_outbox`).
 
+**Janelas de envio** (decisão do Samuel, 14/10/2026): a fila não sai em tempo
+real. Ela sai em janelas de 1 h às 8h, 11h, 14h e 17h (horário de Brasília), de
+segunda a sábado (`JANELAS`, `PORTAL_FLOWPCP_JANELAS="8,11,14,17"`). Fora delas
+o pedido só fica na fila. Cada janela fecha com uma linha de log
+`flowpcp.envio janela … fechada: {…}` e fica em `/metrics`
+(`portal_flowpcp_janela_pedidos`, últimas 8). O worker segue as mesmas janelas.
+
 **Decisões do Flow** (escrita de `DT_ENTREGA` no ERP): só com
 `PORTAL_FLOWPCP_DECISOES=1` (`config.decisoes_habilitadas`), desligado por padrão.
 
@@ -40,8 +47,10 @@ from __future__ import annotations
 
 import os
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from app.erp import queries
 from app.erp.connection import FirebirdConnection
@@ -51,7 +60,7 @@ from app.integrations.flowpcp.config import (
     decisoes_habilitadas,
     enabled_flowpcp_envs,
 )
-from app.observability.metrics import update_outbox_metrics
+from app.observability.metrics import flowpcp_janela_pedidos, update_outbox_metrics
 from app.persistence import context as env_context
 from app.persistence import db, environments_repo, outbox_repo, repo
 from app.persistence.outbox_repo import OutboxRow
@@ -72,12 +81,80 @@ _RETIDO = (
     "a reconciliação achar o pedido"
 )
 
+FUSO = ZoneInfo("America/Sao_Paulo")
+JANELAS = (8, 11, 14, 17)  # hora cheia de início; cada janela dura 1 h
+DIAS_UTEIS = frozenset(range(6))  # segunda (0) a sábado (5)
+_JANELAS_GUARDADAS = 8
+_RESULTADOS = (
+    ("enviados", "enviado"),
+    ("descartados", "descartado"),
+    ("retidos", "retido"),
+    ("falhas", "falha"),
+)
+
 LerStatus = Callable[[dict, list[int]], dict[int, str]]
 
 # slug → até quando não tentar ler o ERP de novo (o fdb não tem timeout curto).
 _pausa_erp: dict[str, datetime] = {}
 # slug → até quando não tentar enviar de novo depois de uma falha de envio.
 _pausa_flow: dict[str, datetime] = {}
+
+
+def _horas_das_janelas() -> tuple[int, ...]:
+    bruto = os.environ.get("PORTAL_FLOWPCP_JANELAS", "").strip()
+    if not bruto:
+        return JANELAS
+    try:
+        horas = tuple(sorted({int(h) for h in bruto.split(",") if h.strip()}))
+    except ValueError:
+        horas = ()
+    if not horas or any(h < 0 or h > 23 for h in horas):
+        logger.error(
+            f"flowpcp.envio: PORTAL_FLOWPCP_JANELAS inválido ({bruto!r}), usando {JANELAS}"
+        )
+        return JANELAS
+    return horas
+
+
+def janela_aberta(agora: datetime | None = None) -> str | None:
+    """Rótulo da janela de envio aberta agora (ex.: "2026-10-15 08h") ou None."""
+    local = (agora or datetime.now(FUSO)).astimezone(FUSO)
+    if local.weekday() not in DIAS_UTEIS or local.hour not in _horas_das_janelas():
+        return None
+    return f"{local:%Y-%m-%d} {local.hour:02d}h"
+
+
+# janela → contagem acumulada (últimas `_JANELAS_GUARDADAS`), e a que está aberta.
+_resumos: OrderedDict[str, dict[str, int]] = OrderedDict()
+_janela_corrente: str | None = None
+
+
+def _registrar(janela: str, conta: dict[str, int]) -> None:
+    resumo = _resumos.setdefault(janela, {chave: 0 for chave, _ in _RESULTADOS})
+    for chave, rotulo in _RESULTADOS:
+        resumo[chave] += conta.get(chave, 0)
+        flowpcp_janela_pedidos.labels(janela=janela, resultado=rotulo).set(resumo[chave])
+    while len(_resumos) > _JANELAS_GUARDADAS:
+        antiga, _ = _resumos.popitem(last=False)
+        for _, rotulo in _RESULTADOS:
+            try:
+                flowpcp_janela_pedidos.remove(antiga, rotulo)
+            except KeyError:
+                pass
+
+
+def _trocar_janela(janela: str | None) -> None:
+    global _janela_corrente
+    if janela == _janela_corrente:
+        return
+    if _janela_corrente is not None:
+        logger.info(
+            f"flowpcp.envio janela {_janela_corrente} fechada: {_resumos.get(_janela_corrente, {})}"
+        )
+    if janela is not None:
+        logger.info(f"flowpcp.envio janela {janela} aberta")
+        _registrar(janela, {})
+    _janela_corrente = janela
 
 
 def envio_habilitado() -> bool:
@@ -212,7 +289,14 @@ def drenar_ambiente(
     return conta
 
 
-def drenar() -> None:
+def drenar(agora: datetime | None = None) -> str | None:
+    """Drena a fila de cada ambiente se uma janela de envio está aberta.
+    Devolve o rótulo da janela (None = fora da janela, nada sai)."""
+    janela = janela_aberta(agora)
+    _trocar_janela(janela)
+    if janela is None:
+        update_outbox_metrics()
+        return None
     for slug, cfg in enabled_flowpcp_envs().items():
         env = environments_repo.get_by_slug(slug)
         if env is None:
@@ -223,9 +307,11 @@ def drenar() -> None:
         except Exception as exc:  # noqa: BLE001 — um ambiente ruim não derruba os outros
             logger.error(f"flowpcp.envio env={slug} falhou: {exc!r}")
             continue
+        _registrar(janela, conta)
         if any(conta.values()):
-            logger.info(f"flowpcp.envio env={slug} {conta}")
+            logger.info(f"flowpcp.envio env={slug} janela={janela} {conta}")
     update_outbox_metrics()
+    return janela
 
 
 def ciclo(ultima_decisao: datetime, agora: datetime) -> datetime:

@@ -64,7 +64,8 @@ def run_drain_outbox() -> None:
                 from app.integrations.flowpcp import envio_portal  # noqa: PLC0415 — ciclo de import
 
                 try:
-                    envio_portal.drenar_ambiente(env, cfg)
+                    if envio_portal.janela_aberta() is not None:
+                        envio_portal.drenar_ambiente(env, cfg)
                 except Exception as exc:  # noqa: BLE001 — um ambiente ruim não derruba os outros
                     logger.error("worker.drain flowpcp env={} falhou: {!r}", slug, exc)
     update_outbox_metrics()

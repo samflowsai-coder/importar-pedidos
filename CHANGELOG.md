@@ -23,7 +23,7 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
-_(nada ainda)_
+1) **Os pedidos vão para o Flow em 4 horários por dia, não mais na hora.** O portal guarda a fila e envia às 8h, 11h, 14h e 17h, de segunda a sábado. Entre um horário e outro o pedido fica só aguardando; nada se perde. Cada horário deixa registrado quantos pedidos foram enviados, descartados (já faturados, cancelados ou apagados no Fire) e guardados.
 
 ---
 
