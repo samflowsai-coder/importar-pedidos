@@ -1,6 +1,6 @@
 # Composição de kits e vínculo com o Apontaê no catálogo (lado Portal)
 
-**Data:** 15/10/2026 · **Status:** proposta para o Samuel aprovar
+**Data:** 15/10/2026 · **Status:** revisão 2, depois da revisão independente (armadilhas de ponta a ponta)
 **Par do lado Flow:** `pcp-app` `docs/superpowers/specs/2026-10-15-catalogo-erp-fase2-composicao-vinculo-mes-design.md`
 (Fase 2, Fatias A e B). Contrato fechado com a sessão do Flow em 15/10.
 
@@ -63,8 +63,13 @@ Regras de `componentes` (as mesmas da spec do Flow):
 
 Regra de `codigoMes`:
 
-- vai **só para `tipo = simples`** (par). Kit e pack mandam `null`;
-- valor = `CODPROD_ALTERN` sem espaços, quando for só dígitos; senão `null`;
+- vai **só para `tipo = simples` e ativo** (par). Kit, pack e par inativo mandam `null`;
+- valor = `CODPROD_ALTERN` sem espaços, quando for só dígitos ASCII e tiver **até 9
+  dígitos** (cabe no `integer` do Flow; código de cliente de 12 dígitos não passa);
+  senão `null`;
+- valor **repetido** em mais de um par do mesmo envio → `null` em todos os repetidos,
+  com log (quem ganharia o vínculo dependeria da ordem; é o caso dos pares duplicados
+  do listrado Sam's);
 - o Portal não valida contra o Apontaê. Quem valida é o Flow (`external_id` do
   tenant, grava só se o vínculo estiver vazio, nunca sobrescreve).
 
@@ -79,15 +84,26 @@ O Portal só afirma o que leu. Na dúvida, omite a chave, e o Flow não mexe.
 | Situação no Fire | `componentes` |
 |---|---|
 | leitura de `PRODUTOS_KIT` falhou | **ausente em todos os itens** do lote |
-| produto sem linha em `PRODUTOS_KIT` | `[]` |
+| `simples` sem linha em `PRODUTOS_KIT` | `[]` |
+| kit/pack sem linha em `PRODUTOS_KIT` | **decisão do Samuel (C3)**: ausente (recomendado) ou `[]` |
 | composição válida | a lista |
 | algum filho fora do payload (excluído com `excluir=` ou fora do recorte) | ausente nesse item |
 | filho repetido no mesmo pai | ausente nesse item |
 | alguma quantidade ≤ 0 ou > 100000 | ausente nesse item |
 | mais de 50 filhos | ausente nesse item |
 | filho igual ao pai | ausente nesse item |
+| filho ou quantidade nulos numa linha | ausente nesse item |
 
 Cada caso "ausente nesse item" vai para o log com o SEQ e o motivo.
+
+A leitura também conta como **falha** (ausente em todos) quando volta vazia ou
+quando nenhum dos produtos marcados como pai no extract (`IS_KIT=1`) aparece nela:
+base errada ou cópia vazia não pode virar "nenhum kit tem composição".
+
+**Conferência de quantidade** (só aviso, não omite): quando o nome traz a quantidade
+("KIT C/5", "KIT 6", "PACK C/36") e a soma das quantidades da composição é diferente,
+o Portal registra `quantidade diverge do nome` no log e no resumo. Pega erro de
+digitação na carga da MM (12 no lugar de 2 vira OP 6× maior).
 
 Medido no Fire da MM em 15/10 (recorte de 1.026):
 
@@ -96,9 +112,12 @@ Medido no Fire da MM em 15/10 (recorte de 1.026):
   Flow, então o `[]` não remove nada;
 - os 263 kits com composição no Flow têm composição idêntica no Fire (263/263).
 
-A "trava" do Flow (para a etapa de composição se o apply remover a composição de
-mais de 10 kits ou de mais de 5%) protege contra o caso de a MM esvaziar
-composições no Fire por engano.
+As travas do Flow seguram só o tipo de mudança em massa: remoção (mais de 10 kits
+ou 5%) e substituição (mais de 20 ou 10%); o resto do apply segue. Para liberar, o
+corpo leva `confirmarRemocaoComposicao` / `confirmarSubstituicaoComposicao` (topo do
+corpo, só com `dryRun=false`). No Portal, os dois chegam só pela rota manual
+(`sync-catalogo?apply=true&confirmar_remocao=1&confirmar_substituicao=1`), nunca
+pelo diário.
 
 ## 5. Onde muda no Portal
 
@@ -109,7 +128,11 @@ composições no Fire por engano.
 | `app/integrations/flowpcp/catalogo_composicao.py` (novo) | regras do §4: recebe DTOs + composição lida + `fora_do_envio`, devolve, por SEQ, `componentes` (ou ausente) e `codigoMes`; puro, sem I/O |
 | `app/integrations/flowpcp/catalogo_schema.py` | `CatalogoComponente(erpProdutoId, quantidade)`; `CatalogoProdutoItem.componentes: list | None` e `codigoMes: str | None`; serializar **sem** a chave quando ausente (`exclude_unset`) |
 | `app/integrations/flowpcp/catalogo_mapper.py` | monta os campos novos |
-| `app/integrations/flowpcp/catalogo_sync.py` | chama a composição depois do extract; log do resumo (com lista, `[]`, ausente e motivos) |
+| `app/integrations/flowpcp/catalogo_sync.py` | chama a composição depois do extract; log do resumo (com lista, `[]`, ausente, motivos e divergência de quantidade) |
+| `app/integrations/flowpcp/client.py` | apply (`dryRun=false`) **sem repetição** em timeout de leitura e com timeout próprio de 300 s; o dry-run segue com a política atual. O Flow não lê `Idempotency-Key` e passa a ter um apply por vez (409) |
+| `app/web/routes_environments.py` | `confirmar_remocao` e `confirmar_substituicao` na rota manual; 409 do Flow vira "já há uma gravação em andamento" |
+| `app/web/static/admin-ambiente-edit.html` | mostra os blocos `composicao` e `vinculoMes` do relatório, as travas ativas e `leitura_ok`; texto da confirmação diz que o apply troca composição e cria vínculo com o Apontaê |
+| `app/integrations/flowpcp/catalogo_diario.py` | o resumo registra os blocos de composição e vínculo; trava ativa vira WARNING; em `gravar` com composição ligada, recusa enquanto houver exclusão pendente (§6) |
 
 A cópia local (`catalogo_fire`) não muda nesta entrega: nada no Portal lê composição
 hoje (§8).
@@ -120,8 +143,10 @@ hoje (§8).
    promover. Antes disso, `componentes` na forma nova dá 400 no lote inteiro, e o
    `codigoMes` é descartado em silêncio.
 2. **Portal publica esta entrega com o envio desligado**:
-   `PORTAL_FLOWPCP_CATALOGO_COMPOSICAO` (`0` padrão / `1`). Desligado, o payload é
-   idêntico ao de hoje.
+   `PORTAL_FLOWPCP_CATALOGO_COMPOSICAO` = lista de slugs (ex.: `mm`); vazio = ninguém.
+   Por ambiente, para a Nasmar não entrar junto sem medição. Desligado, o payload é
+   idêntico ao de hoje. Se o Flow recusar os campos (400 de contrato, por exemplo num
+   rollback da Fatia A), a mensagem diz para desligar o interruptor.
 3. Samuel liga; o dryRun mostra no staging do Flow o que viria. A sessão do Flow
    confere.
 4. **Flow publica a Fatia B** (grava composição e vínculo). O primeiro apply com
@@ -131,13 +156,23 @@ Interruptor por variável de ambiente, e não por campo no ambiente: é uma chav
 migração, temporária, que sai quando as duas pontas estiverem no ar. Não justifica
 migração de schema.
 
+**Diário em `gravar` com composição ligada:** a exclusão `excluir=` vale por rodada e
+o diário não a conhece; com composição, os kits C/5 do listrado passariam a apontar
+para os pares duplicados. Enquanto o interruptor estiver ligado para o ambiente,
+`PORTAL_FLOWPCP_CATALOGO_EXCLUIR_<SLUG>` (lista de SEQs) é aplicada pelo envio manual
+**e** pelo diário. Assim a exclusão fica guardada sem migração.
+
 ## 7. Testes
 
 - `catalogo_composicao` (puro): cada linha da tabela do §4, mais `codigoMes` (par
   numérico, par com letras, kit numérico → `null`, espaços).
 - schema: chave ausente não aparece no JSON; `[]` aparece; `codigoMes: null` aparece.
-- sync: falha na leitura de `PRODUTOS_KIT` → nenhum item com a chave; interruptor
-  desligado → payload igual ao de hoje (comparação byte a byte com o atual).
+- sync: falha na leitura de `PRODUTOS_KIT`, leitura vazia ou incoerente com o
+  `IS_KIT` → nenhum item com a chave; interruptor desligado (ou ligado para outro
+  slug) → payload igual ao de hoje (comparação byte a byte com o atual).
+- client: apply não repete em timeout de leitura; dry-run repete como hoje.
+- rota: confirmações só com `apply=true`; 409 do Flow vira mensagem clara.
+- diário: exclusão guardada aplicada; confirmações nunca enviadas.
 - validação real, só leitura, no Fire de produção: contagens do §4 batem.
 - contrato: validar um payload real contra o Zod do Flow (Fatia A), como foi feito no
   SP1.
@@ -159,3 +194,7 @@ migração de schema.
 | Código de cliente virar vínculo com o Apontaê | `codigoMes` só para par; Flow valida contra `external_id` e nunca sobrescreve |
 | Deploy fora de ordem quebra o catálogo (400) | interruptor nasce desligado; ligar só depois da Fatia A no ar |
 | Composição do Fire mudar por causa do fiscal | o dryRun de cada envio traz as contagens; apply com ok do Samuel |
+| Apply demorado repetido pelo Portal → dois applies ao mesmo tempo | apply sem retry em timeout (300 s); Flow com um apply por vez (409) |
+| Código do Apontaê digitado errado liga a outra meia | Flow confere o nome normalizado contra o Apontaê (`nomeDivergente` não grava); ação de admin para corrigir |
+| Edição do Fire pela metade lida no meio | Flow só remove ou tira filhos depois de duas leituras iguais |
+| QTD errado na carga da MM | conferência contra a quantidade do nome, no log e no resumo |
