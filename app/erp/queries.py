@@ -417,7 +417,8 @@ def FIND_ORDERS_BY_PEDIDO_CLIENTE(n: int) -> str:
     """
     if n <= 0:
         raise ValueError(
-            "FIND_ORDERS_BY_PEDIDO_CLIENTE requer n >= 1 (IN () é SQL inválida no Firebird)"
+            "FIND_ORDERS_BY_PEDIDO_CLIENTE requer n >= 1 "
+            "(IN () é SQL inválida no Firebird)"
         )
     marcadores = ", ".join("?" for _ in range(n))
     return f"""
