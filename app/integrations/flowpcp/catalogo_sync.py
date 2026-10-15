@@ -16,6 +16,15 @@ from app.utils.logger import logger
 _IMPORTADOR_VERSAO = "1.0.0"
 
 
+class ForaDoEnvioInexistenteError(ValueError):
+    """SEQ pedido em `fora_do_envio` que não está no catálogo extraído. Falha
+    fechada: a exclusão confirmada na resposta tem que ter acontecido."""
+
+    def __init__(self, seqs: list[str]):
+        self.seqs = seqs
+        super().__init__(f"fora do envio, mas não estão no catálogo extraído: {', '.join(seqs)}")
+
+
 @dataclass(frozen=True)
 class CatalogoLocalResult:
     """Resultado do sync quando o envio ao Flow está DESLIGADO
@@ -56,7 +65,10 @@ def run_catalogo_sync(
     `fora_do_envio`: SEQs que não vão ao Flow nesta rodada (a cópia local continua
     com o Fire inteiro). Existe para segurar cadastro com problema no Fire sem
     travar o resto: em 15/10/2026, 10 pares do listrado Sam's tinham 2 cadastros
-    e virariam par duplicado no Flow. Só o envio manual usa; o diário não.
+    e virariam par duplicado no Flow. Vale só para a rodada: o diário não usa,
+    então não ligar o diário em `gravar` enquanto o Fire não for corrigido. SEQ
+    pedido que não está no catálogo extraído levanta `ForaDoEnvioInexistenteError`
+    antes de qualquer envio.
     `_client`/`_fire_conn`/`_env_conn` são injeção de teste (default constrói os reais)."""
     cfg = flowpcp_config_for_slug(slug)
     if cfg is None or not getattr(cfg, "enabled", False):
@@ -86,12 +98,15 @@ def run_catalogo_sync(
         logger.info(f"catalogo sync env={slug}: envio ao Flow DESLIGADO (catalogo_push=0)")
         return CatalogoLocalResult(itens=len(dtos), extraido_em=extraido_em)
 
-    enviados = [d for d in dtos if d.fire_produto_id not in fora_do_envio]
     if fora_do_envio:
+        nao_achados = sorted(fora_do_envio - {d.fire_produto_id for d in dtos}, key=int)
+        if nao_achados:
+            raise ForaDoEnvioInexistenteError(nao_achados)
         logger.info(
-            f"catalogo sync env={slug}: {len(dtos) - len(enviados)} itens fora do envio "
-            f"(pedidos: {sorted(fora_do_envio)})"
+            f"catalogo sync env={slug}: {len(fora_do_envio)} itens fora do envio "
+            f"(solicitados: {sorted(fora_do_envio, key=int)})"
         )
+    enviados = [d for d in dtos if d.fire_produto_id not in fora_do_envio]
     client = _client or _build_client(cfg)
     try:
         request = build_catalogo_request(

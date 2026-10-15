@@ -29,7 +29,7 @@ _(nada ainda)_
 
 ## 20261015-2000
 
-1) **O envio manual do catálogo ao Flow pode deixar produtos de fora.** Quando um cadastro do Fire tem problema (por exemplo, o mesmo par cadastrado duas vezes), dá para mandar o catálogo sem ele, em vez de segurar o catálogo inteiro até o Fire ser corrigido. O catálogo do portal continua com todos os produtos. O envio diário não muda.
+1) **O envio manual do catálogo ao Flow pode deixar produtos de fora.** Quando um cadastro do Fire tem problema (por exemplo, o mesmo par cadastrado duas vezes), dá para mandar o catálogo sem ele, em vez de segurar o catálogo inteiro até o Fire ser corrigido. Vale só para aquele envio: o envio diário continua mandando todos, por isso ele fica só em conferência enquanto o Fire não for corrigido. O catálogo do portal continua com todos os produtos. Se um código pedido para ficar de fora não existir no catálogo, nada é enviado e o portal avisa qual é.
 
 ---
 

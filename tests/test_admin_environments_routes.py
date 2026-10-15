@@ -686,9 +686,39 @@ def test_sync_catalogo_excluir_invalido_e_422(setup, monkeypatch):
 
     chamado = []
     monkeypatch.setattr(cs, "run_catalogo_sync", lambda *a, **k: chamado.append(1))
-    for ruim in ("3174,abc", "3174;3381", "-1", ","):
+    for ruim in ("3174,abc", "3174;3381", "-1", ",", "٣١", "３", "12345678901"):
         r = _client().post(
             f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?excluir={ruim}"
         )
         assert r.status_code == 422, ruim
     assert chamado == []
+
+
+def test_sync_catalogo_excluir_normaliza_zero_e_junta_repetidos(setup, monkeypatch):
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+
+    capturado = {}
+    monkeypatch.setattr(
+        cs, "run_catalogo_sync", lambda slug, **kw: capturado.update(kw) or _FakeReport()
+    )
+    r = _client().post(
+        f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?excluir=03174&excluir=3381"
+    )
+    assert r.status_code == 200
+    assert capturado["fora_do_envio"] == frozenset({"3174", "3381"})
+
+
+def test_sync_catalogo_excluir_seq_inexistente_e_422(setup, monkeypatch):
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+
+    def fake(slug, **kw):
+        raise cs.ForaDoEnvioInexistenteError(["9999"])
+
+    monkeypatch.setattr(cs, "run_catalogo_sync", fake)
+    r = _client().post(
+        f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?apply=true&excluir=9999"
+    )
+    assert r.status_code == 422
+    assert "9999" in r.json()["detail"]

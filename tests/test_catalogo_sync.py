@@ -207,7 +207,7 @@ def test_fora_do_envio_tira_do_flow_mas_mantem_na_copia_local(monkeypatch):
         dry_run=True,
         full_sync=True,
         now_iso="t",
-        fora_do_envio=frozenset({"3174", "3381", "9999"}),
+        fora_do_envio=frozenset({"3174", "3381"}),
         _client=fake_client,
         _fire_conn=object(),
         _env_conn=env_conn,
@@ -230,3 +230,30 @@ def test_sem_fora_do_envio_manda_tudo(monkeypatch):
         "mm", now_iso="t", _client=fake_client, _fire_conn=object(), _env_conn=_FakeEnvConn()
     )
     assert len(fake_client.sent.itens) == 1
+
+
+def test_fora_do_envio_com_seq_inexistente_nao_envia_nada(monkeypatch):
+    """Falha fechada: a exclusão que a resposta confirma tem que ter acontecido."""
+    import pytest
+
+    dtos = [ProdutoFireDTO("3174", "3174", "X", "PAR", None, True, "simples")]
+    monkeypatch.setattr(catalogo_sync, "extract_produtos", lambda conn, **kw: dtos)
+
+    class _Cfg:
+        enabled = True
+        catalogo_push = True
+
+    monkeypatch.setattr(catalogo_sync, "flowpcp_config_for_slug", lambda slug: _Cfg())
+    fake_client = _FakeClient()
+    with pytest.raises(catalogo_sync.ForaDoEnvioInexistenteError) as e:
+        catalogo_sync.run_catalogo_sync(
+            "mm",
+            dry_run=False,
+            now_iso="t",
+            fora_do_envio=frozenset({"3174", "9999"}),
+            _client=fake_client,
+            _fire_conn=object(),
+            _env_conn=_FakeEnvConn(),
+        )
+    assert e.value.seqs == ["9999"]
+    assert fake_client.sent is None

@@ -14,6 +14,7 @@ Endpoint `POST /{id}/test` valida pastas + tenta conexão Firebird.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -243,11 +244,27 @@ def unblock_environment_erp_base(env_id: str, _=Depends(require_admin)):
     return _erp_base_view(env_id)
 
 
+_SEQ = re.compile(r"[0-9]{1,10}")
+
+
+def _seqs_fora_do_envio(valores: list[str] | None) -> frozenset[str]:
+    """`excluir` pode vir repetido e com vírgulas; só dígitos ASCII (até 10).
+    Normaliza o zero à esquerda: o fire_produto_id é str(SEQ) inteiro."""
+    seqs: set[str] = set()
+    for valor in valores or []:
+        for parte in valor.split(","):
+            parte = parte.strip()
+            if not _SEQ.fullmatch(parte):
+                raise HTTPException(422, f"excluir: '{parte}' não é um código do Fire (SEQ)")
+            seqs.add(str(int(parte)))
+    return frozenset(seqs)
+
+
 @router.post("/{env_id}/flowpcp/sync-catalogo")
 def sync_catalogo_flowpcp(
     env_id: str,
     apply: bool = False,
-    excluir: str | None = Query(default=None, pattern=r"^\s*\d+(\s*,\s*\d+)*\s*$"),
+    excluir: list[str] | None = Query(default=None, max_length=4000),
     _=Depends(require_admin),
 ):
     """Full-load do catálogo (produtos Fire → FlowPCP), direção IDA.
@@ -267,11 +284,17 @@ def sync_catalogo_flowpcp(
     if not env.get("flowpcp_enabled"):
         raise HTTPException(409, "FlowPCP não está habilitado neste ambiente")
 
-    from app.integrations.flowpcp.catalogo_sync import CatalogoLocalResult, run_catalogo_sync
+    from app.integrations.flowpcp.catalogo_sync import (
+        CatalogoLocalResult,
+        ForaDoEnvioInexistenteError,
+        run_catalogo_sync,
+    )
 
-    fora = frozenset(s.strip() for s in excluir.split(",")) if excluir else frozenset()
+    fora = _seqs_fora_do_envio(excluir)
     try:
         rep = run_catalogo_sync(env["slug"], dry_run=not apply, full_sync=True, fora_do_envio=fora)
+    except ForaDoEnvioInexistenteError as exc:
+        raise HTTPException(422, f"Nada foi enviado ao Flow: {exc}") from exc
     except Exception as exc:  # noqa: BLE001 — vira erro HTTP legível pro operador
         raise HTTPException(502, f"Falha no sync de catálogo: {exc}") from exc
     if rep is None:
