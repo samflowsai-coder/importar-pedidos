@@ -24,8 +24,8 @@ def _clean(v) -> str | None:
     return s or None
 
 
-_PACK = re.compile(r"\bPACK\b")
-_KIT = re.compile(r"\bKIT\b")
+_PACK = re.compile(r"\bPACKS?\b")
+_KIT = re.compile(r"\bKITS?\b|\bKIT\d")
 
 
 def _tipo(is_kit, unidade: str | None, nome: str) -> str:

@@ -336,11 +336,14 @@ LIST_PRODUTOS_CATALOGO = """
 # Mais os componentes, em qualquer nível (PACK → KIT → par): o par não é
 # vendido, é o que o Flow produz; sem isto os pares dos kits ficavam só no Flow
 # (181 na MM em 15/10, com OP e vínculo ao Apontaê). 1.026 produtos na MM.
+# NIVEL < 5 trava ciclo em PRODUTOS_KIT (A→B→A): sem ele o Firebird aborta no
+# nível 1024 e o catálogo inteiro para por uma linha ruim (hoje a profundidade
+# máxima é 2). Componente cueca também fica fora.
 # O DISTINCT + JOIN no fim é de propósito: `IN (SELECT ... FROM RECORTE)`
 # reavalia a CTE por linha no Firebird 2.5 (passou de 2 min; o JOIN leva 1 s).
 LIST_PRODUTOS_CATALOGO_MEIAS = """
-    WITH RECURSIVE RECORTE (SEQ) AS (
-        SELECT P.SEQ FROM PRODUTOS P
+    WITH RECURSIVE RECORTE (SEQ, NIVEL) AS (
+        SELECT P.SEQ, 0 FROM PRODUTOS P
         WHERE P.CODSUBGRUPO IN (
             SELECT CODIGO FROM GRUPO_PRODUTOS_SUB WHERE UPPER(TRIM(DESCRICAO)) = 'MEIAS'
         )
@@ -353,7 +356,14 @@ LIST_PRODUTOS_CATALOGO_MEIAS = """
                AND P.DESCRICAO NOT CONTAINING 'CUECA'
                AND P.DESCRICAO NOT CONTAINING 'BOXER')
         UNION ALL
-        SELECT K.CODPRODUTO FROM PRODUTOS_KIT K JOIN RECORTE R ON K.CODPRODUTO_PAI = R.SEQ
+        SELECT K.CODPRODUTO, R.NIVEL + 1
+        FROM PRODUTOS_KIT K
+        JOIN RECORTE R ON K.CODPRODUTO_PAI = R.SEQ
+        JOIN PRODUTOS F ON F.SEQ = K.CODPRODUTO
+        WHERE R.NIVEL < 5
+          AND K.CODPRODUTO <> K.CODPRODUTO_PAI
+          AND F.DESCRICAO NOT CONTAINING 'CUECA'
+          AND F.DESCRICAO NOT CONTAINING 'BOXER'
     )
     SELECT P.SEQ, P.DESCRICAO, P.UNIDADE, P.CODIGO_EAN13, P.BLOQUEADO,
            CASE WHEN EXISTS (

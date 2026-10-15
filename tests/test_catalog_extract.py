@@ -112,4 +112,21 @@ def test_recorte_meias_inclui_os_componentes_dos_kits():
     sql = " ".join(LIST_PRODUTOS_CATALOGO_MEIAS.split())
     assert "WITH RECURSIVE" in sql
     assert "JOIN RECORTE R ON K.CODPRODUTO_PAI = R.SEQ" in sql
+    # ciclo em PRODUTOS_KIT não pode derrubar o catálogo (FB aborta no nível 1024)
+    assert "R.NIVEL < 5" in sql and "K.CODPRODUTO <> K.CODPRODUTO_PAI" in sql
+    assert "F.DESCRICAO NOT CONTAINING 'CUECA'" in sql
     assert "NOT CONTAINING 'CUECA'" in sql and "NOT CONTAINING 'BOXER'" in sql
+
+
+def test_tipo_casos_de_borda():
+    rows = [
+        (1, "MEIA SOQUETE BRANCA", "PARES", None, "Nao", 1),  # composição vence o nome
+        (3151, "PACK C/22 KITS DE MEIAS", "Pack", None, "Nao", 1),  # caixa mista
+        (2, "3 KITS MEIA", "unid", None, "Nao", 0),
+        (3, "PACKS 5 MEIAS", "unid", None, "Nao", 0),
+        (4, "KIT3 MEIA SOQUETE", "unid", None, "Nao", 0),
+        (5, "KIT-3 MEIAS", "unid", None, "Nao", 0),
+        (6, "MEIA SOQUETE", "Kit", None, "Nao", 0),
+    ]
+    tipos = [p.tipo for p in extract_produtos(_FakeConn(rows))]
+    assert tipos == ["kit", "pack", "kit", "pack", "kit", "kit", "kit"]
