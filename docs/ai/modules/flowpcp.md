@@ -131,10 +131,11 @@ Flow se o gate correspondente estiver ligado. Gate OFF é caminho normal, não e
 log diz `envio ao Flow DESLIGADO`.
 
 **Catálogo diário** (`catalogo_diario.py`, desde 15/10/2026): a thread
-`flowpcp-envio` (`envio_portal.ciclo`) manda o catálogo inteiro gravando
-(`dryRun=false`, `fullSync=true`) uma vez por dia, na hora
-`PORTAL_FLOWPCP_CATALOGO_HORA` (padrão 5, Brasília), em cada ambiente com
-`flowpcp_catalogo_push` ligado. "Já foi hoje" = `MAX(catalogo_fire.extraido_em)`
+`flowpcp-envio` (`envio_portal.ciclo`) manda o catálogo inteiro
+(`fullSync=true`) uma vez por dia, na hora `PORTAL_FLOWPCP_CATALOGO_HORA`
+(padrão 5, Brasília), em cada ambiente com `flowpcp_catalogo_push` ligado.
+`PORTAL_FLOWPCP_CATALOGO_DIARIO`: `simular` (padrão, `dryRun=true`), `gravar`
+(`dryRun=false`, só depois do ok ao primeiro promote) ou `desligado`. "Já foi hoje" = `MAX(catalogo_fire.extraido_em)`
 desde o início da hora. Falha antes da cópia local pausa 10 min. O promote do
 Flow não desativa produto só do Flow (sai como `flowOnly` no relatório).
 

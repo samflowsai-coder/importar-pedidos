@@ -7,9 +7,12 @@ não chegava ao Flow e o pedido com ele ficava "produto desconhecido" lá
 
 Regra (combinada com o Flow e o Samuel, 15/10/2026): por ambiente com o FlowPCP
 habilitado E "Enviar catálogo ao Flow" (`flowpcp_catalogo_push`) ligado, o
-catálogo inteiro vai gravando (`dryRun=false`, `fullSync=true`) uma vez por dia,
-dentro da hora `PORTAL_FLOWPCP_CATALOGO_HORA` (padrão 5, horário de Brasília,
-junto da foto do SP1). Fora das janelas de envio de propósito: é um POST só,
+catálogo inteiro (`fullSync=true`) vai uma vez por dia, dentro da hora
+`PORTAL_FLOWPCP_CATALOGO_HORA` (padrão 5, horário de Brasília, junto da foto do
+SP1). `PORTAL_FLOWPCP_CATALOGO_DIARIO` decide o modo: `simular` (padrão,
+`dryRun=true`: o Flow só compara), `gravar` (`dryRun=false`) ou `desligado`.
+Gravar nunca é padrão: só vira depois do ok do Samuel ao primeiro promote, para
+o envio diário não gravar um recorte que ninguém conferiu. Fora das janelas de envio de propósito: é um POST só,
 fora do horário de trabalho do Flow.
 
 "Já foi hoje" vem da cópia local (`catalogo_fire.extraido_em`, gravada a cada
@@ -39,6 +42,19 @@ PAUSA_FALHA = timedelta(minutes=10)
 # slug -> não tenta antes de. Falha antes da cópia local (Fire fora) repete
 # dentro da hora, mas sem bater no Fire e no Flow (10/min por tenant) a cada tick.
 _pausa: dict[str, datetime] = {}
+
+
+MODOS = ("simular", "gravar", "desligado")
+
+
+def modo_do_catalogo() -> str:
+    bruto = os.environ.get("PORTAL_FLOWPCP_CATALOGO_DIARIO", "").strip().lower()
+    if not bruto:
+        return "simular"
+    if bruto not in MODOS:
+        logger.error(f"PORTAL_FLOWPCP_CATALOGO_DIARIO inválido ({bruto!r}); usando 'simular'")
+        return "simular"
+    return bruto
 
 
 def hora_do_catalogo() -> int:
@@ -81,7 +97,8 @@ def rodar(
     """Uma volta: sincroniza os ambientes devidos. Devolve os slugs enviados."""
     agora = agora or datetime.now(FUSO)
     hora = hora_do_catalogo()
-    if agora.astimezone(FUSO).hour != hora:
+    modo = modo_do_catalogo()
+    if modo == "desligado" or agora.astimezone(FUSO).hour != hora:
         return []
     enviados: list[str] = []
     for slug, cfg in enabled_flowpcp_envs().items():
@@ -92,13 +109,13 @@ def rodar(
         try:
             if not devido(agora, ultima_extracao(slug), hora):
                 continue
-            rep = sync(slug, dry_run=False, full_sync=True)
+            rep = sync(slug, dry_run=modo != "gravar", full_sync=True)
         except Exception as exc:  # noqa: BLE001 — a thread de envio não pode morrer
             _pausa[slug] = agora + PAUSA_FALHA
             logger.error(f"flowpcp.catalogo env={slug}: sync diário falhou: {exc!r}")
             continue
         enviados.append(slug)
-        logger.info(f"flowpcp.catalogo env={slug}: sync diário enviado: {_resumo(rep)}")
+        logger.info(f"flowpcp.catalogo env={slug}: sync diário ({modo}) enviado: {_resumo(rep)}")
     return enviados
 
 

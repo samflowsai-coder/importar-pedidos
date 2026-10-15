@@ -14,6 +14,7 @@ from app.utils.janelas_envio import FUSO
 @pytest.fixture(autouse=True)
 def _limpo(monkeypatch):
     monkeypatch.delenv("PORTAL_FLOWPCP_CATALOGO_HORA", raising=False)
+    monkeypatch.delenv("PORTAL_FLOWPCP_CATALOGO_DIARIO", raising=False)
     monkeypatch.setattr(catalogo_diario, "_pausa", {})
 
 
@@ -40,12 +41,34 @@ class _Sync:
 CINCO_E_DEZ = datetime(2026, 10, 16, 5, 10, tzinfo=FUSO)
 
 
-def test_na_hora_manda_o_catalogo_inteiro_gravando(monkeypatch):
+def test_por_padrao_so_simula(monkeypatch):
     _envs(monkeypatch, mm=True)
     sync = _Sync()
     enviados = catalogo_diario.rodar(CINCO_E_DEZ, sync=sync, ultima_extracao=lambda s: None)
     assert enviados == ["mm"]
+    assert sync.chamadas == [("mm", {"dry_run": True, "full_sync": True})]
+
+
+def test_grava_so_quando_mandado(monkeypatch):
+    monkeypatch.setenv("PORTAL_FLOWPCP_CATALOGO_DIARIO", "gravar")
+    _envs(monkeypatch, mm=True)
+    sync = _Sync()
+    catalogo_diario.rodar(CINCO_E_DEZ, sync=sync, ultima_extracao=lambda s: None)
     assert sync.chamadas == [("mm", {"dry_run": False, "full_sync": True})]
+
+
+@pytest.mark.parametrize("valor", ["desligado", "DESLIGADO"])
+def test_desligado_nao_manda(monkeypatch, valor):
+    monkeypatch.setenv("PORTAL_FLOWPCP_CATALOGO_DIARIO", valor)
+    _envs(monkeypatch, mm=True)
+    sync = _Sync()
+    assert catalogo_diario.rodar(CINCO_E_DEZ, sync=sync, ultima_extracao=lambda s: None) == []
+    assert sync.chamadas == []
+
+
+def test_modo_invalido_nunca_vira_gravar(monkeypatch):
+    monkeypatch.setenv("PORTAL_FLOWPCP_CATALOGO_DIARIO", "sim")
+    assert catalogo_diario.modo_do_catalogo() == "simular"
 
 
 def test_fora_da_hora_nao_manda(monkeypatch):
