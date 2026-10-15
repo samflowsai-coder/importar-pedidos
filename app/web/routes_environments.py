@@ -14,10 +14,11 @@ Endpoint `POST /{id}/test` valida pastas + tenta conexão Firebird.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from app.erp_eventos.canonico import formatar_instante
@@ -243,8 +244,29 @@ def unblock_environment_erp_base(env_id: str, _=Depends(require_admin)):
     return _erp_base_view(env_id)
 
 
+_SEQ = re.compile(r"[0-9]{1,10}")
+
+
+def _seqs_fora_do_envio(valores: list[str] | None) -> frozenset[str]:
+    """`excluir` pode vir repetido e com vírgulas; só dígitos ASCII (até 10).
+    Normaliza o zero à esquerda: o fire_produto_id é str(SEQ) inteiro."""
+    seqs: set[str] = set()
+    for valor in valores or []:
+        for parte in valor.split(","):
+            parte = parte.strip()
+            if not _SEQ.fullmatch(parte):
+                raise HTTPException(422, f"excluir: '{parte}' não é um código do Fire (SEQ)")
+            seqs.add(str(int(parte)))
+    return frozenset(seqs)
+
+
 @router.post("/{env_id}/flowpcp/sync-catalogo")
-def sync_catalogo_flowpcp(env_id: str, apply: bool = False, _=Depends(require_admin)):
+def sync_catalogo_flowpcp(
+    env_id: str,
+    apply: bool = False,
+    excluir: list[str] | None = Query(default=None, max_length=4000),
+    _=Depends(require_admin),
+):
     """Full-load do catálogo (produtos Fire → FlowPCP), direção IDA.
 
     Lê TODOS os produtos (`PRODUTOS`) do Fire do ambiente e empurra pro Flow.
@@ -252,6 +274,8 @@ def sync_catalogo_flowpcp(env_id: str, apply: bool = False, _=Depends(require_ad
       NÃO escreve no catálogo do Flow. Seguro pra rodar quando quiser.
     - `apply=true`: **promove** — o Flow linka + grava de verdade (Fase 1). Exige
       o `/catalogo` do Flow com o promote no ar (senão devolve 422 → 502 aqui).
+    - `excluir=3174,3381`: SEQs que não vão ao Flow nesta rodada (cadastro com
+      problema no Fire); a cópia local continua com tudo.
     Blocking (Firebird + HTTP) → FastAPI roda esta rota `def` no threadpool.
     """
     env = environments_repo.get(env_id)
@@ -260,10 +284,17 @@ def sync_catalogo_flowpcp(env_id: str, apply: bool = False, _=Depends(require_ad
     if not env.get("flowpcp_enabled"):
         raise HTTPException(409, "FlowPCP não está habilitado neste ambiente")
 
-    from app.integrations.flowpcp.catalogo_sync import CatalogoLocalResult, run_catalogo_sync
+    from app.integrations.flowpcp.catalogo_sync import (
+        CatalogoLocalResult,
+        ForaDoEnvioInexistenteError,
+        run_catalogo_sync,
+    )
 
+    fora = _seqs_fora_do_envio(excluir)
     try:
-        rep = run_catalogo_sync(env["slug"], dry_run=not apply, full_sync=True)
+        rep = run_catalogo_sync(env["slug"], dry_run=not apply, full_sync=True, fora_do_envio=fora)
+    except ForaDoEnvioInexistenteError as exc:
+        raise HTTPException(422, f"Nada foi enviado ao Flow: {exc}") from exc
     except Exception as exc:  # noqa: BLE001 — vira erro HTTP legível pro operador
         raise HTTPException(502, f"Falha no sync de catálogo: {exc}") from exc
     if rep is None:
@@ -271,7 +302,10 @@ def sync_catalogo_flowpcp(env_id: str, apply: bool = False, _=Depends(require_ad
     if isinstance(rep, CatalogoLocalResult):
         # Gate OFF: catálogo atualizado só no importador — nada foi ao Flow.
         return {"local_only": True, "itens": rep.itens, "extraido_em": rep.extraido_em}
-    return rep.model_dump()
+    corpo = rep.model_dump()
+    if fora:
+        corpo["fora_do_envio"] = sorted(fora, key=int)
+    return corpo
 
 
 @router.post("/{env_id}/flowpcp/sync-clientes")

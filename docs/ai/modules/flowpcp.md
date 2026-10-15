@@ -45,7 +45,7 @@ cifrado (`flowpcp_service_token_enc`, via `secret_store`).
 
 Rotas admin: `PUT /api/admin/environments/{env_id}/flowpcp`,
 `PUT /api/admin/environments/{env_id}/intercompany`,
-`POST /api/admin/environments/{env_id}/flowpcp/sync-catalogo?apply=`,
+`POST /api/admin/environments/{env_id}/flowpcp/sync-catalogo?apply=&excluir=`,
 `POST /api/admin/environments/{env_id}/flowpcp/sync-clientes?apply=` — todas exigem
 `flowpcp_enabled`. Ver `modules/environments.md` para o CRUD do ambiente.
 
@@ -151,6 +151,14 @@ não vai no payload. **Portão antes de gravar:** o promote casa por
 `fire_produto_id`) com nome diferente do Fire vira produto novo ao lado dele
 (par duplicado). Conferir no dryRun `fireOnly`/`nomeAmbiguo` dos pares antes do
 `apply=true`.
+
+**Fora do envio** (desde 15/10/2026): `sync-catalogo?excluir=3174,3381` tira esses
+SEQs só do payload daquela rodada (a cópia local continua com o Fire inteiro). É
+para segurar cadastro com problema no Fire sem travar o resto. Vale **por rodada**:
+o diário e os scripts `tools/sync_catalogo_fire.py`/`tools/configurar_flowpcp.py`
+não aplicam, então não ligar o diário em `gravar` com exclusão pendente. Só dígitos
+(zero à esquerda normalizado; `excluir` pode repetir); SEQ fora do catálogo
+extraído dá 422 e nada é enviado.
 
 Tabelas locais em `modules/persistence.md`. Ferramentas de linha de comando:
 `tools/sync_catalogo_fire.py`, `tools/configurar_flowpcp.py`.
