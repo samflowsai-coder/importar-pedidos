@@ -46,7 +46,10 @@ def drenar(
     agora_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
     relogio: Callable[[], float] = time.monotonic,
     prazo_s: float = PRAZO_DRENAGEM_S,
+    ate: str | None = None,
 ) -> ResultadoDrenagem:
+    """`ate`: só eventos observados até esse instante, sem lote vazio de sinal
+    de vida (usado antes da foto, fora das janelas)."""
     inicio = relogio()
     n_lotes = aceitos = duplicados = rejeitados = 0
     max_eventos = lotes.MAX_EVENTOS
@@ -55,12 +58,12 @@ def drenar(
         agora = agora_fn()
         with router.env_connect(cfg.env_slug) as conn:
             envio = erp_estado_repo.obter_envio(conn, cfg.base)
-            pend = erp_estado_repo.pendentes(conn, cfg.base, limite=lotes.MAX_EVENTOS + 1)
+            pend = erp_estado_repo.pendentes(conn, cfg.base, limite=lotes.MAX_EVENTOS + 1, ate=ate)
         if envio.bloqueio:
             return ResultadoDrenagem(n_lotes, aceitos, duplicados, rejeitados, "bloqueada")
         if envio.proxima_tentativa_em and envio.proxima_tentativa_em > formatar_instante(agora):
             return ResultadoDrenagem(n_lotes, aceitos, duplicados, rejeitados, "esperando")
-        if not pend and not envio.sinal_pendente:
+        if not pend and (not envio.sinal_pendente or ate is not None):
             return ResultadoDrenagem(n_lotes, aceitos, duplicados, rejeitados, None)
         if relogio() - inicio > prazo_s:
             return ResultadoDrenagem(n_lotes, aceitos, duplicados, rejeitados, "prazo")

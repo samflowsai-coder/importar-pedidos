@@ -5,6 +5,10 @@
 - `corteEm` = instante ANTES da leitura; a leitura é um snapshot read-only, e
   a vigia da base não roda junto (mesma trava), então todo evento depois tem
   `observadoEm > corteEm`;
+- a fila só sai nas janelas de envio, mas a foto não: antes da primeira
+  página, os eventos com `observadoEm <= corteEm` ainda pendentes saem
+  (`runner._enviar_foto`, só eles), e a foto espera enquanto houver algum;
+  a validade de 24 h é conferida antes dessa espera;
 - páginas montadas e congeladas na criação (≤ 200 pedidos e ≤ 4,5 MB cada,
   `totalPaginas` constante); envio em série, uma página só depois do 202 da
   anterior; reenvio repete o mesmo corpo;
@@ -118,6 +122,18 @@ def criar(cfg: BaseErpConfig, *, corte: datetime, pedidos: list[PedidoErp]) -> s
     return foto_id
 
 
+def expirar_se_vencida(cfg: BaseErpConfig, foto: erp_foto_repo.Foto, agora: datetime) -> bool:
+    """Foto que não completou em `VALIDADE` vira `expirada` (o Flow abre
+    `foto_incompleta`). Chamada antes de qualquer espera, para nenhuma espera
+    segurar a foto em `enviando` para sempre."""
+    if foto.criada_em >= formatar_instante(agora - VALIDADE):
+        return False
+    with router.env_connect(cfg.env_slug) as conn:
+        erp_foto_repo.encerrar(conn, foto.foto_id, "expirada", formatar_instante(agora))
+    logger.error(f"erp_eventos: foto {foto.foto_id} da base '{cfg.base}' não completou em 24 h")
+    return True
+
+
 def enviar(
     cfg: BaseErpConfig,
     *,
@@ -135,10 +151,7 @@ def enviar(
         return "bloqueada"
     if envio.proxima_tentativa_em and envio.proxima_tentativa_em > formatar_instante(agora_fn()):
         return "esperando"
-    if foto.criada_em < formatar_instante(agora_fn() - VALIDADE):
-        with router.env_connect(cfg.env_slug) as conn:
-            erp_foto_repo.encerrar(conn, foto.foto_id, "expirada", formatar_instante(agora_fn()))
-        logger.error(f"erp_eventos: foto {foto.foto_id} da base '{cfg.base}' não completou em 24 h")
+    if expirar_se_vencida(cfg, foto, agora_fn()):
         return "expirada"
 
     while True:

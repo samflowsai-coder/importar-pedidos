@@ -50,7 +50,8 @@ Spec: `pcp-app/docs/superpowers/specs/2026-10-03-sp1-transporte-pedidos-fire-des
    enfileirando. Lotes em série. **Pelo menos um lote por janela**: sem 202 desde o
    início da janela, o runner pede o lote vazio (`_garantir_lote_na_janela`), mesmo com
    o ERP fora — o Flow usa o 202 como sinal de vida e alerta janela sem nada. A foto
-   não segue as janelas.
+   não segue as janelas; antes da primeira página, a fila observada até o `corteEm`
+   sai (única exceção às janelas), para a foto nunca chegar antes dos eventos dela.
 3. **foto**: no `foto_hora` local, uma por base por dia; páginas congeladas. Pedido fora
    do contrato → a foto do dia fica `nao_criada` (com o motivo, visível na tela) e não é
    tentada de novo até amanhã — uma foto sem ele diria ao Flow que saiu de aberto.
