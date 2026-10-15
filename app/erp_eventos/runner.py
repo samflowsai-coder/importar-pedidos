@@ -181,6 +181,9 @@ def processar_base(cfg: BaseErpConfig, *, agora: datetime | None = None) -> None
         lock.release()
 
 
+_FOTO_AGUARDANDO: dict[str, int] = {}
+
+
 def _enviar_foto(cfg: BaseErpConfig) -> None:
     """A foto só sai depois de tudo o que foi observado ATÉ o corte dela.
 
@@ -190,23 +193,28 @@ def _enviar_foto(cfg: BaseErpConfig) -> None:
     Samuel, 14/10/2026): na hora da foto, a fila anterior ao corte sai antes."""
     with router.env_connect(cfg.env_slug) as conn:
         f = erp_foto_repo.em_envio(conn, cfg.base)
-        devendo = erp_estado_repo.pendentes_ate(conn, cfg.base, f.corte_em) if f else 0
-    if f is None:
+    if f is None or foto.expirar_se_vencida(cfg, f, _relogio()):
         return
+    with router.env_connect(cfg.env_slug) as conn:
+        devendo = erp_estado_repo.pendentes_ate(conn, cfg.base, f.corte_em)
     cliente = ClienteErpEventos(
         destino_url=cfg.destino_url, tenant_id=cfg.tenant_id, token=cfg.token or ""
     )
     try:
         if devendo:
-            drenagem.drenar(cfg, cliente=cliente, ritmo=_ritmo)
+            # Só o que é anterior ao corte: o resto espera a janela.
+            drenagem.drenar(cfg, cliente=cliente, ritmo=_ritmo, ate=f.corte_em)
             with router.env_connect(cfg.env_slug) as conn:
                 devendo = erp_estado_repo.pendentes_ate(conn, cfg.base, f.corte_em)
             if devendo:
-                logger.info(
-                    f"erp_eventos: foto {f.foto_id} da base '{cfg.base}' aguarda {devendo} "
-                    "evento(s) anteriores ao corte"
-                )
+                if _FOTO_AGUARDANDO.get(f.foto_id) != devendo:  # log só quando muda
+                    _FOTO_AGUARDANDO[f.foto_id] = devendo
+                    logger.warning(
+                        f"erp_eventos: foto {f.foto_id} da base '{cfg.base}' aguarda {devendo} "
+                        "evento(s) anteriores ao corte"
+                    )
                 return
+        _FOTO_AGUARDANDO.pop(f.foto_id, None)
         foto.enviar(cfg, cliente=cliente, ritmo=_ritmo)
     finally:
         cliente.close()

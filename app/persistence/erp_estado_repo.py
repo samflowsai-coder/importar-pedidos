@@ -100,13 +100,17 @@ def enfileirar(conn: sqlite3.Connection, eventos: list[EventoFila], agora: str) 
     )
 
 
-def pendentes(conn: sqlite3.Connection, base: str, limite: int = 1000) -> list[Pendente]:
+def pendentes(
+    conn: sqlite3.Connection, base: str, limite: int = 1000, ate: str | None = None
+) -> list[Pendente]:
+    """Pendentes em ordem; com `ate`, só os observados até esse instante."""
     rows = conn.execute(
         """
         SELECT ordem, id, unidade, payload_json FROM erp_eventos_saida
-        WHERE base = ? AND situacao = 'pendente' ORDER BY ordem LIMIT ?
+        WHERE base = ? AND situacao = 'pendente' AND (? IS NULL OR observado_em <= ?)
+        ORDER BY ordem LIMIT ?
         """,
-        (base, limite),
+        (base, ate, ate, limite),
     ).fetchall()
     return [Pendente(r["ordem"], r["id"], r["unidade"], r["payload_json"]) for r in rows]
 

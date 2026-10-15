@@ -332,3 +332,57 @@ def test_foto_nao_sai_se_a_fila_anterior_nao_entrou(cfg, monkeypatch):
     runner._enviar_foto(cfg)
 
     assert FlowGravando.ordem == ["lote:falhou"]
+
+
+def test_foto_manda_so_o_anterior_ao_corte(cfg, monkeypatch):
+    FlowGravando.ordem = []
+    monkeypatch.setattr(runner, "ClienteErpEventos", FlowGravando)
+    monkeypatch.setattr(runner, "_ritmo", Ritmo(0))
+    with router.env_connect(cfg.env_slug) as conn:
+        erp_estado_repo.enfileirar(
+            conn,
+            [
+                _evento(1, "2026-10-16T07:00:00.000+00:00"),
+                _evento(9, "2026-10-16T09:00:00.000+00:00"),
+            ],
+            "2026-10-16T09:00:00.000+00:00",
+        )
+    foto.criar(cfg, corte=datetime(2026, 10, 16, 8, 0, tzinfo=UTC), pedidos=pedidos_foto(1))
+
+    runner._enviar_foto(cfg)
+
+    assert FlowGravando.ordem == ["lote:1", "pagina:1"]  # o evento das 9h espera a janela
+    with router.env_connect(cfg.env_slug) as conn:
+        assert erp_estado_repo.contar(conn, "mm").get("pendente") == 1
+
+
+def test_foto_vencida_expira_mesmo_esperando_a_fila(cfg, monkeypatch):
+    """Evento anterior ao corte que nunca entra não segura a foto em 'enviando' para sempre."""
+
+    class FlowFora(FlowGravando):
+        def enviar_lote(self, lote_id, eventos):
+            return RespostaHttp(503, None, None, erro="fora")
+
+    monkeypatch.setattr(runner, "ClienteErpEventos", FlowFora)
+    monkeypatch.setattr(runner, "_ritmo", Ritmo(0))
+    with router.env_connect(cfg.env_slug) as conn:
+        erp_estado_repo.enfileirar(
+            conn, [_evento(1, "2026-10-15T22:00:00.000+00:00")], "2026-10-15T22:00:00.000+00:00"
+        )
+    foto_id = foto.criar(
+        cfg, corte=datetime(2026, 10, 16, 8, 0, tzinfo=UTC), pedidos=pedidos_foto(1)
+    )
+    with router.env_connect(cfg.env_slug) as conn:
+        conn.execute(
+            "UPDATE erp_foto SET criada_em = '2020-01-01T00:00:00.000+00:00' WHERE foto_id = ?",
+            (foto_id,),
+        )
+
+    runner._enviar_foto(cfg)
+
+    with router.env_connect(cfg.env_slug) as conn:
+        assert erp_foto_repo.em_envio(conn, "mm") is None
+        situacao = conn.execute(
+            "SELECT situacao FROM erp_foto WHERE foto_id = ?", (foto_id,)
+        ).fetchone()[0]
+    assert situacao == "expirada"
