@@ -29,7 +29,9 @@ _(nada ainda)_
 
 ## 20261014-2158
 
-1) **A foto completa da madrugada só vai para o Flow depois das mudanças que vieram antes dela.** Como as mudanças dos pedidos esperam os horários de envio, um pedido faturado à noite ficaria na foto das 5h antes de o Flow saber do faturamento. Agora, na hora da foto, o portal manda primeiro as mudanças que estavam esperando e só então a foto. É a única exceção aos horários de envio.
+1) **Tudo que vai para o Flow sai em 4 horários por dia, não mais na hora.** Os pedidos importados e as mudanças dos pedidos do Fire (quando o bloco "Pedidos do ERP para o Flow" estiver ligado) saem às 8h, 11h, 14h e 17h, de segunda a sábado. Entre um horário e outro tudo fica só aguardando; nada se perde. Em cada horário o portal manda pelo menos um aviso de que está vivo, mesmo sem pedido novo. A foto completa da madrugada continua no mesmo horário. Cada horário deixa registrado quantos pedidos foram enviados, recusados pelo Flow, descartados (já faturados, cancelados ou apagados no Fire) e guardados.
+
+2) **A foto completa da madrugada só vai para o Flow depois das mudanças que vieram antes dela.** Como as mudanças dos pedidos esperam os horários de envio, um pedido faturado à noite ficaria na foto das 5h antes de o Flow saber do faturamento. Agora, na hora da foto, o portal manda primeiro as mudanças que estavam esperando e só então a foto. É a única exceção aos horários de envio.
 
 ---
 
