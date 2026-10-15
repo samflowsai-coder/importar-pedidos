@@ -31,7 +31,7 @@ _(nada ainda)_
 
 1) **O catálogo de produtos do Fire vai para o Flow sozinho, todo dia às 5h.** Antes ele só ia quando alguém mandava à mão (a última vez foi em julho), e todo produto cadastrado depois disso chegava no Flow como "produto desconhecido". Agora, nas empresas com "Enviar catálogo ao Flow" ligado, o catálogo é atualizado no Flow toda madrugada.
 
-2) **O catálogo enviado passa a ter tudo o que a fábrica vende.** A opção "só meias" mandava apenas os produtos marcados como MEIAS no Fire e deixava de fora cuecas, meias infantis e kits novos sem essa marcação (57 dos produtos dos pedidos abertos da MM). Agora ela manda as meias e também todo produto que aparece num pedido aberto ou num pedido dos últimos 12 meses. Tecido e cadastros que nunca venderam continuam de fora.
+2) **O catálogo enviado passa a ter todas as meias que a fábrica vende.** A opção "só meias" mandava apenas os produtos marcados como MEIAS no Fire e deixava de fora meias infantis e kits novos sem essa marcação (45 dos produtos dos pedidos abertos da MM). Agora ela manda as meias e também toda meia que aparece num pedido aberto ou num pedido dos últimos 12 meses, mesmo sem a marcação. Cuecas e kits de cueca, tecido e cadastros que nunca venderam continuam de fora.
 
 ---
 
