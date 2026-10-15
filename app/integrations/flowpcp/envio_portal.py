@@ -42,6 +42,9 @@ na entrada do ciclo: uma rodada que começa às 8:59:55 pode terminar depois das
 **Decisões do Flow** (escrita de `DT_ENTREGA` no ERP): só com
 `PORTAL_FLOWPCP_DECISOES=1` (`config.decisoes_habilitadas`), desligado por padrão.
 
+**Catálogo do Fire**: a mesma thread manda o catálogo inteiro ao Flow uma vez
+por dia (`catalogo_diario`, 5h, só onde "Enviar catálogo ao Flow" está ligado).
+
 `PORTAL_FLOWPCP_ENVIO=0` desliga a thread inteira (deploy docker, onde o worker
 faz o mesmo trabalho).
 """
@@ -55,6 +58,7 @@ from datetime import datetime, timedelta
 
 from app.erp import queries
 from app.erp.connection import FirebirdConnection
+from app.integrations.flowpcp import catalogo_diario
 from app.integrations.flowpcp.client import FLOWPCP_TARGET_NAME
 from app.integrations.flowpcp.config import (
     FlowPCPConfig,
@@ -349,6 +353,10 @@ def ciclo(ultima_decisao: datetime, agora: datetime) -> datetime:
         drenar()
     except Exception as exc:  # noqa: BLE001 — a thread daemon não pode morrer
         logger.error(f"flowpcp.envio: drenagem falhou: {exc!r}")
+    try:
+        catalogo_diario.rodar()
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"flowpcp.envio: catálogo diário falhou: {exc!r}")
     if not decisoes_habilitadas() or agora - ultima_decisao < INTERVALO_DECISOES:
         return ultima_decisao
     try:

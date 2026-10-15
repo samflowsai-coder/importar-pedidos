@@ -130,6 +130,14 @@ snapshot local (`catalogo_fire` / `clientes_fire`, no db do ambiente) e só empu
 Flow se o gate correspondente estiver ligado. Gate OFF é caminho normal, não erro — o
 log diz `envio ao Flow DESLIGADO`.
 
+**Catálogo diário** (`catalogo_diario.py`, desde 15/10/2026): a thread
+`flowpcp-envio` (`envio_portal.ciclo`) manda o catálogo inteiro gravando
+(`dryRun=false`, `fullSync=true`) uma vez por dia, na hora
+`PORTAL_FLOWPCP_CATALOGO_HORA` (padrão 5, Brasília), em cada ambiente com
+`flowpcp_catalogo_push` ligado. "Já foi hoje" = `MAX(catalogo_fire.extraido_em)`
+desde o início da hora. Falha antes da cópia local pausa 10 min. O promote do
+Flow não desativa produto só do Flow (sai como `flowOnly` no relatório).
+
 Tabelas locais em `modules/persistence.md`. Ferramentas de linha de comando:
 `tools/sync_catalogo_fire.py`, `tools/configurar_flowpcp.py`.
 
