@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -406,12 +408,23 @@ def test_foto_com_pedido_fora_do_contrato_nao_e_criada():
         )
 
 
-def test_foto_devida_so_depois_da_hora_e_uma_por_dia(mm):
-    noite = datetime(2026, 10, 10, 2, 30, tzinfo=UTC)  # 23:30 em São Paulo
+def test_foto_devida_so_dentro_da_hora_e_uma_por_dia(mm):
+    noite = datetime(2026, 10, 10, 2, 30, tzinfo=UTC)  # 23:30 em São Paulo (foto_hora=23)
     tarde = datetime(2026, 10, 9, 18, 0, tzinfo=UTC)
     assert foto.devida(mm, noite, ja_existe=False)
     assert not foto.devida(mm, noite, ja_existe=True)
     assert not foto.devida(mm, tarde, ja_existe=False)
+
+
+def test_foto_nao_sai_depois_da_hora_dela(mm):
+    """Ligar a base às 22h com foto às 5h não tira a foto na hora (14/10/2026)."""
+    cinco = replace(mm, foto_hora=5)
+    sp = ZoneInfo("America/Sao_Paulo")
+    assert foto.devida(cinco, datetime(2026, 10, 15, 5, 0, tzinfo=sp), ja_existe=False)
+    assert foto.devida(cinco, datetime(2026, 10, 15, 5, 59, tzinfo=sp), ja_existe=False)
+    assert not foto.devida(cinco, datetime(2026, 10, 15, 6, 0, tzinfo=sp), ja_existe=False)
+    assert not foto.devida(cinco, datetime(2026, 10, 14, 22, 19, tzinfo=sp), ja_existe=False)
+    assert not foto.devida(cinco, datetime(2026, 10, 15, 4, 59, tzinfo=sp), ja_existe=False)
 
 
 # ── config da base ───────────────────────────────────────────────────────

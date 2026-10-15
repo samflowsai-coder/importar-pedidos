@@ -27,6 +27,14 @@ _(nada ainda)_
 
 ---
 
+## 20261014-2242
+
+1) **A foto completa da madrugada só sai na hora dela.** Antes, ao ligar o envio de pedidos à noite, o portal tirava a foto do dia na hora e mandava junto todos os pedidos, fora dos horários de envio (aconteceu em 14/10 às 22h20). Agora a foto só sai dentro da hora configurada (às 5h, das 5:00 às 5:59).
+
+2) **Tela "Pedidos do ERP para o Flow" mais clara.** O campo Base já vem preenchido com o identificador do ambiente (antes o "mm" era só um exemplo cinza e o salvar dava erro), os exemplos dos campos deixam de parecer valores de verdade, e os erros aparecem em português dizendo qual campo corrigir.
+
+---
+
 ## 20261014-2158
 
 1) **Tudo que vai para o Flow sai em 4 horários por dia, não mais na hora.** Os pedidos importados e as mudanças dos pedidos do Fire (quando o bloco "Pedidos do ERP para o Flow" estiver ligado) saem às 8h, 11h, 14h e 17h, de segunda a sábado. Entre um horário e outro tudo fica só aguardando; nada se perde. Em cada horário o portal manda pelo menos um aviso de que está vivo, mesmo sem pedido novo. A foto completa da madrugada continua no mesmo horário. Cada horário deixa registrado quantos pedidos foram enviados, recusados pelo Flow, descartados (já faturados, cancelados ou apagados no Fire) e guardados.

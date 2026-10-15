@@ -291,7 +291,7 @@
       </label>
       <label>
         <span>Base URL</span>
-        <input name="flowpcp_base_url" placeholder="https://flowpcp.fly.dev">
+        <input name="flowpcp_base_url" placeholder="endereço de produção do Flow (https://…)">
       </label>
       <label>
         <span>Tenant ID (UUID do ambiente no FlowPCP)</span>
@@ -411,7 +411,7 @@
       <div class="row">
         <label>
           <span>Base (identificador no Flow)</span>
-          <input name="erp_base" placeholder="mm" autocomplete="off">
+          <input name="erp_base" placeholder="ex.: mm" autocomplete="off">
         </label>
         <label>
           <span>Papel desta empresa</span>
@@ -423,11 +423,11 @@
       </div>
       <label>
         <span>Endereço do Flow</span>
-        <input name="erp_destino_url" placeholder="https://flowpcp.fly.dev" autocomplete="off">
+        <input name="erp_destino_url" placeholder="endereço de produção do Flow (https://…)" autocomplete="off">
       </label>
       <label>
         <span>Tenant ID no Flow</span>
-        <input name="erp_tenant_id" placeholder="UUID do tenant" autocomplete="off">
+        <input name="erp_tenant_id" placeholder="UUID do tenant, fornecido pelo Flow" autocomplete="off">
       </label>
       <label>
         <span>Credencial da base (fpe_…; deixe vazio para manter a atual)</span>
@@ -530,6 +530,7 @@
           if (inp && k !== 'fb_password') inp.value = env[k] ?? '';
         }
         f.elements['slug'].readOnly = true;
+        erpBasePadrao();
         // FlowPCP: prefill (sem o token, que é write-only) e revela a seção.
         fv('flowpcp_enabled').checked = !!env.flowpcp_enabled;
         fv('flowpcp_base_url').value = env.flowpcp_base_url ?? '';
@@ -713,6 +714,8 @@
 
     function erpPreencher(view) {
       const c = view.config;
+      erpSemConfig = !c;
+      erpBasePadrao();
       if (c) {
         ev('erp_base').value = c.base;
         ev('erp_papel').value = c.papel;
@@ -729,6 +732,34 @@
       erpMostrarSituacao(view);
     }
 
+    // Base ainda não cadastrada: o identificador nasce igual ao slug do ambiente,
+    // como VALOR (antes era só texto cinza de exemplo e o salvar falhava com
+    // "base" vazia — 14/10/2026). Chamada pelos dois carregamentos (ambiente e
+    // envio de pedidos), que correm em paralelo.
+    let erpSemConfig = false;
+    function erpBasePadrao() {
+      const slug = (f.elements['slug'].value || '').trim().toLowerCase();
+      if (erpSemConfig && slug && !ev('erp_base').value) ev('erp_base').value = slug;
+    }
+
+    // Erro de validação do servidor (lista do FastAPI) em português, por campo.
+    const ERP_CAMPOS = {
+      base: 'Base', papel: 'Papel', destino_url: 'Endereço do Flow', tenant_id: 'Tenant ID',
+      token: 'Credencial', foto_hora: 'Hora da foto', ativo: 'Enviar ao Flow',
+    };
+    function erpErroLegivel(detalhe) {
+      if (!Array.isArray(detalhe)) return 'Não foi possível salvar. Confira os campos.';
+      return detalhe.map(e => {
+        const campo = ERP_CAMPOS[(e.loc || []).slice(-1)[0]] || 'Campo';
+        const t = e.type || '';
+        const motivo = t === 'missing' || t === 'string_too_short' ? 'preencha este campo'
+          : t.startsWith('int') || t.startsWith('greater') || t.startsWith('less') ? 'valor fora do permitido'
+          : t.includes('pattern') ? 'formato inválido'
+          : 'valor inválido';
+        return campo + ': ' + motivo;
+      }).join(' · ');
+    }
+
     async function erpChamar(metodo, sufixo, corpo) {
       const r = await fetch('/api/admin/environments/' + envId + '/erp-base' + sufixo, {
         method: metodo,
@@ -740,7 +771,7 @@
       if (!r.ok) {
         let msg;
         try { msg = JSON.parse(t).detail || t; } catch { msg = t || ('Erro ' + r.status); }
-        throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+        throw new Error(typeof msg === 'string' ? msg : erpErroLegivel(msg));
       }
       return JSON.parse(t);
     }

@@ -1,6 +1,6 @@
 """Foto noturna de uma base (contrato `pedido.snapshot_erp.v1`, spec SP1 §4.2).
 
-- uma por base por dia local, no horário `erp_bases.foto_hora` (o MESMO que o
+- uma por base por dia local, só dentro da hora `erp_bases.foto_hora` (o MESMO que o
   `fotoHoraSp` do Flow — o alerta de foto incompleta usa o de lá);
 - `corteEm` = instante ANTES da leitura; a leitura é um snapshot read-only, e
   a vigia da base não roda junto (mesma trava), então todo evento depois tem
@@ -42,9 +42,13 @@ SCHEMA = "pedido.snapshot_erp.v1"
 
 
 def devida(cfg: BaseErpConfig, agora: datetime, ja_existe: bool) -> bool:
+    """Só DENTRO da hora da foto (5h → das 5:00 às 5:59). Com ">=", ligar a base
+    às 22h tirava a foto na hora e, com ela, mandava a fila fora das janelas
+    (14/10/2026). Portal fora do ar a hora toda = sem foto no dia: o Flow alerta
+    `foto_incompleta`, que é o aviso certo."""
     if cfg.foto_hora is None or ja_existe:
         return False
-    return agora.astimezone(FUSO).hour >= cfg.foto_hora
+    return agora.astimezone(FUSO).hour == cfg.foto_hora
 
 
 def dia_local(agora: datetime) -> str:
