@@ -548,3 +548,30 @@ CODIGOS_POR_PEDIDO_CLIENTE_E_CLIENTE = """
     WHERE TRIM(PEDIDO_CLIENTE) = ?
       AND CLIENTE = ?
 """
+
+
+# Carga de material (spec 2026-10-16-flow-fonte-do-cadastro §6.2): tudo que não é
+# CONFECCIONADO (grupo 8). Vai com BLOQUEADO para o Flow saber o ativo; o Flow não
+# cria insumo inativo novo. Em 16/10/2026: ~381 na MM (.7).
+LIST_MATERIAIS = """
+    SELECT P.SEQ, P.DESCRICAO, P.UNIDADE, P.CODIGO_EAN13, P.BLOQUEADO,
+           P.CLASSIF_FISCAL, P.CODITEMSPED, P.GRUPO, G.GRUPO AS GRUPO_NOME
+    FROM PRODUTOS P
+    LEFT JOIN GRUPO_PRODUTOS G ON G.CODIGO = P.GRUPO
+    WHERE P.GRUPO IS NOT NULL AND P.GRUPO <> 8
+    ORDER BY P.SEQ
+"""
+
+# NCM das notas de ENTRADA (CFOP 1xxx/2xxx/3xxx) de material nos últimos 24
+# meses; a mais recente por produto é escolhida em Python (Firebird 2.5 não tem
+# janela). Referência para o fiscal, nunca valor do cadastro.
+LIST_ENTRADAS_NCM = """
+    SELECT I.CODPRODUTO, N.NF_EMISSAO, I.NCM
+    FROM NOTAPROD I
+    JOIN NOTA N ON N.CODIGO = I.CODNOTA
+    JOIN PRODUTOS P ON P.SEQ = I.CODPRODUTO
+    WHERE P.GRUPO <> 8
+      AND N.NF_EMISSAO >= DATEADD(-24 MONTH TO CURRENT_DATE)
+      AND SUBSTRING(TRIM(I.CFOP) FROM 1 FOR 1) IN ('1', '2', '3')
+      AND I.NCM IS NOT NULL
+"""

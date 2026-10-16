@@ -16,6 +16,7 @@ from app.integrations.flowpcp.clientes_schema import (
     ClientesReconciliacaoResponse,
     ClientesRequest,
 )
+from app.integrations.flowpcp.materiais_schema import MateriaisRequest, MateriaisResposta
 from app.integrations.flowpcp.schema import (
     ConfirmarReconciliacaoRequest,
     DecisoesResponse,
@@ -29,6 +30,7 @@ _RECEBIMENTO_PATH = RECEBIMENTO_PATH
 _DECISOES_PATH = "/api/portal-pedidos/decisoes"
 _CATALOGO_PATH = "/api/portal-pedidos/catalogo"
 _CLIENTES_PATH = "/api/portal-pedidos/clientes"
+_MATERIAIS_PATH = "/api/portal-pedidos/materiais"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 # Apply do catálogo: o Flow tem maxDuration 300 s e um apply por vez (409).
 APPLY_TIMEOUT_SECONDS = 300.0
@@ -63,6 +65,14 @@ def _idem_catalogo(request: CatalogoRequest) -> str:
     serializado = json.dumps(corpo, sort_keys=True, default=str)
     digest = hashlib.sha256(serializado.encode()).hexdigest()[:16]
     return f"catalogo-{int(request.dryRun)}-{len(request.itens)}-{digest}"
+
+
+def _idem_materiais(request: MateriaisRequest) -> str:
+    """Mesmo esquema de `_idem_catalogo`: estável em retry, novo quando o conteúdo muda."""
+    corpo = {k: v for k, v in request.model_dump(by_alias=True).items() if k != "origem"}
+    serializado = json.dumps(corpo, sort_keys=True, default=str)
+    digest = hashlib.sha256(serializado.encode()).hexdigest()[:16]
+    return f"materiais-{int(request.dryRun)}-{len(request.itens)}-{digest}"
 
 
 class FlowPCPClient:
@@ -169,6 +179,36 @@ class FlowPCPClient:
                 body=(resp.text or "")[:500],
             )
         return CatalogoReconciliacaoResponse.model_validate(resp.json())
+
+    def send_materiais(self, request: MateriaisRequest) -> MateriaisResposta:
+        body = request.model_dump(by_alias=True)
+        idem = _idem_materiais(request)
+        extras = (
+            {}
+            if request.dryRun
+            else {"timeout": _apply_timeout(), "retry_policy": apply_post_policy()}
+        )
+        try:
+            resp = self._client.post_json(
+                _MATERIAIS_PATH, json=body, idempotency_key=idem, **extras
+            )
+        except HttpError as exc:
+            raise FlowPCPClientError(
+                f"send_materiais falhou: {exc}", status_code=exc.status_code, body=exc.body
+            ) from exc
+        if resp.status_code == 409:
+            raise FlowPCPApplyEmAndamentoError(
+                "o Flow já está gravando materiais deste ambiente",
+                status_code=409,
+                body=(resp.text or "")[:500],
+            )
+        if not resp.is_success:
+            raise FlowPCPClientError(
+                f"materiais status {resp.status_code}",
+                status_code=resp.status_code,
+                body=(resp.text or "")[:500],
+            )
+        return MateriaisResposta.model_validate(resp.json())
 
     def send_clientes(self, request: ClientesRequest) -> ClientesReconciliacaoResponse:
         body = request.model_dump(by_alias=True)

@@ -125,6 +125,21 @@ CREATE TABLE IF NOT EXISTS catalogo_fire (
     extraido_em     TEXT NOT NULL
 );
 
+-- Cópia local dos materiais do Fire (tudo fora do grupo 8 CONFECCIONADO), spec
+-- 2026-10-16-flow-fonte-do-cadastro §6.2. Snapshot substitutivo a cada sync.
+CREATE TABLE IF NOT EXISTS materiais_fire (
+    erp_produto_id  TEXT PRIMARY KEY,
+    nome            TEXT NOT NULL,
+    unidade         TEXT,
+    ean             TEXT,
+    ativo           INTEGER NOT NULL DEFAULT 1,
+    grupo_codigo    INTEGER,
+    ncm             TEXT,
+    tipo_item_sped  INTEGER,
+    exige_aprovacao INTEGER NOT NULL DEFAULT 0,
+    extraido_em     TEXT NOT NULL
+);
+
 -- Cópia local dos clientes ativos do Fire ("manter no importador"). Snapshot
 -- substitutivo a cada sync; envio ao Flow é gated por flowpcp_clientes_push.
 CREATE TABLE IF NOT EXISTS clientes_fire (
