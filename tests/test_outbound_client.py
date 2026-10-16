@@ -13,6 +13,7 @@ import pytest
 from app.http import OutboundClient
 from app.http.policies import (
     RetryPolicy,
+    apply_post_policy,
     idempotent_post_policy,
     llm_call_policy,
     read_only_policy,
@@ -324,3 +325,39 @@ def test_openrouter_propagates_trace_id():
         client.chat_completion(model="m", messages=[{"role": "user", "content": "x"}])
 
     assert seen["headers"]["x-trace-id"] == "trace-llm-9"
+
+
+# ── apply_post_policy: grava e não é idempotente no servidor ─────────────
+
+
+def test_apply_nao_repete_em_timeout_de_leitura():
+    tentativas = []
+
+    def handler(request):
+        tentativas.append(1)
+        raise httpx.ReadTimeout("lento", request=request)
+
+    with OutboundClient(base_url="http://test", transport=_transport(handler)) as client:
+        with pytest.raises(httpx.ReadTimeout):
+            client.post_json("/x", json={}, retry_policy=apply_post_policy())
+    assert len(tentativas) == 1
+
+
+def test_apply_nao_repete_em_5xx():
+    tentativas = []
+
+    def handler(request):
+        tentativas.append(1)
+        return httpx.Response(503)
+
+    with OutboundClient(base_url="http://test", transport=_transport(handler)) as client:
+        r = client.post_json("/x", json={}, retry_policy=apply_post_policy())
+    assert r.status_code == 503 and len(tentativas) == 1
+
+
+def test_apply_so_repete_quando_a_conexao_nem_abriu():
+    p = apply_post_policy()
+    assert httpx.ConnectError in p.retry_on_exceptions
+    assert httpx.ReadTimeout not in p.retry_on_exceptions
+    assert httpx.WriteTimeout not in p.retry_on_exceptions
+    assert httpx.RemoteProtocolError not in p.retry_on_exceptions

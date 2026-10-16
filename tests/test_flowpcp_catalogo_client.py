@@ -5,7 +5,13 @@ from app.integrations.flowpcp.catalogo_schema import (
     CatalogoProdutoItem,
     CatalogoRequest,
 )
-from app.integrations.flowpcp.client import FlowPCPClient, FlowPCPClientError
+from app.integrations.flowpcp.client import (
+    APPLY_TIMEOUT_SECONDS,
+    FlowPCPApplyEmAndamentoError,
+    FlowPCPClient,
+    FlowPCPClientError,
+    _idem_catalogo,
+)
 
 
 class _Resp:
@@ -28,11 +34,13 @@ class _FakeOutbound:
         self.last_path = None
         self.last_json = None
         self.last_key = None
+        self.last_kw = None
 
-    def post_json(self, path, *, json, idempotency_key):
+    def post_json(self, path, *, json, idempotency_key, **kw):
         self.last_path = path
         self.last_json = json
         self.last_key = idempotency_key
+        self.last_kw = kw
         return self._resp
 
     def close(self):
@@ -77,3 +85,39 @@ def test_send_catalogo_erro_http_vira_FlowPCPClientError():  # noqa: N802
     client = FlowPCPClient(base_url="http://x", service_token="t", tenant_id="tn", outbound=out)
     with pytest.raises(FlowPCPClientError):
         client.send_catalogo(_req())
+
+
+def _req_apply(nome="X"):
+    r = _req()
+    return r.model_copy(update={"dryRun": False, "itens": [r.itens[0].model_copy(update={"nome": nome})]})
+
+
+def _cliente(resp):
+    out = _FakeOutbound(resp)
+    return out, FlowPCPClient(base_url="http://x", service_token="t", tenant_id="tn", outbound=out)
+
+
+def test_apply_vai_com_politica_e_timeout_proprios():
+    out, client = _cliente(_Resp(200, {"contagens": {}}))
+    client.send_catalogo(_req_apply())
+    assert out.last_kw["timeout"] == APPLY_TIMEOUT_SECONDS
+    assert out.last_kw["retry_policy"].max_attempts >= 1
+    assert out.last_kw["retry_policy"].retry_on_status == frozenset()
+
+
+def test_dry_run_segue_a_politica_de_hoje():
+    out, client = _cliente(_Resp(200, {"contagens": {}}))
+    client.send_catalogo(_req())
+    assert out.last_kw == {}
+
+
+def test_409_vira_apply_em_andamento():
+    _, client = _cliente(_Resp(409, text="execução em andamento"))
+    with pytest.raises(FlowPCPApplyEmAndamentoError):
+        client.send_catalogo(_req_apply())
+
+
+def test_idempotencia_muda_quando_o_conteudo_muda_com_mesma_contagem():
+    a, b = _req_apply("X"), _req_apply("X NOVO")
+    assert _idem_catalogo(a) != _idem_catalogo(b)
+    assert _idem_catalogo(a) == _idem_catalogo(_req_apply("X"))  # estável em retry
