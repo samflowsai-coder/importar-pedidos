@@ -937,20 +937,25 @@
         catLinha(g, 'A remover', co.aRemover);
         catLinha(g, 'Adiadas (remoção na 1ª leitura)', co.adiadas);
         catLinha(g, 'Bloqueados: filho ausente', co.bloqueadosFilhoAusente);
+        catLinha(g, 'Bloqueados: filho inativo', co.bloqueadosFilhoInativo);
         catLinha(g, 'Bloqueados: ciclo', co.bloqueadosCiclo);
         catLinha(g, 'Bloqueados: filho duplicado', co.bloqueadosFilhoDuplicado);
         catLinha(g, 'Bloqueados: quantidade', co.bloqueadosQuantidade);
+        const bl = co.amostras && Array.isArray(co.amostras.bloqueados) ? co.amostras.bloqueados : [];
+        catSeqs(g, bl.map((x) => x.paiCodigo + ': ' + x.motivo), undefined, '; ');
         catLinha(g, 'Incoerência de tipo', co.incoerenciaTipo);
         if (co.paisIgnorados !== undefined && co.paisIgnorados !== null) {
           catLinha(g, 'Kits ignorados pelo Flow', co.paisIgnorados, co.paisIgnorados > 0 ? 'aviso' : undefined);
         }
-        const ip = co.impactoPoolTotal;
+        // O Flow devolve o impacto no topo da resposta (spec do Flow §4), ao lado de composicao.
+        const ip = rep.impactoPoolTotal ?? co.impactoPoolTotal;
+        const ipLista = rep.impactoPool ?? co.impactoPool;
         if (ip && typeof ip === 'object') {
           catLinha(g, 'Impacto na fila de produção',
             ip.pais + ' kits (' + ip.paisComItens + ' com itens) · ' + ip.itensNaFila + ' itens na fila · ' + ip.itensAlocados + ' alocados',
             ip.itensAlocados > 0 ? 'aviso' : undefined);
-          if (Array.isArray(co.impactoPool)) {
-            const lin = co.impactoPool.map((x) => x.paiCodigo + ': ' + x.acao + ' (fila ' + x.itensNaFila + ', alocados ' + x.itensAlocados + ')');
+          if (Array.isArray(ipLista)) {
+            const lin = ipLista.map((x) => x.paiCodigo + ': ' + x.acao + ' (fila ' + x.itensNaFila + ', alocados ' + x.itensAlocados + ')');
             catSeqs(g, lin, ip.pais, '; ');
           }
         }
@@ -974,9 +979,13 @@
         catLinha(g, 'Conflitos (valor diferente)', vm.conflitoValor, vm.conflitoValor ? 'aviso' : undefined);
         catLinha(g, 'Conflitos (código de outro produto)', vm.conflitoOutroProduto, vm.conflitoOutroProduto ? 'aviso' : undefined);
         catLinha(g, 'Inexistentes no Apontaê', vm.inexistenteNoMes);
+        const inex = vm.amostras && Array.isArray(vm.amostras.inexistenteNoMes) ? vm.amostras.inexistenteNoMes : [];
+        catSeqs(g, inex.map((x) => x.erpProdutoId + ' → ' + x.idProdutoMes), vm.inexistenteNoMes);
         catLinha(g, 'Formato inválido', vm.formatoInvalido, vm.formatoInvalido ? 'aviso' : undefined);
         catLinha(g, 'Nome diferente do Apontaê (não ligado)', vm.nomeDivergente, vm.nomeDivergente ? 'aviso' : undefined);
         catLinha(g, 'Ignorados (não são pares)', vm.ignoradoNaoSimples);
+        // Campo da Fatia B do Flow; ausente = 0.
+        catLinha(g, 'Mantidos sem vínculo pelo gerente', vm.mantidoPeloGerente ?? 0);
         if (vm.repetidoNoEnvio !== undefined && vm.repetidoNoEnvio !== null) {
           catLinha(g, 'Código repetido no envio', vm.repetidoNoEnvio, vm.repetidoNoEnvio > 0 ? 'aviso' : undefined);
         }

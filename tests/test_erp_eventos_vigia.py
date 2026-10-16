@@ -255,7 +255,9 @@ def test_eco_da_decisao_aplicada_vai_com_correlacao(bases):
             base="mm",
             erp_codigos=[88213, 99],
             nova_data=date(2026, 12, 1),
-            agora="2026-10-09T13:05:00.000+00:00",
+            # relativo ao relógio: a janela do eco (7 dias) conta de datetime.now(),
+            # e a data fixa de 09/10 fez o teste vencer em 16/10
+            agora=eco.formatar_instante(datetime.now(UTC) - timedelta(minutes=5)),
         )
     agora = datetime.now(UTC)
     rodar(bases["mm"], Leitor([pedido(dt=date(2026, 12, 1))]), agora=agora)
