@@ -158,7 +158,7 @@ def _id_do_bruto(bruto: object) -> str:
 
 def _versao_do_bruto(bruto: object) -> int:
     v = bruto.get("versao") if isinstance(bruto, dict) else None
-    return v if type(v) is int and v >= 1 else 0
+    return v if type(v) is int and 1 <= v <= 2**31 - 1 else 0
 
 
 def _idade_mais_antiga(brutos: list) -> float:
@@ -279,7 +279,15 @@ def _processar_fila(slug, brutos, resumo, _fire_conn, _env_conn) -> dict:
             item, *_ = validar_item(bruto)
             if item is not None:
                 cadastro_id, versao = str(item.cadastroId), item.versao
-            if cadastro_volta_repo.existe(env_conn, cadastro_id, versao):
+            try:
+                ja = cadastro_volta_repo.existe(env_conn, cadastro_id, versao)
+            except Exception as exc:  # noqa: BLE001 — um item não trava a fila
+                msg = f"consulta ao livro falhou ({type(exc).__name__})"
+                decisoes.append(
+                    (cadastro_id, versao, ("erro_definitivo", item, "livro_falhou", msg, None))
+                )
+                continue
+            if ja:
                 decisoes.append((cadastro_id, versao, None))
                 continue
             decisoes.append((cadastro_id, versao, _decidir(bruto, env_conn, fire_conn)))
@@ -330,7 +338,7 @@ def rodar() -> dict[str, dict]:
         try:
             resultado[slug] = processar_ambiente(slug)
         except Exception as exc:  # noqa: BLE001 — um ambiente não derruba os outros
-            logger.error(f"flowpcp.cadastro_volta env={slug}: falhou: {exc!r}")
+            logger.error(f"flowpcp.cadastro_volta env={slug}: falhou: {type(exc).__name__}")
             resultado[slug] = {"erro": type(exc).__name__}
     return resultado
 

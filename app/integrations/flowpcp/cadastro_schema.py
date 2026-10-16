@@ -35,7 +35,7 @@ _SPED_VALIDOS = frozenset({*range(0, 11), 99})
 _NOME_SEGURO = re.compile(r"^[A-Za-z0-9_]{1,40}$")
 
 
-_ID = r"^[1-9]\d{0,8}$"  # cabe no INTEGER de 32 bits do Fire, sem zero à esquerda
+_ID = r"^[1-9][0-9]{0,8}$"  # cabe no INTEGER de 32 bits do Fire, sem zero à esquerda
 
 
 class _Estrito(BaseModel):
@@ -54,14 +54,14 @@ class ComponenteRef(_Estrito):
 
 class CadastroPendente(_Estrito):
     cadastroId: UUID  # noqa: N815
-    versao: int = Field(ge=1)
+    versao: int = Field(ge=1, le=2**31 - 1)
     acao: Literal["criar", "atualizar", "inativar"]
     erpProdutoId: str | None = Field(default=None, pattern=_ID)  # noqa: N815
     tipo: Literal["simples", "kit", "pack", "material"]
     nome: str = Field(min_length=1)
     unidadeErp: str | None = None  # noqa: N815
     ean: str | None = None
-    ncm: str | None = Field(default=None, pattern=r"^\d{8}$")
+    ncm: str | None = Field(default=None, pattern=r"^[0-9]{8}$")
     tipoItemSped: int | None = None  # noqa: N815
     grupoErp: GrupoRef  # noqa: N815
     codigoNfe: str | None = None  # noqa: N815

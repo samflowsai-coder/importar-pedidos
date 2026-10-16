@@ -91,3 +91,20 @@ def test_plano_truncado_por_bytes_com_acento(setup):
 
 def test_sem_login_e_401(setup, real_auth):
     assert _get(_env(setup)["id"]).status_code == 401
+
+
+def test_operador_logado_e_403(setup, real_auth):
+    from app.web.server import app
+
+    env = _env(setup)
+    c = TestClient(app)
+    c.post("/api/auth/bootstrap", json={"email": "admin@x.com", "password": "supersecret1"})
+    c.post(
+        "/api/admin/users", json={"email": "op@x.com", "password": "operpass1", "role": "operator"}
+    )
+    c.post("/api/auth/logout")
+    assert (
+        c.post("/api/auth/login", json={"email": "op@x.com", "password": "operpass1"}).status_code
+        == 200
+    )
+    assert c.get(f"/api/admin/environments/{env['id']}/flowpcp/cadastro-volta").status_code == 403

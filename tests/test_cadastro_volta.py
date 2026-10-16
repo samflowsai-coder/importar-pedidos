@@ -438,3 +438,31 @@ def test_versao_bool_ou_negativa_cai_em_zero(env_conn, monkeypatch):
     a = dict(BOM, versao=True, extra=1)
     cv.processar_ambiente("mm", _client=_Client([a]), _fire_conn=_Fire(), _env_conn=env_conn)
     assert list(_livro(env_conn)) == [(BOM["cadastroId"], 0)]
+
+
+def test_versao_enorme_nao_trava_a_fila(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    enorme = dict(BOM, cadastroId="cccccccc-0f7e-4a51-9c39-2a8f3f1d9a10", versao=10**30)
+    r = cv.processar_ambiente(
+        "mm", _client=_Client([enorme, BOM]), _fire_conn=_Fire(), _env_conn=env_conn
+    )
+    assert "erro_transitorio" not in r and (r["simulados"], r["erros"]) == (1, 1)
+    livro = _livro(env_conn)
+    assert livro[("cccccccc-0f7e-4a51-9c39-2a8f3f1d9a10", 0)]["erro_codigo"] == "contrato_invalido"
+
+
+def test_falha_no_livro_so_rejeita_o_proprio_item(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    original = cadastro_volta_repo.existe
+
+    def existe(conn, cadastro_id, versao):
+        if cadastro_id.startswith("00000002"):
+            raise OverflowError("x")
+        return original(conn, cadastro_id, versao)
+
+    monkeypatch.setattr(cadastro_volta_repo, "existe", existe)
+    itens = [_item(1, "A"), _item(2, "B"), _item(3, "C")]
+    r = cv.processar_ambiente("mm", _client=_Client(itens), _fire_conn=_Fire(), _env_conn=env_conn)
+    assert "erro_transitorio" not in r and (r["simulados"], r["erros"]) == (2, 1)
+    dois = _livro(env_conn)[("00000002-0f7e-4a51-9c39-2a8f3f1d9a10", 1)]
+    assert dois["erro_codigo"] == "livro_falhou" and "OverflowError" in dois["erro_mensagem"]

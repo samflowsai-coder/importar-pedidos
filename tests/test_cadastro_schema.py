@@ -149,3 +149,27 @@ def test_estrito_aceita_formas_corretas():
     )
     assert validar_item(dict(BOM, aprovadoEm="2026-10-20T09:00:00-03:00"))[1] is None
     assert validar_item(dict(BOM, acao="atualizar", erpProdutoId="999999999"))[1] is None
+
+
+@pytest.mark.parametrize(
+    "campo,valor",
+    [
+        ("versao", 10**30),
+        ("versao", 2**31),
+        ("erpProdutoId", "1٢٣"),
+        ("erpProdutoId", "１２３"),
+        ("grupoErp", {"codigo": "1٢٣"}),
+        ("grupoErp", {"codigo": "１２３"}),
+        ("componentes", [{"erpProdutoId": "1٢٣", "quantidade": 1}]),
+        ("componentes", [{"erpProdutoId": "３１７０", "quantidade": 1}]),
+        ("ncm", "٦١١٥٩٥٠٠"),
+        ("ncm", "６１１５９５００"),
+    ],
+)
+def test_digitos_unicode_e_versao_enorme_recusados(campo, valor):
+    bruto = dict(BOM)
+    bruto[campo] = valor
+    if campo == "erpProdutoId":
+        bruto["acao"] = "atualizar"
+    item, cod, _ = validar_item(bruto)
+    assert item is None and cod == "contrato_invalido"
