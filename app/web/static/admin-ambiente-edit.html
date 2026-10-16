@@ -889,12 +889,13 @@
       return g;
     }
     // Lista de SEQs em linha própria: apagada, pequena, monoespaçada, no máximo 20.
-    function catSeqs(pai, v, total) {
+    // `sep` = "; " nas listas vindas de mapa (o texto de cada item já tem vírgula).
+    function catSeqs(pai, v, total, sep) {
       if (!Array.isArray(v) || !v.length) return;
       const d = document.createElement('div');
       d.style.cssText = 'font-size:.85em;color:var(--text-muted,#9aa);font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;margin-bottom:.25rem';
       const resto = (total ?? v.length) - Math.min(v.length, 20);
-      d.textContent = v.slice(0, 20).join(', ') + (resto > 0 ? ' e mais ' + resto : '');
+      d.textContent = v.slice(0, 20).join(sep || ', ') + (resto > 0 ? ' e mais ' + resto : '');
       pai.appendChild(d);
     }
     function catLista(v) {
@@ -916,14 +917,14 @@
         catLinha(g, 'Pares sem composição (vazios)', cp.pares_vazios);
         const omit = catMapa(cp.omitidos, (k, x) => k + ': ' + x);
         catLinha(g, 'Omitidos (SEQ: motivo)', omit.length, omit.length ? 'aviso' : undefined);
-        catSeqs(g, omit);
+        catSeqs(g, omit, undefined, '; ');
         const dn = catMapa(cp.divergencia_nome, (k, x) => k + ': ' + (typeof x === 'string' ? x : JSON.stringify(x)));
         catLinha(g, 'Quantidade não bate com o nome (SEQ: aviso)', dn.length, dn.length ? 'aviso' : undefined);
-        catSeqs(g, dn);
+        catSeqs(g, dn, undefined, '; ');
         catLinha(g, 'Códigos do Apontaê enviados', cp.codigo_mes);
         const rp = catMapa(cp.codigo_mes_repetido, (k, x) => k + ' em ' + (Array.isArray(x) ? x.join(', ') : x));
         catLinha(g, 'Códigos do Apontaê repetidos', rp.length, rp.length ? 'aviso' : undefined);
-        catSeqs(g, rp);
+        catSeqs(g, rp, undefined, '; ');
       }
       const co = rep.composicao;
       if (co && typeof co === 'object') {
@@ -940,6 +941,19 @@
         catLinha(g, 'Bloqueados: filho duplicado', co.bloqueadosFilhoDuplicado);
         catLinha(g, 'Bloqueados: quantidade', co.bloqueadosQuantidade);
         catLinha(g, 'Incoerência de tipo', co.incoerenciaTipo);
+        if (co.paisIgnorados !== undefined && co.paisIgnorados !== null) {
+          catLinha(g, 'Kits ignorados pelo Flow', co.paisIgnorados, co.paisIgnorados > 0 ? 'aviso' : undefined);
+        }
+        const ip = co.impactoPoolTotal;
+        if (ip && typeof ip === 'object') {
+          catLinha(g, 'Impacto na fila de produção',
+            ip.pais + ' kits (' + ip.paisComItens + ' com itens) · ' + ip.itensNaFila + ' itens na fila · ' + ip.itensAlocados + ' alocados',
+            ip.itensAlocados > 0 ? 'aviso' : undefined);
+          if (Array.isArray(co.impactoPool)) {
+            const lin = co.impactoPool.map((x) => x.paiCodigo + ': ' + x.acao + ' (fila ' + x.itensNaFila + ', alocados ' + x.itensAlocados + ')');
+            catSeqs(g, lin, ip.pais, '; ');
+          }
+        }
         catLinha(g, 'Kits do ERP que deixaram de vir', co.erpSemChave || 0, co.erpSemChave ? 'aviso' : undefined);
         catSeqs(g, co.erpSemChaveIds, co.erpSemChave);
         // Simulação mostra o que a trava SEGURARIA; "ATIVA" só depois de gravar.
@@ -963,6 +977,9 @@
         catLinha(g, 'Formato inválido', vm.formatoInvalido, vm.formatoInvalido ? 'aviso' : undefined);
         catLinha(g, 'Nome diferente do Apontaê (não ligado)', vm.nomeDivergente, vm.nomeDivergente ? 'aviso' : undefined);
         catLinha(g, 'Ignorados (não são pares)', vm.ignoradoNaoSimples);
+        if (vm.repetidoNoEnvio !== undefined && vm.repetidoNoEnvio !== null) {
+          catLinha(g, 'Código repetido no envio', vm.repetidoNoEnvio, vm.repetidoNoEnvio > 0 ? 'aviso' : undefined);
+        }
       }
       const fg = catLista(rep.fora_do_envio_guardado);
       if (fg) {
