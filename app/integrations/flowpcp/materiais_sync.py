@@ -186,7 +186,8 @@ def run_materiais_sync(
         fire_ctx = nullcontext(_fire_conn)
     else:
         env = environments_repo.get_by_slug(slug)
-        fire_ctx = FirebirdConnection().connect_with_config(environments_repo.to_fb_config(env))
+        # Fluxo só de SELECT: transação READ ONLY, o próprio Firebird recusa escrita.
+        fire_ctx = FirebirdConnection().connect_somente_leitura(environments_repo.to_fb_config(env))
     with fire_ctx as fire_conn:
         dtos = extract_materiais(fire_conn)
         entradas = extract_ultima_entrada(fire_conn)

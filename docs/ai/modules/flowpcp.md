@@ -215,9 +215,12 @@ dígitos), `tipoItemSped` (0–10 ou 99), `grupoErp`, `codigoNfe` e `cor`. Valor
 **ausente** ("não mexer" no Flow) e vira pendência no relatório (`ncm_vazio`, `ncm_invalido`,
 `sped_invalido`, `cor_longa`). O Flow descarta campo desconhecido sem erro, então o sucesso só
 vale com `fiscal.v1` nas `capacidades` da resposta. *Material* (`materiais_sync.run_materiais_sync`,
-`PORTAL_FLOWPCP_MATERIAIS`): tudo fora do grupo 8 CONFECCIONADO e não bloqueado (bloqueado
-só entra com `ativo=false` se já estava na cópia local) vai para
-`materiais_fire` (sempre) e ao Flow. A rota e `tools/sync_materiais_fire.py <slug>` fazem dryRun por
+`PORTAL_FLOWPCP_MATERIAIS`): tudo fora do grupo 8 CONFECCIONADO vai para
+`materiais_fire` (sempre) e ao Flow; bloqueado vai com `ativo=false` (o Flow não cria insumo
+novo inativo, `inativoSemInsumo`, então só serve para desativar o que ele já tem). Fora do
+envio (`materiais_portal.fora`): `sem_grupo`, `campo_excede`, `sem_nome`, `duplicado`.
+Vão com pendência (`materiais_portal.pendencias`): `grupo_sem_nome` (vai como `GRUPO <n>`),
+`ncm_vazio`, `ncm_invalido`, `sped_invalido`. A rota e `tools/sync_materiais_fire.py <slug>` fazem dryRun por
 padrão; `apply=true`/`--apply` manda a sonda dryRun primeiro e só grava se o Flow declarou
 `materiais.v1` (senão `ApplySemCapacidadeError` = 422, nada gravado). `materiais.dryrun.v1`
 ausente marca `capacidade_ok=false` e loga ERROR. 403 do Flow = flag `materiaisErpAtivo`
@@ -229,7 +232,7 @@ Tabelas locais em `modules/persistence.md`. Ferramentas de linha de comando:
 ## 5. Volta de cadastro (Flow → Fire)
 
 `cadastro_volta.py` lê a fila de cadastros aprovados do Flow
-(`client.list_cadastros_pendentes`, até 20 por rodada) e a thread `flowpcp-envio`
+(`client.list_cadastros_pendentes`, até 50 por rodada, o máximo do Flow) e a thread `flowpcp-envio`
 (`envio_portal.ciclo`) chama `rodar_se_devido` no máximo a cada 5 min. Modo por ambiente em
 `PORTAL_FLOWPCP_CADASTRO_VOLTA`:
 
@@ -241,14 +244,29 @@ Tabelas locais em `modules/persistence.md`. Ferramentas de linha de comando:
 
 Em `simular` o portal **nunca grava no Fire e nunca confirma no Flow**. O livro é a tabela
 `cadastro_volta`, cuja chave `(cadastro_id, versao)` é o lease (o mesmo item não é processado
-duas vezes). Estados registrados: `simulado` (com `plano_json`) e `erro_definitivo` (com
+duas vezes). **Limitação de `simular`:** a fila do Flow não tem cursor (só o confirmar a anda)
+e `simular` nunca confirma, então a volta só enxerga os 50 mais antigos; o que já está no livro
+nem abre o Fire. Estados registrados: `simulado` (com `plano_json`) e `erro_definitivo` (com
 `erro_codigo`/`erro_mensagem`, sem o valor recebido; ex.: `seq_fora_do_escopo`, `nome_existe`,
 `componente_invalido`, `consulta_fire_falhou`, `livro_falhou`). Item inválido ou que quebra não
-trava a fila; Fire fora aborta a rodada sem registrar nada e tenta no ciclo seguinte. Métricas:
+trava a fila (item que nem é objeto vira `contrato_invalido` com id `sem-id-<hash>`;
+`capacidades` malformada = nenhuma); `cadastros` que não é lista = `erro_transitorio`
+`resposta_invalida`, nada registrado. Fire fora aborta a rodada sem registrar nada e tenta no
+ciclo seguinte. `nome_existe` compara em Python (`casefold`) sobre `SELECT SEQ, DESCRICAO FROM
+PRODUTOS`, lido uma vez por ciclo: o `UPPER` do Firebird não é confiável para Ç/Ã/Ú em WIN1252.
+Componentes: `criar` de kit/pack exige lista; `atualizar` com `componentes: null` não mexe na
+composição (plano com `"componentes": null`, sem consulta de componente no Fire); `inativar`
+ignora o campo; `simples`/`material` exigem `null`. Texto opcional `""` = `contrato_invalido`.
+Variável vazia: `rodar()` volta na hora, sem listar ambientes nem abrir token; slug na variável
+que não é ambiente com FlowPCP habilitado loga WARNING uma vez. Métricas:
 `portal_flowpcp_cadastro_volta_total{env,resultado}` (`simulado`, `erro_definitivo`,
-`ja_no_livro`), `portal_flowpcp_cadastro_volta_pendentes{env}` e
+`ja_no_livro`), `portal_flowpcp_cadastro_volta_pendentes{env}` (lidos na última leitura, não o
+tamanho da fila) e
 `portal_flowpcp_cadastro_volta_mais_antigo_segundos{env}`. A tela do ambiente lê o livro por
-`GET .../flowpcp/cadastro-volta` (modo, contagem por estado e os 50 últimos, plano truncado em 2 KB).
+`GET .../flowpcp/cadastro-volta` (modo, contagem por estado e os 50 últimos, plano truncado em 2 KB,
+`ultimo_ciclo` deste processo e `thread_desligada` com `PORTAL_FLOWPCP_ENVIO=0`). O último ciclo
+(`cadastro_volta.ultimo_ciclo(slug)`) guarda só contagens, `capacidade_ok` e o código/classe do
+erro, em memória: some quando o portal reinicia.
 
 ## Testes
 
@@ -260,7 +278,7 @@ Cobertura larga — 25+ arquivos. Os principais:
   tests/test_catalogo_sync.py tests/test_clientes_sync.py -v
 ```
 
-Fiscal, material e volta: `test_catalogo_fiscal.py`, `test_erp_fiscal.py`,
+Fiscal, material e volta: `test_catalogo_fiscal.py`, `test_catalog_extract.py`,
 `test_materiais_extract.py`, `test_materiais_sync.py`, `test_sync_materiais_route.py`,
 `test_cadastro_schema.py`, `test_cadastro_volta.py`, `test_cadastro_volta_route.py`,
 `test_admin_ambiente_edit_cadastro.py`.

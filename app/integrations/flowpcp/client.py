@@ -130,7 +130,9 @@ class FlowPCPClient:
             resp = self._client.get(_CADASTROS_PENDENTES_PATH, params={"limite": limite})
         except HttpError as exc:
             raise FlowPCPClientError(
-                f"list_cadastros_pendentes falhou: {exc}", status_code=exc.status_code, body=exc.body
+                f"list_cadastros_pendentes falhou: {exc}",
+                status_code=exc.status_code,
+                body=exc.body,
             ) from exc
         if not resp.is_success:
             raise FlowPCPClientError(

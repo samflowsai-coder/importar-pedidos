@@ -124,7 +124,7 @@ Por isso toda resposta do Flow passa a trazer `capacidades: string[]`, e o Porta
 | `fiscal.v1` | o catálogo aceita e guarda os campos fiscais | Com o interruptor fiscal ligado, registra ERROR, põe o diário em atenção e a tela mostra "o Flow ignorou os campos fiscais". O lote não falha |
 | `materiais.dryrun.v1` | a rota de materiais existe e calcula o relatório | Não envia material |
 | `materiais.v1` | `dryRun=false` de materiais grava | Recusa o apply antes de enviar (422 no Portal). O Flow responderia 409 `promote_indisponivel` |
-| `cadastros.v1` | a fila de gravação é real | A volta continua desligada, mesmo configurada |
+| `cadastros.v1` | a fila de gravação é real | `simular` roda assim mesmo (só lê, não grava nem confirma); só os modos de gravação (`criar`, `criar_e_atualizar`) a exigem e recusam iniciar sem ela |
 
 Os nomes no wire seguem o papel do campo (regra P-PROD-08 do Flow): `erpProdutoId`, `unidadeErp`, `grupoErp`. O `fireProdutoId` do catálogo de produtos fica como está, por compatibilidade.
 
@@ -165,7 +165,7 @@ Os nomes no wire seguem o papel do campo (regra P-PROD-08 do Flow): `erpProdutoI
   - `ativo`, `exigeAprovacao`;
   - `ncmUltimaEntrada?`, `ultimaEntradaEm?` (data civil, `YYYY-MM-DD`).
 
-**Recorte:** `PRODUTOS` com `GRUPO <> 8`, `BLOQUEADO <> 'Sim'` e o grupo na tabela do ambiente (abaixo). Os bloqueados vão com `ativo=false`; o Flow não cria insumo novo inativo (`inativoSemInsumo`), então só serve para desativar o que ele já tem.
+**Recorte:** `PRODUTOS` com `GRUPO <> 8` e o grupo na tabela do ambiente (abaixo). Os bloqueados vão com `ativo=false`; o Flow não cria insumo novo inativo (`inativoSemInsumo`), então só serve para desativar o que ele já tem.
 
 **Regra de `exigeAprovacao`:** verdadeiro quando o grupo está na lista de produção do ambiente, `PORTAL_FLOWPCP_MATERIAIS_GRUPOS_PRODUCAO_<SLUG>` (padrão da MM: `1,4,5,6,11,13,19`), **ou** quando o tipo SPED está entre 0 e 6 ou é 10. A regra canônica fica no Flow (D5). Se a do Flow der diferente, vale a dele, e a divergência aparece em `exigeAprovacaoDiverge`.
 
@@ -193,7 +193,7 @@ Os nomes no wire seguem o papel do campo (regra P-PROD-08 do Flow): `erpProdutoI
 
 #### Contrato (rotas no Flow)
 
-**`GET /api/portal-pedidos/cadastros/pendentes?limite=20`** (máximo 50 no servidor, sem cursor: o ack tira o item da fila).
+**`GET /api/portal-pedidos/cadastros/pendentes?limite=50`** (máximo 50 no servidor, sem cursor: o ack tira o item da fila). Como `simular` não confirma, em simulação a volta só enxerga os 50 mais antigos.
 
 A resposta é `{capacidades, cadastros: [...]}`. Cada cadastro traz:
 - `cadastroId` (uuid);
@@ -202,7 +202,7 @@ A resposta é `{capacidades, cadastros: [...]}`. Cada cadastro traz:
 - `erpProdutoId` (`null` em `criar`);
 - `tipo`: `simples`, `kit`, `pack` ou `material`;
 - `nome`, `unidadeErp`, `ean`, `ncm`, `tipoItemSped`, `grupoErp {codigo}`, `codigoNfe`, `cor`;
-- `componentes` (só em kit e pack);
+- `componentes`: em `criar` de kit/pack, obrigatório e não vazio; em `atualizar` de kit/pack, `null` = não mexer na composição (lista não nula segue as regras do `criar`); em `inativar`, ignorado; em `simples`/`material`, sempre `null` (qualquer outro valor, inclusive `[]`, é `contrato_invalido`);
 - `codigoMes`;
 - `aprovadoEm`.
 
@@ -225,15 +225,16 @@ Respostas do Flow e o que o Portal faz com cada uma:
 
 1. O item passa por um modelo pydantic com `extra="forbid"`, enums fechados e limites por coluna medidos no Fire:
    - `nome` até 200, `cor` até 200, `unidadeErp` até 10, `ean` até 15, `codigoNfe` até 20, `codigoMes` até 30;
-   - `ncm` com `^\d{8}$`, e `tipoItemSped` de 0 a 10 ou 99;
+   - `ncm` com `^[0-9]{8}$`, e `tipoItemSped` de 0 a 10 ou 99;
+   - texto opcional (`unidadeErp`, `ean`, `codigoNfe`, `cor`, `codigoMes`) é `null` ou não vazio: `""` é `contrato_invalido`;
    - IDs só com dígitos.
 
    A P0 confirma esses limites.
 2. **Codificação WIN1252:** caractere que não codifica dá erro definitivo `caractere_invalido`. Nunca grava texto corrompido.
 3. **`atualizar` e `inativar`:** só valem quando o SEQ está na cópia local do ambiente (`catalogo_fire` ou `materiais_fire`). Um SEQ fora dela, como os confeccionados históricos de D8, dá erro definitivo `seq_fora_do_escopo`.
 4. **`inativar`** é ação explícita, nunca deduzida de um campo `ativo`, e tem portão próprio (`PORTAL_FLOWPCP_CADASTRO_VOLTA_INATIVAR`, desligado por padrão).
-5. **Componentes:** todos existentes no Fire e não bloqueados, sem o próprio pai, até 50, quantidade com 0 < q ≤ 100000 (as mesmas regras de `catalogo_composicao`). Kit ou pack sem componentes dá erro definitivo.
-6. **`criar`:** o nome não pode existir no Fire, comparado aparado e sem diferença de maiúsculas. Se existir, dá erro definitivo `nome_existe` com o SEQ encontrado, para uma pessoa resolver (pode ser cadastro feito por fora).
+5. **Componentes:** todos existentes no Fire e não bloqueados, sem o próprio pai, até 50, quantidade com 0 < q ≤ 100000 (as mesmas regras de `catalogo_composicao`). `criar` de kit ou pack sem componentes dá erro definitivo; `atualizar` com `componentes: null` não mexe na composição nem consulta componentes no Fire.
+6. **`criar`:** o nome não pode existir no Fire, comparado aparado e sem diferença de maiúsculas (em Python, `casefold`, sobre a leitura de `SEQ, DESCRICAO` uma vez por ciclo: o `UPPER` do Firebird não é confiável para Ç/Ã/Ú em WIN1252). Se existir, dá erro definitivo `nome_existe` com o SEQ encontrado, para uma pessoa resolver (pode ser cadastro feito por fora).
 7. Item inválido nunca é gravado pela metade. A mensagem de erro que vai ao Flow tem até 500 caracteres, sem SQL, sem caminho de arquivo e sem segredo.
 
 #### Quem roda
@@ -345,7 +346,7 @@ Só roda com o ok do Samuel.
 - com o interruptor ligado e a resposta sem `fiscal.v1`, o log tem ERROR e o diário fica em atenção.
 
 **Material:**
-- o recorte exclui o grupo 8 e os bloqueados sem histórico;
+- o recorte exclui o grupo 8; bloqueados vão com `ativo=false`;
 - `exigeAprovacao` segue o grupo **ou** o tipo SPED (o grupo 12 com tipo 1 dá verdadeiro);
 - a última entrada escolhe a nota mais recente com CFOP de entrada;
 - `apply` sem `materiais.v1` dá 422 e não envia nada;

@@ -314,7 +314,11 @@ UPDATE_DT_ENTREGA = """
 # que o cliente usa (codigo = str(SEQ)). BLOQUEADO ∈ {'Sim','Nao'} → ativo =
 # (BLOQUEADO <> 'Sim'). IS_KIT = 1 se o SEQ é pai em PRODUTOS_KIT; o tipo final
 # (pack/kit/simples) sai de catalog_extract._tipo, que também olha unidade e nome.
-# CODPROD_ALTERN = código do par no Apontaê (7ª coluna; ver catalog_extract).
+# 13 colunas, nesta ordem (catalog_extract lê por posição): SEQ, DESCRICAO,
+# UNIDADE, CODIGO_EAN13, BLOQUEADO, IS_KIT, CODPROD_ALTERN (código do par no
+# Apontaê), e as 6 fiscais/cadastrais CLASSIF_FISCAL, CODITEMSPED, GRUPO,
+# GRUPO_NOME, CODPARANFE, DESCRICAO2 (catalogo_fiscal valida). GRUPO_NOME vem de
+# LEFT JOIN GRUPO_PRODUTOS: produto sem grupo (ou com grupo apagado) não some.
 LIST_PRODUTOS_CATALOGO = """
     SELECT P.SEQ, P.DESCRICAO, P.UNIDADE, P.CODIGO_EAN13, P.BLOQUEADO,
            CASE WHEN EXISTS (

@@ -34,7 +34,8 @@ class _Client:
     """Sem método de confirmação: se alguém chamar, explode."""
 
     def __init__(self, cadastros, caps=("cadastros.v1",)):
-        self.resp = PendentesResposta(cadastros=cadastros, capacidades=list(caps))
+        caps = list(caps) if caps is not None else None
+        self.resp = PendentesResposta(cadastros=cadastros, capacidades=caps)
         self.limites = []
 
     def list_cadastros_pendentes(self, limite=20):
@@ -76,8 +77,7 @@ class _Fire:
         if "RDB$DATABASE" in sql:
             return [(1,)]
         if "DESCRICAO" in sql:
-            seq = self.nomes.get(params[0])
-            return [(seq,)] if seq else []
+            return [(seq, nome) for nome, seq in self.nomes.items()]
         if params[0] in self.produtos:
             return [(params[0], self.produtos[params[0]])]
         return []
@@ -88,6 +88,7 @@ def _limpo(monkeypatch):
     monkeypatch.delenv(cv.VAR_MODO, raising=False)
     cv._avisados.clear()
     monkeypatch.setattr(cv, "_ultima_volta", None)
+    monkeypatch.setattr(cv, "_ultimo_ciclo", {})
 
 
 @pytest.fixture
@@ -110,6 +111,10 @@ def erros():
 
 def _simular(monkeypatch):
     monkeypatch.setenv(cv.VAR_MODO, "mm:simular")
+
+
+def _item(n, nome):
+    return dict(BOM, cadastroId=f"{n:08d}-0f7e-4a51-9c39-2a8f3f1d9a10", nome=nome)
 
 
 def _livro(conn):
@@ -189,9 +194,9 @@ def test_tres_itens_bom_extra_e_seq_fora(env_conn, monkeypatch):
     assert (e["estado"], e["erro_codigo"]) == ("erro_definitivo", "contrato_invalido")
     f = livro[("bbbbbbbb-0f7e-4a51-9c39-2a8f3f1d9a10", 1)]
     assert (f["estado"], f["erro_codigo"]) == ("erro_definitivo", "seq_fora_do_escopo")
-    assert fire.executados and all(
-        s.upper().startswith("SELECT") and "?" in s for s, _ in fire.executados
-    )
+    assert fire.executados and all(s.upper().startswith("SELECT") for s, _ in fire.executados)
+    # Só a leitura de nomes (uma por ciclo, sem valor do item) vai sem parâmetro.
+    assert all("?" in s for s, _ in fire.executados if s != cv._SQL_NOMES)
 
 
 def test_atualizar_de_seq_na_copia_local_passa(env_conn, monkeypatch):
@@ -221,16 +226,33 @@ def test_criar_com_nome_existente(env_conn, monkeypatch):
     cv.processar_ambiente("mm", _client=_Client([BOM]), _fire_conn=fire, _env_conn=env_conn)
     r = _livro(env_conn)[(BOM["cadastroId"], 1)]
     assert r["erro_codigo"] == "nome_existe" and "4321" in r["erro_mensagem"]
-    assert fire.executados[0][1] == ("KIT3 MEIA CURTO PRETO",)  # parâmetro, não texto no SQL
 
 
-def test_nome_com_aspas_vai_como_parametro(env_conn, monkeypatch):
+def test_nome_com_aspas_nunca_vai_ao_sql(env_conn, monkeypatch):
     _simular(monkeypatch)
     fire = _Fire()
     item = dict(BOM, nome="X' OR 1=1 --")
     cv.processar_ambiente("mm", _client=_Client([item]), _fire_conn=fire, _env_conn=env_conn)
-    sql, params = fire.executados[0]
-    assert "OR 1=1" not in sql and params == ("X' OR 1=1 --",)
+    assert not any("OR 1=1" in sql or "OR 1=1" in repr(p) for sql, p in fire.executados)
+
+
+def test_nome_acentuado_casa_sem_depender_do_upper_do_firebird(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    fire = _Fire(nomes={"meia açúcar": 77})
+    item = dict(BOM, nome="MEIA AÇÚCAR")
+    cv.processar_ambiente("mm", _client=_Client([item]), _fire_conn=fire, _env_conn=env_conn)
+    r = _livro(env_conn)[(BOM["cadastroId"], 1)]
+    assert r["erro_codigo"] == "nome_existe" and "77" in r["erro_mensagem"]
+    nomes = [sql for sql, _ in fire.executados if "DESCRICAO" in sql]
+    assert nomes == ["SELECT SEQ, DESCRICAO FROM PRODUTOS"]  # uma vez por ciclo, sem UPPER
+
+
+def test_nomes_lidos_uma_vez_por_ciclo(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    fire = _Fire()
+    itens = [_item(1, "A"), _item(2, "B"), _item(3, "C")]
+    cv.processar_ambiente("mm", _client=_Client(itens), _fire_conn=fire, _env_conn=env_conn)
+    assert sum("DESCRICAO" in sql for sql, _ in fire.executados) == 1
 
 
 @pytest.mark.parametrize("produtos", [{}, {3170: "Sim"}])
@@ -373,18 +395,15 @@ def test_client_list_cadastros_pendentes_tolera_chave_nova_e_nao_valida_itens():
 
 class _FireQueQuebraNoSegundo(_Fire):
     def responder(self, sql, params):
-        if "DESCRICAO" in sql and params[0] == "ITEM DOIS":
+        if "BLOQUEADO" in sql and params[0] == 3171:
             raise RuntimeError("segredo-do-driver")
         return super().responder(sql, params)
 
 
-def _item(n, nome):
-    return dict(BOM, cadastroId=f"{n:08d}-0f7e-4a51-9c39-2a8f3f1d9a10", nome=nome)
-
-
 def test_consulta_que_falha_so_rejeita_o_proprio_item(env_conn, monkeypatch):
     _simular(monkeypatch)
-    itens = [_item(1, "ITEM UM"), _item(2, "ITEM DOIS"), _item(3, "ITEM TRES")]
+    dois = dict(_item(2, "ITEM DOIS"), componentes=[{"erpProdutoId": "3171", "quantidade": 3}])
+    itens = [_item(1, "ITEM UM"), dois, _item(3, "ITEM TRES")]
     r = cv.processar_ambiente(
         "mm", _client=_Client(itens), _fire_conn=_FireQueQuebraNoSegundo(), _env_conn=env_conn
     )
@@ -466,3 +485,164 @@ def test_falha_no_livro_so_rejeita_o_proprio_item(env_conn, monkeypatch):
     assert "erro_transitorio" not in r and (r["simulados"], r["erros"]) == (2, 1)
     dois = _livro(env_conn)[("00000002-0f7e-4a51-9c39-2a8f3f1d9a10", 1)]
     assert dois["erro_codigo"] == "livro_falhou" and "OverflowError" in dois["erro_mensagem"]
+
+
+# --- onda final: envelope, fila de 50, último ciclo, componentes ----------
+
+
+def test_item_que_nao_e_objeto_vira_erro_so_dele(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    r = cv.processar_ambiente(
+        "mm", _client=_Client([None, "x", BOM], caps=None), _fire_conn=_Fire(), _env_conn=env_conn
+    )
+    assert "erro_transitorio" not in r and (r["simulados"], r["erros"]) == (1, 2)
+    assert r["capacidade_ok"] is False
+    livro = cadastro_volta_repo.listar(env_conn)
+    ruins = [x for x in livro if x["estado"] == "erro_definitivo"]
+    assert len(ruins) == 2 and all(x["erro_codigo"] == "contrato_invalido" for x in ruins)
+    assert all(x["cadastro_id"].startswith("sem-id-") for x in ruins)
+
+
+def test_cadastros_que_nao_e_lista_e_transitorio_e_nao_grava(env_conn, monkeypatch, erros):
+    _simular(monkeypatch)
+
+    class _Ruim(_Client):
+        def list_cadastros_pendentes(self, limite=20):
+            return PendentesResposta.model_validate({"cadastros": "segredo-x"})
+
+    r = cv.processar_ambiente("mm", _client=_Ruim([]), _env_conn=env_conn)
+    assert r["erro_transitorio"] == "resposta_invalida"
+    assert cadastro_volta_repo.listar(env_conn) == []
+    assert erros and not any("segredo" in m for m in erros)
+
+
+def test_pede_50_a_fila(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    cliente = _Client([])
+    cv.processar_ambiente("mm", _client=cliente, _env_conn=env_conn)
+    assert cliente.limites == [50]
+
+
+def test_segundo_ciclo_todo_no_livro_nao_abre_o_fire(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    itens = [_item(1, "A"), _item(2, "B")]
+    cv.processar_ambiente("mm", _client=_Client(itens), _fire_conn=_Fire(), _env_conn=env_conn)
+    from app.persistence import environments_repo
+
+    monkeypatch.setattr(environments_repo, "get_by_slug", lambda s: {"slug": s})
+    monkeypatch.setattr(environments_repo, "to_fb_config", lambda e: {})
+    monkeypatch.setattr(
+        cv.FirebirdConnection,
+        "connect_somente_leitura",
+        lambda *a, **k: pytest.fail("não podia abrir o Fire"),
+    )
+    r = cv.processar_ambiente("mm", _client=_Client(itens), _env_conn=env_conn)
+    assert r["ja_no_livro"] == 2 and r["simulados"] == 0
+
+
+def test_gauge_de_pendentes_diz_lidos_na_ultima_leitura():
+    from app.observability import metrics
+
+    assert "lidos" in metrics.cadastro_volta_pendentes._documentation
+
+
+def test_ultimo_ciclo_guardado_no_sucesso(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    assert cv.ultimo_ciclo("mm") is None
+    cv.processar_ambiente(
+        "mm", _client=_Client([BOM], caps=()), _fire_conn=_Fire(), _env_conn=env_conn
+    )
+    u = cv.ultimo_ciclo("mm")
+    assert u["em"].endswith("+00:00")
+    assert u["resumo"] == {
+        "modo": "simular",
+        "lidos": 1,
+        "capacidade_ok": False,
+        "simulados": 1,
+        "erros": 0,
+        "ja_no_livro": 0,
+        "erro": None,
+    }
+
+
+def test_ultimo_ciclo_guardado_no_erro_sem_texto_do_erro(env_conn, monkeypatch):
+    _simular(monkeypatch)
+
+    class _Fora(_Client):
+        def list_cadastros_pendentes(self, limite=20):
+            raise RuntimeError("segredo-no-corpo")
+
+    cv.processar_ambiente("mm", _client=_Fora([]), _env_conn=env_conn)
+    u = cv.ultimo_ciclo("mm")
+    assert u["resumo"]["erro"] and "segredo" not in json.dumps(u)
+
+
+def test_rodar_guarda_ultimo_ciclo_do_ambiente_que_explode(monkeypatch):
+    monkeypatch.setenv(cv.VAR_MODO, "a:simular")
+    monkeypatch.setattr(cv, "enabled_flowpcp_envs", lambda: {"a": object()})
+
+    def fake(slug, **k):
+        raise RuntimeError("segredo")
+
+    monkeypatch.setattr(cv, "processar_ambiente", fake)
+    cv.rodar()
+    u = cv.ultimo_ciclo("a")
+    assert u["resumo"]["erro"] == "RuntimeError" and "segredo" not in json.dumps(u)
+
+
+@pytest.mark.parametrize("valor", [None, ""])
+def test_rodar_sem_variavel_nao_lista_ambientes(monkeypatch, valor):
+    if valor is not None:
+        monkeypatch.setenv(cv.VAR_MODO, valor)
+    monkeypatch.setattr(
+        cv, "enabled_flowpcp_envs", lambda: pytest.fail("não podia listar ambientes")
+    )
+    assert cv.rodar() == {}
+
+
+def test_rodar_avisa_slug_que_nao_e_ambiente_flowpcp(monkeypatch):
+    monkeypatch.setenv(cv.VAR_MODO, "mm:simular,fantasma:simular,Ruim!<b>:simular")
+    monkeypatch.setattr(cv, "enabled_flowpcp_envs", lambda: {"mm": object()})
+    monkeypatch.setattr(cv, "processar_ambiente", lambda slug, **k: {"modo": "simular"})
+    avisos: list[str] = []
+    hid = logger.add(
+        lambda m: avisos.append(str(m)),
+        level="WARNING",
+        filter=lambda r: r["level"].name == "WARNING",
+    )
+    try:
+        cv.rodar()
+        cv.rodar()
+    finally:
+        logger.remove(hid)
+    assert sum("'fantasma'" in a for a in avisos) == 1
+    assert sum("valor inválido" in a for a in avisos) == 1
+    assert not any("<b>" in a or "'mm'" in a for a in avisos)
+
+
+def test_atualizar_kit_sem_componentes_nao_consulta_componentes(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    env_conn.execute(
+        "INSERT INTO catalogo_fire (fire_produto_id, codigo, nome, extraido_em) "
+        "VALUES ('2645', '2645', 'X', '2026-10-16')"
+    )
+    item = dict(BOM, acao="atualizar", erpProdutoId="2645", componentes=None)
+    fire = _Fire()
+    cv.processar_ambiente("mm", _client=_Client([item]), _fire_conn=fire, _env_conn=env_conn)
+    linha = _livro(env_conn)[(BOM["cadastroId"], 1)]
+    assert linha["estado"] == "simulado"
+    assert json.loads(linha["plano_json"])["componentes"] is None
+    assert not any("BLOQUEADO" in sql for sql, _ in fire.executados)
+
+
+def test_inativar_kit_com_componentes_lixo_simula_sem_composicao(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    env_conn.execute(
+        "INSERT INTO catalogo_fire (fire_produto_id, codigo, nome, extraido_em) "
+        "VALUES ('2645', '2645', 'X', '2026-10-16')"
+    )
+    item = dict(BOM, acao="inativar", erpProdutoId="2645", componentes="lixo")
+    cv.processar_ambiente("mm", _client=_Client([item]), _fire_conn=_Fire(), _env_conn=env_conn)
+    linha = _livro(env_conn)[(BOM["cadastroId"], 1)]
+    assert linha["estado"] == "simulado"
+    assert json.loads(linha["plano_json"])["componentes"] is None

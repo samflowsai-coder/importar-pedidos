@@ -1165,8 +1165,10 @@
       const g = catGrupo(out, 'Campos fiscais');
       catLinha(g, 'Enviados', (fp.enviados ?? '—') + ' enviados, ' + (fp.com_pendencia ?? '—') + ' com pendência',
         fp.com_pendencia > 0 ? 'aviso' : undefined);
+      const pend = catMapa(fp.pendencias, (k, x) => k + ': ' + (Array.isArray(x) ? x.join(', ') : x));
+      catSeqs(g, pend, undefined, '; ');
       const motivos = catMapa(fp.por_motivo, (k, x) => k + ': ' + x);
-      if (motivos.length) catSeqs(g, motivos, undefined, '; ');
+      if (motivos.length) catSeqs(g, ['Por motivo: ' + motivos.join('; ')]);
       if (fp.capacidade_ok === false) {
         const w = document.createElement('div');
         w.className = 'err';
@@ -1264,11 +1266,36 @@
     document.getElementById('btn-sync-materiais').addEventListener('click', rodarSyncMateriais);
 
     // Volta Flow → Fire: carrega ao abrir (só edição). `desligado` = só "Desligada".
+    // "Última leitura" vem da memória do processo (some ao reiniciar o portal).
+    function voltaUltima(uc) {
+      if (!uc || typeof uc !== 'object' || !uc.resumo || typeof uc.resumo !== 'object') return 'nenhuma desde que o portal subiu';
+      const r = uc.resumo;
+      const t = new Date(uc.em);
+      const hora = isNaN(t) ? '—' : String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+      const partes = [(typeof r.lidos === 'number' ? r.lidos : 0) + ' lidos'];
+      if (r.capacidade_ok === false) partes.push('sem cadastros.v1');
+      if (r.erro) partes.push('erro ' + r.erro);
+      else if (r.lidos === 0) partes.push('nenhum cadastro');
+      return hora + ' — ' + partes.join(' · ');
+    }
+    function voltaAviso(out, texto) {
+      const w = document.createElement('div');
+      w.className = 'err';
+      w.style.cssText = 'margin-top:.3rem;overflow-wrap:anywhere';
+      w.textContent = texto;
+      out.appendChild(w);
+    }
     function voltaRender(out, d) {
       out.replaceChildren();
       const modo = d && typeof d.modo === 'string' ? d.modo : '';
+      if (d && d.thread_desligada === true) voltaAviso(out, 'A thread de envio está desligada neste servidor (PORTAL_FLOWPCP_ENVIO=0).');
       if (modo === 'desligado') { catLinha(out, 'Volta', 'Desligada'); return; }
       catLinha(out, 'Modo', modo || '—');
+      const ul = document.createElement('div');
+      ul.style.cssText = 'font-variant-numeric:tabular-nums;overflow-wrap:anywhere';
+      ul.textContent = 'Última leitura: ' + voltaUltima(d && d.ultimo_ciclo);
+      out.appendChild(ul);
+      if (modo === 'simular') catSeqs(out, ['Em simulação, a volta só enxerga os 50 mais antigos da fila do Flow.']);
       const pe = catMapa(d && d.por_estado, (k, x) => k + ': ' + x);
       catLinha(out, 'Por estado', pe.length ? pe.join(' · ') : 'nenhum');
       const ult = d && Array.isArray(d.ultimos) ? d.ultimos.slice(0, 10) : [];

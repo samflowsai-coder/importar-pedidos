@@ -17,7 +17,7 @@ SPED_VALIDOS = frozenset({*range(0, 11), 99})
 LIMITE_CODIGO_NFE = 60
 LIMITE_COR = 120
 LIMITE_GRUPO_NOME = 80
-_NCM = re.compile(r"\d{8}")
+_NCM = re.compile(r"[0-9]{8}")  # só ASCII, a mesma regra do Zod do Flow
 _SEPARADORES = re.compile(r"[\s.\-]")
 
 

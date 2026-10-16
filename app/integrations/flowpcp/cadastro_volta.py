@@ -17,8 +17,9 @@ import hashlib
 import json
 import os
 import re
+import unicodedata
 from contextlib import ExitStack, nullcontext
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from app.erp.connection import FirebirdConnection
 from app.integrations.flowpcp import capacidades
@@ -32,11 +33,16 @@ from app.utils.logger import logger
 MODOS = ("desligado", "simular", "criar", "criar_e_atualizar")
 VAR_MODO = "PORTAL_FLOWPCP_CADASTRO_VOLTA"
 INTERVALO = timedelta(minutes=5)
-LIMITE_FILA = 20
+# Máximo do Flow. A fila não tem cursor (só o confirmar a anda) e `simular` não
+# confirma: em simulação a volta só enxerga os LIMITE_FILA mais antigos.
+LIMITE_FILA = 50
 _RECUSA_ESCRITA = "gravação exige P0 e cadastros.v1 (Etapa 3)"
+_SLUG_SEGURO = re.compile(r"^[a-z0-9_-]{1,32}$")
 
 _avisados: set[str] = set()
 _ultima_volta: datetime | None = None
+# slug -> {"em": ISO UTC, "resumo": {...}} do último ciclo desde que o processo subiu.
+_ultimo_ciclo: dict[str, dict] = {}
 
 # wire -> coluna do Fire (PRODUTOS)
 COLUNAS = {
@@ -50,24 +56,29 @@ COLUNAS = {
     "codigoMes": "CODPROD_ALTERN",
 }
 
-_SQL_NOME = "SELECT FIRST 1 SEQ FROM PRODUTOS WHERE UPPER(TRIM(DESCRICAO)) = ?"
+# Nomes lidos uma vez por ciclo e comparados em Python: DESCRICAO é WIN1252 e o
+# UPPER do Firebird não é confiável para Ç/Ã/Ú (364 nomes da MM têm acento).
+_SQL_NOMES = "SELECT SEQ, DESCRICAO FROM PRODUTOS"
 _SQL_SONDA = "SELECT 1 FROM RDB$DATABASE"
 _SQL_COMPONENTE = "SELECT SEQ, BLOQUEADO FROM PRODUTOS WHERE SEQ = ?"
 
 
-def _avisa_uma_vez(chave: str, msg: str) -> None:
+def _avisa_uma_vez(chave: str, msg: str, nivel: str = "ERROR") -> None:
     if chave in _avisados:
         return
     _avisados.add(chave)
-    logger.error(msg)
+    logger.log(nivel, msg)
+
+
+def _entradas() -> list[str]:
+    return [p.strip() for p in os.environ.get(VAR_MODO, "").split(",") if p.strip()]
 
 
 def modo(slug: str) -> str:
     """Modo do ambiente em `PORTAL_FLOWPCP_CADASTRO_VOLTA` (`slug:modo,slug:modo`).
     Ausente ou inválido = `desligado` (o inválido loga ERROR uma vez por valor)."""
-    bruto = os.environ.get(VAR_MODO, "")
     achado = "desligado"
-    for parte in bruto.split(","):
+    for parte in _entradas():
         entrada = parte.strip()
         if not entrada:
             continue
@@ -109,11 +120,24 @@ def _no_escopo(env_conn, item: CadastroPendente) -> bool:
     return row is not None
 
 
-def _contra_o_fire(fire_conn, item: CadastroPendente) -> tuple[str, str] | None:
+def _normaliza_nome(s: str) -> str:
+    return unicodedata.normalize("NFC", s).strip().casefold()
+
+
+def _nomes_do_fire(fire_conn) -> dict[str, list]:
+    """`nome normalizado -> [SEQ]` de todo PRODUTOS (~3,8 mil linhas), uma vez por ciclo."""
+    nomes: dict[str, list] = {}
+    for seq, desc in _select(fire_conn, _SQL_NOMES, ()):
+        if isinstance(desc, str) and desc.strip():
+            nomes.setdefault(_normaliza_nome(desc), []).append(seq)
+    return nomes
+
+
+def _contra_o_fire(fire_conn, item: CadastroPendente, nomes: dict) -> tuple[str, str] | None:
     if item.acao == "criar":
-        achou = _select(fire_conn, _SQL_NOME, (item.nome.strip().upper(),))
+        achou = nomes.get(_normaliza_nome(item.nome))
         if achou:
-            return "nome_existe", f"já existe produto com esse nome no Fire (SEQ {achou[0][0]})"
+            return "nome_existe", f"já existe produto com esse nome no Fire (SEQ {achou[0]})"
     for i, comp in enumerate(item.componentes or []):
         linhas = _select(fire_conn, _SQL_COMPONENTE, (int(comp.erpProdutoId),))
         if not linhas:
@@ -136,9 +160,11 @@ def _plano(item: CadastroPendente) -> dict:
         "tipo": item.tipo,
         "seq": item.erpProdutoId,
         "campos": {} if item.acao == "inativar" else campos,
-        "componentes": [
-            {"erpProdutoId": c.erpProdutoId, "quantidade": c.quantidade}
-            for c in (item.componentes or [])
+        # None = não mexer na composição (atualizar sem lista, inativar, simples).
+        "componentes": None
+        if item.componentes is None
+        else [
+            {"erpProdutoId": c.erpProdutoId, "quantidade": c.quantidade} for c in item.componentes
         ],
     }
 
@@ -178,7 +204,7 @@ def _idade_mais_antiga(brutos: list) -> float:
     return maior
 
 
-def _decidir(bruto, env_conn, fire_conn):
+def _decidir(bruto, env_conn, fire_conn, nomes):
     """-> (estado, item|None, codigo, mensagem, plano|None)."""
     item, codigo, msg = validar_item(bruto)
     if item is None:
@@ -193,7 +219,7 @@ def _decidir(bruto, env_conn, fire_conn):
             None,
         )
     try:
-        falha = _contra_o_fire(fire_conn, item)
+        falha = _contra_o_fire(fire_conn, item, nomes)
     except Exception as exc:  # noqa: BLE001
         # Conexão perdida aborta o lote; erro só desta consulta rejeita só este item.
         try:
@@ -212,7 +238,49 @@ def _decidir(bruto, env_conn, fire_conn):
     return "simulado", item, None, None, _plano(item)
 
 
+def _resumo_saneado(r: dict) -> dict:
+    """Só contagens e código/classe do erro: nada do que o Flow ou o Fire mandou."""
+    saida = {
+        k: r.get(k) for k in ("modo", "lidos", "capacidade_ok", "simulados", "erros", "ja_no_livro")
+    }
+    if "erro_transitorio" in r or "erro" in r:
+        erro = r.get("erro_transitorio") or r.get("erro")
+    elif "recusado" in r:
+        erro = "modo_recusado"
+    elif "ignorado" in r:
+        erro = "flowpcp_desabilitado"
+    else:
+        erro = None
+    saida["erro"] = str(erro)[:80] if erro is not None else None
+    return saida
+
+
+def _guardar_ciclo(slug: str, resumo: dict) -> None:
+    _ultimo_ciclo[slug] = {
+        "em": datetime.now(UTC).isoformat(timespec="seconds"),
+        "resumo": _resumo_saneado(resumo),
+    }
+
+
+def ultimo_ciclo(slug: str) -> dict | None:
+    """Último ciclo do ambiente desde que o processo subiu (None se nenhum)."""
+    u = _ultimo_ciclo.get(slug)
+    return {"em": u["em"], "resumo": dict(u["resumo"])} if u else None
+
+
 def processar_ambiente(slug: str, *, _client=None, _fire_conn=None, _env_conn=None) -> dict:
+    """Um ciclo do ambiente; o resumo saneado fica em `ultimo_ciclo(slug)`."""
+    try:
+        r = _processar_ambiente(slug, _client=_client, _fire_conn=_fire_conn, _env_conn=_env_conn)
+    except Exception as exc:
+        _guardar_ciclo(slug, {"modo": modo(slug), "erro": type(exc).__name__})
+        raise
+    if r.get("modo") != "desligado":
+        _guardar_ciclo(slug, r)
+    return r
+
+
+def _processar_ambiente(slug: str, *, _client, _fire_conn, _env_conn) -> dict:
     m = modo(slug)
     if m == "desligado":
         return {"modo": m}
@@ -229,6 +297,12 @@ def processar_ambiente(slug: str, *, _client=None, _fire_conn=None, _env_conn=No
     try:
         try:
             resp = client.list_cadastros_pendentes(limite=LIMITE_FILA)
+        except ValueError as exc:  # JSON ou envelope inválido (`cadastros` não é lista)
+            logger.error(
+                f"flowpcp.cadastro_volta env={slug}: resposta da fila inválida: "
+                f"{type(exc).__name__}"
+            )
+            return {"modo": m, "erro_transitorio": "resposta_invalida"}
         except Exception as exc:  # noqa: BLE001 — Flow fora não derruba o ciclo
             logger.error(
                 f"flowpcp.cadastro_volta env={slug}: leitura da fila falhou: {type(exc).__name__}"
@@ -262,18 +336,11 @@ def processar_ambiente(slug: str, *, _client=None, _fire_conn=None, _env_conn=No
 
 def _processar_fila(slug, brutos, resumo, _fire_conn, _env_conn) -> dict:
     with ExitStack() as stack:
-        if _fire_conn is not None:
-            fire_conn = _fire_conn
-        else:
-            env = environments_repo.get_by_slug(slug)
-            fire_conn = stack.enter_context(
-                FirebirdConnection().connect_somente_leitura(environments_repo.to_fb_config(env))
-            )
         env_conn = stack.enter_context(
             nullcontext(_env_conn) if _env_conn is not None else router.env_connect(slug)
         )
-        # Fase 1: decide tudo (lê o Fire); se o Fire cair, nada foi para o livro.
-        decisoes = []
+        # Fase 0: o que já está no livro não abre o Fire (simular nunca anda a fila).
+        triagem = []
         for bruto in brutos:
             cadastro_id, versao = _id_do_bruto(bruto), _versao_do_bruto(bruto)
             item, *_ = validar_item(bruto)
@@ -283,14 +350,34 @@ def _processar_fila(slug, brutos, resumo, _fire_conn, _env_conn) -> dict:
                 ja = cadastro_volta_repo.existe(env_conn, cadastro_id, versao)
             except Exception as exc:  # noqa: BLE001 — um item não trava a fila
                 msg = f"consulta ao livro falhou ({type(exc).__name__})"
-                decisoes.append(
-                    (cadastro_id, versao, ("erro_definitivo", item, "livro_falhou", msg, None))
+                triagem.append(
+                    (
+                        cadastro_id,
+                        versao,
+                        bruto,
+                        ("erro_definitivo", item, "livro_falhou", msg, None),
+                    )
                 )
                 continue
-            if ja:
-                decisoes.append((cadastro_id, versao, None))
-                continue
-            decisoes.append((cadastro_id, versao, _decidir(bruto, env_conn, fire_conn)))
+            triagem.append((cadastro_id, versao, bruto, None if ja else "decidir"))
+        fire_conn = nomes = None
+        if any(t[3] == "decidir" for t in triagem):
+            if _fire_conn is not None:
+                fire_conn = _fire_conn
+            else:
+                env = environments_repo.get_by_slug(slug)
+                fire_conn = stack.enter_context(
+                    FirebirdConnection().connect_somente_leitura(
+                        environments_repo.to_fb_config(env)
+                    )
+                )
+            nomes = _nomes_do_fire(fire_conn)
+        # Fase 1: decide tudo (lê o Fire); se o Fire cair, nada foi para o livro.
+        decisoes = []
+        for cadastro_id, versao, bruto, dec in triagem:
+            if dec == "decidir":
+                dec = _decidir(bruto, env_conn, fire_conn, nomes)
+            decisoes.append((cadastro_id, versao, dec))
         # Fase 2: registra.
         for cadastro_id, versao, dec in decisoes:
             if dec is None:
@@ -327,11 +414,14 @@ def _processar_fila(slug, brutos, resumo, _fire_conn, _env_conn) -> dict:
 def rodar() -> dict[str, dict]:
     """Todos os ambientes com a volta ligada. Nunca levanta."""
     resultado: dict[str, dict] = {}
+    if not _entradas():
+        return resultado  # volta desligada: nem lista ambientes nem abre token
     try:
         ambientes = list(enabled_flowpcp_envs())
     except Exception as exc:  # noqa: BLE001
         logger.error(f"flowpcp.cadastro_volta: listar ambientes falhou: {type(exc).__name__}")
         return resultado
+    _avisa_slugs_desconhecidos(set(ambientes))
     for slug in ambientes:
         if modo(slug) == "desligado":
             continue
@@ -340,7 +430,23 @@ def rodar() -> dict[str, dict]:
         except Exception as exc:  # noqa: BLE001 — um ambiente não derruba os outros
             logger.error(f"flowpcp.cadastro_volta env={slug}: falhou: {type(exc).__name__}")
             resultado[slug] = {"erro": type(exc).__name__}
+            _guardar_ciclo(slug, resultado[slug])
     return resultado
+
+
+def _avisa_slugs_desconhecidos(habilitados: set[str]) -> None:
+    conhecidos = {s.lower() for s in habilitados}
+    for entrada in _entradas():
+        nome, sep, _ = entrada.partition(":")
+        nome = nome.strip().lower()
+        if not sep or not nome or nome in conhecidos:
+            continue
+        rotulo = repr(nome) if _SLUG_SEGURO.fullmatch(nome) else "valor inválido"
+        _avisa_uma_vez(
+            f"slug-desconhecido:{nome}",
+            f"{VAR_MODO} cita {rotulo} que não é ambiente com FlowPCP habilitado",
+            nivel="WARNING",
+        )
 
 
 def rodar_se_devido(agora: datetime) -> dict[str, dict] | None:

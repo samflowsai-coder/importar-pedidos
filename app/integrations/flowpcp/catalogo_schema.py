@@ -54,7 +54,9 @@ class CatalogoProdutoItem(BaseModel):
 
     @model_serializer(mode="wrap")
     def _omite_nao_preenchidos(self, handler):
-        return _sem_os_nao_preenchidos(self, handler(self),
+        return _sem_os_nao_preenchidos(
+            self,
+            handler(self),
             ("componentes", "codigoMes", "ncm", "tipoItemSped", "grupoErp", "codigoNfe", "cor"),
         )
 

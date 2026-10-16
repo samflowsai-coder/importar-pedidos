@@ -38,6 +38,15 @@ def _bloco_js() -> str:
         "casados",
         "porId",
         "PORTAL_FLOWPCP_MATERIAIS",
+        "ultimo_ciclo",
+        "Última leitura: ",
+        "sem cadastros.v1",
+        "nenhum cadastro",
+        "Em simulação, a volta só enxerga os 50 mais antigos da fila do Flow.",
+        "thread_desligada",
+        "A thread de envio está desligada neste servidor (PORTAL_FLOWPCP_ENVIO=0).",
+        "fp.pendencias",
+        "'Por motivo: '",
     ],
 )
 def test_tela_tem_os_blocos_novos(trecho):

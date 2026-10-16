@@ -212,3 +212,31 @@ def test_403_vira_erro_claro_da_flag_do_tenant(monkeypatch, env_conn):
     client = _Client(erro=FlowPCPClientError("materiais status 403", status_code=403))
     with pytest.raises(FlowPCPClientError, match="materiaisErpAtivo"):
         _rodar(monkeypatch, env_conn, [_dto()], client=client)
+
+
+def test_abre_o_fire_somente_leitura(monkeypatch, env_conn):
+    from contextlib import contextmanager
+
+    from app.persistence import environments_repo
+
+    abertos = []
+
+    @contextmanager
+    def leitura(self, cfg):
+        abertos.append(cfg)
+        yield object()
+
+    monkeypatch.setattr(environments_repo, "get_by_slug", lambda s: {"slug": s})
+    monkeypatch.setattr(environments_repo, "to_fb_config", lambda e: {"fb": 1})
+    monkeypatch.setattr(ms.FirebirdConnection, "connect_somente_leitura", leitura)
+    monkeypatch.setattr(
+        ms.FirebirdConnection,
+        "connect_with_config",
+        lambda *a, **k: pytest.fail("material só lê: conexão de escrita proibida"),
+    )
+    monkeypatch.setattr(ms, "extract_materiais", lambda conn: [_dto()])
+    monkeypatch.setattr(ms, "extract_ultima_entrada", lambda conn: {})
+    monkeypatch.setattr(ms, "flowpcp_config_for_slug", lambda slug: _Cfg())
+    monkeypatch.delenv("PORTAL_FLOWPCP_MATERIAIS", raising=False)
+    ms.run_materiais_sync("mm", now_iso="2026-10-16T00:00:00Z", _env_conn=env_conn)
+    assert abertos == [{"fb": 1}]

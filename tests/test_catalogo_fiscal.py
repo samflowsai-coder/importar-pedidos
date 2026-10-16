@@ -12,27 +12,41 @@ from app.integrations.flowpcp.catalogo_schema import (
 )
 
 
-@pytest.mark.parametrize("bruto,esperado", [
-    ("61159500", ("61159500", None)),
-    ("61.159.500", ("61159500", None)),
-    (" 6115.95.00 ", ("61159500", None)),
-    ("6115-9500", ("61159500", None)),
-    ("6115950061159500", (None, "ncm_invalido")),
-    ("611595", (None, "ncm_invalido")),
-    ("6115950A", (None, "ncm_invalido")),
-    ("", (None, "ncm_vazio")),
-    (None, (None, "ncm_vazio")),
-])
+@pytest.mark.parametrize(
+    "bruto,esperado",
+    [
+        ("61159500", ("61159500", None)),
+        ("61.159.500", ("61159500", None)),
+        (" 6115.95.00 ", ("61159500", None)),
+        ("6115-9500", ("61159500", None)),
+        ("6115950061159500", (None, "ncm_invalido")),
+        ("611595", (None, "ncm_invalido")),
+        ("6115950A", (None, "ncm_invalido")),
+        ("٦١١٥٩٥٠٠", (None, "ncm_invalido")),  # dígito árabe-índico: Zod do Flow é [0-9]
+        ("６１１５９５００", (None, "ncm_invalido")),  # dígito de largura total
+        ("", (None, "ncm_vazio")),
+        (None, (None, "ncm_vazio")),
+    ],
+)
 def test_normalizar_ncm(bruto, esperado):
     assert cf.normalizar_ncm(bruto) == esperado
 
 
-@pytest.mark.parametrize("bruto,esperado", [
-    (3, (3, None)), (4, (4, None)), (0, (0, None)), (10, (10, None)), (99, (99, None)),
-    ("04", (4, None)),
-    (12, (None, "sped_invalido")), (-1, (None, "sped_invalido")), ("x", (None, "sped_invalido")),
-    (None, (None, "sped_vazio")),
-])
+@pytest.mark.parametrize(
+    "bruto,esperado",
+    [
+        (3, (3, None)),
+        (4, (4, None)),
+        (0, (0, None)),
+        (10, (10, None)),
+        (99, (99, None)),
+        ("04", (4, None)),
+        (12, (None, "sped_invalido")),
+        (-1, (None, "sped_invalido")),
+        ("x", (None, "sped_invalido")),
+        (None, (None, "sped_vazio")),
+    ],
+)
 def test_normalizar_sped(bruto, esperado):
     assert cf.normalizar_sped(bruto) == esperado
 
@@ -44,19 +58,37 @@ def test_texto_apara_e_limita():
 
 
 def _dto(**kw):
-    base = dict(fire_produto_id="2645", codigo="2645", nome="KIT3 MEIA CURTO BRANCO",
-                unidade="KIT", ean=None, ativo=True, tipo="kit")
+    base = dict(
+        fire_produto_id="2645",
+        codigo="2645",
+        nome="KIT3 MEIA CURTO BRANCO",
+        unidade="KIT",
+        ean=None,
+        ativo=True,
+        tipo="kit",
+    )
     base.update(kw)
     return ProdutoFireDTO(**base)
 
 
 def test_campos_fiscais_completo_com_acento():
-    campos, motivos = cf.campos_fiscais(_dto(
-        ncm_bruto="61.159.500", sped_bruto=4, grupo_codigo=8, grupo_nome="CONFECCIONADO",
-        codigo_nfe="KIT3-MEIA-CURTO/BCOM", cor="AÇÚCAR"))
-    assert campos == {"ncm": "61159500", "tipoItemSped": 4,
-                      "grupoErp": {"codigo": "8", "nome": "CONFECCIONADO"},
-                      "codigoNfe": "KIT3-MEIA-CURTO/BCOM", "cor": "AÇÚCAR"}
+    campos, motivos = cf.campos_fiscais(
+        _dto(
+            ncm_bruto="61.159.500",
+            sped_bruto=4,
+            grupo_codigo=8,
+            grupo_nome="CONFECCIONADO",
+            codigo_nfe="KIT3-MEIA-CURTO/BCOM",
+            cor="AÇÚCAR",
+        )
+    )
+    assert campos == {
+        "ncm": "61159500",
+        "tipoItemSped": 4,
+        "grupoErp": {"codigo": "8", "nome": "CONFECCIONADO"},
+        "codigoNfe": "KIT3-MEIA-CURTO/BCOM",
+        "cor": "AÇÚCAR",
+    }
     assert motivos == []
 
 
@@ -87,20 +119,30 @@ def test_capacidades_tolera_ausente_e_lixo():
 
     class _M:
         model_extra = {"capacidades": ["materiais.dryrun.v1"]}
+
     assert capacidades.de(_M()) == frozenset({"materiais.dryrun.v1"})
 
 
 def test_resumo():
     r = cf.resumo({"10": ["ncm_vazio"], "11": ["ncm_invalido", "sped_invalido"]}, enviados=5)
-    assert r == {"enviados": 5, "com_pendencia": 2,
-                 "por_motivo": {"ncm_vazio": 1, "ncm_invalido": 1, "sped_invalido": 1},
-                 "pendencias": {"10": ["ncm_vazio"], "11": ["ncm_invalido", "sped_invalido"]},
-                 "capacidade_ok": None}
+    assert r == {
+        "enviados": 5,
+        "com_pendencia": 2,
+        "por_motivo": {"ncm_vazio": 1, "ncm_invalido": 1, "sped_invalido": 1},
+        "pendencias": {"10": ["ncm_vazio"], "11": ["ncm_invalido", "sped_invalido"]},
+        "capacidade_ok": None,
+    }
 
 
 def _req(dtos, fiscal=None):
-    return build_catalogo_request(dtos, dry_run=True, full_sync=True, importador_versao="1",
-                                  extraido_em="2026-10-16T00:00:00Z", fiscal=fiscal)
+    return build_catalogo_request(
+        dtos,
+        dry_run=True,
+        full_sync=True,
+        importador_versao="1",
+        extraido_em="2026-10-16T00:00:00Z",
+        fiscal=fiscal,
+    )
 
 
 def test_sem_fiscal_payload_igual_ao_de_hoje():
@@ -142,6 +184,7 @@ class _Env:
         class C:
             fetchone = staticmethod(lambda: (0,))
             fetchall = staticmethod(lambda: [])
+
         return C()
 
     def executemany(self, *a):
@@ -151,6 +194,7 @@ class _Env:
 @pytest.fixture
 def caplog_loguru():
     from app.utils.logger import logger
+
     msgs: list[str] = []
     hid = logger.add(lambda m: msgs.append(str(m)), level="WARNING")
     yield msgs
@@ -158,7 +202,10 @@ def caplog_loguru():
 
 
 def _rodar(monkeypatch, caps, ligado=True):
-    dtos = [_dto(ncm_bruto="61159500", sped_bruto=4), _dto(fire_produto_id="9", codigo="9", ncm_bruto="")]
+    dtos = [
+        _dto(ncm_bruto="61159500", sped_bruto=4),
+        _dto(fire_produto_id="9", codigo="9", ncm_bruto=""),
+    ]
     monkeypatch.setattr(catalogo_sync, "extract_produtos", lambda conn, **kw: dtos)
     monkeypatch.setattr(catalogo_sync, "flowpcp_config_for_slug", lambda slug: _Cfg())
     monkeypatch.delenv("PORTAL_FLOWPCP_CATALOGO_COMPOSICAO", raising=False)
@@ -167,8 +214,9 @@ def _rodar(monkeypatch, caps, ligado=True):
     else:
         monkeypatch.delenv("PORTAL_FLOWPCP_CATALOGO_FISCAL", raising=False)
     client = _Client(caps)
-    rep = catalogo_sync.run_catalogo_sync("mm", now_iso="2026-10-16T00:00:00Z",
-                                          _client=client, _fire_conn=object(), _env_conn=_Env())
+    rep = catalogo_sync.run_catalogo_sync(
+        "mm", now_iso="2026-10-16T00:00:00Z", _client=client, _fire_conn=object(), _env_conn=_Env()
+    )
     return rep, client
 
 

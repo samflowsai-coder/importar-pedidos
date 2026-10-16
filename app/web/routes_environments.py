@@ -454,7 +454,16 @@ def cadastro_volta_flowpcp(env_id: str, _=Depends(require_admin)):
         linha["plano_truncado"] = len(bruto) > _PLANO_MAX_BYTES
         if linha["plano_truncado"]:
             linha["plano_json"] = bruto[:_PLANO_MAX_BYTES].decode("utf-8", errors="ignore")
-    return {"modo": cadastro_volta.modo(env["slug"]), "por_estado": por_estado, "ultimos": ultimos}
+    from app.integrations.flowpcp.envio_portal import envio_habilitado
+
+    return {
+        "modo": cadastro_volta.modo(env["slug"]),
+        "por_estado": por_estado,
+        "ultimos": ultimos,
+        # Último ciclo deste processo (None desde que subiu) e a thread que o roda.
+        "ultimo_ciclo": cadastro_volta.ultimo_ciclo(env["slug"]),
+        "thread_desligada": not envio_habilitado(),
+    }
 
 
 @router.delete("/{env_id}", status_code=204)

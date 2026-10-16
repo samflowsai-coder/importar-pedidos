@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 import re
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -59,15 +59,16 @@ class CadastroPendente(_Estrito):
     erpProdutoId: str | None = Field(default=None, pattern=_ID)  # noqa: N815
     tipo: Literal["simples", "kit", "pack", "material"]
     nome: str = Field(min_length=1)
-    unidadeErp: str | None = None  # noqa: N815
-    ean: str | None = None
+    # Texto opcional: null = "não mexer"; "" é erro de contrato (min_length=1).
+    unidadeErp: str | None = Field(default=None, min_length=1)  # noqa: N815
+    ean: str | None = Field(default=None, min_length=1)
     ncm: str | None = Field(default=None, pattern=r"^[0-9]{8}$")
     tipoItemSped: int | None = None  # noqa: N815
     grupoErp: GrupoRef  # noqa: N815
-    codigoNfe: str | None = None  # noqa: N815
-    cor: str | None = None
+    codigoNfe: str | None = Field(default=None, min_length=1)  # noqa: N815
+    cor: str | None = Field(default=None, min_length=1)
     componentes: list[ComponenteRef] | None = None
-    codigoMes: str | None = None  # noqa: N815
+    codigoMes: str | None = Field(default=None, min_length=1)  # noqa: N815
     aprovadoEm: datetime  # noqa: N815
 
     @field_validator("cadastroId", mode="before")
@@ -103,12 +104,14 @@ class CadastroPendente(_Estrito):
 
 
 class PendentesResposta(BaseModel):
-    """Resposta da fila. Tolera chave nova; `cadastros` fica crua."""
+    """Resposta da fila. Tolera chave nova; `cadastros` fica crua: item que não é
+    objeto vira erro só dele em `validar_item`. `capacidades` malformada = nenhuma
+    (`capacidades.de` filtra). Só `cadastros` que não é lista derruba a leitura."""
 
     model_config = ConfigDict(extra="allow")
 
-    capacidades: list[str] = Field(default_factory=list)
-    cadastros: list[dict] = Field(default_factory=list)
+    capacidades: Any = None
+    cadastros: list[Any] = Field(default_factory=list)
 
 
 def codifica_win1252(s: str) -> bool:
@@ -154,9 +157,11 @@ def _tem_controle(s: str) -> bool:
 
 
 def _erro_componentes(item: CadastroPendente) -> str | None:
+    """kit/pack: `criar` exige lista; `atualizar` com null = não mexer na composição,
+    lista não-nula segue as regras do `criar`. `inativar` chega aqui com null."""
+    if item.componentes is None and item.acao != "criar":
+        return None
     comps = item.componentes or []
-    if item.tipo in ("simples", "material"):
-        return "tipo sem composição não aceita componentes" if comps else None
     if item.tipo == "kit" or item.tipo == "pack":
         if not 1 <= len(comps) <= MAX_COMPONENTES:
             return f"{item.tipo} exige de 1 a {MAX_COMPONENTES} componentes; veio {len(comps)}"
@@ -170,6 +175,9 @@ def _erro_componentes(item: CadastroPendente) -> str | None:
 
 def validar_item(bruto: dict) -> tuple[CadastroPendente | None, str | None, str | None]:
     """`(item, None, None)` se válido; senão `(None, codigo_erro, mensagem)`."""
+    if isinstance(bruto, dict) and bruto.get("acao") == "inativar" and "componentes" in bruto:
+        # inativar ignora componentes: qualquer valor, sem validar.
+        bruto = {**bruto, "componentes": None}
     try:
         item = CadastroPendente.model_validate(bruto)
     except ValidationError as exc:
@@ -194,6 +202,8 @@ def validar_item(bruto: dict) -> tuple[CadastroPendente | None, str | None, str 
         return None, "contrato_invalido", "criar não aceita erpProdutoId"
     if item.acao != "criar" and item.erpProdutoId is None:
         return None, "contrato_invalido", f"{item.acao} exige erpProdutoId"
+    if item.tipo in ("simples", "material") and item.componentes is not None:
+        return None, "contrato_invalido", f"{item.tipo} exige componentes null"
 
     erro = _erro_componentes(item)
     if erro:

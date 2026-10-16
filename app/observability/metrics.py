@@ -81,7 +81,8 @@ cadastro_volta_total: Counter = Counter(
 )
 cadastro_volta_pendentes: Gauge = Gauge(
     "portal_flowpcp_cadastro_volta_pendentes",
-    "Cadastros na fila do Flow na última leitura da volta.",
+    "Cadastros lidos da fila do Flow na última leitura da volta (no máximo 50; "
+    "em simular a fila não anda, então não é o tamanho real da fila).",
     ["env"],
 )
 cadastro_volta_mais_antigo: Gauge = Gauge(

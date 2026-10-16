@@ -42,10 +42,33 @@ def test_404(setup):
     assert _get("nao-existe").status_code == 404
 
 
-def test_livro_vazio(setup):
+def test_livro_vazio(setup, monkeypatch):
+    monkeypatch.delenv("PORTAL_FLOWPCP_ENVIO", raising=False)
     r = _get(_env(setup)["id"])
     assert r.status_code == 200
-    assert r.json() == {"modo": "desligado", "por_estado": {}, "ultimos": []}
+    assert r.json() == {
+        "modo": "desligado",
+        "por_estado": {},
+        "ultimos": [],
+        "ultimo_ciclo": None,
+        "thread_desligada": False,
+    }
+
+
+def test_ultimo_ciclo_e_thread_desligada(setup, monkeypatch):
+    from app.integrations.flowpcp import cadastro_volta
+
+    env = _env(setup)
+    resumo = {"modo": "simular", "lidos": 3, "capacidade_ok": False, "erro": None}
+    monkeypatch.setattr(
+        cadastro_volta,
+        "_ultimo_ciclo",
+        {"mm": {"em": "2026-10-20T12:05:00+00:00", "resumo": resumo}},
+    )
+    monkeypatch.setenv("PORTAL_FLOWPCP_ENVIO", "0")
+    body = _get(env["id"]).json()
+    assert body["ultimo_ciclo"] == {"em": "2026-10-20T12:05:00+00:00", "resumo": resumo}
+    assert body["thread_desligada"] is True
 
 
 def test_duas_linhas_com_plano_truncado(setup):
