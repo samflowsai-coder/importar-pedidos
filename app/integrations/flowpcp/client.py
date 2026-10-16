@@ -4,6 +4,8 @@ import hashlib
 import json
 from typing import Any
 
+import httpx
+
 from app.http.client import HttpError, OutboundClient
 from app.http.policies import apply_post_policy, idempotent_post_policy
 from app.integrations.flowpcp.catalogo_schema import (
@@ -45,12 +47,21 @@ class FlowPCPApplyEmAndamentoError(FlowPCPClientError):
     """409 do /catalogo: o Flow já está gravando um catálogo deste tenant."""
 
 
+def _apply_timeout() -> httpx.Timeout:
+    """300 s é o tempo de LEITURA (maxDuration do Flow); conectar segue curto, senão
+    um Flow inalcançável seguraria 3 x 300 s nas repetições de conexão."""
+    return httpx.Timeout(
+        APPLY_TIMEOUT_SECONDS, connect=DEFAULT_TIMEOUT_SECONDS, pool=DEFAULT_TIMEOUT_SECONDS
+    )
+
+
 def _idem_catalogo(request: CatalogoRequest) -> str:
     """Chave estável em retry e nova quando o conteúdo muda (só a contagem colidia:
     os mesmos 1.026 itens com composição nova). `origem` fica fora: muda a cada
     extração mesmo sem nada novo."""
     corpo = {k: v for k, v in request.model_dump(by_alias=True).items() if k != "origem"}
-    digest = hashlib.sha256(json.dumps(corpo, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    serializado = json.dumps(corpo, sort_keys=True, default=str)
+    digest = hashlib.sha256(serializado.encode()).hexdigest()[:16]
     return f"catalogo-{int(request.dryRun)}-{len(request.itens)}-{digest}"
 
 
@@ -137,12 +148,10 @@ class FlowPCPClient:
         extras = (
             {}
             if request.dryRun
-            else {"timeout": APPLY_TIMEOUT_SECONDS, "retry_policy": apply_post_policy()}
+            else {"timeout": _apply_timeout(), "retry_policy": apply_post_policy()}
         )
         try:
-            resp = self._client.post_json(
-                _CATALOGO_PATH, json=body, idempotency_key=idem, **extras
-            )
+            resp = self._client.post_json(_CATALOGO_PATH, json=body, idempotency_key=idem, **extras)
         except HttpError as exc:
             raise FlowPCPClientError(
                 f"send_catalogo falhou: {exc}", status_code=exc.status_code, body=exc.body

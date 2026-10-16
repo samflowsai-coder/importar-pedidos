@@ -5,6 +5,7 @@ without hitting the network.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import httpx
@@ -361,3 +362,30 @@ def test_apply_so_repete_quando_a_conexao_nem_abriu():
     assert httpx.ReadTimeout not in p.retry_on_exceptions
     assert httpx.WriteTimeout not in p.retry_on_exceptions
     assert httpx.RemoteProtocolError not in p.retry_on_exceptions
+
+
+@pytest.mark.parametrize(
+    ("exc", "esperado"),
+    [
+        (httpx.ConnectError, 3),
+        (httpx.WriteTimeout, 1),
+        (httpx.RemoteProtocolError, 1),
+    ],
+)
+def test_apply_repete_so_o_que_a_politica_permite(exc, esperado):
+    politica = dataclasses.replace(
+        apply_post_policy(),
+        wait_initial_seconds=0,
+        wait_max_seconds=0,
+        wait_jitter_seconds=0,
+    )
+    tentativas = []
+
+    def handler(request):
+        tentativas.append(1)
+        raise exc("falha", request=request)
+
+    with OutboundClient(base_url="http://test", transport=_transport(handler)) as client:
+        with pytest.raises(exc):
+            client.post_json("/x", json={}, retry_policy=politica)
+    assert len(tentativas) == esperado

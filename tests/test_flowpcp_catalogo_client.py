@@ -1,5 +1,6 @@
 import pytest
 
+from app.http.policies import apply_post_policy
 from app.integrations.flowpcp.catalogo_schema import (
     CatalogoOrigem,
     CatalogoProdutoItem,
@@ -7,6 +8,7 @@ from app.integrations.flowpcp.catalogo_schema import (
 )
 from app.integrations.flowpcp.client import (
     APPLY_TIMEOUT_SECONDS,
+    DEFAULT_TIMEOUT_SECONDS,
     FlowPCPApplyEmAndamentoError,
     FlowPCPClient,
     FlowPCPClientError,
@@ -89,7 +91,8 @@ def test_send_catalogo_erro_http_vira_FlowPCPClientError():  # noqa: N802
 
 def _req_apply(nome="X"):
     r = _req()
-    return r.model_copy(update={"dryRun": False, "itens": [r.itens[0].model_copy(update={"nome": nome})]})
+    item = r.itens[0].model_copy(update={"nome": nome})
+    return r.model_copy(update={"dryRun": False, "itens": [item]})
 
 
 def _cliente(resp):
@@ -100,8 +103,12 @@ def _cliente(resp):
 def test_apply_vai_com_politica_e_timeout_proprios():
     out, client = _cliente(_Resp(200, {"contagens": {}}))
     client.send_catalogo(_req_apply())
-    assert out.last_kw["timeout"] == APPLY_TIMEOUT_SECONDS
-    assert out.last_kw["retry_policy"].max_attempts >= 1
+    timeout = out.last_kw["timeout"]
+    assert timeout.read == APPLY_TIMEOUT_SECONDS
+    assert timeout.connect == DEFAULT_TIMEOUT_SECONDS
+    assert timeout.pool == DEFAULT_TIMEOUT_SECONDS
+    politica = out.last_kw["retry_policy"]
+    assert politica.retry_on_exceptions == apply_post_policy().retry_on_exceptions
     assert out.last_kw["retry_policy"].retry_on_status == frozenset()
 
 

@@ -113,7 +113,7 @@ class OutboundClient:
         json: dict[str, Any] | list[Any],
         headers: dict[str, str] | None = None,
         idempotency_key: str | None = None,
-        timeout: float | None = None,
+        timeout: float | httpx.Timeout | None = None,
         retry_policy: RetryPolicy | None = None,
     ) -> httpx.Response:
         merged = self._build_headers(headers, idempotency_key=idempotency_key)
@@ -132,7 +132,7 @@ class OutboundClient:
         *,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
-        timeout: float | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response:
         merged = self._build_headers(headers)
         return self._send_with_retry(
@@ -164,7 +164,7 @@ class OutboundClient:
         headers: dict[str, str],
         json: Any = None,
         params: dict[str, Any] | None = None,
-        timeout: float | None = None,
+        timeout: float | httpx.Timeout | None = None,
         retry_policy: RetryPolicy | None = None,
     ) -> httpx.Response:
         policy = retry_policy or self._retry_policy
