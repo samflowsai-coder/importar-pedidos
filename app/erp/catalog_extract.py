@@ -193,7 +193,12 @@ def extract_materiais(fire_conn) -> list[MaterialFireDTO]:
 
 
 def extract_ultima_entrada(fire_conn) -> dict[str, tuple[str, date]]:
-    """SEQ -> (NCM bruto, data de emissão) da nota de entrada mais recente. Read-only."""
+    """SEQ -> (NCM bruto, data de emissão) da nota de entrada mais recente com NCM
+    válido (8 dígitos). Entrada com NCM inválido não esconde uma anterior válida.
+    A query vem ordenada por (emissão, nota); em empate de data a última linha
+    (maior nota) vence. Read-only."""
+    from app.integrations.flowpcp.catalogo_fiscal import normalizar_ncm  # evita import circular
+
     cur = fire_conn.cursor()
     try:
         cur.execute(LIST_ENTRADAS_NCM)
@@ -203,10 +208,10 @@ def extract_ultima_entrada(fire_conn) -> dict[str, tuple[str, date]]:
     out: dict[str, tuple[str, date]] = {}
     for cod, emissao, ncm in rows:
         ncm_s = _clean(ncm)
-        if cod is None or emissao is None or ncm_s is None:
+        if cod is None or emissao is None or ncm_s is None or normalizar_ncm(ncm_s)[0] is None:
             continue
         seq = str(cod)
         atual = out.get(seq)
-        if atual is None or emissao > atual[1]:
+        if atual is None or emissao >= atual[1]:
             out[seq] = (ncm_s, emissao)
     return out

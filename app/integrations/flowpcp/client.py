@@ -57,22 +57,18 @@ def _apply_timeout() -> httpx.Timeout:
     )
 
 
-def _idem_catalogo(request: CatalogoRequest) -> str:
+def _idem(prefixo: str, request) -> str:
     """Chave estável em retry e nova quando o conteúdo muda (só a contagem colidia:
     os mesmos 1.026 itens com composição nova). `origem` fica fora: muda a cada
     extração mesmo sem nada novo."""
     corpo = {k: v for k, v in request.model_dump(by_alias=True).items() if k != "origem"}
     serializado = json.dumps(corpo, sort_keys=True, default=str)
     digest = hashlib.sha256(serializado.encode()).hexdigest()[:16]
-    return f"catalogo-{int(request.dryRun)}-{len(request.itens)}-{digest}"
+    return f"{prefixo}-{int(request.dryRun)}-{len(request.itens)}-{digest}"
 
 
-def _idem_materiais(request: MateriaisRequest) -> str:
-    """Mesmo esquema de `_idem_catalogo`: estável em retry, novo quando o conteúdo muda."""
-    corpo = {k: v for k, v in request.model_dump(by_alias=True).items() if k != "origem"}
-    serializado = json.dumps(corpo, sort_keys=True, default=str)
-    digest = hashlib.sha256(serializado.encode()).hexdigest()[:16]
-    return f"materiais-{int(request.dryRun)}-{len(request.itens)}-{digest}"
+def _idem_catalogo(request: CatalogoRequest) -> str:
+    return _idem("catalogo", request)
 
 
 class FlowPCPClient:
@@ -151,38 +147,28 @@ class FlowPCPClient:
         return resp.json()
 
     def send_catalogo(self, request: CatalogoRequest) -> CatalogoReconciliacaoResponse:
-        body = request.model_dump(by_alias=True)
-        idem = _idem_catalogo(request)
-        # Apply grava e o Flow não deduplica pela chave: não repetir depois que a
-        # conexão abriu, e esperar até o maxDuration do Flow. Dry-run segue como era.
-        extras = (
-            {}
-            if request.dryRun
-            else {"timeout": _apply_timeout(), "retry_policy": apply_post_policy()}
+        return self._post_relatorio(
+            _CATALOGO_PATH,
+            "catalogo",
+            request,
+            CatalogoReconciliacaoResponse,
+            em_andamento="o Flow já está gravando um catálogo deste ambiente",
         )
-        try:
-            resp = self._client.post_json(_CATALOGO_PATH, json=body, idempotency_key=idem, **extras)
-        except HttpError as exc:
-            raise FlowPCPClientError(
-                f"send_catalogo falhou: {exc}", status_code=exc.status_code, body=exc.body
-            ) from exc
-        if resp.status_code == 409:
-            raise FlowPCPApplyEmAndamentoError(
-                "o Flow já está gravando um catálogo deste ambiente",
-                status_code=409,
-                body=(resp.text or "")[:500],
-            )
-        if not resp.is_success:
-            raise FlowPCPClientError(
-                f"catalogo status {resp.status_code}",
-                status_code=resp.status_code,
-                body=(resp.text or "")[:500],
-            )
-        return CatalogoReconciliacaoResponse.model_validate(resp.json())
 
     def send_materiais(self, request: MateriaisRequest) -> MateriaisResposta:
+        return self._post_relatorio(
+            _MATERIAIS_PATH,
+            "materiais",
+            request,
+            MateriaisResposta,
+            em_andamento="o Flow já está gravando materiais deste ambiente",
+        )
+
+    def _post_relatorio(self, path, nome, request, modelo, *, em_andamento: str):
+        """POST de carga com relatório (`dryRun`). Apply grava e o Flow não deduplica
+        pela chave: não repetir depois que a conexão abriu, e esperar até o maxDuration
+        do Flow. Dry-run segue a política padrão."""
         body = request.model_dump(by_alias=True)
-        idem = _idem_materiais(request)
         extras = (
             {}
             if request.dryRun
@@ -190,25 +176,23 @@ class FlowPCPClient:
         )
         try:
             resp = self._client.post_json(
-                _MATERIAIS_PATH, json=body, idempotency_key=idem, **extras
+                path, json=body, idempotency_key=_idem(nome, request), **extras
             )
         except HttpError as exc:
             raise FlowPCPClientError(
-                f"send_materiais falhou: {exc}", status_code=exc.status_code, body=exc.body
+                f"send_{nome} falhou: {exc}", status_code=exc.status_code, body=exc.body
             ) from exc
         if resp.status_code == 409:
             raise FlowPCPApplyEmAndamentoError(
-                "o Flow já está gravando materiais deste ambiente",
-                status_code=409,
-                body=(resp.text or "")[:500],
+                em_andamento, status_code=409, body=(resp.text or "")[:500]
             )
         if not resp.is_success:
             raise FlowPCPClientError(
-                f"materiais status {resp.status_code}",
+                f"{nome} status {resp.status_code}",
                 status_code=resp.status_code,
                 body=(resp.text or "")[:500],
             )
-        return MateriaisResposta.model_validate(resp.json())
+        return modelo.model_validate(resp.json())
 
     def send_clientes(self, request: ClientesRequest) -> ClientesReconciliacaoResponse:
         body = request.model_dump(by_alias=True)

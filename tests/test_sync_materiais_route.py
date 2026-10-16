@@ -111,3 +111,45 @@ def test_caminho_feliz_devolve_relatorio_com_extras(setup, monkeypatch):
     body = r.json()
     assert body["dryRun"] is True and body["resumo"] == {"criar": 3}
     assert body["materiais_portal"] == {"enviados": 3}
+
+
+def test_apply_e_default_mapeiam_dry_run(setup, monkeypatch):
+    import app.integrations.flowpcp.materiais_sync as m
+
+    vistos = []
+
+    def captura(slug, **k):
+        vistos.append(k["dry_run"])
+        return m.MateriaisLocalResult(itens=1, extraido_em="x")
+
+    monkeypatch.setattr(m, "run_materiais_sync", captura)
+    env_id = _env(setup)["id"]
+    _post(env_id)
+    _post(env_id, apply=True)
+    assert vistos == [True, False]
+
+
+def test_422_envio_desligado(setup, monkeypatch):
+    import app.integrations.flowpcp.materiais_sync as m
+
+    def boom(*a, **k):
+        raise m.MateriaisDesligadoError("envio de materiais desligado")
+
+    monkeypatch.setattr(m, "run_materiais_sync", boom)
+    r = _post(_env(setup)["id"], apply=True)
+    assert r.status_code == 422 and "desligado" in r.json()["detail"]
+
+
+def test_502_flow_recusou_403_cita_a_flag(setup, monkeypatch):
+    import app.integrations.flowpcp.materiais_sync as m
+    from app.integrations.flowpcp.client import FlowPCPClientError
+
+    def boom(*a, **k):
+        raise FlowPCPClientError(
+            "materiais status 403 — a flag do tenant `materiaisErpAtivo` está desligada",
+            status_code=403,
+        )
+
+    monkeypatch.setattr(m, "run_materiais_sync", boom)
+    r = _post(_env(setup)["id"])
+    assert r.status_code == 502 and "materiaisErpAtivo" in r.json()["detail"]

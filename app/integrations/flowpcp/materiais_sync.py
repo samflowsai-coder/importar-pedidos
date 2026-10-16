@@ -180,10 +180,6 @@ def run_materiais_sync(
         logger.info(f"materiais sync: ambiente {slug} sem FlowPCP habilitado — skip")
         return None
     ligado = envio_ligado(slug)
-    if not dry_run and not ligado:
-        raise MateriaisDesligadoError(
-            f"envio de materiais desligado para '{slug}' (PORTAL_FLOWPCP_MATERIAIS)"
-        )
 
     extraido_em = now_iso or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     if _fire_conn is not None:
@@ -220,6 +216,11 @@ def run_materiais_sync(
         )
     logger.info(f"materiais sync env={slug} itens={len(dtos)} — cópia local atualizada")
 
+    if not dry_run and not ligado:
+        raise MateriaisDesligadoError(
+            f"envio de materiais desligado para '{slug}' (PORTAL_FLOWPCP_MATERIAIS); "
+            "a cópia local foi atualizada"
+        )
     if not ligado:
         logger.info(
             f"materiais sync env={slug}: envio ao Flow DESLIGADO (PORTAL_FLOWPCP_MATERIAIS)"

@@ -44,7 +44,7 @@ def caplog_loguru():
     from app.utils.logger import logger
 
     msgs: list[str] = []
-    hid = logger.add(lambda m: msgs.append(str(m)), level="WARNING")
+    hid = logger.add(lambda m: msgs.append(f"{m.record['level'].name}|{m}"), level="WARNING")
     yield msgs
     logger.remove(hid)
 
@@ -104,7 +104,7 @@ def test_grupos_producao_padrao_env_e_invalido(monkeypatch, caplog_loguru):
     assert ms.grupos_producao("mm") == {4, 19}
     monkeypatch.setenv("PORTAL_FLOWPCP_MATERIAIS_GRUPOS_PRODUCAO_MM", "4,x")
     assert ms.grupos_producao("mm") == padrao
-    assert any("inválido" in m for m in caplog_loguru)
+    assert any(m.startswith("ERROR|") and "inválido" in m for m in caplog_loguru)
 
 
 def test_desligado_grava_local_e_nao_chama_client(monkeypatch, env_conn):
@@ -118,9 +118,10 @@ def test_desligado_grava_local_e_nao_chama_client(monkeypatch, env_conn):
     assert tuple(row) == ("54023310", 1, 1)
 
 
-def test_apply_com_envio_desligado_levanta(monkeypatch, env_conn):
+def test_apply_com_envio_desligado_grava_local_e_levanta(monkeypatch, env_conn):
     with pytest.raises(ms.MateriaisDesligadoError):
-        _rodar(monkeypatch, env_conn, [_dto()], ligado=False, dry_run=False)
+        _rodar(monkeypatch, env_conn, [_dto("250")], ligado=False, dry_run=False)
+    assert materiais_fire_repo.seqs(env_conn) == {"250"}
 
 
 def test_ligado_dryrun_monta_itens(monkeypatch, env_conn):
@@ -167,6 +168,15 @@ def test_duplicado_fica_fora_mantendo_o_primeiro(monkeypatch, env_conn):
     assert rep.model_extra["materiais_portal"]["fora"] == {"251": "duplicado"}
 
 
+def test_erp_produto_id_repetido_fica_fora(monkeypatch, env_conn):
+    # SEQ é PK da cópia local: o repo recebe o lote já sem a repetição exata.
+    monkeypatch.setattr(ms.materiais_fire_repo, "replace_all", lambda *a, **k: 0)
+    dtos = [_dto("250", codigo="A1"), _dto("250", codigo="A2"), _dto("251", codigo="A3")]
+    rep, client = _rodar(monkeypatch, env_conn, dtos)
+    assert [i.erpProdutoId for i in client.chamadas[0].itens] == ["250", "251"]
+    assert rep.model_extra["materiais_portal"]["fora"] == {"250": "duplicado"}
+
+
 def test_campo_excede_fica_fora_sem_falhar_o_lote(monkeypatch, env_conn):
     dtos = [_dto("250"), _dto("251", nome="X" * 256), _dto("252", ean="9" * 33)]
     rep, client = _rodar(monkeypatch, env_conn, dtos)
@@ -193,7 +203,9 @@ def test_apply_com_capacidade_sonda_e_depois_grava(monkeypatch, env_conn):
 def test_flow_antigo_sem_dryrun_marca_e_loga(monkeypatch, env_conn, caplog_loguru):
     rep, _ = _rodar(monkeypatch, env_conn, [_dto()], client=_Client(caps=[]))
     assert rep.model_extra["materiais_portal"]["capacidade_ok"] is False
-    assert any("não declarou 'materiais.dryrun.v1'" in m for m in caplog_loguru)
+    assert any(
+        m.startswith("ERROR|") and "não declarou 'materiais.dryrun.v1'" in m for m in caplog_loguru
+    )
 
 
 def test_403_vira_erro_claro_da_flag_do_tenant(monkeypatch, env_conn):
