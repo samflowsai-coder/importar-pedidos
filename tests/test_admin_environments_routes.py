@@ -722,3 +722,102 @@ def test_sync_catalogo_excluir_seq_inexistente_e_422(setup, monkeypatch):
     )
     assert r.status_code == 422
     assert "9999" in r.json()["detail"]
+
+
+def test_sync_catalogo_confirmacoes_chegam_ao_sync(setup, monkeypatch):
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+
+    capturado = {}
+    monkeypatch.setattr(
+        cs, "run_catalogo_sync", lambda slug, **kw: capturado.update(kw) or _FakeReport()
+    )
+    url = f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo"
+    r = _client().post(url + "?apply=true&confirmar_remocao=1&confirmar_substituicao=1")
+    assert r.status_code == 200
+    assert capturado["confirmar_remocao"] is True
+    assert capturado["confirmar_substituicao"] is True
+
+
+def test_sync_catalogo_sem_confirmacao_manda_false(setup, monkeypatch):
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+
+    capturado = {}
+    monkeypatch.setattr(
+        cs, "run_catalogo_sync", lambda slug, **kw: capturado.update(kw) or _FakeReport()
+    )
+    _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?apply=true")
+    assert capturado["confirmar_remocao"] is False
+    assert capturado["confirmar_substituicao"] is False
+
+
+def test_sync_catalogo_confirmacao_sem_apply_e_422(setup, monkeypatch):
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+
+    chamado = []
+    monkeypatch.setattr(cs, "run_catalogo_sync", lambda *a, **k: chamado.append(1))
+    r = _client().post(
+        f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?confirmar_remocao=1"
+    )
+    assert r.status_code == 422
+    assert chamado == []
+
+
+def test_sync_catalogo_409_do_flow_vira_mensagem_clara(setup, monkeypatch):
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+    from app.integrations.flowpcp.client import FlowPCPApplyEmAndamentoError
+
+    def ocupado(*a, **k):
+        raise FlowPCPApplyEmAndamentoError("ocupado", status_code=409)
+
+    monkeypatch.setattr(cs, "run_catalogo_sync", ocupado)
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?apply=true")
+    assert r.status_code == 409
+    assert "já está gravando" in r.json()["detail"]
+
+
+def test_sync_catalogo_valueerror_do_sync_e_422(setup, monkeypatch):
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+
+    def invalido(*a, **k):
+        raise ValueError("PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM inválido: 'x'")
+
+    monkeypatch.setattr(cs, "run_catalogo_sync", invalido)
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?apply=true")
+    assert r.status_code == 422
+    assert "PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM" in r.json()["detail"]
+
+
+def test_sync_catalogo_timeout_no_apply_e_504_com_aviso(setup, monkeypatch):
+    import httpx
+
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+
+    def lento(*a, **k):
+        raise httpx.ReadTimeout("lento")
+
+    monkeypatch.setattr(cs, "run_catalogo_sync", lento)
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?apply=true")
+    assert r.status_code == 504
+    assert "pode ainda estar em andamento" in r.json()["detail"]
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo")
+    assert r.status_code == 504
+    assert "Tente simular de novo" in r.json()["detail"]
+
+
+def test_sync_catalogo_guardado_inexistente_cita_a_variavel(setup, monkeypatch):
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+
+    def fake(slug, **kw):
+        raise cs.ForaDoEnvioInexistenteError(["9999"], guardados=["9999"])
+
+    monkeypatch.setattr(cs, "run_catalogo_sync", fake)
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?apply=true")
+    assert r.status_code == 422
+    assert "PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM" in r.json()["detail"]

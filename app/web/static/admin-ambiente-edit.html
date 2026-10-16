@@ -863,18 +863,123 @@
     });
 
     // Full-load de catálogo: apply=false simula (dry-run), apply=true promove
-    // (escreve no Flow, com confirmação). Mostra as contagens que o Flow devolve.
-    async function rodarSyncCatalogo(apply) {
+    // (escreve no Flow, com confirmação). Mostra as contagens que o Flow devolve,
+    // os blocos de composição/vínculo e, com trava ativa, o botão que a libera.
+    // Nada do relatório entra por innerHTML: tudo via createElement/textContent.
+    function catLinha(pai, rotulo, valor, tom) {
+      const d = document.createElement('div');
+      d.appendChild(document.createTextNode(rotulo + ': '));
+      const s = document.createElement('strong');
+      s.style.fontVariantNumeric = 'tabular-nums';
+      s.style.overflowWrap = 'anywhere';
+      s.textContent = (valor === undefined || valor === null || valor === '') ? '—' : String(valor);
+      if (tom === 'err') s.className = 'err';
+      if (tom === 'aviso') s.style.color = 'var(--warning, #d97706)';
+      d.appendChild(s);
+      pai.appendChild(d);
+    }
+    function catGrupo(pai, titulo) {
+      const g = document.createElement('div');
+      g.style.cssText = 'margin-top:.6rem;padding-top:.5rem;border-top:1px solid var(--border,#2a2a2a)';
+      const h = document.createElement('div');
+      h.style.cssText = 'font-weight:600;margin-bottom:.2rem';
+      h.textContent = titulo;
+      g.appendChild(h);
+      pai.appendChild(g);
+      return g;
+    }
+    function catLista(v) {
+      return Array.isArray(v) && v.length ? v.join(', ') : '';
+    }
+    function catMapa(v, fmt) {
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return '';
+      return Object.entries(v).map(([k, x]) => fmt(k, x)).join('; ');
+    }
+    function catBlocos(out, rep, apply) {
+      const cp = rep.composicao_portal;
+      if (cp && typeof cp === 'object') {
+        const g = catGrupo(out, 'Composição enviada pelo Portal');
+        if (cp.leitura_ok === false) catLinha(g, 'Leitura da composição no Fire', 'FALHOU' + (cp.motivo_falha ? ': ' + cp.motivo_falha : ''), 'err');
+        else catLinha(g, 'Leitura da composição no Fire', 'ok');
+        catLinha(g, 'Kits com composição', cp.com_lista);
+        catLinha(g, 'Kits sem composição no Fire', (cp.kits_sem_composicao ?? 0) + (catLista(cp.kits_sem_composicao_seqs) ? ' (SEQ ' + catLista(cp.kits_sem_composicao_seqs) + ')' : ''), cp.kits_sem_composicao ? 'aviso' : undefined);
+        const omit = catMapa(cp.omitidos, (k, x) => k + ': ' + x);
+        catLinha(g, 'Omitidos (SEQ: motivo)', omit || 0, omit ? 'aviso' : undefined);
+        const dn = catMapa(cp.divergencia_nome, (k, x) => k + ': ' + (typeof x === 'string' ? x : JSON.stringify(x)));
+        catLinha(g, 'Quantidade não bate com o nome (SEQ: aviso)', dn || 0, dn ? 'aviso' : undefined);
+        catLinha(g, 'Códigos do Apontaê enviados', cp.codigo_mes);
+        const rep_ = catMapa(cp.codigo_mes_repetido, (k, x) => k + ' em ' + (Array.isArray(x) ? x.join(', ') : x));
+        catLinha(g, 'Códigos do Apontaê repetidos', rep_ || 0, rep_ ? 'aviso' : undefined);
+      }
+      const co = rep.composicao;
+      if (co && typeof co === 'object') {
+        const g = catGrupo(out, 'Composição no Flow');
+        catLinha(g, 'Kits com composição no ERP', co.paisComComposicaoNoErp);
+        catLinha(g, 'Iguais', co.iguais);
+        catLinha(g, 'A adotar (Flow igual ao Fire passa a ser do Fire)', co.aAdotar);
+        catLinha(g, 'A criar', co.aCriar);
+        catLinha(g, 'A substituir', co.aSubstituir);
+        catLinha(g, 'A remover', co.aRemover);
+        catLinha(g, 'Adiadas (remoção na 1ª leitura)', co.adiadas);
+        catLinha(g, 'Bloqueados: filho ausente', co.bloqueadosFilhoAusente);
+        catLinha(g, 'Bloqueados: ciclo', co.bloqueadosCiclo);
+        catLinha(g, 'Bloqueados: filho duplicado', co.bloqueadosFilhoDuplicado);
+        catLinha(g, 'Bloqueados: quantidade', co.bloqueadosQuantidade);
+        catLinha(g, 'Incoerência de tipo', co.incoerenciaTipo);
+        catLinha(g, 'Kits do ERP que deixaram de vir', (co.erpSemChave || 0) + (catLista(co.erpSemChaveIds) ? ' (' + catLista(co.erpSemChaveIds) + ')' : ''), co.erpSemChave ? 'aviso' : undefined);
+        if (co.travaRemocaoAtiva === true) catLinha(g, 'Trava de remoção ATIVA', catLista(co.travaRemocao) || 'sim', 'aviso');
+        if (co.travaSubstituicaoAtiva === true) catLinha(g, 'Trava de substituição ATIVA', catLista(co.travaSubstituicao) || 'sim', 'aviso');
+      }
+      const vm = rep.vinculoMes;
+      if (vm && typeof vm === 'object') {
+        const g = catGrupo(out, 'Vínculo com o Apontaê');
+        catLinha(g, 'Novos', vm.novos);
+        catLinha(g, 'Iguais', vm.iguais);
+        catLinha(g, 'Conflitos (valor diferente)', vm.conflitoValor, vm.conflitoValor ? 'aviso' : undefined);
+        catLinha(g, 'Conflitos (código de outro produto)', vm.conflitoOutroProduto, vm.conflitoOutroProduto ? 'aviso' : undefined);
+        catLinha(g, 'Inexistentes no Apontaê', vm.inexistenteNoMes);
+        catLinha(g, 'Formato inválido', vm.formatoInvalido, vm.formatoInvalido ? 'aviso' : undefined);
+      }
+      const fg = catLista(rep.fora_do_envio_guardado);
+      if (fg) {
+        const d = document.createElement('div');
+        d.style.cssText = 'margin-top:.6rem;overflow-wrap:anywhere';
+        d.textContent = 'Fora do envio até o Fire ser corrigido: ' + fg;
+        out.appendChild(d);
+      }
+      const liberar = [];
+      if (co && co.travaRemocaoAtiva === true) liberar.push('remocao');
+      if (co && co.travaSubstituicaoAtiva === true) liberar.push('substituicao');
+      if (apply && liberar.length) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn btn-secondary';
+        b.style.marginTop = '.6rem';
+        b.textContent = 'Gravar liberando a trava';
+        b.addEventListener('click', () => rodarSyncCatalogo(true, liberar, co));
+        out.appendChild(b);
+      }
+    }
+    async function rodarSyncCatalogo(apply, liberar = [], co = null) {
       const st = document.getElementById('sync-catalogo-status');
       const out = document.getElementById('sync-catalogo-result');
       const btns = [document.getElementById('btn-sync-catalogo'), document.getElementById('btn-promover-catalogo')];
-      if (apply && !confirm('PROMOVER: isto grava os produtos do Fire direto no catálogo do Flow (Fase 1). Confirmar?')) return;
+      if (apply && liberar.length) {
+        const partes = [];
+        if (liberar.includes('remocao')) partes.push((co && co.travaRemocao ? co.travaRemocao.length : 'alguns') + ' kit(s) segurados pela trava de remoção ficam sem composição');
+        if (liberar.includes('substituicao')) partes.push((co && co.travaSubstituicao ? co.travaSubstituicao.length : 'alguns') + ' kit(s) segurados pela trava de substituição têm a composição trocada');
+        if (!confirm('GRAVAR LIBERANDO A TRAVA: ' + partes.join('; ') + '. Confirmar?')) return;
+      } else if (apply && !confirm('GRAVAR NO FLOW: grava os produtos do Fire no catálogo do Flow. Se o envio de composição estiver ligado para esta empresa, grava também de que cada kit é feito e o código de cada par no Apontaê. Confirmar?')) return;
       st.textContent = apply ? 'Promovendo… pode levar alguns segundos.' : 'Simulando… pode levar alguns segundos.';
       st.className = 'flowpcp-status';
       out.hidden = true;
       btns.forEach(b => b.disabled = true);
       try {
-        const url = '/api/admin/environments/' + envId + '/flowpcp/sync-catalogo' + (apply ? '?apply=true' : '');
+        const qs = [];
+        if (apply) qs.push('apply=true');
+        if (liberar.includes('remocao')) qs.push('confirmar_remocao=1');
+        if (liberar.includes('substituicao')) qs.push('confirmar_substituicao=1');
+        const url = '/api/admin/environments/' + envId + '/flowpcp/sync-catalogo' + (qs.length ? '?' + qs.join('&') : '');
         const r = await fetch(url, { method: 'POST' });
         const t = await r.text();
         if (!r.ok) {
@@ -892,11 +997,13 @@
         st.textContent = apply ? '✓ Promovido no Flow' : '✓ Simulação concluída (dry-run)';
         st.classList.add('ok');
         out.hidden = false;
+        out.replaceChildren();
         const linhas = p
           ? [
               ['Criados no Flow', p.criados],
               ['Atualizados', p.atualizados],
               ['Desativados', p.desativados],
+              ['Reativados', p.reativados],
               ['Divergências (só no Flow)', p.flowOnly],
               ['Ambíguos por nome', p.nomeAmbiguo],
               ['Sem PK do Fire', p.semPk],
@@ -909,9 +1016,12 @@
               ['Só no Fire (entrariam)', c.fire_only],
               ['Só no Flow', c.flow_only],
               ['Ambíguos', c.ambiguo],
+              ['Seriam desativados', c.desativados],
+              ['Seriam reativados', c.reativados],
               ['PK do Fire presente', rep.fire_pk_presente],
             ];
-        out.innerHTML = linhas.map(([k, v]) => '<div>' + k + ': <strong>' + (v ?? '—') + '</strong></div>').join('');
+        linhas.forEach(([k, v]) => catLinha(out, k, v));
+        catBlocos(out, rep, apply);
       } catch (err) {
         st.textContent = '✗ ' + err.message; st.classList.add('err');
       } finally {

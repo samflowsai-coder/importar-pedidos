@@ -21,8 +21,10 @@ class ForaDoEnvioInexistenteError(ValueError):
     """SEQ pedido em `fora_do_envio` que não está no catálogo extraído. Falha
     fechada: a exclusão confirmada na resposta tem que ter acontecido."""
 
-    def __init__(self, seqs: list[str]):
+    def __init__(self, seqs: list[str], guardados: list[str] | None = None):
         self.seqs = seqs
+        # Os que vieram da exclusão guardada (variável de ambiente), não da rota.
+        self.guardados = guardados or []
         super().__init__(f"fora do envio, mas não estão no catálogo extraído: {', '.join(seqs)}")
 
 
@@ -120,7 +122,9 @@ def run_catalogo_sync(
     if fora:
         nao_achados = sorted(fora - {d.fire_produto_id for d in dtos}, key=int)
         if nao_achados:
-            raise ForaDoEnvioInexistenteError(nao_achados)
+            raise ForaDoEnvioInexistenteError(
+                nao_achados, guardados=[s for s in nao_achados if s in guardado]
+            )
         logger.info(
             f"catalogo sync env={slug}: {len(fora)} itens fora do envio "
             f"(solicitados: {sorted(fora_do_envio, key=int)}, guardados: {sorted(guardado, key=int)})"
