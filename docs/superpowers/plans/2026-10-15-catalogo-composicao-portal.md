@@ -1464,7 +1464,7 @@ def test_resumo_traz_os_blocos_de_composicao():
     "extra",
     [
         {"composicao": {"travaRemocaoAtiva": True}},
-        {"composicao": {"travaSubstituicao": ["2544"]}},
+        {"composicao": {"travaSubstituicaoAtiva": True, "travaSubstituicao": ["2544"]}},
         {"composicao": {"erpSemChave": 4}},
         {"composicao_portal": {"leitura_ok": False}},
     ],
@@ -1551,12 +1551,12 @@ e em `rodar`, trocar o `logger.info(...)` final por:
 - texto da confirmação do apply: `'GRAVAR NO FLOW: grava os produtos do Fire no catálogo do Flow. Se o envio de composição estiver ligado para esta empresa, grava também de que cada kit é feito e o código de cada par no Apontaê. Confirmar?'`; com `liberar`, a confirmação diz quantos kits cada trava segura e que eles vão ser trocados ou ficar sem composição;
 - depois das linhas de contagem que já existem, montar com `document.createElement`/`textContent` (nada do relatório entra por `innerHTML`) três grupos, cada um só quando o bloco veio:
   - **Composição enviada pelo Portal** (`rep.composicao_portal`): leitura (ok, ou o `motivo_falha` em destaque de erro), kits com composição, kits sem composição no Fire (com os SEQs), omitidos (SEQ: motivo), quantidade que não bate com o nome (SEQ: aviso), códigos do Apontaê enviados e repetidos;
-  - **Composição no Flow** (`rep.composicao`): iguais, a criar, a substituir, a remover, bloqueados, kits do ERP que deixaram de vir (`erpSemChave` com os ids), e cada trava ativa em destaque de aviso;
+  - **Composição no Flow** (`rep.composicao`): iguais, a adotar (`aAdotar`: composição do Flow igual à do Fire que passa a ser do Fire), a criar, a substituir, a remover, adiadas (`adiadas`: remoção na 1ª leitura), bloqueados (inclusive `bloqueadosFilhoDuplicado`), kits do ERP que deixaram de vir (`erpSemChave` com `erpSemChaveIds`), e cada trava ativa em destaque de aviso;
   - **Vínculo com o Apontaê** (`rep.vinculoMes`): novos, iguais, conflitos, inexistentes no Apontaê, formato inválido;
-- quando `apply` e o relatório tiver trava ativa (`travaRemocaoAtiva`/`travaRemocao` ou `travaSubstituicaoAtiva`/`travaSubstituicao`), mostrar um botão secundário **"Gravar liberando a trava"** que chama `rodarSyncCatalogo(true, [...travas ativas])`. Sem trava, o botão não existe;
+- quando `apply` e o relatório tiver trava ativa (`travaRemocaoAtiva === true` ou `travaSubstituicaoAtiva === true`; as listas `travaRemocao`/`travaSubstituicao` com os `erpProdutoId` retidos só vêm quando não vazias), mostrar um botão secundário **"Gravar liberando a trava"** que chama `rodarSyncCatalogo(true, [...travas ativas])`. Sem trava, o botão não existe;
 - `rep.fora_do_envio_guardado`, quando vier, aparece numa linha: "Fora do envio até o Fire ser corrigido: 3174, 3381…".
 
-Os nomes das chaves de trava são os da spec do Flow (§4/§5.3); a Task 7 Step 6 confere com o Zod/relatório real da Fatia A e ajusta se mudarem.
+Os nomes das chaves foram fechados com a sessão do Flow em 15/10 (plano do Flow, commit 9e14e070): `travaRemocaoAtiva`/`travaSubstituicaoAtiva` booleanos sempre presentes, iguais no dry-run e no apply. A Task 7 Step 6 confere com o relatório real da Fatia A.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
