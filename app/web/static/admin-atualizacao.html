@@ -291,12 +291,21 @@
         <button class="btn" id="btn-new-update">Enviar outro pacote</button>
       </div>
     </div>
+
+    <!-- Reiniciar o portal (sem pacote) -->
+    <div class="card" id="restart-card" hidden>
+      <div class="card-title">Reiniciar o portal</div>
+      <div class="card-desc" id="restart-desc">Use depois de mudar a configuração (.env) do servidor. Não aplica nenhum pacote.</div>
+      <div class="actions">
+        <button class="btn" id="btn-restart">Reiniciar o portal</button>
+      </div>
+    </div>
   </div>
 </main>
 
 <script>
   const API = '/api/admin/update';
-  const TERMINAL = new Set(['succeeded', 'rolled_back', 'rollback_failed']);
+  const TERMINAL = new Set(['succeeded', 'rolled_back', 'rollback_failed', 'restart_failed']);
   const POLL_INTERVAL_MS = 3000;
   const POLL_CAP_MS = 5 * 60 * 1000;
 
@@ -314,6 +323,15 @@
     { keys: ['healthcheck', 'health', 'verificando'], label: 'Verificando' },
   ];
   const RESTARTING_STEP_INDEX = 4; // "Reiniciando" — usado quando o fetch falha (servidor fora do ar)
+
+  // Restart sem pacote (kind=restart): o updater só reporta stop | start | healthcheck.
+  const RESTART_STEPS = [
+    { keys: ['stop'], label: 'Parando serviço' },
+    { keys: ['start'], label: 'Iniciando' },
+    { keys: ['healthcheck', 'health'], label: 'Verificando' },
+  ];
+  const RESTART_RECONNECT_INDEX = 1; // fetch falhou: o portal está fora do ar subindo de novo
+  let progressKind = 'update';       // 'update' | 'restart'
 
   let staged = null;       // resumo mais recente do /upload (fonte mais rica que o /status)
   let pollTimer = null;
@@ -359,7 +377,7 @@
   }
 
   function hideAllStateCards() {
-    ['upload-card', 'staged-card', 'progress-card', 'result-card'].forEach((id) => { $(id).hidden = true; });
+    ['upload-card', 'staged-card', 'progress-card', 'result-card', 'restart-card'].forEach((id) => { $(id).hidden = true; });
   }
 
   function renderVersion(data) {
@@ -379,6 +397,17 @@
     $('upload-card').hidden = false;
     $('dropzone').hidden = false;
     $('dz-uploading').hidden = true;
+    setRestartCard(true);
+  }
+
+  // Botão de reinício: habilitado só com a tela ociosa; com pacote encenado
+  // aparece desabilitado e explica por quê (o status.json é um só).
+  function setRestartCard(enabled) {
+    $('restart-card').hidden = false;
+    $('btn-restart').disabled = !enabled;
+    $('restart-desc').textContent = enabled
+      ? 'Use depois de mudar a configuração (.env) do servidor. Não aplica nenhum pacote.'
+      : 'Há um pacote esperando. Aplique ou descarte o pacote antes de reiniciar o portal.';
   }
 
   async function handleFile(file) {
@@ -448,6 +477,7 @@
     $('st-notes-wrap').hidden = !notes;
     $('st-deps-badge').hidden = !data.deps_changed;
     $('btn-apply').disabled = false;
+    setRestartCard(false);
   }
 
   function bindStagedActions() {
@@ -492,18 +522,21 @@
   }
 
   // ── Em andamento (poll) ──────────────────────────────────────────
+  function currentSteps() { return progressKind === 'restart' ? RESTART_STEPS : PHASE_STEPS; }
+
   function matchPhaseIndex(phase) {
     if (!phase) return -1;
     const p = String(phase).toLowerCase();
-    for (let i = 0; i < PHASE_STEPS.length; i++) {
-      if (PHASE_STEPS[i].keys.some((k) => p === k || p.includes(k))) return i;
+    const steps = currentSteps();
+    for (let i = 0; i < steps.length; i++) {
+      if (steps[i].keys.some((k) => p === k || p.includes(k))) return i;
     }
     return -1;
   }
 
   function renderTimeline(activeIndex, opts) {
     opts = opts || {};
-    const html = PHASE_STEPS.map((step, i) => {
+    const html = currentSteps().map((step, i) => {
       let cls = 'pending';
       let icon = '';
       if (activeIndex === -1) {
@@ -527,11 +560,19 @@
     $('timeline').innerHTML = html;
   }
 
-  function startProgress() {
+  function startProgress(kind) {
+    progressKind = kind === 'restart' ? 'restart' : 'update';
     hideAllStateCards();
     $('progress-card').hidden = false;
+    $('progress-recovery').hidden = true;
+    $('progress-card').querySelector('.card-title').textContent =
+      progressKind === 'restart' ? 'Reiniciando…' : 'Aplicando atualização';
+    $('progress-card').querySelector('.card-desc').textContent = progressKind === 'restart'
+      ? 'Não feche esta aba. O portal cai e volta em alguns segundos.'
+      : 'Não feche esta aba. O portal ficará fora do ar por alguns minutos.';
     pollStartedAt = Date.now();
     pollAttempts = 0;
+    lastKnownStatus = null;
     $('progress-note').textContent = '';
     renderTimeline(-1, {});
     tickElapsed();
@@ -575,7 +616,7 @@
 
     if (networkError || !data) {
       $('progress-note').textContent = `tentativa ${pollAttempts}`;
-      renderTimeline(RESTARTING_STEP_INDEX, { restarting: true });
+      renderTimeline(progressKind === 'restart' ? RESTART_RECONNECT_INDEX : RESTARTING_STEP_INDEX, { restarting: true });
       pollTimer = setTimeout(poll, POLL_INTERVAL_MS);
       return;
     }
@@ -607,6 +648,10 @@
     const title = $('result-title');
     const body = $('result-body');
 
+    if (data.kind === 'restart') {
+      renderRestartResult(data, card, icon, title, body);
+      return;
+    }
     if (data.status === 'succeeded') {
       card.className = 'card result-success';
       icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
@@ -629,6 +674,23 @@
     }
   }
 
+  function renderRestartResult(data, card, icon, title, body) {
+    if (data.status === 'succeeded') {
+      card.className = 'card result-success';
+      icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+      const at = typeof data.finished_at === 'number' ? new Date(data.finished_at * 1000) : new Date();
+      title.textContent = 'Portal reiniciado às '
+        + at.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      body.textContent = 'O portal voltou e está respondendo.';
+    } else {
+      card.className = 'card result-error';
+      icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>';
+      title.textContent = 'Não foi possível reiniciar o portal';
+      body.textContent = 'O portal não respondeu depois de duas tentativas. É necessária intervenção manual no servidor.'
+        + (data.error ? ' Erro: ' + data.error : '');
+    }
+  }
+
   async function dismissTerminal() {
     // Dispensa o status terminal (ou 'rodando' morto) NO SERVIDOR — sem apagar
     // arquivo — e volta pra tela de upload. Se o servidor recusar (409: update de
@@ -645,6 +707,28 @@
     }
   }
 
+  function bindRestartAction() {
+    $('btn-restart').addEventListener('click', async () => {
+      if (!confirm('Reiniciar o portal agora? Quem estiver usando perde a conexão por alguns segundos.')) return;
+      clearError();
+      const btn = $('btn-restart');
+      btn.disabled = true;
+      try {
+        const { ok, status, data } = await api('POST', `${API}/restart`);
+        if (status === 401) { location.href = '/login'; return; }
+        if (!ok) {
+          showError(data.detail || `Falha ao reiniciar o portal (${status}).`);
+          btn.disabled = false;
+          return;
+        }
+        startProgress('restart');
+      } catch (e) {
+        showError('Falha de rede ao reiniciar o portal.');
+        btn.disabled = false;
+      }
+    });
+  }
+
   function bindResultActions() {
     $('btn-reload').addEventListener('click', () => location.reload());
     $('btn-new-update').addEventListener('click', dismissTerminal);
@@ -655,6 +739,7 @@
   async function boot() {
     bindDropzone();
     bindStagedActions();
+    bindRestartAction();
     bindResultActions();
 
     let r;
@@ -684,7 +769,7 @@
       };
       renderStaged(staged);
     } else if (data.status === 'apply_requested' || data.status === 'in_progress') {
-      startProgress();
+      startProgress(data.kind);
     } else if (data.status === 'succeeded') {
       // Sucesso de uma atualização JÁ concluída (reload da página): a "Versão
       // atual" no topo já mostra o resultado — vai direto pro upload, sem card

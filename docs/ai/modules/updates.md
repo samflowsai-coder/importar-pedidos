@@ -61,6 +61,7 @@ Testes: `tests/test_extract_notes.py`.
 | `GET /api/admin/update/status` | Estado atual + `current_version`/`applied_at` lidos de `applied_update.json` |
 | `POST /api/admin/update/upload` | Recebe o `.zip`, valida, encena. Limite **100MB**. Só **um** pacote staged por vez |
 | `POST /api/admin/update/apply` | Exige `update_id` == o staged; dispara `schtasks /run /tn PortalPedidosUpdater`. Responde **202** |
+| `POST /api/admin/update/restart` | Reinicia o portal sem pacote (ex.: `.env` mudou). 409 com update rodando (`is_locked` + `_reject_if_update_running`) ou pacote `staged`; grava `kind: "restart"`, `requested_by`, `apply_requested` e dispara a mesma tarefa. Responde **202** |
 | `POST /api/admin/update/dismiss` | Volta pra idle. Pacote staged é apagado do disco de verdade |
 
 ## Validação do pacote (`validate_and_stage`)
@@ -107,7 +108,15 @@ lock → revalida staging → backup → stop → apply (clean-replace de app/)
 ```
 
 Fases reportadas: `backup | stop | apply | pip | start | healthcheck`.
-Estados terminais: `succeeded | rolled_back | rollback_failed`.
+Estados terminais: `succeeded | rolled_back | rollback_failed` (e `restart_failed` no ramo restart).
+
+**Ramo `kind: "restart"`** (`POST /restart`): o `.ps1` lê `kind` no `status.json` logo após
+o lock e, se for `restart`, roda só `lock → stop → start → healthcheck` (`Invoke-Restart`),
+sem backup, staging, pip nem arquivo tocado; tenta subir uma 2ª vez antes de desistir.
+Fases: `stop | start | healthcheck`. Terminais: `succeeded | restart_failed`. Solta o lock
+e grava em `history.jsonl` uma linha com `kind: "restart"`. Como o `status.json` é
+mesclado, `/upload` e `/apply` zeram `kind` para um update não herdar `restart`.
+`restart_failed` conta como terminal no `/dismiss`.
 
 Backup em `backups/update/<id>/` — **sempre sob o AppDir**, nunca sob o DataDir.
 
