@@ -89,6 +89,7 @@
     }
     .ok  { color: var(--success, #22c55e); }
     .err { color: var(--danger, #ef4444); }
+    #btn-sync-materiais:focus-visible { outline: 2px solid var(--accent, #3b82f6); outline-offset: 2px; }
     .err-banner {
       padding: .8rem 1rem;
       background: color-mix(in srgb, var(--danger, #ef4444) 15%, transparent);
@@ -395,6 +396,25 @@
         <button type="button" id="btn-promover-clientes" class="btn btn-primary">Promover no Flow</button>
         <span id="sync-clientes-status" class="flowpcp-status"></span>
         <div id="sync-clientes-result" hidden style="margin-top:.75rem;font-size:.85em;line-height:1.6"></div>
+      </div>
+
+      <!-- Materiais (Fire → Flow): só simulação (dryRun) nesta etapa. -->
+      <div style="margin-top:1.25rem;border-top:1px solid var(--border,#2a2a2a);padding-top:1rem">
+        <div style="font-weight:600;margin-bottom:.3rem">Materiais (Fire → Flow)</div>
+        <div style="font-size:.85em;color:var(--text-muted,#9aa);margin-bottom:.6rem;line-height:1.5">
+          <strong>Simular</strong> mostra o que o Flow faria com os materiais do Fire <em>sem escrever</em>.
+          A gravação ainda não está disponível nesta etapa.
+        </div>
+        <button type="button" id="btn-sync-materiais" class="btn btn-secondary">Simular carga de material</button>
+        <span id="sync-materiais-status" class="flowpcp-status"></span>
+        <div id="sync-materiais-result" hidden style="margin-top:.75rem;font-size:.85em;line-height:1.6"></div>
+      </div>
+
+      <!-- Volta Flow → Fire: leitura do livro do ambiente, carrega ao abrir. -->
+      <div style="margin-top:1.25rem;border-top:1px solid var(--border,#2a2a2a);padding-top:1rem">
+        <div style="font-weight:600;margin-bottom:.3rem">Volta do Flow para o Fire</div>
+        <span id="volta-status" class="flowpcp-status"></span>
+        <div id="volta-result" hidden style="margin-top:.5rem;font-size:.85em;line-height:1.6"></div>
       </div>
     </fieldset>
 
@@ -990,6 +1010,7 @@
           catLinha(g, 'Código repetido no envio', vm.repetidoNoEnvio, vm.repetidoNoEnvio > 0 ? 'aviso' : undefined);
         }
       }
+      catFiscal(out, rep.fiscal_portal);
       const fg = catLista(rep.fora_do_envio_guardado);
       if (fg) {
         const d = document.createElement('div');
@@ -1136,6 +1157,151 @@
     }
     document.getElementById('btn-sync-clientes').addEventListener('click', () => rodarSyncClientes(false));
     document.getElementById('btn-promover-clientes').addEventListener('click', () => rodarSyncClientes(true));
+
+    // ── Cadastro: fiscal, materiais e volta (início)
+    // Tudo via createElement/textContent (reusa catLinha/catGrupo/catSeqs/catMapa).
+    function catFiscal(out, fp) {
+      if (!fp || typeof fp !== 'object') return;
+      const g = catGrupo(out, 'Campos fiscais');
+      catLinha(g, 'Campos fiscais', (fp.enviados ?? '—') + ' enviados, ' + (fp.com_pendencia ?? '—') + ' com pendência',
+        fp.com_pendencia > 0 ? 'aviso' : undefined);
+      const motivos = catMapa(fp.por_motivo, (k, x) => k + ': ' + x);
+      if (motivos.length) catSeqs(g, motivos, undefined, '; ');
+      if (fp.capacidade_ok === false) {
+        const w = document.createElement('div');
+        w.className = 'err';
+        w.style.cssText = 'margin-top:.3rem;overflow-wrap:anywhere';
+        w.textContent = 'O Flow ignorou os campos fiscais (o Flow ainda não aceita). Tire a empresa de PORTAL_FLOWPCP_CATALOGO_FISCAL.';
+        g.appendChild(w);
+      }
+    }
+
+    // Material: só simulação. Chaves conhecidas do `resumo` do Flow em ordem fixa;
+    // qualquer outra chave escalar aparece com o nome cru (o Flow é dono do shape).
+    const MAT_RESUMO = [
+      ['casadosPorId', 'Casados por id'], ['casadosPorCodigo', 'Casados por código'],
+      ['casadosPorNome', 'Casados por nome'], ['criar', 'A criar'], ['atualizar', 'A atualizar'],
+      ['ambiguos', 'Ambíguos'], ['codigoNomeDiverge', 'Código e nome divergem'],
+      ['unidadeSemMapa', 'Unidade sem mapa'], ['exigeAprovacaoDiverge', 'Exige aprovação diverge'],
+      ['soNoFlow', 'Só no Flow'],
+    ];
+    function matRender(out, rep) {
+      out.replaceChildren();
+      const resumo = rep.resumo && typeof rep.resumo === 'object' ? rep.resumo : {};
+      const g = catGrupo(out, 'Resumo do Flow');
+      const vistos = new Set();
+      MAT_RESUMO.forEach(([k, rot]) => {
+        if (!(k in resumo)) return;
+        vistos.add(k);
+        catLinha(g, rot, resumo[k]);
+      });
+      Object.keys(resumo).forEach((k) => {
+        const v = resumo[k];
+        if (vistos.has(k) || (v !== null && typeof v === 'object')) return;
+        catLinha(g, k, v);
+      });
+      if (!Object.keys(resumo).length) catLinha(g, 'Resumo', '—');
+      const mp = rep.materiais_portal;
+      if (mp && typeof mp === 'object') {
+        const p = catGrupo(out, 'Enviado pelo Portal');
+        catLinha(p, 'Materiais enviados', mp.enviados);
+        const fora = catMapa(mp.fora, (k, x) => k + ': ' + x);
+        catLinha(p, 'Fora do envio (SEQ: motivo)', fora.length, fora.length ? 'aviso' : undefined);
+        catSeqs(p, fora, undefined, '; ');
+        const mf = catMapa(mp.por_motivo_fora, (k, x) => k + ': ' + x);
+        if (mf.length) catSeqs(p, mf, undefined, '; ');
+        const pend = catMapa(mp.pendencias, (k, x) => k + ': ' + (Array.isArray(x) ? x.join(', ') : x));
+        catLinha(p, 'Com pendência (SEQ: motivos)', pend.length, pend.length ? 'aviso' : undefined);
+        catSeqs(p, pend, undefined, '; ');
+        const mpd = catMapa(mp.por_motivo_pendencia, (k, x) => k + ': ' + x);
+        if (mpd.length) catSeqs(p, mpd, undefined, '; ');
+        if (mp.capacidade_ok === false) {
+          const w = document.createElement('div');
+          w.className = 'err';
+          w.style.cssText = 'margin-top:.3rem;overflow-wrap:anywhere';
+          w.textContent = 'O Flow ainda não declara a capacidade de materiais.';
+          p.appendChild(w);
+        }
+      }
+    }
+    async function rodarSyncMateriais() {
+      const st = document.getElementById('sync-materiais-status');
+      const out = document.getElementById('sync-materiais-result');
+      const btn = document.getElementById('btn-sync-materiais');
+      st.textContent = 'Simulando… pode levar alguns segundos.';
+      st.className = 'flowpcp-status';
+      out.hidden = true;
+      btn.disabled = true;
+      try {
+        const r = await fetch('/api/admin/environments/' + envId + '/flowpcp/sync-materiais', { method: 'POST' });
+        const t = await r.text();
+        if (!r.ok) {
+          let msg; try { msg = JSON.parse(t).detail || t; } catch { msg = t || ('Erro ' + r.status); }
+          st.textContent = '✗ ' + (typeof msg === 'string' ? msg : JSON.stringify(msg)); st.classList.add('err'); return;
+        }
+        const rep = JSON.parse(t);
+        if (rep.local_only) {
+          st.textContent = '✓ Materiais atualizados localmente (' + rep.itens + '). Envio ao Flow DESLIGADO.';
+          st.classList.add('ok');
+          return;
+        }
+        st.textContent = '✓ Simulação concluída (dry-run)';
+        st.classList.add('ok');
+        out.hidden = false;
+        matRender(out, rep);
+      } catch (err) {
+        st.textContent = '✗ ' + err.message; st.classList.add('err');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+    document.getElementById('btn-sync-materiais').addEventListener('click', rodarSyncMateriais);
+
+    // Volta Flow → Fire: carrega ao abrir (só edição). `desligado` = só "Desligada".
+    function voltaRender(out, d) {
+      out.replaceChildren();
+      const modo = d && typeof d.modo === 'string' ? d.modo : '';
+      if (modo === 'desligado') { catLinha(out, 'Volta', 'Desligada'); return; }
+      catLinha(out, 'Modo', modo || '—');
+      const pe = catMapa(d && d.por_estado, (k, x) => k + ': ' + x);
+      catLinha(out, 'Por estado', pe.length ? pe.join(' · ') : 'nenhum');
+      const ult = d && Array.isArray(d.ultimos) ? d.ultimos.slice(0, 10) : [];
+      const g = catGrupo(out, 'Últimos ' + ult.length);
+      if (!ult.length) { catLinha(g, 'Itens', 'nenhum'); return; }
+      ult.forEach((x) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'overflow-wrap:anywhere;font-variant-numeric:tabular-nums;margin-bottom:.2rem';
+        const partes = [(x.cadastro_id ?? '—') + ' v' + (x.versao ?? '—'), x.estado, x.acao, x.tipo].map((v) => (v === undefined || v === null || v === '') ? '—' : String(v));
+        row.textContent = partes.join(' · ');
+        if (x.erro_codigo) {
+          const e = document.createElement('span');
+          e.className = 'err';
+          e.textContent = ' · ' + x.erro_codigo;
+          row.appendChild(e);
+        }
+        g.appendChild(row);
+      });
+    }
+    async function carregarVolta() {
+      const st = document.getElementById('volta-status');
+      const out = document.getElementById('volta-result');
+      st.textContent = 'Carregando…';
+      st.className = 'flowpcp-status';
+      try {
+        const r = await fetch('/api/admin/environments/' + envId + '/flowpcp/cadastro-volta');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        st.textContent = '';
+        out.hidden = false;
+        voltaRender(out, d);
+      } catch (err) {
+        out.hidden = true;
+        st.textContent = '✗ Não foi possível carregar a volta do Flow agora.';
+        st.classList.add('err');
+      }
+    }
+    if (isEdit) carregarVolta();
+    // ── Cadastro: fiscal, materiais e volta (fim)
 
     // ── Filesystem browser (pastas e arquivos) ─────────────────────
     // Modo "dir": clica em "Selecionar aqui" pra escolher o diretório atual
