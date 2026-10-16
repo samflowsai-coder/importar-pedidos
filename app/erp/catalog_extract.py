@@ -21,6 +21,13 @@ class ProdutoFireDTO:
     tipo: str  # 'pack' | 'kit' | 'simples' — ver `_tipo`
     codigo_alternativo: str | None = None  # CODPROD_ALTERN (código do par no Apontaê, se par)
     tem_composicao: bool = False  # IS_KIT: tem linha em PRODUTOS_KIT como pai
+    # Campos fiscais/cadastrais (catalogo_fiscal valida; aqui só o valor lido, aparado)
+    ncm_bruto: str | None = None  # CLASSIF_FISCAL
+    sped_bruto: int | None = None  # CODITEMSPED
+    grupo_codigo: int | None = None  # GRUPO
+    grupo_nome: str | None = None  # GRUPO_PRODUTOS.GRUPO
+    codigo_nfe: str | None = None  # CODPARANFE
+    cor: str | None = None  # DESCRICAO2
 
 
 def _clean(v) -> str | None:
@@ -48,6 +55,18 @@ def _tipo(is_kit, unidade: str | None, nome: str) -> str:
     return "simples"
 
 
+def _int_ou_none(v) -> int | None:
+    """Inteiro do Fire ou None; texto não numérico vira None (a regra de
+    `catalogo_fiscal` decide o que fazer com vazio)."""
+    s = _clean(v)
+    if s is None:
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        return None
+
+
 def extract_produtos(fire_conn, *, apenas_meias: bool = False) -> list[ProdutoFireDTO]:
     """Lê o subconjunto de identidade de PRODUTOS do Fire. Read-only.
     codigo = fire_produto_id = str(SEQ) (o cliente usa o sequencial).
@@ -65,7 +84,21 @@ def extract_produtos(fire_conn, *, apenas_meias: bool = False) -> list[ProdutoFi
     finally:
         cur.close()
     out: list[ProdutoFireDTO] = []
-    for seq, desc, uni, ean, bloqueado, is_kit, alternativo in rows:
+    for (
+        seq,
+        desc,
+        uni,
+        ean,
+        bloqueado,
+        is_kit,
+        alternativo,
+        ncm,
+        sped,
+        grupo,
+        grupo_nome,
+        nfe,
+        cor,
+    ) in rows:
         seq_s = str(seq)
         nome = _clean(desc) or ""
         out.append(
@@ -79,6 +112,12 @@ def extract_produtos(fire_conn, *, apenas_meias: bool = False) -> list[ProdutoFi
                 tipo=_tipo(is_kit, _clean(uni), nome),
                 codigo_alternativo=_clean(alternativo),
                 tem_composicao=bool(is_kit),
+                ncm_bruto=_clean(ncm),
+                sped_bruto=_int_ou_none(sped),
+                grupo_codigo=_int_ou_none(grupo),
+                grupo_nome=_clean(grupo_nome),
+                codigo_nfe=_clean(nfe),
+                cor=_clean(cor),
             )
         )
     return out

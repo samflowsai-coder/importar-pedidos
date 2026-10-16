@@ -120,7 +120,7 @@ def rodar(
     return enviados
 
 
-_BLOCOS = ("composicao", "vinculoMes", "composicao_portal", "fora_do_envio_guardado")
+_BLOCOS = ("composicao", "vinculoMes", "composicao_portal", "fora_do_envio_guardado", "fiscal_portal")
 
 
 def _precisa_atencao(rep: object) -> bool:
@@ -130,12 +130,14 @@ def _precisa_atencao(rep: object) -> bool:
     extra = getattr(rep, "model_extra", None) or {}
     comp = extra.get("composicao") or {}
     portal = extra.get("composicao_portal") or {}
+    fiscal = extra.get("fiscal_portal") or {}
     trava = comp.get("travaRemocaoAtiva") is True or comp.get("travaSubstituicaoAtiva") is True
     return bool(
         trava
         or comp.get("erpSemChave")
         or portal.get("leitura_ok") is False
         or portal.get("divergencia_nome")
+        or fiscal.get("capacidade_ok") is False
     )
 
 

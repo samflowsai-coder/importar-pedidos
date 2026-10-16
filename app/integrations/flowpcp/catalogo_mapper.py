@@ -4,6 +4,7 @@ from app.erp.catalog_extract import ProdutoFireDTO
 from app.integrations.flowpcp.catalogo_composicao import ComposicaoDoEnvio
 from app.integrations.flowpcp.catalogo_schema import (
     CatalogoComponente,
+    CatalogoGrupoErp,
     CatalogoOrigem,
     CatalogoProdutoItem,
     CatalogoRequest,
@@ -14,6 +15,7 @@ def _item(
     d: ProdutoFireDTO,
     composicao: ComposicaoDoEnvio | None,
     codigos_mes: dict[str, str | None] | None,
+    fiscal: dict[str, dict] | None = None,
 ) -> CatalogoProdutoItem:
     campos = dict(
         fireProdutoId=d.fire_produto_id,
@@ -31,6 +33,11 @@ def _item(
                 CatalogoComponente(erpProdutoId=f, quantidade=q)
                 for f, q in composicao.por_seq[d.fire_produto_id]
             ]
+    if fiscal is not None:
+        extra = dict(fiscal.get(d.fire_produto_id, {}))
+        if "grupoErp" in extra:
+            extra["grupoErp"] = CatalogoGrupoErp(**extra["grupoErp"])
+        campos.update(extra)
     return CatalogoProdutoItem(**campos)
 
 
@@ -45,8 +52,10 @@ def build_catalogo_request(
     codigos_mes: dict[str, str | None] | None = None,
     confirmar_remocao: bool = False,
     confirmar_substituicao: bool = False,
+    fiscal: dict[str, dict] | None = None,
 ) -> CatalogoRequest:
     """`composicao=None` (interruptor desligado): itens iguais aos de antes.
+    `fiscal=None` idem: nenhum campo fiscal no corpo.
     Confirmações só entram no corpo quando pedidas."""
     extras = {}
     if confirmar_remocao:
@@ -56,7 +65,7 @@ def build_catalogo_request(
     return CatalogoRequest(
         dryRun=dry_run,
         fullSync=full_sync,
-        itens=[_item(d, composicao, codigos_mes) for d in dtos],
+        itens=[_item(d, composicao, codigos_mes, fiscal) for d in dtos],
         origem=CatalogoOrigem(importadorVersao=importador_versao, extraidoEm=extraido_em),
         **extras,
     )
