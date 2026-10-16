@@ -183,7 +183,7 @@ PORTAL_FLOWPCP_CATALOGO_HORA=    # hora (Brasília) do envio diário do catálog
 PORTAL_FLOWPCP_CATALOGO_DIARIO=  # simular (padrão: Flow só compara) | gravar | desligado
 PORTAL_FLOWPCP_CATALOGO_COMPOSICAO=  # slugs separados por vírgula (ex.: mm) que mandam composição dos kits e código
                                      # do Apontaê no catálogo. Só com o Flow aceitando (Fatia A).
-PORTAL_FLOWPCP_CATALOGO_EXCLUIR_<SLUG>=  # (slug em maiúsculas, não alfanumérico vira _; ex.: _MM)
+PORTAL_FLOWPCP_CATALOGO_EXCLUIR_<SLUG>=  # (slug em maiúsculas, não alfanumérico vira _; ex.: PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM)
                                      # SEQs separados por vírgula, fora de todo envio de catálogo da
                                      # empresa (manual e diário) até o cadastro no Fire ser corrigido.
                                      # Valor inválido ou SEQ fora do extract = nenhum envio de catálogo

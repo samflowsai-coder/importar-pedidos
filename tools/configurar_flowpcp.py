@@ -174,7 +174,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--promover",
         action="store_true",
-        help="após configurar+testar, roda Simular + Promover o catálogo (sem prompt)",
+        help=(
+            "após configurar+testar, roda Simular + Promover o catálogo (sem prompt). "
+            "Com PORTAL_FLOWPCP_CATALOGO_COMPOSICAO ligado, --promover grava composição e "
+            "vínculo com o Apontaê: só com o ok do Samuel"
+        ),
     )
     args = parser.parse_args(argv)
 

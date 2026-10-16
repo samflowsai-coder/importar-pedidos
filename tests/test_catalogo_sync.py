@@ -303,12 +303,14 @@ class _FireComKit:
 
     def __init__(self, linhas=None, falha=False):
         self.linhas, self.falha = linhas or [], falha
+        self.sqls: list[str] = []
 
     def cursor(self):
         dono = self
 
         class _C:
             def execute(self, sql):
+                dono.sqls.append(sql)
                 if dono.falha:
                     raise RuntimeError("Fire caiu")
 
@@ -357,20 +359,26 @@ def _sync(monkeypatch):
     return rodar
 
 
+_LEGADO = [
+    {"fireProdutoId": "2544", "codigo": "2544", "nome": "KIT", "unidade": "KIT",
+     "ean": None, "ativo": True, "tipo": "kit"},
+    # 3306 tem CODPROD_ALTERN: o codigoMes não pode vazar com o interruptor desligado
+    {"fireProdutoId": "3306", "codigo": "3306", "nome": "PAR", "unidade": "PARES",
+     "ean": None, "ativo": True, "tipo": "simples"},
+    {"fireProdutoId": "3174", "codigo": "3174", "nome": "PAR DUP", "unidade": "PARES",
+     "ean": None, "ativo": True, "tipo": "simples"},
+]
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
 @pytest.mark.parametrize("ligado_para", ["", "nasmar"])
-def test_sync_desligado_payload_identico_ao_de_hoje(_sync, ligado_para):
-    rep, corpo = _sync(ligado_para=ligado_para)
-    esperado = {
-        "fireProdutoId": "2544",
-        "codigo": "2544",
-        "nome": "KIT",
-        "unidade": "KIT",
-        "ean": None,
-        "ativo": True,
-        "tipo": "kit",
-    }
-    assert json.dumps(corpo["itens"][0], sort_keys=True) == json.dumps(esperado, sort_keys=True)
+def test_sync_desligado_payload_identico_ao_de_hoje(_sync, ligado_para, dry_run):
+    fire = _FireComKit([(2544, 3306, 6)])
+    rep, corpo = _sync(ligado_para=ligado_para, fire=fire, dry_run=dry_run)
+    assert json.dumps(corpo["itens"], sort_keys=True) == json.dumps(_LEGADO, sort_keys=True)
     assert set(corpo) == {"schema", "dryRun", "fullSync", "itens", "origem"}
+    assert corpo["dryRun"] is dry_run
+    assert not any("PRODUTOS_KIT" in q for q in fire.sqls)
     assert "composicao_portal" not in (rep.model_extra or {})
 
 

@@ -297,7 +297,10 @@ def sync_catalogo_flowpcp(
         ForaDoEnvioInexistenteError,
         run_catalogo_sync,
     )
-    from app.integrations.flowpcp.client import FlowPCPApplyEmAndamentoError
+    from app.integrations.flowpcp.client import (
+        FlowPCPApplyEmAndamentoError,
+        FlowPCPClientError,
+    )
 
     if (confirmar_remocao or confirmar_substituicao) and not apply:
         raise HTTPException(422, "Liberar trava só vale junto com apply=true (gravar)")
@@ -338,6 +341,18 @@ def sync_catalogo_flowpcp(
             msg = "O Flow não respondeu a tempo. Tente simular de novo."
         raise HTTPException(504, msg) from exc
     except Exception as exc:  # noqa: BLE001 — vira erro HTTP legível pro operador
+        status = getattr(exc, "status_code", None)
+        if (
+            apply
+            and isinstance(exc, FlowPCPClientError)
+            and isinstance(status, int)
+            and status >= 500
+        ):
+            raise HTTPException(
+                502,
+                f"O Flow respondeu com erro ao gravar ({status}). Ele pode ter gravado parte: "
+                "simule antes de gravar de novo.",
+            ) from exc
         raise HTTPException(502, f"Falha no sync de catálogo: {exc}") from exc
     if rep is None:
         raise HTTPException(409, "FlowPCP não está habilitado neste ambiente")

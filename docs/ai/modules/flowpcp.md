@@ -146,7 +146,7 @@ ou KIT no nome; o resto é `simples`. O promote atualiza o tipo dos já casados.
 O recorte "só meias" inclui os componentes (CTE recursiva sobre `PRODUTOS_KIT`),
 porque o par não é vendido e sem isso ficava só no Flow (trava de 5 níveis
 contra ciclo; componente cueca fora). A composição em si (`componentes`) só vai
-no payload com `PORTAL_FLOWPCP_CATALOGO_COMPOSICAO` ligada para o slug (ver abaixo). **Portão antes de gravar:** o promote casa por
+no payload com `PORTAL_FLOWPCP_CATALOGO_COMPOSICAO` ligada para o slug (ver abaixo). Com ela ligada, `tools/configurar_flowpcp.py --promover` grava composição e vínculo com o Apontaê: só com o ok do Samuel. **Portão antes de gravar:** o promote casa por
 `fire_produto_id`, código e nome; par só do Flow (`APT-…`, sem
 `fire_produto_id`) com nome diferente do Fire vira produto novo ao lado dele
 (par duplicado). Conferir no dryRun `fireOnly`/`nomeAmbiguo` dos pares antes do

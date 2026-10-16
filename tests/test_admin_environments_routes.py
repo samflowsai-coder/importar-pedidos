@@ -779,6 +779,31 @@ def test_sync_catalogo_409_do_flow_vira_mensagem_clara(setup, monkeypatch):
     assert "já está gravando" in r.json()["detail"]
 
 
+@pytest.mark.parametrize(
+    "apply,status,trecho",
+    [
+        ("true", 503, "Ele pode ter gravado parte: simule antes de gravar de novo"),
+        ("true", 500, "O Flow respondeu com erro ao gravar (500)"),
+        ("false", 503, "Falha no sync de catálogo"),
+        ("true", 422, "Falha no sync de catálogo"),
+    ],
+)
+def test_sync_catalogo_5xx_do_flow_no_apply_avisa_que_pode_ter_gravado(
+    setup, monkeypatch, apply, status, trecho
+):
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+    from app.integrations.flowpcp.client import FlowPCPClientError
+
+    def quebra(*a, **k):
+        raise FlowPCPClientError("falhou", status_code=status)
+
+    monkeypatch.setattr(cs, "run_catalogo_sync", quebra)
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?apply={apply}")
+    assert r.status_code == 502
+    assert trecho in r.json()["detail"]
+
+
 def test_sync_catalogo_valueerror_do_sync_e_422(setup, monkeypatch):
     env = _env_mm_habilitado(setup)
     import app.integrations.flowpcp.catalogo_sync as cs

@@ -168,6 +168,10 @@ def run_catalogo_sync(
             rep = client.send_catalogo(request)
         except FlowPCPClientError as exc:
             if ligado and exc.status_code == 400:
+                # o caminho do Zod (campo recusado) só aparece no corpo; sem segredo nele
+                logger.error(
+                    f"catalogo sync env={slug}: Flow recusou status=400 body={(exc.body or '')[:500]}"
+                )
                 raise FlowPCPClientError(
                     f"{exc} — o Flow recusou o catálogo com composição. Se a Fatia A não "
                     f"estiver no ar, tire '{slug}' de PORTAL_FLOWPCP_CATALOGO_COMPOSICAO",

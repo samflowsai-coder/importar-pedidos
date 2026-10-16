@@ -377,7 +377,7 @@ LIST_PRODUTOS_CATALOGO_MEIAS = """
 """
 
 # Composição (PRODUTOS_KIT) para o catálogo enviado ao Flow: pai, filho e
-# quantidade, um nível (o Flow explode recursivo). Sem filtro: são ~500 linhas na
+# quantidade, um nível (o Flow explode recursivo). Sem filtro: são centenas de linhas na
 # MM, e quem decide o que vai é catalogo_composicao. ORDER BY CODIGO mantém a
 # ordem de cadastro, que vira a posição do filho no Flow.
 LIST_PRODUTOS_KIT_COMPOSICAO = """
