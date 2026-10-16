@@ -15,6 +15,8 @@ class ProdutoFireDTO:
     ean: str | None  # CODIGO_EAN13
     ativo: bool  # BLOQUEADO <> 'Sim'
     tipo: str  # 'pack' | 'kit' | 'simples' — ver `_tipo`
+    codigo_alternativo: str | None = None  # CODPROD_ALTERN (código do par no Apontaê, se par)
+    tem_composicao: bool = False  # IS_KIT: tem linha em PRODUTOS_KIT como pai
 
 
 def _clean(v) -> str | None:
