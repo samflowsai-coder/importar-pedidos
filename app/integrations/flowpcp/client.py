@@ -8,6 +8,7 @@ import httpx
 
 from app.http.client import HttpError, OutboundClient
 from app.http.policies import apply_post_policy, idempotent_post_policy
+from app.integrations.flowpcp.cadastro_schema import PendentesResposta
 from app.integrations.flowpcp.catalogo_schema import (
     CatalogoReconciliacaoResponse,
     CatalogoRequest,
@@ -31,6 +32,7 @@ _DECISOES_PATH = "/api/portal-pedidos/decisoes"
 _CATALOGO_PATH = "/api/portal-pedidos/catalogo"
 _CLIENTES_PATH = "/api/portal-pedidos/clientes"
 _MATERIAIS_PATH = "/api/portal-pedidos/materiais"
+_CADASTROS_PENDENTES_PATH = "/api/portal-pedidos/cadastros/pendentes"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 # Apply do catálogo: o Flow tem maxDuration 300 s e um apply por vez (409).
 APPLY_TIMEOUT_SECONDS = 300.0
@@ -121,6 +123,22 @@ class FlowPCPClient:
                 body=(resp.text or "")[:500],
             )
         return DecisoesResponse.model_validate(resp.json())
+
+    def list_cadastros_pendentes(self, limite: int = 20) -> PendentesResposta:
+        """Fila de cadastros aprovados no Flow. Só leitura: nada é confirmado."""
+        try:
+            resp = self._client.get(_CADASTROS_PENDENTES_PATH, params={"limite": limite})
+        except HttpError as exc:
+            raise FlowPCPClientError(
+                f"list_cadastros_pendentes falhou: {exc}", status_code=exc.status_code, body=exc.body
+            ) from exc
+        if not resp.is_success:
+            raise FlowPCPClientError(
+                f"cadastros pendentes status {resp.status_code}",
+                status_code=resp.status_code,
+                body=(resp.text or "")[:500],
+            )
+        return PendentesResposta.model_validate(resp.json())
 
     def confirmar_reconciliacao(
         self, decisao_id: str, request: ConfirmarReconciliacaoRequest

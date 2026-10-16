@@ -432,6 +432,30 @@ def sync_materiais_flowpcp(env_id: str, apply: bool = False, _=Depends(require_a
     return res.model_dump(by_alias=True)
 
 
+_PLANO_MAX_BYTES = 2048
+
+
+@router.get("/{env_id}/flowpcp/cadastro-volta")
+def cadastro_volta_flowpcp(env_id: str, _=Depends(require_admin)):
+    """Livro da volta Flow → Fire (spec 2026-10-16 §6.3). Só leitura do SQLite do ambiente."""
+    env = environments_repo.get(env_id)
+    if not env:
+        raise HTTPException(404, "Ambiente não encontrado")
+
+    from app.integrations.flowpcp import cadastro_volta
+    from app.persistence import cadastro_volta_repo
+
+    with db_router.env_connect(env["slug"]) as conn:
+        por_estado = cadastro_volta_repo.contar_por_estado(conn)
+        ultimos = cadastro_volta_repo.listar(conn, limite=50)
+    for linha in ultimos:
+        plano = linha.get("plano_json")
+        linha["plano_truncado"] = bool(plano) and len(plano) > _PLANO_MAX_BYTES
+        if linha["plano_truncado"]:
+            linha["plano_json"] = plano[:_PLANO_MAX_BYTES]
+    return {"modo": cadastro_volta.modo(env["slug"]), "por_estado": por_estado, "ultimos": ultimos}
+
+
 @router.delete("/{env_id}", status_code=204)
 def delete_environment(env_id: str, _=Depends(require_admin)):
     if not environments_repo.get(env_id):

@@ -140,6 +140,24 @@ CREATE TABLE IF NOT EXISTS materiais_fire (
     extraido_em     TEXT NOT NULL
 );
 
+-- Livro da volta Flow → Fire (spec 2026-10-16 §6.3). Na Etapa 1 só registra
+-- `simulado`/`erro_definitivo`: nada é gravado no Fire nem confirmado no Flow.
+-- (cadastro_id, versao) é o lease: o mesmo item não é processado duas vezes.
+CREATE TABLE IF NOT EXISTS cadastro_volta (
+    cadastro_id    TEXT NOT NULL,
+    versao         INTEGER NOT NULL,
+    estado         TEXT NOT NULL,
+    acao           TEXT,
+    tipo           TEXT,
+    seq_reservado  INTEGER,
+    erro_codigo    TEXT,
+    erro_mensagem  TEXT,
+    plano_json     TEXT,
+    iniciado_em    TEXT NOT NULL DEFAULT (datetime('now')),
+    atualizado_em  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (cadastro_id, versao)
+);
+
 -- Cópia local dos clientes ativos do Fire ("manter no importador"). Snapshot
 -- substitutivo a cada sync; envio ao Flow é gated por flowpcp_clientes_push.
 CREATE TABLE IF NOT EXISTS clientes_fire (

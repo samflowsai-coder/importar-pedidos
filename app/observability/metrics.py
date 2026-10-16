@@ -73,6 +73,24 @@ flowpcp_janela_pedidos: Gauge = Gauge(
 )
 
 
+cadastro_volta_total: Counter = Counter(
+    "portal_flowpcp_cadastro_volta_total",
+    "Cadastros da fila do Flow tratados pela volta, por resultado "
+    "(simulado | erro_definitivo | ja_no_livro).",
+    ["env", "resultado"],
+)
+cadastro_volta_pendentes: Gauge = Gauge(
+    "portal_flowpcp_cadastro_volta_pendentes",
+    "Cadastros na fila do Flow na última leitura da volta.",
+    ["env"],
+)
+cadastro_volta_mais_antigo: Gauge = Gauge(
+    "portal_flowpcp_cadastro_volta_mais_antigo_segundos",
+    "Idade (aprovadoEm) do cadastro mais antigo da fila na última leitura.",
+    ["env"],
+)
+
+
 def update_outbox_metrics() -> None:
     """Query todas as DBs de ambiente e atualiza outbox Gauges (soma global).
 
