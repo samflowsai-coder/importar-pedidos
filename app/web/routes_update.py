@@ -37,7 +37,7 @@ def staging_dir() -> Path:
 
 
 _RUNNING_STATUSES = {"apply_requested", "in_progress"}
-_TERMINAL_STATUSES = {"succeeded", "rolled_back", "rollback_failed"}
+_TERMINAL_STATUSES = {"succeeded", "rolled_back", "rollback_failed", "restart_failed"}
 # Um updater VIVO segura o update.lock durante toda a aplicação. Logo, status
 # "rodando" SEM lock e com started_at antigo = o updater morreu sem escrever
 # status terminal (ex.: o watchdog já removeu o lock órfão). Bem acima da janela
@@ -139,6 +139,7 @@ async def upload(file: UploadFile = File(...), _=Depends(require_admin)):
             version=res.version, deps_changed=res.deps_changed,
             git_commit=res.git_commit, built_at=res.built_at,
             files_count=res.files_count, notes=res.notes,
+            kind=None,  # o status.json é mesclado: não herdar `restart` de antes
         )
         return {
             "update_id": res.update_id, "version": res.version,
@@ -163,11 +164,34 @@ def apply(body: ApplyBody, _=Depends(require_admin)):
     _reject_if_update_running(s)
     if s.get("status") != "staged" or s.get("update_id") != body.update_id:
         raise HTTPException(404, "update_id não corresponde ao pacote staged")
-    state.write_status(updates_dir(), status="apply_requested", started_at=time.time())
+    state.write_status(updates_dir(), status="apply_requested", started_at=time.time(), kind=None)
     if not _start_updater_task():
         state.write_status(updates_dir(), status="staged")  # reverte
         raise HTTPException(409, "serviço de update não configurado — rode setup-service.bat no servidor")
     return {"update_id": body.update_id, "status": "apply_requested"}
+
+
+@router.post("/restart", status_code=202)
+def restart(user=Depends(require_admin)):
+    """Reinicia o portal (ex.: depois de mudar o .env) pelo mesmo updater do
+    /apply, em modo `kind=restart`: só stop -> start -> health-check, sem
+    backup, staging, pip nem tocar em arquivo."""
+    if state.is_locked(updates_dir()):
+        raise HTTPException(409, "há um update em andamento")
+    s = state.read_status(updates_dir())
+    _reject_if_update_running(s)
+    if s.get("status") == "staged":
+        # o status.json é um só: reiniciar apagaria o estado do pacote encenado
+        raise HTTPException(409, "há um pacote enviado esperando — aplique ou descarte o pacote antes de reiniciar")
+    # Recomeça o status do zero: restos de um update anterior (update_id, error,
+    # version...) não podem vazar para o ciclo de restart.
+    state.clear_status(updates_dir())
+    state.write_status(updates_dir(), status="apply_requested", kind="restart",
+                       started_at=time.time(), requested_by=user.email)
+    if not _start_updater_task():
+        state.clear_status(updates_dir())  # reverte
+        raise HTTPException(409, "serviço de update não configurado — rode setup-service.bat no servidor")
+    return {"status": "apply_requested", "kind": "restart"}
 
 
 def _running_but_dead(s: dict) -> bool:

@@ -25,6 +25,7 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 1) **A simulação do catálogo mostra o impacto na fila de produção, os kits que o Flow segurou e por quê, e os códigos do Apontaê que não existem lá.** O impacto já vinha do Flow, mas a tela procurava no lugar errado e não mostrava.
 2) **Kit cuja quantidade no nome não bate com a composição do Fire fica congelado no Flow.** Ele continua no catálogo, mas sem composição: o Flow não muda o que tem até o Fire ser corrigido (a composição ou o nome), e aí o kit sobe sozinho no envio seguinte. A tela lista esses kits como congelados.
+3) **Há um botão "Reiniciar o portal" em Atualização do sistema**, para o portal passar a valer uma mudança na configuração do servidor sem precisar de acesso remoto; ele só fica liberado quando não há atualização em andamento nem pacote esperando.
 
 ---
 

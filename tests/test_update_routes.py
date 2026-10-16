@@ -362,3 +362,147 @@ def test_apply_operador_nao_admin_403(setup, real_auth):
     _bootstrap_operator_session(c)
     r = c.post("/api/admin/update/apply", json={"update_id": "x"})
     assert r.status_code == 403
+
+
+# ── POST /restart: reinicia o portal pelo mesmo updater, sem pacote ──────────
+
+def test_restart_dispara_updater_202_e_grava_status_kind_restart(setup, monkeypatch):
+    from app.updates import state
+    from app.web import routes_update
+    called = {}
+    monkeypatch.setattr(routes_update, "_start_updater_task",
+                        lambda: called.setdefault("ran", True) or True)
+    r = _client().post("/api/admin/update/restart")
+    assert r.status_code == 202 and called.get("ran")
+    s = state.read_status(routes_update.updates_dir())
+    assert s["kind"] == "restart" and s["status"] == "apply_requested"
+    assert isinstance(s["started_at"], float)
+    assert s["requested_by"] == "test@portal.local"
+
+
+@pytest.mark.parametrize("running_status", ["apply_requested", "in_progress"])
+def test_restart_rejeita_409_quando_update_em_andamento(setup, monkeypatch, running_status):
+    """Guard de ESTADO (status rodando, sem lock no disco ainda)."""
+    from app.updates import state
+    from app.web import routes_update
+    called = {}
+    monkeypatch.setattr(routes_update, "_start_updater_task",
+                        lambda: called.setdefault("ran", True) or True)
+    state.write_status(routes_update.updates_dir(), status=running_status, update_id="x")
+    r = _client().post("/api/admin/update/restart")
+    assert r.status_code == 409 and "andamento" in r.json()["detail"].lower()
+    assert not called
+
+
+def test_restart_rejeita_409_com_lock_no_disco(setup, monkeypatch):
+    """Guard de LOCK: updater vivo segura update.lock mesmo sem status rodando."""
+    from app.updates import state
+    from app.web import routes_update
+    monkeypatch.setattr(routes_update, "_start_updater_task", lambda: True)
+    lock = state.lock_path(routes_update.updates_dir())
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("pid=1")
+    r = _client().post("/api/admin/update/restart")
+    assert r.status_code == 409 and "andamento" in r.json()["detail"].lower()
+
+
+def test_restart_rejeita_409_com_pacote_encenado_e_preserva_status(setup, monkeypatch):
+    from app.updates import state
+    from app.web import routes_update
+    called = {}
+    monkeypatch.setattr(routes_update, "_start_updater_task",
+                        lambda: called.setdefault("ran", True) or True)
+    state.write_status(routes_update.updates_dir(), status="staged", update_id="abc",
+                       version="v1")
+    r = _client().post("/api/admin/update/restart")
+    assert r.status_code == 409
+    assert "pacote" in r.json()["detail"].lower()
+    s = state.read_status(routes_update.updates_dir())
+    assert s["status"] == "staged" and s["update_id"] == "abc" and "kind" not in s
+    assert not called
+
+
+def test_restart_falha_ao_disparar_tarefa_reverte_e_409(setup, monkeypatch):
+    from app.updates import state
+    from app.web import routes_update
+    monkeypatch.setattr(routes_update, "_start_updater_task", lambda: False)
+    r = _client().post("/api/admin/update/restart")
+    assert r.status_code == 409 and "setup-service" in r.json()["detail"]
+    assert state.read_status(routes_update.updates_dir())["status"] == "idle"
+
+
+def test_restart_apos_terminal_descarta_campos_do_update_anterior(setup, monkeypatch):
+    from app.updates import state
+    from app.web import routes_update
+    monkeypatch.setattr(routes_update, "_start_updater_task", lambda: True)
+    state.write_status(routes_update.updates_dir(), status="rolled_back",
+                       update_id="velho", error="boom")
+    assert _client().post("/api/admin/update/restart").status_code == 202
+    s = state.read_status(routes_update.updates_dir())
+    assert s["kind"] == "restart" and "error" not in s and "update_id" not in s
+
+
+def test_upload_e_apply_apos_restart_nao_herdam_kind_restart(setup, monkeypatch):
+    """O status.json é um só e o merge preserva chaves: sem limpar `kind`, um
+    update feito depois de um restart seria executado como restart."""
+    from app.updates import package, state
+    from app.web import routes_update
+    monkeypatch.setattr(package, "compute_deps_sha256", lambda p: "SHA")
+    monkeypatch.setattr(routes_update, "_start_updater_task", lambda: True)
+    c = _client()
+    assert c.post("/api/admin/update/restart").status_code == 202
+    state.write_status(routes_update.updates_dir(), status="succeeded")  # updater terminou
+    up = c.post("/api/admin/update/upload",
+                files={"file": ("p.zip", _good_zip("SHA"), "application/zip")}).json()
+    assert state.read_status(routes_update.updates_dir()).get("kind") is None
+    assert c.post("/api/admin/update/apply", json={"update_id": up["update_id"]}).status_code == 202
+    assert state.read_status(routes_update.updates_dir()).get("kind") is None
+
+
+def test_dismiss_limpa_restart_failed(setup):
+    from app.updates import state
+    from app.web import routes_update
+    state.write_status(routes_update.updates_dir(), status="restart_failed", kind="restart")
+    r = _client().post("/api/admin/update/dismiss")
+    assert r.status_code == 200 and r.json()["status"] == "idle"
+
+
+def test_restart_sem_auth_401(setup, real_auth):
+    assert _client().post("/api/admin/update/restart").status_code == 401
+
+
+def test_restart_operador_nao_admin_403(setup, real_auth):
+    c = _client()
+    _bootstrap_operator_session(c)
+    assert c.post("/api/admin/update/restart").status_code == 403
+
+
+def test_updater_ps1_tem_ramo_restart_sem_backup_nem_pip():
+    """O .ps1 não roda no Mac: trava por texto o ramo `restart` (sem backup,
+    staging, pip nem arquivos) e que o fluxo de atualização segue intacto."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "scripts" / "apply-update.ps1").read_text(
+        encoding="utf-8")
+    start = src.index("function Invoke-Restart")
+    end = src.index("\n}\n", start)
+    body = src[start:end]
+    for fase in ("stop", "start", "healthcheck"):
+        assert f'-Phase "{fase}"' in body
+    for proibido in ("Backup-CurrentInstall", "Apply-StagedFiles", "Install-Dependencies",
+                     "Assert-StagingValid", "Copy-Item", "Remove-Item"):
+        assert proibido not in body
+    assert "restart_failed" in body and 'kind = "restart"' in body
+    # falha inesperada no ramo: despacho tem catch que grava restart_failed
+    despacho = src[src.index("if ($isRestart)"):src.index("exit 0", src.index("if ($isRestart)"))]
+    assert "} catch {" in despacho and '-Status "restart_failed"' in despacho
+    assert '-eq "restart"' in src
+    # o fluxo de atualização continua lá
+    assert "Backup-CurrentInstall -Destination $backupDir" in src
+
+
+def test_pagina_atualizacao_tem_botao_reiniciar_com_confirmacao(setup):
+    body = _client().get("/admin/atualizacao").content.decode()
+    assert "Reiniciar o portal" in body
+    assert "Reiniciar o portal agora? Quem estiver usando perde a conexão por alguns segundos." in body
+    assert "PORTAL_PORT" in body and "O reinício não foi confirmado" in body
+    assert "RESTART_POLL_CAP_MS" in body

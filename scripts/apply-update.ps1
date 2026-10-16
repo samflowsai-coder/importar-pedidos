@@ -20,6 +20,8 @@
     literalmente neste script):
       backup | stop | apply | pip | start | healthcheck
     Status terminais: succeeded | rolled_back | rollback_failed
+    Ramo kind=restart (POST /api/admin/update/restart): so stop | start |
+    healthcheck; terminais succeeded | restart_failed (ver Invoke-Restart).
     (in_progress durante a execucao; apply_requested/staged/idle sao
     escritos pela camada web, nao por este script).
 
@@ -608,6 +610,67 @@ function Invoke-Rollback {
     }
 }
 
+# -- Restart (kind=restart no status.json) -------------------------------------
+# Reinicia o portal SEM pacote: stop -> start -> health-check. Sem backup, sem
+# staging, sem pip, sem tocar em arquivo (ex.: .env mudou e so vale apos subir
+# de novo). Disparado por POST /api/admin/update/restart. Tenta subir mais uma
+# vez antes de desistir. Nao libera o lock -- quem chama libera (finally).
+# Terminais: succeeded | restart_failed.
+function Invoke-Restart {
+    $statusData = Read-StatusRaw
+    $startedAt = $statusData["started_at"]
+    if (-not $startedAt) { $startedAt = Get-UnixTime }
+    $requestedBy = $statusData["requested_by"]
+
+    Write-Phase -Status "in_progress" -Phase "stop" -Extra @{
+        started_at = $startedAt; error = $null; finished_at = $null
+    }
+    $healthy = $false
+    $lastError = $null
+    foreach ($attempt in 1..2) {
+        try {
+            if ($attempt -eq 1) {
+                Stop-PortalApp
+            } else {
+                Write-Log "Restart: tentativa 2 apos falha ($lastError)."
+                Write-Phase -Status "in_progress" -Phase "stop" -Extra @{ error = $lastError }
+                Stop-PortalApp -IgnoreErrors
+            }
+            Write-Phase -Status "in_progress" -Phase "start"
+            Start-PortalApp
+            Write-Phase -Status "in_progress" -Phase "healthcheck"
+            $timeout = 120
+            if ($attempt -eq 2) { $timeout = 90 }
+            $healthy = Wait-Healthy -TimeoutSec $timeout
+            if ($healthy) { break }
+            $lastError = "health-check nao respondeu 200 em /health apos ${timeout}s"
+        } catch {
+            $lastError = $_.Exception.Message
+        }
+        Write-Log "Restart: tentativa $attempt falhou: $lastError"
+    }
+
+    if ($healthy) {
+        Write-Phase -Status "succeeded" -Phase "healthcheck" -Extra @{
+            error = $null; finished_at = (Get-UnixTime)
+        }
+        Append-History @{
+            kind = "restart"; result = "succeeded"; requested_by = $requestedBy
+            started_at = $startedAt; finished_at = (Get-UnixTime)
+        }
+        Write-Log "Restart concluido com sucesso."
+    } else {
+        Write-Phase -Status "restart_failed" -Phase "healthcheck" -Extra @{
+            error = $lastError; finished_at = (Get-UnixTime)
+        }
+        Append-History @{
+            kind = "restart"; result = "restart_failed"; error = $lastError
+            requested_by = $requestedBy; started_at = $startedAt; finished_at = (Get-UnixTime)
+        }
+        Write-Log "RESTART FALHOU: $lastError -- intervencao manual necessaria"
+    }
+}
+
 # -- Execucao principal --------------------------------------------------------
 
 Write-Log "==== apply-update.ps1 iniciado (PID $PID) ===="
@@ -627,6 +690,39 @@ try {
 } catch {
     Write-Log "NAO foi possivel adquirir o lock (outra instancia rodando, ou lock orfao) -- encerrando sem tocar em status/lock existentes. $($_.Exception.Message)"
     exit 1
+}
+
+# 1b) kind=restart: so reinicia o portal (ver Invoke-Restart). O fluxo de
+#     atualizacao abaixo so roda quando o status NAO e de restart.
+$isRestart = $false
+try { $isRestart = ((Read-StatusRaw)["kind"] -eq "restart") } catch { $isRestart = $false }
+if ($isRestart) {
+    try {
+        Invoke-Restart
+    } catch {
+        # Falha inesperada ate nas escritas de status do proprio ramo: grava
+        # restart_failed em best-effort para a tela nao ficar pendurada.
+        $restartError = $_.Exception.Message
+        Write-Log "RESTART: erro inesperado: $restartError"
+        try {
+            Write-Phase -Status "restart_failed" -Phase "healthcheck" -Extra @{
+                error = $restartError; finished_at = (Get-UnixTime)
+            }
+            Append-History @{
+                kind = "restart"; result = "restart_failed"; error = $restartError
+                finished_at = (Get-UnixTime)
+            }
+        } catch {
+            Write-Log "RESTART: nao foi possivel gravar restart_failed: $($_.Exception.Message)"
+        }
+    } finally {
+        if ($script:LockAcquired) {
+            Remove-Item -Path $LockPath -Force -ErrorAction SilentlyContinue
+            Write-Log "Lock liberado."
+        }
+        Write-Log "==== apply-update.ps1 (restart) finalizado ===="
+    }
+    exit 0
 }
 
 $updateId   = $null
