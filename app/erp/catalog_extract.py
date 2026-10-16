@@ -3,7 +3,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from app.erp.queries import LIST_PRODUTOS_CATALOGO, LIST_PRODUTOS_CATALOGO_MEIAS
+from app.erp.queries import (
+    LIST_PRODUTOS_CATALOGO,
+    LIST_PRODUTOS_CATALOGO_MEIAS,
+    LIST_PRODUTOS_KIT_COMPOSICAO,
+)
 
 
 @dataclass(frozen=True)
@@ -61,7 +65,7 @@ def extract_produtos(fire_conn, *, apenas_meias: bool = False) -> list[ProdutoFi
     finally:
         cur.close()
     out: list[ProdutoFireDTO] = []
-    for seq, desc, uni, ean, bloqueado, is_kit in rows:
+    for seq, desc, uni, ean, bloqueado, is_kit, alternativo in rows:
         seq_s = str(seq)
         nome = _clean(desc) or ""
         out.append(
@@ -73,6 +77,29 @@ def extract_produtos(fire_conn, *, apenas_meias: bool = False) -> list[ProdutoFi
                 ean=_clean(ean),
                 ativo=(str(bloqueado or "").strip().lower() != "sim"),
                 tipo=_tipo(is_kit, _clean(uni), nome),
+                codigo_alternativo=_clean(alternativo),
+                tem_composicao=bool(is_kit),
             )
+        )
+    return out
+
+
+def extract_composicao(fire_conn) -> dict[str, list[tuple[str | None, float | None]]]:
+    """PRODUTOS_KIT inteiro, agrupado por pai: {SEQ do pai: [(SEQ do filho, QTD)]},
+    na ordem de cadastro. Read-only. Erro do driver sobe: o sync trata como
+    "composição ausente em todos" (nunca como "sem composição"). Filho ou QTD
+    nulos ficam None para a regra omitir o kit; pai nulo não tem a quem pertencer."""
+    cur = fire_conn.cursor()
+    try:
+        cur.execute(LIST_PRODUTOS_KIT_COMPOSICAO)
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+    out: dict[str, list[tuple[str | None, float | None]]] = {}
+    for pai, filho, qtd in rows:
+        if pai is None:
+            continue
+        out.setdefault(str(pai), []).append(
+            (None if filho is None else str(filho), None if qtd is None else float(qtd))
         )
     return out

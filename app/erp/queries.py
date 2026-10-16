@@ -314,12 +314,13 @@ UPDATE_DT_ENTREGA = """
 # que o cliente usa (codigo = str(SEQ)). BLOQUEADO ∈ {'Sim','Nao'} → ativo =
 # (BLOQUEADO <> 'Sim'). IS_KIT = 1 se o SEQ é pai em PRODUTOS_KIT; o tipo final
 # (pack/kit/simples) sai de catalog_extract._tipo, que também olha unidade e nome.
-# CODPROD_ALTERN ignorado (grade-code não-único).
+# CODPROD_ALTERN = código do par no Apontaê (7ª coluna; ver catalog_extract).
 LIST_PRODUTOS_CATALOGO = """
     SELECT P.SEQ, P.DESCRICAO, P.UNIDADE, P.CODIGO_EAN13, P.BLOQUEADO,
            CASE WHEN EXISTS (
                SELECT 1 FROM PRODUTOS_KIT K WHERE K.CODPRODUTO_PAI = P.SEQ
-           ) THEN 1 ELSE 0 END AS IS_KIT
+           ) THEN 1 ELSE 0 END AS IS_KIT,
+           P.CODPROD_ALTERN
     FROM PRODUTOS P
     ORDER BY P.SEQ
 """
@@ -368,10 +369,21 @@ LIST_PRODUTOS_CATALOGO_MEIAS = """
     SELECT P.SEQ, P.DESCRICAO, P.UNIDADE, P.CODIGO_EAN13, P.BLOQUEADO,
            CASE WHEN EXISTS (
                SELECT 1 FROM PRODUTOS_KIT K WHERE K.CODPRODUTO_PAI = P.SEQ
-           ) THEN 1 ELSE 0 END AS IS_KIT
+           ) THEN 1 ELSE 0 END AS IS_KIT,
+           P.CODPROD_ALTERN
     FROM (SELECT DISTINCT SEQ FROM RECORTE) R
     JOIN PRODUTOS P ON P.SEQ = R.SEQ
     ORDER BY P.SEQ
+"""
+
+# Composição (PRODUTOS_KIT) para o catálogo enviado ao Flow: pai, filho e
+# quantidade, um nível (o Flow explode recursivo). Sem filtro: são ~500 linhas na
+# MM, e quem decide o que vai é catalogo_composicao. ORDER BY CODIGO mantém a
+# ordem de cadastro, que vira a posição do filho no Flow.
+LIST_PRODUTOS_KIT_COMPOSICAO = """
+    SELECT K.CODPRODUTO_PAI, K.CODPRODUTO, K.QTD
+    FROM PRODUTOS_KIT K
+    ORDER BY K.CODPRODUTO_PAI, K.CODIGO
 """
 
 # ── Clientes ativos (carga Fire→Flow) ─────────────────────────────────────────
