@@ -1,6 +1,25 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
+
+
+class CatalogoComponente(BaseModel):
+    """Um filho da composição (PRODUTOS_KIT). Nome pelo papel (P-PROD-08 do Flow)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    erpProdutoId: str  # noqa: N815 — SEQ do filho
+    quantidade: float
+
+
+def _sem_os_nao_preenchidos(modelo: BaseModel, corpo: dict, campos: tuple[str, ...]) -> dict:
+    """Chave só vai no JSON quando foi preenchida: ausente ≠ [] ≠ null (ausente =
+    "não mexer" no Flow). Com o interruptor desligado o payload fica igual ao de
+    antes da composição."""
+    for campo in campos:
+        if campo not in modelo.model_fields_set:
+            corpo.pop(campo, None)
+    return corpo
 
 
 class CatalogoProdutoItem(BaseModel):
@@ -19,6 +38,12 @@ class CatalogoProdutoItem(BaseModel):
     tipo: str | None = (
         None  # 'pack' | 'kit' | 'simples' — catalog_extract._tipo (CODTIPOPROD do Fire não é usado).
     )
+    componentes: list[CatalogoComponente] | None = None
+    codigoMes: str | None = None  # noqa: N815 — CODPROD_ALTERN só dígitos, só em par ativo
+
+    @model_serializer(mode="wrap")
+    def _omite_nao_preenchidos(self, handler):
+        return _sem_os_nao_preenchidos(self, handler(self), ("componentes", "codigoMes"))
 
 
 class CatalogoOrigem(BaseModel):
@@ -36,6 +61,16 @@ class CatalogoRequest(BaseModel):
     fullSync: bool  # noqa: N815
     itens: list[CatalogoProdutoItem]
     origem: CatalogoOrigem
+    # Liberam as travas de remoção/substituição de composição do Flow. Só com
+    # dryRun=false e só pela rota manual (o diário nunca manda).
+    confirmarRemocaoComposicao: bool | None = None  # noqa: N815
+    confirmarSubstituicaoComposicao: bool | None = None  # noqa: N815
+
+    @model_serializer(mode="wrap")
+    def _omite_nao_preenchidos(self, handler):
+        return _sem_os_nao_preenchidos(
+            self, handler(self), ("confirmarRemocaoComposicao", "confirmarSubstituicaoComposicao")
+        )
 
 
 class CatalogoContagens(BaseModel):
