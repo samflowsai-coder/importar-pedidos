@@ -26,6 +26,10 @@ acontece — uma falha aqui vira outbox/retry e **nunca** pode derrubar o fluxo 
 | `intercompany.py` | **política** do de-para de cliente (quando aplica) |
 | `poll_decisoes.py` | consome decisões do Flow e reconcilia no Fire |
 | `catalogo_*.py` / `clientes_*.py` | sync de produto e de cliente (extract → local → push) |
+| `catalogo_fiscal.py` | campos fiscais do produto (NCM, SPED, grupo, `codigoNfe`, cor): normaliza e devolve pendências |
+| `capacidades.py` | o que o Flow declara aceitar (`fiscal.v1`, `materiais.dryrun.v1`, `materiais.v1`, `cadastros.v1`) |
+| `materiais_sync.py` / `materiais_schema.py` | carga de material (grupo ≠ 8) Fire → cópia local → Flow |
+| `cadastro_volta.py` / `cadastro_schema.py` | volta Flow → Fire dos cadastros aprovados (só `simular` na Etapa 1) |
 
 ## Configuração — por ambiente, não global
 
@@ -43,11 +47,22 @@ cifrado (`flowpcp_service_token_enc`, via `secret_store`).
 | `flowpcp_catalogo_apenas_meias` | `0` | recorta o catálogo |
 | **`flowpcp_clientes_push`** | `0` | idem para clientes |
 
+Variáveis de ambiente do processo (todas **ausentes = desligado**; `slug` em minúsculas):
+
+| Variável | Valor | O que controla |
+|---|---|---|
+| `PORTAL_FLOWPCP_CATALOGO_FISCAL` | `mm` (lista por vírgula) | manda os campos fiscais no catálogo; sem `fiscal.v1` na resposta do Flow o relatório avisa e a variável deve ser retirada |
+| `PORTAL_FLOWPCP_MATERIAIS` | `mm` (lista por vírgula) | envio da carga de material ao Flow; desligada, só atualiza a cópia local `materiais_fire` e `apply` dá 422 |
+| `PORTAL_FLOWPCP_MATERIAIS_GRUPOS_PRODUCAO_<SLUG>` | `1,4,5,...` | grupos que exigem aprovação (slug em maiúsculas, não alfanumérico vira `_`); padrão `1,4,5,6,11,13,19`; inválido loga ERROR e usa o padrão |
+| `PORTAL_FLOWPCP_CADASTRO_VOLTA` | `mm:simular,nas:desligado` | modo da volta por ambiente: `desligado` (padrão), `simular`, `criar`, `criar_e_atualizar`; entrada inválida = desligado, com ERROR uma vez |
+
 Rotas admin: `PUT /api/admin/environments/{env_id}/flowpcp`,
 `PUT /api/admin/environments/{env_id}/intercompany`,
 `POST /api/admin/environments/{env_id}/flowpcp/sync-catalogo?apply=&excluir=&confirmar_remocao=&confirmar_substituicao=`,
-`POST /api/admin/environments/{env_id}/flowpcp/sync-clientes?apply=` — todas exigem
-`flowpcp_enabled`. Ver `modules/environments.md` para o CRUD do ambiente.
+`POST /api/admin/environments/{env_id}/flowpcp/sync-clientes?apply=`,
+`POST /api/admin/environments/{env_id}/flowpcp/sync-materiais?apply=` — todas exigem
+`flowpcp_enabled`. Mais `GET /api/admin/environments/{env_id}/flowpcp/cadastro-volta`
+(só leitura do livro; não exige `flowpcp_enabled`). Ver `modules/environments.md` para o CRUD do ambiente.
 
 ## 1. Pedido → Flow
 
@@ -193,8 +208,47 @@ Portal falhou (`leitura_ok` false); caso contrário, INFO.
 Só ligar a composição depois de o Flow aceitar os campos (Fatia A); antes disso ele
 recusa o lote com 400. Spec: `docs/superpowers/specs/2026-10-15-catalogo-composicao-portal-design.md`.
 
+**Fiscal e material** (Etapa 1 de `docs/superpowers/specs/2026-10-16-flow-fonte-do-cadastro-design.md`,
+tudo desligado por padrão). *Fiscal* (`catalogo_fiscal.py`, `PORTAL_FLOWPCP_CATALOGO_FISCAL`): o
+catálogo passa a levar `ncm` (tira pontos, espaços e hífens; só vai se sobrar exatamente 8
+dígitos), `tipoItemSped` (0–10 ou 99), `grupoErp`, `codigoNfe` e `cor`. Valor que não passa vai
+**ausente** ("não mexer" no Flow) e vira pendência no relatório (`ncm_vazio`, `ncm_invalido`,
+`sped_invalido`, `cor_longa`). O Flow descarta campo desconhecido sem erro, então o sucesso só
+vale com `fiscal.v1` nas `capacidades` da resposta. *Material* (`materiais_sync.run_materiais_sync`,
+`PORTAL_FLOWPCP_MATERIAIS`): tudo fora do grupo 8 CONFECCIONADO e não bloqueado (bloqueado
+só entra com `ativo=false` se já estava na cópia local) vai para
+`materiais_fire` (sempre) e ao Flow. A rota e `tools/sync_materiais_fire.py <slug>` fazem dryRun por
+padrão; `apply=true`/`--apply` manda a sonda dryRun primeiro e só grava se o Flow declarou
+`materiais.v1` (senão `ApplySemCapacidadeError` = 422, nada gravado). `materiais.dryrun.v1`
+ausente marca `capacidade_ok=false` e loga ERROR. 403 do Flow = flag `materiaisErpAtivo`
+desligada no tenant. A tela do ambiente tem um bloco para cada um.
+
 Tabelas locais em `modules/persistence.md`. Ferramentas de linha de comando:
-`tools/sync_catalogo_fire.py`, `tools/configurar_flowpcp.py`.
+`tools/sync_catalogo_fire.py`, `tools/configurar_flowpcp.py`, `tools/sync_materiais_fire.py`.
+
+## 5. Volta de cadastro (Flow → Fire)
+
+`cadastro_volta.py` lê a fila de cadastros aprovados do Flow
+(`client.list_cadastros_pendentes`, até 20 por rodada) e a thread `flowpcp-envio`
+(`envio_portal.ciclo`) chama `rodar_se_devido` no máximo a cada 5 min. Modo por ambiente em
+`PORTAL_FLOWPCP_CADASTRO_VOLTA`:
+
+| Modo | Efeito na Etapa 1 |
+|---|---|
+| `desligado` (padrão) | não lê a fila |
+| `simular` | lê a fila, valida cada item, confere a cópia local e o Fire (conexão somente leitura, só SELECT parametrizado) e grava no livro o plano do que seria feito |
+| `criar`, `criar_e_atualizar` | **recusados** (ERROR no log, `recusado`) até a Etapa 3: gravação exige P0 e `cadastros.v1` |
+
+Em `simular` o portal **nunca grava no Fire e nunca confirma no Flow**. O livro é a tabela
+`cadastro_volta`, cuja chave `(cadastro_id, versao)` é o lease (o mesmo item não é processado
+duas vezes). Estados registrados: `simulado` (com `plano_json`) e `erro_definitivo` (com
+`erro_codigo`/`erro_mensagem`, sem o valor recebido; ex.: `seq_fora_do_escopo`, `nome_existe`,
+`componente_invalido`, `consulta_fire_falhou`, `livro_falhou`). Item inválido ou que quebra não
+trava a fila; Fire fora aborta a rodada sem registrar nada e tenta no ciclo seguinte. Métricas:
+`portal_flowpcp_cadastro_volta_total{env,resultado}` (`simulado`, `erro_definitivo`,
+`ja_no_livro`), `portal_flowpcp_cadastro_volta_pendentes{env}` e
+`portal_flowpcp_cadastro_volta_mais_antigo_segundos{env}`. A tela do ambiente lê o livro por
+`GET .../flowpcp/cadastro-volta` (modo, contagem por estado e os 50 últimos, plano truncado em 2 KB).
 
 ## Testes
 
@@ -205,6 +259,11 @@ Cobertura larga — 25+ arquivos. Os principais:
   tests/test_flowpcp_poll.py tests/test_flowpcp_intercompany.py \
   tests/test_catalogo_sync.py tests/test_clientes_sync.py -v
 ```
+
+Fiscal, material e volta: `test_catalogo_fiscal.py`, `test_erp_fiscal.py`,
+`test_materiais_extract.py`, `test_materiais_sync.py`, `test_sync_materiais_route.py`,
+`test_cadastro_schema.py`, `test_cadastro_volta.py`, `test_cadastro_volta_route.py`,
+`test_admin_ambiente_edit_cadastro.py`.
 
 Config e wiring: `test_flowpcp_config.py`, `test_flowpcp_worker_wiring.py`,
 `test_intercompany_config.py`. Mappers: `test_flowpcp_mapper_*.py`.

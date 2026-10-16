@@ -26,6 +26,10 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 1) **A simulação do catálogo mostra o impacto na fila de produção, os kits que o Flow segurou e por quê, e os códigos do Apontaê que não existem lá.** O impacto já vinha do Flow, mas a tela procurava no lugar errado e não mostrava.
 2) **Kit cuja quantidade no nome não bate com a composição do Fire fica congelado no Flow.** Ele continua no catálogo, mas sem composição: o Flow não muda o que tem até o Fire ser corrigido (a composição ou o nome), e aí o kit sobe sozinho no envio seguinte. A tela lista esses kits como congelados.
 3) **Há um botão "Reiniciar o portal" em Atualização do sistema**, para o portal passar a valer uma mudança na configuração do servidor sem precisar de acesso remoto; ele só fica liberado quando não há atualização em andamento nem pacote esperando.
+4) **O catálogo pode levar ao Flow os dados fiscais de cada produto (NCM, tipo SPED, grupo, código para NF-e e cor).** Dado que não passa na conferência, como NCM com formato errado, não é enviado e aparece como pendência no relatório. Fica desligado por empresa até o Flow estar pronto para receber.
+5) **Há uma carga de materiais (tudo que não é confeccionado) do Fire para o Flow, por enquanto em simulação.** O portal guarda a cópia local e mostra o que o Flow mudaria, sem gravar nada no Flow até ele estar pronto. Fica desligada por empresa.
+6) **O portal passa a ler os cadastros que o PCP aprova no Flow e a simular o que seria feito no Fire.** Nesta etapa ele não grava nada no Fire nem dá baixa no Flow: só registra o que faria e o que recusaria. Fica desligado por empresa.
+7) **A tela do ambiente no admin ganhou blocos de fiscal, de materiais e da volta de cadastro**, com o relatório da simulação, as pendências e o histórico do que a volta simulou.
 
 ---
 

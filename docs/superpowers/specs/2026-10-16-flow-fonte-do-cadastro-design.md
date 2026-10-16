@@ -134,7 +134,7 @@ Os nomes no wire seguem o papel do campo (regra P-PROD-08 do Flow): `erpProdutoI
 
 | Campo (wire) | Origem no Fire | Regra do Portal |
 |---|---|---|
-| `ncm` | `CLASSIF_FISCAL` (varchar 20) | Tira pontos e espaços. Vai só se sobrar exatamente 8 dígitos (`^\d{8}$`). Senão vai ausente e entra em `pendencias_fiscais` |
+| `ncm` | `CLASSIF_FISCAL` (varchar 20) | Tira pontos, espaços e hífens. Vai só se sobrar exatamente 8 dígitos (`^\d{8}$`). Senão vai ausente e entra em `pendencias_fiscais` |
 | `tipoItemSped` | `CODITEMSPED` (inteiro) | Inteiro de 0 a 10 ou 99. Fora disso vai ausente + pendência |
 | `grupoErp` | `GRUPO` (inteiro) + `GRUPO_PRODUTOS.GRUPO` | `{codigo: str, nome: str 1..80}`. Sem nome vai ausente |
 | `codigoNfe` | `CODPARANFE` (varchar 20) | Aparado, de 1 a 60 caracteres |
@@ -165,7 +165,7 @@ Os nomes no wire seguem o papel do campo (regra P-PROD-08 do Flow): `erpProdutoI
   - `ativo`, `exigeAprovacao`;
   - `ncmUltimaEntrada?`, `ultimaEntradaEm?` (data civil, `YYYY-MM-DD`).
 
-**Recorte:** `PRODUTOS` com `GRUPO <> 8`, `BLOQUEADO <> 'Sim'` e o grupo na tabela do ambiente (abaixo). Os bloqueados vão com `ativo=false` só quando já constam na cópia local de uma rodada anterior, para o Flow poder desativar.
+**Recorte:** `PRODUTOS` com `GRUPO <> 8`, `BLOQUEADO <> 'Sim'` e o grupo na tabela do ambiente (abaixo). Os bloqueados vão com `ativo=false`; o Flow não cria insumo novo inativo (`inativoSemInsumo`), então só serve para desativar o que ele já tem.
 
 **Regra de `exigeAprovacao`:** verdadeiro quando o grupo está na lista de produção do ambiente, `PORTAL_FLOWPCP_MATERIAIS_GRUPOS_PRODUCAO_<SLUG>` (padrão da MM: `1,4,5,6,11,13,19`), **ou** quando o tipo SPED está entre 0 e 6 ou é 10. A regra canônica fica no Flow (D5). Se a do Flow der diferente, vale a dele, e a divergência aparece em `exigeAprovacaoDiverge`.
 
