@@ -45,7 +45,7 @@ cifrado (`flowpcp_service_token_enc`, via `secret_store`).
 
 Rotas admin: `PUT /api/admin/environments/{env_id}/flowpcp`,
 `PUT /api/admin/environments/{env_id}/intercompany`,
-`POST /api/admin/environments/{env_id}/flowpcp/sync-catalogo?apply=&excluir=`,
+`POST /api/admin/environments/{env_id}/flowpcp/sync-catalogo?apply=&excluir=&confirmar_remocao=&confirmar_substituicao=`,
 `POST /api/admin/environments/{env_id}/flowpcp/sync-clientes?apply=` — todas exigem
 `flowpcp_enabled`. Ver `modules/environments.md` para o CRUD do ambiente.
 
@@ -145,8 +145,8 @@ Flow não desativa produto só do Flow (sai como `flowOnly` no relatório).
 ou KIT no nome; o resto é `simples`. O promote atualiza o tipo dos já casados.
 O recorte "só meias" inclui os componentes (CTE recursiva sobre `PRODUTOS_KIT`),
 porque o par não é vendido e sem isso ficava só no Flow (trava de 5 níveis
-contra ciclo; componente cueca fora). A composição em si (`componentes`) ainda
-não vai no payload. **Portão antes de gravar:** o promote casa por
+contra ciclo; componente cueca fora). A composição em si (`componentes`) só vai
+no payload com `PORTAL_FLOWPCP_CATALOGO_COMPOSICAO` ligada para o slug (ver abaixo). Com ela ligada, `tools/configurar_flowpcp.py --promover` grava composição e vínculo com o Apontaê: só com o ok do Samuel. **Portão antes de gravar:** o promote casa por
 `fire_produto_id`, código e nome; par só do Flow (`APT-…`, sem
 `fire_produto_id`) com nome diferente do Fire vira produto novo ao lado dele
 (par duplicado). Conferir no dryRun `fireOnly`/`nomeAmbiguo` dos pares antes do
@@ -156,9 +156,39 @@ não vai no payload. **Portão antes de gravar:** o promote casa por
 SEQs só do payload daquela rodada (a cópia local continua com o Fire inteiro). É
 para segurar cadastro com problema no Fire sem travar o resto. Vale **por rodada**:
 o diário e os scripts `tools/sync_catalogo_fire.py`/`tools/configurar_flowpcp.py`
-não aplicam, então não ligar o diário em `gravar` com exclusão pendente. Só dígitos
+não usam o parâmetro: sem a exclusão guardada (abaixo), não ligar o diário em `gravar`
+com exclusão pendente (o `?excluir=` vale só para a rodada). Só dígitos
 (zero à esquerda normalizado; `excluir` pode repetir); SEQ fora do catálogo
 extraído dá 422 e nada é enviado.
+
+**Composição e código do Apontaê** (`catalogo_composicao.py`, desde 15/10/2026, por empresa em
+`PORTAL_FLOWPCP_CATALOGO_COMPOSICAO=mm`): cada item leva `componentes`
+(`[{erpProdutoId, quantidade}]`, de `PRODUTOS_KIT`, um nível) e `codigoMes`
+(`CODPROD_ALTERN` só dígitos, até 9, só em `simples` ativo, sem repetição no envio).
+Chave `componentes` ausente = "não mexer" no Flow; `[]` só em par; kit/pack sem
+`PRODUTOS_KIT` vai sem a chave (C3: o PCP pode ter composição provisória no Flow).
+Leitura com erro, vazia ou nenhum kit do extract presente na leitura = ausente em todos. Filho fora do
+envio, repetido, nulo, quantidade fora de 0 < q ≤ 100000, mais de 50 filhos ou kit dentro
+dele mesmo: ausente naquele item, com log. Quantidade que não bate com o nome: só aviso.
+O relatório ganha `composicao_portal` e `fora_do_envio_guardado` (SEQs tirados pela
+exclusão guardada).
+**Apply:** sem repetição depois de conectar; timeout de leitura 300 s, conexão/pool 30 s.
+Erros da rota: `ExcluirGuardadoInvalidoError`, `ConfirmacaoSemApplyError` e
+`ForaDoEnvioInexistenteError` = 422; `FlowPCPApplyEmAndamentoError` (o Flow já está
+gravando) = 409; `ConnectTimeout`/`PoolTimeout` = 504 "nada foi gravado"; `ReadTimeout`/
+`WriteTimeout` no apply = 504 "pode ainda estar em andamento" (simular antes de regravar).
+Travas do Flow (`travaRemocaoAtiva`/`travaSubstituicaoAtiva`) liberadas só pela rota manual
+(`confirmar_remocao=1`, `confirmar_substituicao=1`, exigem `apply=true`); o diário nunca manda.
+A tela do ambiente mostra os blocos Portal/Flow/Apontaê do relatório e, depois de um apply
+com trava ativa, o botão "Gravar liberando a trava".
+**Exclusão guardada:** `PORTAL_FLOWPCP_CATALOGO_EXCLUIR_<SLUG>` sai de todo envio (manual
+e diário), com a composição ligada ou não; valor inválido não envia nada. SEQ guardado que
+não existe mais no extract = 422 apontando a variável.
+**Diário:** com composição ligada também manda composição; loga WARNING quando
+`travaRemocaoAtiva`/`travaSubstituicaoAtiva` é true, `erpSemChave > 0` ou a leitura do
+Portal falhou (`leitura_ok` false); caso contrário, INFO.
+Só ligar a composição depois de o Flow aceitar os campos (Fatia A); antes disso ele
+recusa o lote com 400. Spec: `docs/superpowers/specs/2026-10-15-catalogo-composicao-portal-design.md`.
 
 Tabelas locais em `modules/persistence.md`. Ferramentas de linha de comando:
 `tools/sync_catalogo_fire.py`, `tools/configurar_flowpcp.py`.

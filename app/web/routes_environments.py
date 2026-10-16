@@ -265,6 +265,8 @@ def sync_catalogo_flowpcp(
     env_id: str,
     apply: bool = False,
     excluir: list[str] | None = Query(default=None, max_length=4000),
+    confirmar_remocao: bool = False,
+    confirmar_substituicao: bool = False,
     _=Depends(require_admin),
 ):
     """Full-load do catálogo (produtos Fire → FlowPCP), direção IDA.
@@ -276,6 +278,8 @@ def sync_catalogo_flowpcp(
       o `/catalogo` do Flow com o promote no ar (senão devolve 422 → 502 aqui).
     - `excluir=3174,3381`: SEQs que não vão ao Flow nesta rodada (cadastro com
       problema no Fire); a cópia local continua com tudo.
+    - confirmar_remocao=1 / confirmar_substituicao=1: liberam as travas de composição
+      do Flow; só com apply=true (o diário nunca manda).
     Blocking (Firebird + HTTP) → FastAPI roda esta rota `def` no threadpool.
     """
     env = environments_repo.get(env_id)
@@ -284,18 +288,71 @@ def sync_catalogo_flowpcp(
     if not env.get("flowpcp_enabled"):
         raise HTTPException(409, "FlowPCP não está habilitado neste ambiente")
 
+    import httpx
+
+    from app.integrations.flowpcp.catalogo_composicao import ExcluirGuardadoInvalidoError
     from app.integrations.flowpcp.catalogo_sync import (
         CatalogoLocalResult,
+        ConfirmacaoSemApplyError,
         ForaDoEnvioInexistenteError,
         run_catalogo_sync,
     )
+    from app.integrations.flowpcp.client import (
+        FlowPCPApplyEmAndamentoError,
+        FlowPCPClientError,
+    )
 
+    if (confirmar_remocao or confirmar_substituicao) and not apply:
+        raise HTTPException(422, "Liberar trava só vale junto com apply=true (gravar)")
     fora = _seqs_fora_do_envio(excluir)
     try:
-        rep = run_catalogo_sync(env["slug"], dry_run=not apply, full_sync=True, fora_do_envio=fora)
+        rep = run_catalogo_sync(
+            env["slug"],
+            dry_run=not apply,
+            full_sync=True,
+            fora_do_envio=fora,
+            confirmar_remocao=confirmar_remocao,
+            confirmar_substituicao=confirmar_substituicao,
+        )
     except ForaDoEnvioInexistenteError as exc:
-        raise HTTPException(422, f"Nada foi enviado ao Flow: {exc}") from exc
+        detalhe = f"Nada foi enviado ao Flow: {exc}"
+        if exc.guardados:
+            detalhe += (
+                f". Os SEQs {', '.join(exc.guardados)} vêm da exclusão guardada "
+                f"({exc.variavel}): corrija a variável"
+            )
+        raise HTTPException(422, detalhe) from exc
+    except FlowPCPApplyEmAndamentoError as exc:
+        raise HTTPException(
+            409,
+            "O Flow já está gravando um catálogo deste ambiente. Espere terminar e simule de novo.",
+        ) from exc
+    except (ExcluirGuardadoInvalidoError, ConfirmacaoSemApplyError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except httpx.TimeoutException as exc:
+        if isinstance(exc, httpx.ConnectTimeout | httpx.PoolTimeout):
+            msg = "Não consegui conectar ao Flow; nada foi gravado. Tente de novo."
+        elif apply:
+            msg = (
+                "O Flow não respondeu a tempo. A gravação pode ainda estar em andamento no Flow: "
+                "espere alguns minutos e simule de novo antes de gravar outra vez."
+            )
+        else:
+            msg = "O Flow não respondeu a tempo. Tente simular de novo."
+        raise HTTPException(504, msg) from exc
     except Exception as exc:  # noqa: BLE001 — vira erro HTTP legível pro operador
+        status = getattr(exc, "status_code", None)
+        if (
+            apply
+            and isinstance(exc, FlowPCPClientError)
+            and isinstance(status, int)
+            and status >= 500
+        ):
+            raise HTTPException(
+                502,
+                f"O Flow respondeu com erro ao gravar ({status}). Ele pode ter gravado parte: "
+                "simule antes de gravar de novo.",
+            ) from exc
         raise HTTPException(502, f"Falha no sync de catálogo: {exc}") from exc
     if rep is None:
         raise HTTPException(409, "FlowPCP não está habilitado neste ambiente")

@@ -181,6 +181,13 @@ PORTAL_FLOW_JANELAS=             # horas das janelas de envio ao Flow (seg-sáb,
 PORTAL_FLOWPCP_DECISOES=         # 1 liga a leitura das decisões do Flow (ESCREVE DT_ENTREGA no Fire); ausente = desligado
 PORTAL_FLOWPCP_CATALOGO_HORA=    # hora (Brasília) do envio diário do catálogo ao Flow; ausente = 5
 PORTAL_FLOWPCP_CATALOGO_DIARIO=  # simular (padrão: Flow só compara) | gravar | desligado
+PORTAL_FLOWPCP_CATALOGO_COMPOSICAO=  # slugs separados por vírgula (ex.: mm) que mandam composição dos kits e código
+                                     # do Apontaê no catálogo. Só com o Flow aceitando (Fatia A).
+PORTAL_FLOWPCP_CATALOGO_EXCLUIR_<SLUG>=  # (slug em maiúsculas, não alfanumérico vira _; ex.: PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM)
+                                     # SEQs separados por vírgula, fora de todo envio de catálogo da
+                                     # empresa (manual e diário) até o cadastro no Fire ser corrigido.
+                                     # Valor inválido ou SEQ fora do extract = nenhum envio de catálogo
+                                     # da empresa (manual e diário).
 
 # Webhooks do Gestor
 WEBHOOK_SECRET_GESTOR=

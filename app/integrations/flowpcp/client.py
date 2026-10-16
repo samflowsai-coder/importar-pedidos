@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
+import httpx
+
 from app.http.client import HttpError, OutboundClient
-from app.http.policies import idempotent_post_policy
+from app.http.policies import apply_post_policy, idempotent_post_policy
 from app.integrations.flowpcp.catalogo_schema import (
     CatalogoReconciliacaoResponse,
     CatalogoRequest,
@@ -27,6 +30,8 @@ _DECISOES_PATH = "/api/portal-pedidos/decisoes"
 _CATALOGO_PATH = "/api/portal-pedidos/catalogo"
 _CLIENTES_PATH = "/api/portal-pedidos/clientes"
 DEFAULT_TIMEOUT_SECONDS = 30.0
+# Apply do catálogo: o Flow tem maxDuration 300 s e um apply por vez (409).
+APPLY_TIMEOUT_SECONDS = 300.0
 
 
 class FlowPCPClientError(Exception):
@@ -36,6 +41,28 @@ class FlowPCPClientError(Exception):
         super().__init__(message)
         self.status_code = status_code
         self.body = body
+
+
+class FlowPCPApplyEmAndamentoError(FlowPCPClientError):
+    """409 do /catalogo: o Flow já está gravando um catálogo deste tenant."""
+
+
+def _apply_timeout() -> httpx.Timeout:
+    """300 s é o tempo de LEITURA (maxDuration do Flow); conectar segue curto, senão
+    um Flow inalcançável seguraria 3 x 300 s nas repetições de conexão."""
+    return httpx.Timeout(
+        APPLY_TIMEOUT_SECONDS, connect=DEFAULT_TIMEOUT_SECONDS, pool=DEFAULT_TIMEOUT_SECONDS
+    )
+
+
+def _idem_catalogo(request: CatalogoRequest) -> str:
+    """Chave estável em retry e nova quando o conteúdo muda (só a contagem colidia:
+    os mesmos 1.026 itens com composição nova). `origem` fica fora: muda a cada
+    extração mesmo sem nada novo."""
+    corpo = {k: v for k, v in request.model_dump(by_alias=True).items() if k != "origem"}
+    serializado = json.dumps(corpo, sort_keys=True, default=str)
+    digest = hashlib.sha256(serializado.encode()).hexdigest()[:16]
+    return f"catalogo-{int(request.dryRun)}-{len(request.itens)}-{digest}"
 
 
 class FlowPCPClient:
@@ -115,13 +142,26 @@ class FlowPCPClient:
 
     def send_catalogo(self, request: CatalogoRequest) -> CatalogoReconciliacaoResponse:
         body = request.model_dump(by_alias=True)
-        idem = f"catalogo-{int(request.dryRun)}-{len(request.itens)}"
+        idem = _idem_catalogo(request)
+        # Apply grava e o Flow não deduplica pela chave: não repetir depois que a
+        # conexão abriu, e esperar até o maxDuration do Flow. Dry-run segue como era.
+        extras = (
+            {}
+            if request.dryRun
+            else {"timeout": _apply_timeout(), "retry_policy": apply_post_policy()}
+        )
         try:
-            resp = self._client.post_json(_CATALOGO_PATH, json=body, idempotency_key=idem)
+            resp = self._client.post_json(_CATALOGO_PATH, json=body, idempotency_key=idem, **extras)
         except HttpError as exc:
             raise FlowPCPClientError(
                 f"send_catalogo falhou: {exc}", status_code=exc.status_code, body=exc.body
             ) from exc
+        if resp.status_code == 409:
+            raise FlowPCPApplyEmAndamentoError(
+                "o Flow já está gravando um catálogo deste ambiente",
+                status_code=409,
+                body=(resp.text or "")[:500],
+            )
         if not resp.is_success:
             raise FlowPCPClientError(
                 f"catalogo status {resp.status_code}",

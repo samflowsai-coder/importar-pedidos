@@ -113,6 +113,19 @@ def idempotent_post_policy() -> RetryPolicy:
     )
 
 
+def apply_post_policy() -> RetryPolicy:
+    """POST que grava e NÃO é idempotente no servidor (apply do catálogo do Flow).
+    Repete só quando a conexão nem abriu: timeout de leitura, 5xx ou conexão caída
+    no meio podem ter chegado lá, e repetir seria um segundo apply."""
+    return RetryPolicy(
+        max_attempts=3,
+        retry_on_status=frozenset(),
+        wait_initial_seconds=1.0,
+        wait_max_seconds=4.0,
+        retry_on_exceptions=(httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout),
+    )
+
+
 def llm_call_policy() -> RetryPolicy:
     """LLM completions. Pessimistic — 1 retry only, gateway errors only.
 
@@ -130,6 +143,7 @@ def llm_call_policy() -> RetryPolicy:
 
 __all__ = [
     "RetryPolicy",
+    "apply_post_policy",
     "idempotent_post_policy",
     "llm_call_policy",
     "read_only_policy",

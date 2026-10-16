@@ -1,9 +1,21 @@
+import json
+
+import pytest
+
 from app.erp.catalog_extract import ProdutoFireDTO
 from app.integrations.flowpcp import catalogo_sync
 from app.integrations.flowpcp.catalogo_schema import (
     CatalogoContagens,
     CatalogoReconciliacaoResponse,
 )
+from app.integrations.flowpcp.client import FlowPCPClientError
+
+
+@pytest.fixture(autouse=True)
+def _sem_interruptores_de_ambiente(monkeypatch):
+    """Testes antigos não dependem do ambiente de quem roda."""
+    monkeypatch.delenv("PORTAL_FLOWPCP_CATALOGO_COMPOSICAO", raising=False)
+    monkeypatch.delenv("PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM", raising=False)
 
 
 class _FakeClient:
@@ -257,3 +269,169 @@ def test_fora_do_envio_com_seq_inexistente_nao_envia_nada(monkeypatch):
         )
     assert e.value.seqs == ["9999"]
     assert fake_client.sent is None
+
+
+def test_exclusao_guardada_com_seq_inexistente_nao_envia_nada(monkeypatch):
+    import pytest
+
+    dtos = [ProdutoFireDTO("3174", "3174", "X", "PAR", None, True, "simples")]
+    monkeypatch.setattr(catalogo_sync, "extract_produtos", lambda conn, **kw: dtos)
+    monkeypatch.setenv("PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM", "3174,9999")
+
+    class _Cfg:
+        enabled = True
+        catalogo_push = True
+
+    monkeypatch.setattr(catalogo_sync, "flowpcp_config_for_slug", lambda slug: _Cfg())
+    fake_client = _FakeClient()
+    with pytest.raises(catalogo_sync.ForaDoEnvioInexistenteError) as e:
+        catalogo_sync.run_catalogo_sync(
+            "mm",
+            dry_run=False,
+            now_iso="t",
+            _client=fake_client,
+            _fire_conn=object(),
+            _env_conn=_FakeEnvConn(),
+        )
+    assert e.value.guardados == ["9999"]
+    assert e.value.variavel == "PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM"
+    assert fake_client.sent is None
+
+
+class _FireComKit:
+    """Conexão fake: PRODUTOS_KIT devolve linhas ou falha."""
+
+    def __init__(self, linhas=None, falha=False):
+        self.linhas, self.falha = linhas or [], falha
+        self.sqls: list[str] = []
+
+    def cursor(self):
+        dono = self
+
+        class _C:
+            def execute(self, sql):
+                dono.sqls.append(sql)
+                if dono.falha:
+                    raise RuntimeError("Fire caiu")
+
+            def fetchall(self):
+                return dono.linhas
+
+            def close(self):
+                pass
+
+        return _C()
+
+
+_DTOS_KIT = [
+    ProdutoFireDTO("2544", "2544", "KIT", "KIT", None, True, "kit", tem_composicao=True),
+    ProdutoFireDTO(
+        "3306", "3306", "PAR", "PARES", None, True, "simples", codigo_alternativo="8366"
+    ),
+    ProdutoFireDTO("3174", "3174", "PAR DUP", "PARES", None, True, "simples"),
+]
+
+
+@pytest.fixture
+def _sync(monkeypatch):
+    monkeypatch.delenv("PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM", raising=False)
+
+    class _Cfg:
+        enabled = True
+        catalogo_push = True
+
+    monkeypatch.setattr(catalogo_sync, "flowpcp_config_for_slug", lambda slug: _Cfg())
+    monkeypatch.setattr(catalogo_sync, "extract_produtos", lambda conn, **kw: list(_DTOS_KIT))
+
+    def rodar(*, ligado_para="mm", fire=None, cliente=None, **kw):
+        monkeypatch.setenv("PORTAL_FLOWPCP_CATALOGO_COMPOSICAO", ligado_para)
+        cliente = cliente or _FakeClient()
+        rep = catalogo_sync.run_catalogo_sync(
+            "mm",
+            now_iso="t",
+            _client=cliente,
+            _env_conn=_FakeEnvConn(),
+            _fire_conn=fire or _FireComKit([(2544, 3306, 6)]),
+            **kw,
+        )
+        return rep, cliente.sent.model_dump(by_alias=True)
+
+    return rodar
+
+
+_LEGADO = [
+    {"fireProdutoId": "2544", "codigo": "2544", "nome": "KIT", "unidade": "KIT",
+     "ean": None, "ativo": True, "tipo": "kit"},
+    # 3306 tem CODPROD_ALTERN: o codigoMes não pode vazar com o interruptor desligado
+    {"fireProdutoId": "3306", "codigo": "3306", "nome": "PAR", "unidade": "PARES",
+     "ean": None, "ativo": True, "tipo": "simples"},
+    {"fireProdutoId": "3174", "codigo": "3174", "nome": "PAR DUP", "unidade": "PARES",
+     "ean": None, "ativo": True, "tipo": "simples"},
+]
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+@pytest.mark.parametrize("ligado_para", ["", "nasmar"])
+def test_sync_desligado_payload_identico_ao_de_hoje(_sync, ligado_para, dry_run):
+    fire = _FireComKit([(2544, 3306, 6)])
+    rep, corpo = _sync(ligado_para=ligado_para, fire=fire, dry_run=dry_run)
+    assert json.dumps(corpo["itens"], sort_keys=True) == json.dumps(_LEGADO, sort_keys=True)
+    assert set(corpo) == {"schema", "dryRun", "fullSync", "itens", "origem"}
+    assert corpo["dryRun"] is dry_run
+    assert not any("PRODUTOS_KIT" in q for q in fire.sqls)
+    assert "composicao_portal" not in (rep.model_extra or {})
+
+
+def test_sync_ligado_manda_composicao_e_resumo(_sync):
+    rep, corpo = _sync()
+    kit, par, _ = corpo["itens"]
+    assert kit["componentes"] == [{"erpProdutoId": "3306", "quantidade": 6.0}]
+    assert par["componentes"] == [] and par["codigoMes"] == "8366"
+    assert rep.model_extra["composicao_portal"]["com_lista"] == 1
+
+
+@pytest.mark.parametrize("fire", [_FireComKit(falha=True), _FireComKit([])])
+def test_sync_leitura_com_falha_nenhum_item_com_a_chave(_sync, fire):
+    rep, corpo = _sync(fire=fire)
+    assert all("componentes" not in i for i in corpo["itens"])
+    assert corpo["itens"][1]["codigoMes"] == "8366"
+    assert rep.model_extra["composicao_portal"]["leitura_ok"] is False
+
+
+def test_sync_exclusao_guardada_vale_mesmo_desligado(_sync, monkeypatch):
+    monkeypatch.setenv("PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM", "3174")
+    rep, corpo = _sync(ligado_para="")
+    assert [i["fireProdutoId"] for i in corpo["itens"]] == ["2544", "3306"]
+    assert rep.model_extra["fora_do_envio_guardado"] == ["3174"]
+
+
+def test_sync_exclusao_guardada_tira_a_chave_do_kit_que_usa_o_par(_sync, monkeypatch):
+    monkeypatch.setenv("PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM", "3306")
+    rep, corpo = _sync()
+    assert "componentes" not in corpo["itens"][0]
+    assert rep.model_extra["composicao_portal"]["omitidos"] == {"2544": "filho fora do envio: 3306"}
+
+
+def test_sync_exclusao_guardada_invalida_nao_envia_nada(_sync, monkeypatch):
+    monkeypatch.setenv("PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM", "abc")
+    cliente = _FakeClient()
+    with pytest.raises(ValueError):
+        _sync(cliente=cliente)
+    assert cliente.sent is None
+
+
+def test_sync_confirmacao_so_com_apply(_sync):
+    with pytest.raises(ValueError, match="dryRun"):
+        _sync(dry_run=True, confirmar_remocao=True)
+    _, corpo = _sync(dry_run=False, confirmar_substituicao=True)
+    assert corpo["confirmarSubstituicaoComposicao"] is True
+
+
+def test_sync_400_com_composicao_ligada_diz_para_desligar(_sync):
+    class _Recusa(_FakeClient):
+        def send_catalogo(self, request):
+            self.sent = request
+            raise FlowPCPClientError("catalogo status 400", status_code=400, body="zod")
+
+    with pytest.raises(FlowPCPClientError, match="PORTAL_FLOWPCP_CATALOGO_COMPOSICAO"):
+        _sync(cliente=_Recusa())

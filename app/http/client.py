@@ -113,11 +113,17 @@ class OutboundClient:
         json: dict[str, Any] | list[Any],
         headers: dict[str, str] | None = None,
         idempotency_key: str | None = None,
-        timeout: float | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> httpx.Response:
         merged = self._build_headers(headers, idempotency_key=idempotency_key)
         return self._send_with_retry(
-            "POST", url, headers=merged, json=json, timeout=timeout
+            "POST",
+            url,
+            headers=merged,
+            json=json,
+            timeout=timeout,
+            retry_policy=retry_policy,
         )
 
     def get(
@@ -126,7 +132,7 @@ class OutboundClient:
         *,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
-        timeout: float | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response:
         merged = self._build_headers(headers)
         return self._send_with_retry(
@@ -158,9 +164,11 @@ class OutboundClient:
         headers: dict[str, str],
         json: Any = None,
         params: dict[str, Any] | None = None,
-        timeout: float | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> httpx.Response:
-        retrying = self._retry_policy.build()
+        policy = retry_policy or self._retry_policy
+        retrying = policy.build()
         attempt_n = 0
         try:
             for attempt in retrying:
@@ -189,7 +197,7 @@ class OutboundClient:
                         raise
 
                     duration_ms = int((time.perf_counter() - started) * 1000)
-                    if self._retry_policy.should_retry_status(response.status_code):
+                    if policy.should_retry_status(response.status_code):
                         logger.warning(
                             f"http {method} {url} attempt={attempt_n} "
                             f"status={response.status_code} "

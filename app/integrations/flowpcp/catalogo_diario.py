@@ -115,8 +115,22 @@ def rodar(
             logger.error(f"flowpcp.catalogo env={slug}: sync diário falhou: {exc!r}")
             continue
         enviados.append(slug)
-        logger.info(f"flowpcp.catalogo env={slug}: sync diário ({modo}) enviado: {_resumo(rep)}")
+        log = logger.warning if _precisa_atencao(rep) else logger.info
+        log(f"flowpcp.catalogo env={slug}: sync diário ({modo}) enviado: {_resumo(rep)}")
     return enviados
+
+
+_BLOCOS = ("composicao", "vinculoMes", "composicao_portal", "fora_do_envio_guardado")
+
+
+def _precisa_atencao(rep: object) -> bool:
+    """Trava do Flow ativa, leitura da composição com falha no Portal, ou kit com
+    composição do ERP que deixou de vir (C3: apagar no Fire não chega ao Flow)."""
+    extra = getattr(rep, "model_extra", None) or {}
+    comp = extra.get("composicao") or {}
+    portal = extra.get("composicao_portal") or {}
+    trava = comp.get("travaRemocaoAtiva") is True or comp.get("travaSubstituicaoAtiva") is True
+    return bool(trava or comp.get("erpSemChave") or portal.get("leitura_ok") is False)
 
 
 def _resumo(rep: object) -> str:
@@ -126,6 +140,6 @@ def _resumo(rep: object) -> str:
     extras = {
         k: v
         for k, v in (getattr(rep, "model_extra", None) or {}).items()
-        if isinstance(v, int | str)
+        if isinstance(v, int | str) or k in _BLOCOS
     }
     return f"contagens={contagens.model_dump(by_alias=True)} {extras}".strip()
