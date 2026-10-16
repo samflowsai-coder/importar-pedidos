@@ -169,7 +169,10 @@ Chave `componentes` ausente = "não mexer" no Flow; `[]` só em par; kit/pack se
 `PRODUTOS_KIT` vai sem a chave (C3: o PCP pode ter composição provisória no Flow).
 Leitura com erro, vazia ou nenhum kit do extract presente na leitura = ausente em todos. Filho fora do
 envio, repetido, nulo, quantidade fora de 0 < q ≤ 100000, mais de 50 filhos ou kit dentro
-dele mesmo: ausente naquele item, com log. Quantidade que não bate com o nome: só aviso.
+dele mesmo: ausente naquele item, com log. Quantidade que não bate com o nome ("KIT C/5"
+somando 3): o kit vai sem a chave (congelado, o Flow mantém o que tem) até o Fire ser
+corrigido; aparece em `divergencia_nome`, no log como `composicao congelada` e põe o diário
+em atenção.
 O relatório ganha `composicao_portal` e `fora_do_envio_guardado` (SEQs tirados pela
 exclusão guardada).
 **Apply:** sem repetição depois de conectar; timeout de leitura 300 s, conexão/pool 30 s.

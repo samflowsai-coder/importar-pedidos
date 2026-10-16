@@ -124,13 +124,19 @@ _BLOCOS = ("composicao", "vinculoMes", "composicao_portal", "fora_do_envio_guard
 
 
 def _precisa_atencao(rep: object) -> bool:
-    """Trava do Flow ativa, leitura da composição com falha no Portal, ou kit com
-    composição do ERP que deixou de vir (C3: apagar no Fire não chega ao Flow)."""
+    """Trava do Flow ativa, leitura da composição com falha no Portal, kit com
+    composição do ERP que deixou de vir (C3: apagar no Fire não chega ao Flow), ou
+    kit congelado por quantidade divergente do nome (fica parado até o Fire mudar)."""
     extra = getattr(rep, "model_extra", None) or {}
     comp = extra.get("composicao") or {}
     portal = extra.get("composicao_portal") or {}
     trava = comp.get("travaRemocaoAtiva") is True or comp.get("travaSubstituicaoAtiva") is True
-    return bool(trava or comp.get("erpSemChave") or portal.get("leitura_ok") is False)
+    return bool(
+        trava
+        or comp.get("erpSemChave")
+        or portal.get("leitura_ok") is False
+        or portal.get("divergencia_nome")
+    )
 
 
 def _resumo(rep: object) -> str:

@@ -201,6 +201,6 @@ def _logar_composicao(slug: str, resumo: dict) -> None:
     for seq, motivo in resumo["omitidos"].items():
         logger.warning(f"catalogo sync env={slug} composicao omitida SEQ {seq}: {motivo}")
     for seq, aviso in resumo["divergencia_nome"].items():
-        logger.warning(f"catalogo sync env={slug} quantidade diverge do nome SEQ {seq}: {aviso}")
+        logger.warning(f"catalogo sync env={slug} composicao congelada SEQ {seq} (quantidade diverge do nome): {aviso}")
     for codigo, seqs in resumo["codigo_mes_repetido"].items():
         logger.warning(f"catalogo sync env={slug} codigoMes {codigo} repetido em {seqs}: vai null")

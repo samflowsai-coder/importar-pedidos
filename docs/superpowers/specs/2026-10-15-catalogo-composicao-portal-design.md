@@ -30,6 +30,7 @@ do Fire (revisão da MM + validação do fiscal); tela de kits no Portal (§8).
 | Código do par no Apontaê fica no código alternativo do Fire, só o número | Samuel (opção A) + medição | 15/10 |
 | Ordem: Flow aceita no staging (Fatia A) → Portal manda → Flow grava (Fatia B) | as duas sessões | 15/10 |
 | Kit/pack sem composição no Fire vai **sem a chave**; o PCP pode cadastrar uma composição provisória no Flow, que o Fire substitui quando for corrigido. "Congelar composição" fica para depois | Samuel (C3, opção 1) | 15/10 |
+| Kit com quantidade divergente do nome vai congelado (sem a chave) até o Fire ser corrigido | Samuel | 16/10 |
 
 ## 3. Contrato (aditivo em `catalogo.produtos.v1`)
 
@@ -101,10 +102,13 @@ A leitura também conta como **falha** (ausente em todos) quando volta vazia ou
 quando nenhum dos produtos marcados como pai no extract (`IS_KIT=1`) aparece nela:
 base errada ou cópia vazia não pode virar "nenhum kit tem composição".
 
-**Conferência de quantidade** (só aviso, não omite): quando o nome traz a quantidade
+**Conferência de quantidade** (congela o kit): quando o nome traz a quantidade
 ("KIT C/5", "KIT 6", "PACK C/36") e a soma das quantidades da composição é diferente,
-o Portal registra `quantidade diverge do nome` no log e no resumo. Pega erro de
-digitação na carga da MM (12 no lugar de 2 vira OP 6× maior).
+o kit vai **sem a chave** `componentes` (o Flow mantém o que tem) e o Portal registra
+`composicao congelada` no log e em `divergencia_nome` no resumo. Pega erro de
+digitação na carga da MM (12 no lugar de 2 vira OP 6× maior). Corrigido o Fire (a
+composição ou o nome), o kit volta a ir no envio seguinte. Decisão do Samuel em
+16/10, antes da Fatia B: os 4 kits da MM (2538, 2614, 3151, 3152) ficam congelados.
 
 **Consequência do C3:** apagar no Fire a composição de um kit não chega ao Flow
 (o kit passa a ir sem a chave e o Flow mantém a última). O caminho certo é corrigir a
@@ -212,5 +216,5 @@ inválido ou SEQ que não está no extract: o envio falha sem mandar nada.
 | Apply demorado repetido pelo Portal → dois applies ao mesmo tempo | apply sem retry em timeout (300 s); Flow com um apply por vez (409) |
 | Código do Apontaê digitado errado liga a outra meia | Flow confere o nome normalizado contra o Apontaê (`nomeDivergente` não grava); ação de admin para corrigir |
 | Edição do Fire pela metade lida no meio | Flow só remove ou tira filhos depois de duas leituras iguais |
-| QTD errado na carga da MM | conferência contra a quantidade do nome, no log e no resumo |
+| QTD errado na carga da MM | conferência contra a quantidade do nome: o kit vai congelado (sem a chave), com log, resumo e atenção no diário |
 | Composição apagada no Fire não chega ao Flow (C3) | contagem de kits sem composição no resumo; aviso do Flow para kit de origem ERP que deixou de receber a chave |

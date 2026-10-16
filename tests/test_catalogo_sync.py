@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -396,6 +397,18 @@ def test_sync_leitura_com_falha_nenhum_item_com_a_chave(_sync, fire):
     assert all("componentes" not in i for i in corpo["itens"])
     assert corpo["itens"][1]["codigoMes"] == "8366"
     assert rep.model_extra["composicao_portal"]["leitura_ok"] is False
+
+
+def test_sync_kit_com_quantidade_divergente_do_nome_vai_sem_a_chave(_sync, monkeypatch):
+    dtos = [replace(_DTOS_KIT[0], nome="KIT C/5"), *_DTOS_KIT[1:]]
+    monkeypatch.setattr(catalogo_sync, "extract_produtos", lambda conn, **kw: list(dtos))
+    rep, corpo = _sync(fire=_FireComKit([(2544, 3306, 3)]))
+    kit, par, _ = corpo["itens"]
+    assert "componentes" not in kit  # congelado: o Flow não mexe
+    assert par["componentes"] == []
+    cp = rep.model_extra["composicao_portal"]
+    assert cp["com_lista"] == 0
+    assert cp["divergencia_nome"] == {"2544": "nome diz 5, composição soma 3"}
 
 
 def test_sync_exclusao_guardada_vale_mesmo_desligado(_sync, monkeypatch):

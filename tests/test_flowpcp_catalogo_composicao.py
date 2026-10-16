@@ -195,10 +195,24 @@ def test_mais_de_50_filhos_omite():
         ("KIT POLO MATCH", [("3306", 3.0)], False),  # nome sem quantidade: não confere
     ],
 )
-def test_quantidade_contra_o_nome_so_avisa(nome, linhas, divergente):
+def test_quantidade_contra_o_nome_congela_o_kit(nome, linhas, divergente):
+    """Divergente vai SEM a chave (o Flow não mexe) até o Fire ser corrigido:
+    Samuel, 16/10 — os 4 kits da MM ficam congelados e sobem depois."""
     r = cc.montar_composicao([_p("2544", "kit", nome=nome), _p("3306"), _p("3364")], {"2544": linhas})
-    assert r.por_seq["2544"] == linhas  # nunca omite por isso
     assert ("2544" in r.divergencia_nome) is divergente
+    if divergente:
+        assert "2544" not in r.por_seq
+        assert "2544" not in r.omitidos
+    else:
+        assert r.por_seq["2544"] == linhas
+
+
+def test_kit_congelado_nao_conta_como_com_lista():
+    dtos = [_p("2544", "kit", nome="KIT C/5 X"), _p("2133", "kit", nome="KIT C/2 Y"), _p("3306")]
+    r = cc.montar_composicao(dtos, {"2544": [("3306", 3.0)], "2133": [("3306", 2.0)]})
+    res = cc.resumo(r, {}, {})
+    assert res["com_lista"] == 1
+    assert res["divergencia_nome"] == {"2544": "nome diz 5, composição soma 3"}
 
 
 def test_resumo_conta_tudo():
