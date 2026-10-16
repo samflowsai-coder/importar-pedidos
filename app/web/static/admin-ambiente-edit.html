@@ -89,7 +89,7 @@
     }
     .ok  { color: var(--success, #22c55e); }
     .err { color: var(--danger, #ef4444); }
-    #btn-sync-materiais:focus-visible { outline: 2px solid var(--accent, #3b82f6); outline-offset: 2px; }
+    .btn:focus-visible { outline: 2px solid var(--accent, #3b82f6); outline-offset: 2px; }
     .err-banner {
       padding: .8rem 1rem;
       background: color-mix(in srgb, var(--danger, #ef4444) 15%, transparent);
@@ -402,8 +402,8 @@
       <div style="margin-top:1.25rem;border-top:1px solid var(--border,#2a2a2a);padding-top:1rem">
         <div style="font-weight:600;margin-bottom:.3rem">Materiais (Fire → Flow)</div>
         <div style="font-size:.85em;color:var(--text-muted,#9aa);margin-bottom:.6rem;line-height:1.5">
-          <strong>Simular</strong> mostra o que o Flow faria com os materiais do Fire <em>sem escrever</em>.
-          A gravação ainda não está disponível nesta etapa.
+          <strong>Simular</strong> mostra o que o Flow faria com os materiais do Fire <em>sem escrever no Flow</em>.
+          A cópia local é sempre atualizada. A gravação ainda não está disponível nesta etapa.
         </div>
         <button type="button" id="btn-sync-materiais" class="btn btn-secondary">Simular carga de material</button>
         <span id="sync-materiais-status" class="flowpcp-status"></span>
@@ -1163,7 +1163,7 @@
     function catFiscal(out, fp) {
       if (!fp || typeof fp !== 'object') return;
       const g = catGrupo(out, 'Campos fiscais');
-      catLinha(g, 'Campos fiscais', (fp.enviados ?? '—') + ' enviados, ' + (fp.com_pendencia ?? '—') + ' com pendência',
+      catLinha(g, 'Enviados', (fp.enviados ?? '—') + ' enviados, ' + (fp.com_pendencia ?? '—') + ' com pendência',
         fp.com_pendencia > 0 ? 'aviso' : undefined);
       const motivos = catMapa(fp.por_motivo, (k, x) => k + ': ' + x);
       if (motivos.length) catSeqs(g, motivos, undefined, '; ');
@@ -1179,28 +1179,33 @@
     // Material: só simulação. Chaves conhecidas do `resumo` do Flow em ordem fixa;
     // qualquer outra chave escalar aparece com o nome cru (o Flow é dono do shape).
     const MAT_RESUMO = [
-      ['casadosPorId', 'Casados por id'], ['casadosPorCodigo', 'Casados por código'],
-      ['casadosPorNome', 'Casados por nome'], ['criar', 'A criar'], ['atualizar', 'A atualizar'],
+      ['recebidos', 'Recebidos'], ['casados.porId', 'Casados por id'],
+      ['casados.porCodigo', 'Casados por código'], ['casados.porNome', 'Casados por nome'],
+      ['criar', 'A criar'], ['atualizar', 'A atualizar'], ['semMudanca', 'Sem mudança'],
       ['ambiguos', 'Ambíguos'], ['codigoNomeDiverge', 'Código e nome divergem'],
-      ['unidadeSemMapa', 'Unidade sem mapa'], ['exigeAprovacaoDiverge', 'Exige aprovação diverge'],
-      ['soNoFlow', 'Só no Flow'],
+      ['unidadeSemMapa', 'Unidade sem mapa'], ['unidadeDiverge', 'Unidade diverge'],
+      ['exigeAprovacaoDiverge', 'Exige aprovação diverge'], ['soNoFlow', 'Só no Flow'],
+      ['inativoSemInsumo', 'Inativos sem insumo'], ['desativar', 'A desativar'],
+      ['desativarBloqueado', 'Desativação bloqueada (em BOM ou com saldo)'],
     ];
     function matRender(out, rep) {
       out.replaceChildren();
       const resumo = rep.resumo && typeof rep.resumo === 'object' ? rep.resumo : {};
       const g = catGrupo(out, 'Resumo do Flow');
-      const vistos = new Set();
+      const vistos = new Set(['casados']);
       MAT_RESUMO.forEach(([k, rot]) => {
-        if (!(k in resumo)) return;
-        vistos.add(k);
-        catLinha(g, rot, resumo[k]);
+        const partes = k.split('.');
+        vistos.add(partes[0]);
+        const v = partes.length === 2
+          ? (resumo.casados && typeof resumo.casados === 'object' ? resumo.casados[partes[1]] : undefined)
+          : resumo[k];
+        catLinha(g, rot, v);
       });
       Object.keys(resumo).forEach((k) => {
         const v = resumo[k];
         if (vistos.has(k) || (v !== null && typeof v === 'object')) return;
         catLinha(g, k, v);
       });
-      if (!Object.keys(resumo).length) catLinha(g, 'Resumo', '—');
       const mp = rep.materiais_portal;
       if (mp && typeof mp === 'object') {
         const p = catGrupo(out, 'Enviado pelo Portal');
@@ -1209,17 +1214,17 @@
         catLinha(p, 'Fora do envio (SEQ: motivo)', fora.length, fora.length ? 'aviso' : undefined);
         catSeqs(p, fora, undefined, '; ');
         const mf = catMapa(mp.por_motivo_fora, (k, x) => k + ': ' + x);
-        if (mf.length) catSeqs(p, mf, undefined, '; ');
+        if (mf.length) catSeqs(p, ['Por motivo: ' + mf.join('; ')]);
         const pend = catMapa(mp.pendencias, (k, x) => k + ': ' + (Array.isArray(x) ? x.join(', ') : x));
         catLinha(p, 'Com pendência (SEQ: motivos)', pend.length, pend.length ? 'aviso' : undefined);
         catSeqs(p, pend, undefined, '; ');
         const mpd = catMapa(mp.por_motivo_pendencia, (k, x) => k + ': ' + x);
-        if (mpd.length) catSeqs(p, mpd, undefined, '; ');
+        if (mpd.length) catSeqs(p, ['Por motivo: ' + mpd.join('; ')]);
         if (mp.capacidade_ok === false) {
           const w = document.createElement('div');
           w.className = 'err';
           w.style.cssText = 'margin-top:.3rem;overflow-wrap:anywhere';
-          w.textContent = 'O Flow ainda não declara a capacidade de materiais.';
+          w.textContent = 'O Flow ainda não aceita a carga de material. Tire a empresa de PORTAL_FLOWPCP_MATERIAIS.';
           p.appendChild(w);
         }
       }
@@ -1239,7 +1244,8 @@
           let msg; try { msg = JSON.parse(t).detail || t; } catch { msg = t || ('Erro ' + r.status); }
           st.textContent = '✗ ' + (typeof msg === 'string' ? msg : JSON.stringify(msg)); st.classList.add('err'); return;
         }
-        const rep = JSON.parse(t);
+        let rep;
+        try { rep = JSON.parse(t); } catch { st.textContent = '✗ Resposta inesperada do servidor.'; st.classList.add('err'); return; }
         if (rep.local_only) {
           st.textContent = '✓ Materiais atualizados localmente (' + rep.itens + '). Envio ao Flow DESLIGADO.';
           st.classList.add('ok');

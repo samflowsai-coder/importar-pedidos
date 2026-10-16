@@ -35,6 +35,9 @@ def _bloco_js() -> str:
         "por_estado",
         "Volta do Flow para o Fire",
         "Desligada",
+        "casados",
+        "porId",
+        "PORTAL_FLOWPCP_MATERIAIS",
     ],
 )
 def test_tela_tem_os_blocos_novos(trecho):
