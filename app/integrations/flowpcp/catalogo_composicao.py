@@ -70,19 +70,24 @@ def codigo_mes(tipo: str, ativo: bool, codigo_alternativo: str | None) -> str | 
     valor = codigo_alternativo.strip()
     if not _DIGITOS.fullmatch(valor) or len(valor) > MAX_DIGITOS_MES:
         return None
+    if int(valor) == 0:
+        return None  # o Flow lê como inteiro: zero não é código de Apontaê
     return valor
 
 
 def codigos_mes(dtos: list[ProdutoFireDTO]) -> tuple[dict[str, str | None], dict[str, list[str]]]:
     """Código por SEQ; repetido em mais de um par → None em todos (quem ganharia o
-    vínculo no Flow dependeria da ordem)."""
+    vínculo no Flow dependeria da ordem). Repetição é pelo INTEIRO ("0100" e "100"
+    são o mesmo vínculo no Flow); o valor enviado continua o cru."""
     brutos = {d.fire_produto_id: codigo_mes(d.tipo, d.ativo, d.codigo_alternativo) for d in dtos}
     por_codigo: dict[str, list[str]] = defaultdict(list)
     for seq, codigo in brutos.items():
         if codigo:
-            por_codigo[codigo].append(seq)
+            por_codigo[str(int(codigo))].append(seq)
     repetidos = {c: sorted(s, key=int) for c, s in por_codigo.items() if len(s) > 1}
-    finais = {seq: (None if c in repetidos else c) for seq, c in brutos.items()}
+    finais = {
+        seq: (None if c and str(int(c)) in repetidos else c) for seq, c in brutos.items()
+    }
     return finais, repetidos
 
 

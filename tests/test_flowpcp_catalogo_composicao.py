@@ -4,10 +4,13 @@ from app.erp.catalog_extract import ProdutoFireDTO
 from app.integrations.flowpcp import catalogo_composicao as cc
 
 
-def _p(seq, tipo="simples", alt=None, nome=None, ativo=True):
+def _p(seq, tipo="simples", alt=None, nome=None, ativo=True, tem_composicao=None):
+    # tem_composicao None = o que o extract faz com IS_KIT: kit/pack têm, par não
+    if tem_composicao is None:
+        tem_composicao = tipo != "simples"
     return ProdutoFireDTO(
         seq, seq, nome or f"P{seq}", "PARES", None, ativo, tipo,
-        codigo_alternativo=alt, tem_composicao=tipo != "simples",
+        codigo_alternativo=alt, tem_composicao=tem_composicao,
     )
 
 
@@ -62,6 +65,9 @@ def test_excluir_guardado_invalido_falha_fechado(monkeypatch, valor):
         ("simples", True, "SAM´S-BP34", None),
         ("simples", True, "", None),
         ("simples", True, None, None),
+        ("simples", True, "0100", "0100"),  # sozinho: vai o valor cru, o Flow que normaliza
+        ("simples", True, "0", None),  # zero não é código
+        ("simples", True, "000", None),
         ("simples", True, "٣١", None),  # dígito não ASCII
         ("simples", False, "8366", None),  # par inativo
         ("kit", True, "8366", None),
@@ -77,6 +83,14 @@ def test_codigo_mes_repetido_vira_null_nos_dois():
     codigos, repetidos = cc.codigos_mes(dtos)
     assert codigos == {"3759": None, "3174": None, "3306": "8366"}
     assert repetidos == {"113649": ["3174", "3759"]}
+
+
+def test_codigo_mes_repetido_pelo_inteiro_zero_a_esquerda():
+    # o Flow lê ^\d{1,9}$ como inteiro: "0100" e "100" são o mesmo vínculo
+    dtos = [_p("1", alt="0100"), _p("2", alt="100"), _p("3", alt="8366")]
+    codigos, repetidos = cc.codigos_mes(dtos)
+    assert codigos == {"1": None, "2": None, "3": "8366"}
+    assert repetidos == {"100": ["1", "2"]}
 
 
 # ── composição ──────────────────────────────────────────────────────────
@@ -136,6 +150,32 @@ def test_filho_fora_do_envio_omite_a_chave_do_pai():
 def test_composicao_invalida_omite_com_motivo(linhas, motivo):
     r = cc.montar_composicao([_p("2544", "kit"), _p("3306")], {"2544": linhas})
     assert "2544" not in r.por_seq and r.omitidos["2544"] == motivo
+
+
+def test_c3_real_kit_sem_tem_composicao_e_sem_linha_fica_sem_a_chave():
+    # kit por nome/unidade (IS_KIT falso, sem linhas) convive com um kit IS_KIT lido
+    dtos = [_p("2544", "kit"), _p("3306"), _p("2133", "kit", tem_composicao=False)]
+    r = cc.montar_composicao(dtos, {"2544": [("3306", 1.0)]})
+    assert r.leitura_ok is True
+    assert "2133" not in r.por_seq and r.sem_linha == ("2133",)
+
+
+def test_exatamente_50_filhos_e_aceito():
+    filhos = [_p(str(4000 + i)) for i in range(50)]
+    lida = {"2544": [(f.fire_produto_id, 1.0) for f in filhos]}
+    r = cc.montar_composicao([_p("2544", "kit"), *filhos], lida)
+    assert len(r.por_seq["2544"]) == 50 and r.omitidos == {}
+
+
+def test_quantidade_100000_e_aceita():
+    r = cc.montar_composicao([_p("2544", "kit"), _p("3306")], {"2544": [("3306", 100000.0)]})
+    assert r.por_seq["2544"] == [("3306", 100000.0)] and r.omitidos == {}
+
+
+def test_so_kits_por_nome_com_leitura_nao_vazia_nao_e_falha():
+    dtos = [_p("2133", "kit", tem_composicao=False), _p("3306")]
+    r = cc.montar_composicao(dtos, {"9999": [("3306", 1.0)]})
+    assert r.leitura_ok is True and r.sem_linha == ("2133",)
 
 
 def test_mais_de_50_filhos_omite():
