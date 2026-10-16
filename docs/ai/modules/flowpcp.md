@@ -145,8 +145,8 @@ Flow não desativa produto só do Flow (sai como `flowOnly` no relatório).
 ou KIT no nome; o resto é `simples`. O promote atualiza o tipo dos já casados.
 O recorte "só meias" inclui os componentes (CTE recursiva sobre `PRODUTOS_KIT`),
 porque o par não é vendido e sem isso ficava só no Flow (trava de 5 níveis
-contra ciclo; componente cueca fora). A composição em si (`componentes`) ainda
-não vai no payload. **Portão antes de gravar:** o promote casa por
+contra ciclo; componente cueca fora). A composição em si (`componentes`) só vai
+no payload com `PORTAL_FLOWPCP_CATALOGO_COMPOSICAO` ligada para o slug (ver abaixo). **Portão antes de gravar:** o promote casa por
 `fire_produto_id`, código e nome; par só do Flow (`APT-…`, sem
 `fire_produto_id`) com nome diferente do Fire vira produto novo ao lado dele
 (par duplicado). Conferir no dryRun `fireOnly`/`nomeAmbiguo` dos pares antes do
@@ -156,7 +156,8 @@ não vai no payload. **Portão antes de gravar:** o promote casa por
 SEQs só do payload daquela rodada (a cópia local continua com o Fire inteiro). É
 para segurar cadastro com problema no Fire sem travar o resto. Vale **por rodada**:
 o diário e os scripts `tools/sync_catalogo_fire.py`/`tools/configurar_flowpcp.py`
-não usam o parâmetro (para o diário há a exclusão guardada, abaixo). Só dígitos
+não usam o parâmetro: sem a exclusão guardada (abaixo), não ligar o diário em `gravar`
+com exclusão pendente (o `?excluir=` vale só para a rodada). Só dígitos
 (zero à esquerda normalizado; `excluir` pode repetir); SEQ fora do catálogo
 extraído dá 422 e nada é enviado.
 
@@ -166,10 +167,11 @@ extraído dá 422 e nada é enviado.
 (`CODPROD_ALTERN` só dígitos, até 9, só em `simples` ativo, sem repetição no envio).
 Chave `componentes` ausente = "não mexer" no Flow; `[]` só em par; kit/pack sem
 `PRODUTOS_KIT` vai sem a chave (C3: o PCP pode ter composição provisória no Flow).
-Leitura com erro, vazia ou sem nenhum kit do extract = ausente em todos. Filho fora do
+Leitura com erro, vazia ou nenhum kit do extract presente na leitura = ausente em todos. Filho fora do
 envio, repetido, nulo, quantidade fora de 0 < q ≤ 100000, mais de 50 filhos ou kit dentro
 dele mesmo: ausente naquele item, com log. Quantidade que não bate com o nome: só aviso.
-O relatório ganha `composicao_portal`.
+O relatório ganha `composicao_portal` e `fora_do_envio_guardado` (SEQs tirados pela
+exclusão guardada).
 **Apply:** sem repetição depois de conectar; timeout de leitura 300 s, conexão/pool 30 s.
 Erros da rota: `ExcluirGuardadoInvalidoError`, `ConfirmacaoSemApplyError` e
 `ForaDoEnvioInexistenteError` = 422; `FlowPCPApplyEmAndamentoError` (o Flow já está

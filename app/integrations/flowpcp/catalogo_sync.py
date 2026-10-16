@@ -77,9 +77,9 @@ def run_catalogo_sync(
     `fora_do_envio`: SEQs que não vão ao Flow nesta rodada (a cópia local continua
     com o Fire inteiro). Existe para segurar cadastro com problema no Fire sem
     travar o resto: em 15/10/2026, 10 pares do listrado Sam's tinham 2 cadastros
-    e virariam par duplicado no Flow. Vale só para a rodada: o diário não usa,
-    então não ligar o diário em `gravar` enquanto o Fire não for corrigido. SEQ
-    pedido que não está no catálogo extraído levanta `ForaDoEnvioInexistenteError`
+    e virariam par duplicado no Flow. Vale só para a rodada (rota `excluir=`); a exclusão
+    guardada `PORTAL_FLOWPCP_CATALOGO_EXCLUIR_<SLUG>` vale em toda rodada, manual e
+    diária. SEQ pedido que não está no catálogo extraído levanta `ForaDoEnvioInexistenteError`
     antes de qualquer envio.
     Composição (`PORTAL_FLOWPCP_CATALOGO_COMPOSICAO` com o slug): lê PRODUTOS_KIT
     e manda `componentes`/`codigoMes` pelas regras de `catalogo_composicao`; o

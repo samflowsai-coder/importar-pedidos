@@ -23,7 +23,7 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
-1) **O catálogo pode levar ao Flow de que cada kit é feito e o código de cada par no Apontaê.** Fica desligado até o Flow estar pronto para receber, e liga por empresa. Kit que não tem composição no Fire não apaga a que o PCP cadastrou no Flow. Se o portal não conseguir ler a composição no Fire, ele não manda nada sobre composição, e o Flow mantém a que tem.
+1) **O catálogo pode informar ao Flow do que cada kit é feito e o código de cada par no Apontaê.** Fica desligado até o Flow estar pronto para receber, e liga por empresa. Kit que não tem composição no Fire não apaga a que o PCP cadastrou no Flow. Se o portal não conseguir ler a composição no Fire, ele não manda nada sobre composição, e o Flow mantém a que tem. A tela do ambiente no admin agora mostra o que foi enviado, o que o Flow mudaria, e traz o botão "Gravar liberando a trava" quando o Flow está segurando uma mudança em massa.
 2) **Produto com cadastro errado no Fire pode ficar fora de todo envio de catálogo**, inclusive do envio diário, até ser corrigido.
 3) **Gravar o catálogo no Flow não repete o envio quando o Flow demora**, e a tela avisa quando o Flow já está gravando.
 
