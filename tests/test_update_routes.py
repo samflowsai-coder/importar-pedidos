@@ -492,6 +492,9 @@ def test_updater_ps1_tem_ramo_restart_sem_backup_nem_pip():
                      "Assert-StagingValid", "Copy-Item", "Remove-Item"):
         assert proibido not in body
     assert "restart_failed" in body and 'kind = "restart"' in body
+    # falha inesperada no ramo: despacho tem catch que grava restart_failed
+    despacho = src[src.index("if ($isRestart)"):src.index("exit 0", src.index("if ($isRestart)"))]
+    assert "} catch {" in despacho and '-Status "restart_failed"' in despacho
     assert '-eq "restart"' in src
     # o fluxo de atualização continua lá
     assert "Backup-CurrentInstall -Destination $backupDir" in src
@@ -501,3 +504,5 @@ def test_pagina_atualizacao_tem_botao_reiniciar_com_confirmacao(setup):
     body = _client().get("/admin/atualizacao").content.decode()
     assert "Reiniciar o portal" in body
     assert "Reiniciar o portal agora? Quem estiver usando perde a conexão por alguns segundos." in body
+    assert "PORTAL_PORT" in body and "O reinício não foi confirmado" in body
+    assert "RESTART_POLL_CAP_MS" in body

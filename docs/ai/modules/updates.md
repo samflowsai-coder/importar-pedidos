@@ -116,7 +116,8 @@ sem backup, staging, pip nem arquivo tocado; tenta subir uma 2ª vez antes de de
 Fases: `stop | start | healthcheck`. Terminais: `succeeded | restart_failed`. Solta o lock
 e grava em `history.jsonl` uma linha com `kind: "restart"`. Como o `status.json` é
 mesclado, `/upload` e `/apply` zeram `kind` para um update não herdar `restart`.
-`restart_failed` conta como terminal no `/dismiss`.
+`restart_failed` conta como terminal no `/dismiss`. Falha inesperada no ramo grava `restart_failed` em best-effort.
+Se a mudança no `.env` trocar `PORTAL_PORT`, o admin precisa abrir o endereço novo depois de reiniciar (a tela avisa).
 
 Backup em `backups/update/<id>/` — **sempre sob o AppDir**, nunca sob o DataDir.
 

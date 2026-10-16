@@ -295,7 +295,7 @@
     <!-- Reiniciar o portal (sem pacote) -->
     <div class="card" id="restart-card" hidden>
       <div class="card-title">Reiniciar o portal</div>
-      <div class="card-desc" id="restart-desc">Use depois de mudar a configuração (.env) do servidor. Não aplica nenhum pacote.</div>
+      <div class="card-desc" id="restart-desc">Use depois de mudar a configuração (.env) do servidor. Não aplica nenhum pacote. Se a mudança trocar a porta (PORTAL_PORT), abra o endereço novo depois de reiniciar.</div>
       <div class="actions">
         <button class="btn" id="btn-restart">Reiniciar o portal</button>
       </div>
@@ -308,6 +308,7 @@
   const TERMINAL = new Set(['succeeded', 'rolled_back', 'rollback_failed', 'restart_failed']);
   const POLL_INTERVAL_MS = 3000;
   const POLL_CAP_MS = 5 * 60 * 1000;
+  const RESTART_POLL_CAP_MS = 7 * 60 * 1000; // restart com falha leva ~4,5 min (2 tentativas)
 
   // Ordem canônica das fases (espelha a spec § 4, passo 8a–8h). O updater
   // (scripts/apply-update.ps1) ainda vai definir a string exata de `phase`;
@@ -406,7 +407,7 @@
     $('restart-card').hidden = false;
     $('btn-restart').disabled = !enabled;
     $('restart-desc').textContent = enabled
-      ? 'Use depois de mudar a configuração (.env) do servidor. Não aplica nenhum pacote.'
+      ? 'Use depois de mudar a configuração (.env) do servidor. Não aplica nenhum pacote. Se a mudança trocar a porta (PORTAL_PORT), abra o endereço novo depois de reiniciar.'
       : 'Há um pacote esperando. Aplique ou descarte o pacote antes de reiniciar o portal.';
   }
 
@@ -593,7 +594,7 @@
   async function poll() {
     clearTimeout(pollTimer);
     const elapsed = Date.now() - pollStartedAt;
-    if (elapsed > POLL_CAP_MS) {
+    if (elapsed > (progressKind === 'restart' ? RESTART_POLL_CAP_MS : POLL_CAP_MS)) {
       renderProgressTimeout();
       return;
     }
@@ -634,6 +635,10 @@
 
   function renderProgressTimeout() {
     $('progress-note').textContent = '';
+    if (progressKind === 'restart') {
+      showError('O reinício está demorando mais que o esperado. Recarregue a página e confira se o portal voltou; se não voltou, reaplique o último pacote.');
+      return;
+    }
     showError('A verificação está demorando mais que o esperado. O servidor pode ainda estar reiniciando — recarregue a página em alguns minutos. Se a atualização travou, use "Dispensar" abaixo para liberar a tela.');
     $('progress-recovery').hidden = false;
   }
@@ -648,6 +653,7 @@
     const title = $('result-title');
     const body = $('result-body');
 
+    $('btn-new-update').textContent = 'Enviar outro pacote';
     if (data.kind === 'restart') {
       renderRestartResult(data, card, icon, title, body);
       return;
@@ -679,14 +685,16 @@
       card.className = 'card result-success';
       icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
       const at = typeof data.finished_at === 'number' ? new Date(data.finished_at * 1000) : new Date();
+      $('btn-new-update').textContent = 'Voltar';
       title.textContent = 'Portal reiniciado às '
         + at.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
       body.textContent = 'O portal voltou e está respondendo.';
     } else {
       card.className = 'card result-error';
       icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>';
+      $('btn-new-update').textContent = 'Voltar';
       title.textContent = 'Não foi possível reiniciar o portal';
-      body.textContent = 'O portal não respondeu depois de duas tentativas. É necessária intervenção manual no servidor.'
+      body.textContent = 'O reinício não foi confirmado. É necessária intervenção manual no servidor.'
         + (data.error ? ' Erro: ' + data.error : '');
     }
   }

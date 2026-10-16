@@ -694,9 +694,27 @@ try {
 
 # 1b) kind=restart: so reinicia o portal (ver Invoke-Restart). O fluxo de
 #     atualizacao abaixo so roda quando o status NAO e de restart.
-if ((Read-StatusRaw)["kind"] -eq "restart") {
+$isRestart = $false
+try { $isRestart = ((Read-StatusRaw)["kind"] -eq "restart") } catch { $isRestart = $false }
+if ($isRestart) {
     try {
         Invoke-Restart
+    } catch {
+        # Falha inesperada ate nas escritas de status do proprio ramo: grava
+        # restart_failed em best-effort para a tela nao ficar pendurada.
+        $restartError = $_.Exception.Message
+        Write-Log "RESTART: erro inesperado: $restartError"
+        try {
+            Write-Phase -Status "restart_failed" -Phase "healthcheck" -Extra @{
+                error = $restartError; finished_at = (Get-UnixTime)
+            }
+            Append-History @{
+                kind = "restart"; result = "restart_failed"; error = $restartError
+                finished_at = (Get-UnixTime)
+            }
+        } catch {
+            Write-Log "RESTART: nao foi possivel gravar restart_failed: $($_.Exception.Message)"
+        }
     } finally {
         if ($script:LockAcquired) {
             Remove-Item -Path $LockPath -Force -ErrorAction SilentlyContinue
