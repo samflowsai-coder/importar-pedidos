@@ -889,11 +889,11 @@
       return g;
     }
     // Lista de SEQs em linha própria: apagada, pequena, monoespaçada, no máximo 20.
-    function catSeqs(pai, v) {
+    function catSeqs(pai, v, total) {
       if (!Array.isArray(v) || !v.length) return;
       const d = document.createElement('div');
       d.style.cssText = 'font-size:.85em;color:var(--text-muted,#9aa);font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;margin-bottom:.25rem';
-      const resto = v.length - 20;
+      const resto = (total ?? v.length) - Math.min(v.length, 20);
       d.textContent = v.slice(0, 20).join(', ') + (resto > 0 ? ' e mais ' + resto : '');
       pai.appendChild(d);
     }
@@ -901,8 +901,8 @@
       return Array.isArray(v) && v.length ? v.join(', ') : '';
     }
     function catMapa(v, fmt) {
-      if (!v || typeof v !== 'object' || Array.isArray(v)) return '';
-      return Object.entries(v).map(([k, x]) => fmt(k, x)).join('; ');
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return [];
+      return Object.entries(v).map(([k, x]) => fmt(k, x));
     }
     function catBlocos(out, rep, apply) {
       const cp = rep.composicao_portal;
@@ -912,15 +912,18 @@
         else catLinha(g, 'Leitura da composição no Fire', 'ok');
         catLinha(g, 'Kits com composição', cp.com_lista);
         catLinha(g, 'Kits sem composição no Fire', cp.kits_sem_composicao ?? 0);
-        catSeqs(g, cp.kits_sem_composicao_seqs);
+        catSeqs(g, cp.kits_sem_composicao_seqs, cp.kits_sem_composicao);
         catLinha(g, 'Pares sem composição (vazios)', cp.pares_vazios);
         const omit = catMapa(cp.omitidos, (k, x) => k + ': ' + x);
-        catLinha(g, 'Omitidos (SEQ: motivo)', omit || 0, omit ? 'aviso' : undefined);
+        catLinha(g, 'Omitidos (SEQ: motivo)', omit.length, omit.length ? 'aviso' : undefined);
+        catSeqs(g, omit);
         const dn = catMapa(cp.divergencia_nome, (k, x) => k + ': ' + (typeof x === 'string' ? x : JSON.stringify(x)));
-        catLinha(g, 'Quantidade não bate com o nome (SEQ: aviso)', dn || 0, dn ? 'aviso' : undefined);
+        catLinha(g, 'Quantidade não bate com o nome (SEQ: aviso)', dn.length, dn.length ? 'aviso' : undefined);
+        catSeqs(g, dn);
         catLinha(g, 'Códigos do Apontaê enviados', cp.codigo_mes);
-        const rep_ = catMapa(cp.codigo_mes_repetido, (k, x) => k + ' em ' + (Array.isArray(x) ? x.join(', ') : x));
-        catLinha(g, 'Códigos do Apontaê repetidos', rep_ || 0, rep_ ? 'aviso' : undefined);
+        const rp = catMapa(cp.codigo_mes_repetido, (k, x) => k + ' em ' + (Array.isArray(x) ? x.join(', ') : x));
+        catLinha(g, 'Códigos do Apontaê repetidos', rp.length, rp.length ? 'aviso' : undefined);
+        catSeqs(g, rp);
       }
       const co = rep.composicao;
       if (co && typeof co === 'object') {
@@ -938,7 +941,7 @@
         catLinha(g, 'Bloqueados: quantidade', co.bloqueadosQuantidade);
         catLinha(g, 'Incoerência de tipo', co.incoerenciaTipo);
         catLinha(g, 'Kits do ERP que deixaram de vir', co.erpSemChave || 0, co.erpSemChave ? 'aviso' : undefined);
-        catSeqs(g, co.erpSemChaveIds);
+        catSeqs(g, co.erpSemChaveIds, co.erpSemChave);
         // Simulação mostra o que a trava SEGURARIA; "ATIVA" só depois de gravar.
         const trava = (ativa, lista, nome) => {
           if (ativa !== true) return;
