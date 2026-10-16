@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from contextlib import ExitStack, nullcontext
 from datetime import datetime, timedelta
 
@@ -50,6 +51,7 @@ COLUNAS = {
 }
 
 _SQL_NOME = "SELECT FIRST 1 SEQ FROM PRODUTOS WHERE UPPER(TRIM(DESCRICAO)) = ?"
+_SQL_SONDA = "SELECT 1 FROM RDB$DATABASE"
 _SQL_COMPONENTE = "SELECT SEQ, BLOQUEADO FROM PRODUTOS WHERE SEQ = ?"
 
 
@@ -141,12 +143,22 @@ def _plano(item: CadastroPendente) -> dict:
     }
 
 
+_ID_SEGURO = re.compile(r"^[0-9A-Fa-f-]{1,64}$")
+
+
 def _id_do_bruto(bruto: object) -> str:
+    """Id para o livro de um item que não validou: só hex e hífen; o resto vira hash."""
     cru = bruto.get("cadastroId") if isinstance(bruto, dict) else None
-    if isinstance(cru, str) and cru:
-        return cru[:64]
-    digest = hashlib.sha256(repr(bruto).encode("utf-8", "replace")).hexdigest()[:16]
+    if isinstance(cru, str) and _ID_SEGURO.fullmatch(cru):
+        return cru
+    base = cru if cru is not None else bruto
+    digest = hashlib.sha256(repr(base).encode("utf-8", "replace")).hexdigest()[:16]
     return f"sem-id-{digest}"
+
+
+def _versao_do_bruto(bruto: object) -> int:
+    v = bruto.get("versao") if isinstance(bruto, dict) else None
+    return v if type(v) is int and v >= 1 else 0
 
 
 def _idade_mais_antiga(brutos: list) -> float:
@@ -180,7 +192,21 @@ def _decidir(bruto, env_conn, fire_conn):
             f"erpProdutoId não está na cópia local {origem}",
             None,
         )
-    falha = _contra_o_fire(fire_conn, item)
+    try:
+        falha = _contra_o_fire(fire_conn, item)
+    except Exception as exc:  # noqa: BLE001
+        # Conexão perdida aborta o lote; erro só desta consulta rejeita só este item.
+        try:
+            _select(fire_conn, _SQL_SONDA, ())
+        except Exception:  # noqa: BLE001
+            raise exc from None
+        return (
+            "erro_definitivo",
+            item,
+            "consulta_fire_falhou",
+            f"consulta ao Fire falhou ({type(exc).__name__})",
+            None,
+        )
     if falha:
         return "erro_definitivo", item, falha[0], falha[1][:500], None
     return "simulado", item, None, None, _plano(item)
@@ -249,7 +275,7 @@ def _processar_fila(slug, brutos, resumo, _fire_conn, _env_conn) -> dict:
         # Fase 1: decide tudo (lê o Fire); se o Fire cair, nada foi para o livro.
         decisoes = []
         for bruto in brutos:
-            cadastro_id, versao = _id_do_bruto(bruto), 0
+            cadastro_id, versao = _id_do_bruto(bruto), _versao_do_bruto(bruto)
             item, *_ = validar_item(bruto)
             if item is not None:
                 cadastro_id, versao = str(item.cadastroId), item.versao

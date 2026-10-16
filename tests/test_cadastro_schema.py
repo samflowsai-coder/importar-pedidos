@@ -109,3 +109,43 @@ def test_mensagem_de_contrato_nao_vaza_valor_nem_chave_hostil():
 def test_entrada_que_nao_e_dict():
     assert validar_item("lixo")[1] == "contrato_invalido"
     assert validar_item(None)[1] == "contrato_invalido"
+
+
+@pytest.mark.parametrize(
+    "campo,valor",
+    [
+        ("versao", True),
+        ("versao", "1"),
+        ("tipoItemSped", True),
+        ("nome", b"K"),
+        ("nome", "   "),
+        ("nome", " KIT"),
+        ("nome", "KIT "),
+        ("aprovadoEm", "2026-10-20T12:00:00"),
+        ("aprovadoEm", 1760961600),
+        ("cadastroId", 12345),
+        ("cadastroId", "nao-e-uuid"),
+        ("erpProdutoId", "0003170"),
+        ("grupoErp", {"codigo": "0008"}),
+        ("grupoErp", {"codigo": "9999999999"}),
+        ("componentes", [{"erpProdutoId": "0003170", "quantidade": 1}]),
+        ("componentes", [{"erpProdutoId": "9999999999", "quantidade": 1}]),
+        ("componentes", [{"erpProdutoId": "3170", "quantidade": True}]),
+    ],
+)
+def test_coercao_e_formas_frouxas_sao_recusadas(campo, valor):
+    bruto = dict(BOM)
+    bruto[campo] = valor
+    if campo == "erpProdutoId":
+        bruto["acao"] = "atualizar"
+    item, cod, msg = validar_item(bruto)
+    assert item is None and cod == "contrato_invalido" and len(msg) <= 500
+
+
+def test_estrito_aceita_formas_corretas():
+    assert (
+        validar_item(dict(BOM, componentes=[{"erpProdutoId": "3170", "quantidade": 2.5}]))[1]
+        is None
+    )
+    assert validar_item(dict(BOM, aprovadoEm="2026-10-20T09:00:00-03:00"))[1] is None
+    assert validar_item(dict(BOM, acao="atualizar", erpProdutoId="999999999"))[1] is None

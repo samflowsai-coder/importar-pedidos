@@ -68,3 +68,26 @@ def test_duas_linhas_com_plano_truncado(setup):
     por_id = {u["cadastro_id"]: u for u in body["ultimos"]}
     assert por_id["id0"]["plano_truncado"] is False
     assert por_id["id1"]["plano_truncado"] is True and len(por_id["id1"]["plano_json"]) == 2048
+
+
+def test_plano_truncado_por_bytes_com_acento(setup):
+    env = _env(setup)
+    with router.env_connect("mm") as conn:
+        cadastro_volta_repo.registrar(
+            conn,
+            cadastro_id="id0",
+            versao=1,
+            estado="simulado",
+            acao="criar",
+            tipo="kit",
+            erro_codigo=None,
+            erro_mensagem=None,
+            plano_json="ç" * 1500,
+        )
+    (linha,) = _get(env["id"]).json()["ultimos"]
+    assert linha["plano_truncado"] is True
+    assert len(linha["plano_json"].encode("utf-8")) <= 2048
+
+
+def test_sem_login_e_401(setup, real_auth):
+    assert _get(_env(setup)["id"]).status_code == 401

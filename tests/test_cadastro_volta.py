@@ -73,6 +73,8 @@ class _Fire:
         return _Cur(self)
 
     def responder(self, sql, params):
+        if "RDB$DATABASE" in sql:
+            return [(1,)]
         if "DESCRICAO" in sql:
             seq = self.nomes.get(params[0])
             return [(seq,)] if seq else []
@@ -183,7 +185,7 @@ def test_tres_itens_bom_extra_e_seq_fora(env_conn, monkeypatch):
     assert (r["simulados"], r["erros"]) == (1, 2)
     livro = _livro(env_conn)
     assert livro[(BOM["cadastroId"], 1)]["estado"] == "simulado"
-    e = livro[("aaaaaaaa-0f7e-4a51-9c39-2a8f3f1d9a10", 0)]
+    e = livro[("aaaaaaaa-0f7e-4a51-9c39-2a8f3f1d9a10", 1)]
     assert (e["estado"], e["erro_codigo"]) == ("erro_definitivo", "contrato_invalido")
     f = livro[("bbbbbbbb-0f7e-4a51-9c39-2a8f3f1d9a10", 1)]
     assert (f["estado"], f["erro_codigo"]) == ("erro_definitivo", "seq_fora_do_escopo")
@@ -364,3 +366,75 @@ def test_client_list_cadastros_pendentes_tolera_chave_nova_e_nao_valida_itens():
     r = c.list_cadastros_pendentes(limite=7)
     assert c._client.visto == ("/api/portal-pedidos/cadastros/pendentes", {"limite": 7})
     assert r.cadastros == [{"qualquer": "coisa"}] and r.model_extra["limite"] == 20
+
+
+# --- fix round 1 ---------------------------------------------------------
+
+
+class _FireQueQuebraNoSegundo(_Fire):
+    def responder(self, sql, params):
+        if "DESCRICAO" in sql and params[0] == "ITEM DOIS":
+            raise RuntimeError("segredo-do-driver")
+        return super().responder(sql, params)
+
+
+def _item(n, nome):
+    return dict(BOM, cadastroId=f"{n:08d}-0f7e-4a51-9c39-2a8f3f1d9a10", nome=nome)
+
+
+def test_consulta_que_falha_so_rejeita_o_proprio_item(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    itens = [_item(1, "ITEM UM"), _item(2, "ITEM DOIS"), _item(3, "ITEM TRES")]
+    r = cv.processar_ambiente(
+        "mm", _client=_Client(itens), _fire_conn=_FireQueQuebraNoSegundo(), _env_conn=env_conn
+    )
+    assert (r["simulados"], r["erros"]) == (2, 1) and "erro_transitorio" not in r
+    livro = _livro(env_conn)
+    assert livro[("00000001-0f7e-4a51-9c39-2a8f3f1d9a10", 1)]["estado"] == "simulado"
+    assert livro[("00000003-0f7e-4a51-9c39-2a8f3f1d9a10", 1)]["estado"] == "simulado"
+    dois = livro[("00000002-0f7e-4a51-9c39-2a8f3f1d9a10", 1)]
+    assert (dois["estado"], dois["erro_codigo"]) == ("erro_definitivo", "consulta_fire_falhou")
+    assert "RuntimeError" in dois["erro_mensagem"] and "segredo" not in dois["erro_mensagem"]
+
+
+def test_conexao_perdida_no_meio_aborta_o_lote(env_conn, monkeypatch):
+    _simular(monkeypatch)
+
+    class _Cai(_Fire):
+        def responder(self, sql, params):
+            raise ConnectionError("caiu")  # inclusive a sonda
+
+    r = cv.processar_ambiente(
+        "mm", _client=_Client([_item(1, "A"), _item(2, "B")]), _fire_conn=_Cai(), _env_conn=env_conn
+    )
+    assert r["erro_transitorio"] == "ConnectionError"
+    assert cadastro_volta_repo.listar(env_conn) == []
+
+
+def test_id_hostil_nao_chega_ao_livro_nem_ao_log(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    msgs: list[str] = []
+    hid = logger.add(lambda m: msgs.append(str(m)), level="DEBUG")
+    try:
+        ruim = {"cadastroId": "<b>x</b>\nFORJADO", "versao": 3, "extra": 1}
+        cv.processar_ambiente("mm", _client=_Client([ruim]), _fire_conn=_Fire(), _env_conn=env_conn)
+    finally:
+        logger.remove(hid)
+    (linha,) = cadastro_volta_repo.listar(env_conn)
+    assert linha["cadastro_id"].startswith("sem-id-") and linha["versao"] == 3
+    assert not any("FORJADO" in m or "<b>" in m for m in msgs)
+
+
+def test_versoes_invalidas_do_mesmo_uuid_sao_linhas_distintas(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    v2 = dict(BOM, versao=2, extra=1)
+    v3 = dict(BOM, versao=3, extra=1)
+    cv.processar_ambiente("mm", _client=_Client([v2, v3]), _fire_conn=_Fire(), _env_conn=env_conn)
+    assert sorted(_livro(env_conn)) == [(BOM["cadastroId"], 2), (BOM["cadastroId"], 3)]
+
+
+def test_versao_bool_ou_negativa_cai_em_zero(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    a = dict(BOM, versao=True, extra=1)
+    cv.processar_ambiente("mm", _client=_Client([a]), _fire_conn=_Fire(), _env_conn=env_conn)
+    assert list(_livro(env_conn)) == [(BOM["cadastroId"], 0)]

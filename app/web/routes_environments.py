@@ -450,9 +450,10 @@ def cadastro_volta_flowpcp(env_id: str, _=Depends(require_admin)):
         ultimos = cadastro_volta_repo.listar(conn, limite=50)
     for linha in ultimos:
         plano = linha.get("plano_json")
-        linha["plano_truncado"] = bool(plano) and len(plano) > _PLANO_MAX_BYTES
+        bruto = plano.encode("utf-8") if plano else b""
+        linha["plano_truncado"] = len(bruto) > _PLANO_MAX_BYTES
         if linha["plano_truncado"]:
-            linha["plano_json"] = plano[:_PLANO_MAX_BYTES]
+            linha["plano_json"] = bruto[:_PLANO_MAX_BYTES].decode("utf-8", errors="ignore")
     return {"modo": cadastro_volta.modo(env["slug"]), "por_estado": por_estado, "ultimos": ultimos}
 
 

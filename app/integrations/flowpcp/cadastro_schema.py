@@ -35,16 +35,20 @@ _SPED_VALIDOS = frozenset({*range(0, 11), 99})
 _NOME_SEGURO = re.compile(r"^[A-Za-z0-9_]{1,40}$")
 
 
+_ID = r"^[1-9]\d{0,8}$"  # cabe no INTEGER de 32 bits do Fire, sem zero à esquerda
+
+
 class _Estrito(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # strict: nada de coerção (True->1, "1"->1, bytes->str) em campo que vira escrita no ERP.
+    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class GrupoRef(_Estrito):
-    codigo: str = Field(pattern=r"^\d{1,10}$")
+    codigo: str = Field(pattern=_ID)
 
 
 class ComponenteRef(_Estrito):
-    erpProdutoId: str = Field(pattern=r"^\d{1,10}$")  # noqa: N815
+    erpProdutoId: str = Field(pattern=_ID)  # noqa: N815
     quantidade: float
 
 
@@ -52,7 +56,7 @@ class CadastroPendente(_Estrito):
     cadastroId: UUID  # noqa: N815
     versao: int = Field(ge=1)
     acao: Literal["criar", "atualizar", "inativar"]
-    erpProdutoId: str | None = Field(default=None, pattern=r"^\d{1,10}$")  # noqa: N815
+    erpProdutoId: str | None = Field(default=None, pattern=_ID)  # noqa: N815
     tipo: Literal["simples", "kit", "pack", "material"]
     nome: str = Field(min_length=1)
     unidadeErp: str | None = None  # noqa: N815
@@ -65,6 +69,30 @@ class CadastroPendente(_Estrito):
     componentes: list[ComponenteRef] | None = None
     codigoMes: str | None = None  # noqa: N815
     aprovadoEm: datetime  # noqa: N815
+
+    @field_validator("cadastroId", mode="before")
+    @classmethod
+    def _uuid(cls, v: object) -> UUID:
+        if not isinstance(v, str):
+            raise ValueError("cadastroId deve ser texto")
+        return UUID(v)
+
+    @field_validator("aprovadoEm", mode="before")
+    @classmethod
+    def _instante(cls, v: object) -> datetime:
+        if not isinstance(v, str):
+            raise ValueError("aprovadoEm deve ser texto")
+        dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            raise ValueError("aprovadoEm sem fuso")
+        return dt
+
+    @field_validator("nome")
+    @classmethod
+    def _nome_sem_borda(cls, v: str) -> str:
+        if not v.strip() or v != v.strip():
+            raise ValueError("nome vazio ou com espaço nas pontas")
+        return v
 
     @field_validator("tipoItemSped")
     @classmethod
