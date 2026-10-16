@@ -271,6 +271,33 @@ def test_fora_do_envio_com_seq_inexistente_nao_envia_nada(monkeypatch):
     assert fake_client.sent is None
 
 
+def test_exclusao_guardada_com_seq_inexistente_nao_envia_nada(monkeypatch):
+    import pytest
+
+    dtos = [ProdutoFireDTO("3174", "3174", "X", "PAR", None, True, "simples")]
+    monkeypatch.setattr(catalogo_sync, "extract_produtos", lambda conn, **kw: dtos)
+    monkeypatch.setenv("PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM", "3174,9999")
+
+    class _Cfg:
+        enabled = True
+        catalogo_push = True
+
+    monkeypatch.setattr(catalogo_sync, "flowpcp_config_for_slug", lambda slug: _Cfg())
+    fake_client = _FakeClient()
+    with pytest.raises(catalogo_sync.ForaDoEnvioInexistenteError) as e:
+        catalogo_sync.run_catalogo_sync(
+            "mm",
+            dry_run=False,
+            now_iso="t",
+            _client=fake_client,
+            _fire_conn=object(),
+            _env_conn=_FakeEnvConn(),
+        )
+    assert e.value.guardados == ["9999"]
+    assert e.value.variavel == "PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM"
+    assert fake_client.sent is None
+
+
 class _FireComKit:
     """Conexão fake: PRODUTOS_KIT devolve linhas ou falha."""
 

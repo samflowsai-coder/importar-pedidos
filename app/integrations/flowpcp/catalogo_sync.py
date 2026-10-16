@@ -17,12 +17,19 @@ from app.utils.logger import logger
 _IMPORTADOR_VERSAO = "1.0.0"
 
 
+class ConfirmacaoSemApplyError(ValueError):
+    """Confirmação de trava pedida junto com dry-run."""
+
+
 class ForaDoEnvioInexistenteError(ValueError):
     """SEQ pedido em `fora_do_envio` que não está no catálogo extraído. Falha
     fechada: a exclusão confirmada na resposta tem que ter acontecido."""
 
-    def __init__(self, seqs: list[str], guardados: list[str] | None = None):
+    def __init__(
+        self, seqs: list[str], guardados: list[str] | None = None, variavel: str | None = None
+    ):
         self.seqs = seqs
+        self.variavel = variavel
         # Os que vieram da exclusão guardada (variável de ambiente), não da rota.
         self.guardados = guardados or []
         super().__init__(f"fora do envio, mas não estão no catálogo extraído: {', '.join(seqs)}")
@@ -81,7 +88,9 @@ def run_catalogo_sync(
     liberam as travas do Flow e só valem com `dry_run=False`.
     `_client`/`_fire_conn`/`_env_conn` são injeção de teste (default constrói os reais)."""
     if dry_run and (confirmar_remocao or confirmar_substituicao):
-        raise ValueError("confirmar trava de composição só vale com dryRun=false (apply)")
+        raise ConfirmacaoSemApplyError(
+            "confirmar trava de composição só vale com dryRun=false (apply)"
+        )
     cfg = flowpcp_config_for_slug(slug)
     if cfg is None or not getattr(cfg, "enabled", False):
         logger.info(f"catalogo sync: ambiente {slug} sem FlowPCP habilitado — skip")
@@ -123,7 +132,9 @@ def run_catalogo_sync(
         nao_achados = sorted(fora - {d.fire_produto_id for d in dtos}, key=int)
         if nao_achados:
             raise ForaDoEnvioInexistenteError(
-                nao_achados, guardados=[s for s in nao_achados if s in guardado]
+                nao_achados,
+                guardados=[s for s in nao_achados if s in guardado],
+                variavel=catalogo_composicao._var_excluir(slug),
             )
         logger.info(
             f"catalogo sync env={slug}: {len(fora)} itens fora do envio "

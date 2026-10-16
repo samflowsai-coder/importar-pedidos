@@ -129,7 +129,7 @@ def _precisa_atencao(rep: object) -> bool:
     extra = getattr(rep, "model_extra", None) or {}
     comp = extra.get("composicao") or {}
     portal = extra.get("composicao_portal") or {}
-    trava = any(k.startswith("trava") and v for k, v in comp.items())
+    trava = comp.get("travaRemocaoAtiva") is True or comp.get("travaSubstituicaoAtiva") is True
     return bool(trava or comp.get("erpSemChave") or portal.get("leitura_ok") is False)
 
 

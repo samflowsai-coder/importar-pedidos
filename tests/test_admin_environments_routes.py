@@ -782,9 +782,10 @@ def test_sync_catalogo_409_do_flow_vira_mensagem_clara(setup, monkeypatch):
 def test_sync_catalogo_valueerror_do_sync_e_422(setup, monkeypatch):
     env = _env_mm_habilitado(setup)
     import app.integrations.flowpcp.catalogo_sync as cs
+    from app.integrations.flowpcp.catalogo_composicao import ExcluirGuardadoInvalidoError
 
     def invalido(*a, **k):
-        raise ValueError("PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM inválido: 'x'")
+        raise ExcluirGuardadoInvalidoError("PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM inválido: 'x'")
 
     monkeypatch.setattr(cs, "run_catalogo_sync", invalido)
     r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?apply=true")
@@ -815,9 +816,58 @@ def test_sync_catalogo_guardado_inexistente_cita_a_variavel(setup, monkeypatch):
     import app.integrations.flowpcp.catalogo_sync as cs
 
     def fake(slug, **kw):
-        raise cs.ForaDoEnvioInexistenteError(["9999"], guardados=["9999"])
+        raise cs.ForaDoEnvioInexistenteError(
+            ["9999"], guardados=["9999"], variavel="PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM"
+        )
 
     monkeypatch.setattr(cs, "run_catalogo_sync", fake)
     r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?apply=true")
     assert r.status_code == 422
     assert "PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM" in r.json()["detail"]
+
+
+def test_sync_catalogo_resposta_fora_do_schema_e_502_nao_422(setup, monkeypatch):
+    from pydantic import BaseModel, ValidationError
+
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+
+    class _M(BaseModel):
+        x: int
+
+    def invalido(*a, **k):
+        try:
+            _M.model_validate({"x": "a"})
+        except ValidationError as exc:
+            raise exc
+
+    monkeypatch.setattr(cs, "run_catalogo_sync", invalido)
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?apply=true")
+    assert r.status_code == 502
+
+
+def test_sync_catalogo_confirmacao_sem_apply_no_sync_e_422(setup, monkeypatch):
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+
+    def sem_apply(*a, **k):
+        raise cs.ConfirmacaoSemApplyError("confirmar trava de composição só vale com apply")
+
+    monkeypatch.setattr(cs, "run_catalogo_sync", sem_apply)
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?apply=true")
+    assert r.status_code == 422
+
+
+def test_sync_catalogo_connect_timeout_diz_que_nada_foi_gravado(setup, monkeypatch):
+    import httpx
+
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+
+    def sem_conexao(*a, **k):
+        raise httpx.ConnectTimeout("x")
+
+    monkeypatch.setattr(cs, "run_catalogo_sync", sem_conexao)
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?apply=true")
+    assert r.status_code == 504
+    assert "nada foi gravado" in r.json()["detail"]

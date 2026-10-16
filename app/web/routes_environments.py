@@ -290,9 +290,10 @@ def sync_catalogo_flowpcp(
 
     import httpx
 
-    from app.integrations.flowpcp.catalogo_composicao import _var_excluir
+    from app.integrations.flowpcp.catalogo_composicao import ExcluirGuardadoInvalidoError
     from app.integrations.flowpcp.catalogo_sync import (
         CatalogoLocalResult,
+        ConfirmacaoSemApplyError,
         ForaDoEnvioInexistenteError,
         run_catalogo_sync,
     )
@@ -315,7 +316,7 @@ def sync_catalogo_flowpcp(
         if exc.guardados:
             detalhe += (
                 f". Os SEQs {', '.join(exc.guardados)} vêm da exclusão guardada "
-                f"({_var_excluir(env['slug'])}): corrija a variável"
+                f"({exc.variavel}): corrija a variável"
             )
         raise HTTPException(422, detalhe) from exc
     except FlowPCPApplyEmAndamentoError as exc:
@@ -323,10 +324,12 @@ def sync_catalogo_flowpcp(
             409,
             "O Flow já está gravando um catálogo deste ambiente. Espere terminar e simule de novo.",
         ) from exc
-    except ValueError as exc:
+    except (ExcluirGuardadoInvalidoError, ConfirmacaoSemApplyError) as exc:
         raise HTTPException(422, str(exc)) from exc
     except httpx.TimeoutException as exc:
-        if apply:
+        if isinstance(exc, httpx.ConnectTimeout | httpx.PoolTimeout):
+            msg = "Não consegui conectar ao Flow; nada foi gravado. Tente de novo."
+        elif apply:
             msg = (
                 "O Flow não respondeu a tempo. A gravação pode ainda estar em andamento no Flow: "
                 "espere alguns minutos e simule de novo antes de gravar outra vez."

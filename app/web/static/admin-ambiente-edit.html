@@ -874,7 +874,7 @@
       s.style.overflowWrap = 'anywhere';
       s.textContent = (valor === undefined || valor === null || valor === '') ? '—' : String(valor);
       if (tom === 'err') s.className = 'err';
-      if (tom === 'aviso') s.style.color = 'var(--warning, #d97706)';
+      if (tom === 'aviso') s.style.color = 'var(--warn-strong, #B45309)';
       d.appendChild(s);
       pai.appendChild(d);
     }
@@ -887,6 +887,15 @@
       g.appendChild(h);
       pai.appendChild(g);
       return g;
+    }
+    // Lista de SEQs em linha própria: apagada, pequena, monoespaçada, no máximo 20.
+    function catSeqs(pai, v) {
+      if (!Array.isArray(v) || !v.length) return;
+      const d = document.createElement('div');
+      d.style.cssText = 'font-size:.85em;color:var(--text-muted,#9aa);font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;margin-bottom:.25rem';
+      const resto = v.length - 20;
+      d.textContent = v.slice(0, 20).join(', ') + (resto > 0 ? ' e mais ' + resto : '');
+      pai.appendChild(d);
     }
     function catLista(v) {
       return Array.isArray(v) && v.length ? v.join(', ') : '';
@@ -902,7 +911,9 @@
         if (cp.leitura_ok === false) catLinha(g, 'Leitura da composição no Fire', 'FALHOU' + (cp.motivo_falha ? ': ' + cp.motivo_falha : ''), 'err');
         else catLinha(g, 'Leitura da composição no Fire', 'ok');
         catLinha(g, 'Kits com composição', cp.com_lista);
-        catLinha(g, 'Kits sem composição no Fire', (cp.kits_sem_composicao ?? 0) + (catLista(cp.kits_sem_composicao_seqs) ? ' (SEQ ' + catLista(cp.kits_sem_composicao_seqs) + ')' : ''), cp.kits_sem_composicao ? 'aviso' : undefined);
+        catLinha(g, 'Kits sem composição no Fire', cp.kits_sem_composicao ?? 0);
+        catSeqs(g, cp.kits_sem_composicao_seqs);
+        catLinha(g, 'Pares sem composição (vazios)', cp.pares_vazios);
         const omit = catMapa(cp.omitidos, (k, x) => k + ': ' + x);
         catLinha(g, 'Omitidos (SEQ: motivo)', omit || 0, omit ? 'aviso' : undefined);
         const dn = catMapa(cp.divergencia_nome, (k, x) => k + ': ' + (typeof x === 'string' ? x : JSON.stringify(x)));
@@ -926,9 +937,17 @@
         catLinha(g, 'Bloqueados: filho duplicado', co.bloqueadosFilhoDuplicado);
         catLinha(g, 'Bloqueados: quantidade', co.bloqueadosQuantidade);
         catLinha(g, 'Incoerência de tipo', co.incoerenciaTipo);
-        catLinha(g, 'Kits do ERP que deixaram de vir', (co.erpSemChave || 0) + (catLista(co.erpSemChaveIds) ? ' (' + catLista(co.erpSemChaveIds) + ')' : ''), co.erpSemChave ? 'aviso' : undefined);
-        if (co.travaRemocaoAtiva === true) catLinha(g, 'Trava de remoção ATIVA', catLista(co.travaRemocao) || 'sim', 'aviso');
-        if (co.travaSubstituicaoAtiva === true) catLinha(g, 'Trava de substituição ATIVA', catLista(co.travaSubstituicao) || 'sim', 'aviso');
+        catLinha(g, 'Kits do ERP que deixaram de vir', co.erpSemChave || 0, co.erpSemChave ? 'aviso' : undefined);
+        catSeqs(g, co.erpSemChaveIds);
+        // Simulação mostra o que a trava SEGURARIA; "ATIVA" só depois de gravar.
+        const trava = (ativa, lista, nome) => {
+          if (ativa !== true) return;
+          const n = Array.isArray(lista) ? lista.length : '?';
+          catLinha(g, apply ? 'Trava de ' + nome + ' ATIVA, kits retidos' : 'Trava de ' + nome + ' seguraria kits', n, 'aviso');
+          catSeqs(g, lista);
+        };
+        trava(co.travaRemocaoAtiva, co.travaRemocao, 'remoção');
+        trava(co.travaSubstituicaoAtiva, co.travaSubstituicao, 'substituição');
       }
       const vm = rep.vinculoMes;
       if (vm && typeof vm === 'object') {
@@ -939,6 +958,8 @@
         catLinha(g, 'Conflitos (código de outro produto)', vm.conflitoOutroProduto, vm.conflitoOutroProduto ? 'aviso' : undefined);
         catLinha(g, 'Inexistentes no Apontaê', vm.inexistenteNoMes);
         catLinha(g, 'Formato inválido', vm.formatoInvalido, vm.formatoInvalido ? 'aviso' : undefined);
+        catLinha(g, 'Nome diferente do Apontaê (não ligado)', vm.nomeDivergente, vm.nomeDivergente ? 'aviso' : undefined);
+        catLinha(g, 'Ignorados (não são pares)', vm.ignoradoNaoSimples);
       }
       const fg = catLista(rep.fora_do_envio_guardado);
       if (fg) {
@@ -970,7 +991,7 @@
         if (liberar.includes('substituicao')) partes.push((co && co.travaSubstituicao ? co.travaSubstituicao.length : 'alguns') + ' kit(s) segurados pela trava de substituição têm a composição trocada');
         if (!confirm('GRAVAR LIBERANDO A TRAVA: ' + partes.join('; ') + '. Confirmar?')) return;
       } else if (apply && !confirm('GRAVAR NO FLOW: grava os produtos do Fire no catálogo do Flow. Se o envio de composição estiver ligado para esta empresa, grava também de que cada kit é feito e o código de cada par no Apontaê. Confirmar?')) return;
-      st.textContent = apply ? 'Promovendo… pode levar alguns segundos.' : 'Simulando… pode levar alguns segundos.';
+      st.textContent = apply ? 'Gravando no Flow… pode levar alguns segundos.' : 'Simulando… pode levar alguns segundos.';
       st.className = 'flowpcp-status';
       out.hidden = true;
       btns.forEach(b => b.disabled = true);
@@ -994,7 +1015,7 @@
         }
         const c = rep.contagens || {};
         const p = rep.promote;
-        st.textContent = apply ? '✓ Promovido no Flow' : '✓ Simulação concluída (dry-run)';
+        st.textContent = apply ? '✓ Gravado no Flow' : '✓ Simulação concluída (dry-run)';
         st.classList.add('ok');
         out.hidden = false;
         out.replaceChildren();

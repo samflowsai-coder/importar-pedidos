@@ -41,10 +41,14 @@ def _var_excluir(slug: str) -> str:
     return "PORTAL_FLOWPCP_CATALOGO_EXCLUIR_" + re.sub(r"[^A-Z0-9]", "_", slug.upper())
 
 
+class ExcluirGuardadoInvalidoError(ValueError):
+    """Variável PORTAL_FLOWPCP_CATALOGO_EXCLUIR_<SLUG> com valor que não é lista de SEQs."""
+
+
 def excluir_guardado(slug: str) -> frozenset[str]:
     """SEQs que ficam fora de todo envio do ambiente (manual e diário) até o Fire
     ser corrigido: em 15/10/2026, os pares duplicados do listrado Sam's. Valor
-    inválido levanta ValueError: melhor não enviar do que enviar o duplicado."""
+    inválido levanta ExcluirGuardadoInvalidoError: melhor não enviar do que enviar o duplicado."""
     nome = _var_excluir(slug)
     seqs: set[str] = set()
     for parte in os.environ.get(nome, "").split(","):
@@ -52,7 +56,7 @@ def excluir_guardado(slug: str) -> frozenset[str]:
         if not parte:
             continue
         if not _SEQ.fullmatch(parte):
-            raise ValueError(f"{nome}: '{parte}' não é um código do Fire (SEQ)")
+            raise ExcluirGuardadoInvalidoError(f"{nome}: '{parte}' não é um código do Fire (SEQ)")
         seqs.add(str(int(parte)))
     return frozenset(seqs)
 
