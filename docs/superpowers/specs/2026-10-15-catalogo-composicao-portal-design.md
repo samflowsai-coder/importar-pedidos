@@ -101,10 +101,13 @@ A leitura também conta como **falha** (ausente em todos) quando volta vazia ou
 quando nenhum dos produtos marcados como pai no extract (`IS_KIT=1`) aparece nela:
 base errada ou cópia vazia não pode virar "nenhum kit tem composição".
 
-**Conferência de quantidade** (só aviso, não omite): quando o nome traz a quantidade
+**Conferência de quantidade** (congela o kit): quando o nome traz a quantidade
 ("KIT C/5", "KIT 6", "PACK C/36") e a soma das quantidades da composição é diferente,
-o Portal registra `quantidade diverge do nome` no log e no resumo. Pega erro de
-digitação na carga da MM (12 no lugar de 2 vira OP 6× maior).
+o kit vai **sem a chave** `componentes` (o Flow mantém o que tem) e o Portal registra
+`composicao congelada` no log e em `divergencia_nome` no resumo. Pega erro de
+digitação na carga da MM (12 no lugar de 2 vira OP 6× maior). Corrigido o Fire (a
+composição ou o nome), o kit volta a ir no envio seguinte. Decisão do Samuel em
+16/10, antes da Fatia B: os 4 kits da MM (2538, 2614, 3151, 3152) ficam congelados.
 
 **Consequência do C3:** apagar no Fire a composição de um kit não chega ao Flow
 (o kit passa a ir sem a chave e o Flow mantém a última). O caminho certo é corrigir a

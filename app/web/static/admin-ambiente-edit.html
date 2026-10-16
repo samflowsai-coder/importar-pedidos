@@ -919,7 +919,7 @@
         catLinha(g, 'Omitidos (SEQ: motivo)', omit.length, omit.length ? 'aviso' : undefined);
         catSeqs(g, omit, undefined, '; ');
         const dn = catMapa(cp.divergencia_nome, (k, x) => k + ': ' + (typeof x === 'string' ? x : JSON.stringify(x)));
-        catLinha(g, 'Quantidade não bate com o nome (SEQ: aviso)', dn.length, dn.length ? 'aviso' : undefined);
+        catLinha(g, 'Congelados: quantidade não bate com o nome, vão sem composição (SEQ: aviso)', dn.length, dn.length ? 'aviso' : undefined);
         catSeqs(g, dn, undefined, '; ');
         catLinha(g, 'Códigos do Apontaê enviados', cp.codigo_mes);
         const rp = catMapa(cp.codigo_mes_repetido, (k, x) => k + ' em ' + (Array.isArray(x) ? x.join(', ') : x));

@@ -126,7 +126,8 @@ def _problema(seq: str, linhas: list[Linha], enviados: set[str]) -> str | None:
 
 
 def _divergencia(nome: str, linhas: list[tuple[str, float]]) -> str | None:
-    """Só aviso: pega o 12 no lugar do 2 na carga da MM (OP 6× maior)."""
+    """Pega o 12 no lugar do 2 na carga da MM (OP 6× maior). Divergente fica
+    congelado: vai sem a chave até o Fire ser corrigido (Samuel, 16/10)."""
     achado = _QTD_NOME.search(nome.upper())
     if not achado:
         return None
@@ -169,10 +170,11 @@ def montar_composicao(
             omitidos[seq] = motivo
             continue
         validas = [(str(f), float(q)) for f, q in linhas]
-        por_seq[seq] = validas
         aviso = _divergencia(d.nome, validas)
         if aviso:
-            divergencia[seq] = aviso
+            divergencia[seq] = aviso  # congelado: sem a chave, o Flow mantém o que tem
+            continue
+        por_seq[seq] = validas
     return ComposicaoDoEnvio(
         por_seq=por_seq,
         omitidos=omitidos,
