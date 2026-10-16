@@ -153,6 +153,7 @@ def test_resumo_traz_os_blocos_de_composicao():
         {"composicao": {"travaSubstituicaoAtiva": True, "travaSubstituicao": ["2544"]}},
         {"composicao": {"erpSemChave": 4}},
         {"composicao_portal": {"leitura_ok": False}},
+        {"composicao_portal": {"leitura_ok": True, "divergencia_nome": {"3151": "nome diz 22, composição soma 1"}}},
     ],
 )
 def test_atencao_quando_trava_falha_ou_kit_sem_chave(extra):
