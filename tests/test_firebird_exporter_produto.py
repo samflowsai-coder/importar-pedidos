@@ -99,3 +99,37 @@ def test_seq_do_depara_sumiu_do_fire_recusa_o_pedido(monkeypatch):
     assert result.skip_reason == "PRODUCT_NOT_FOUND"
     sql = [c.args[0] for c in cur.execute.call_args_list]
     assert queries.INSERT_CORPO_VENDAS not in sql
+
+
+def test_item_sem_produto_no_fire_recusa_o_pedido(monkeypatch):
+    """Antes: item sem match entrava em CORPO_VENDAS com CODPRODUTO NULL e só
+    um warning no log. Agora o pedido inteiro é recusado (a conexão faz
+    rollback do cabeçalho já inserido)."""
+    order = Order(
+        header=OrderHeader(
+            order_number="DEP-2",
+            customer_name="ACME LTDA",
+            customer_cnpj="11.222.333/0001-44",
+        ),
+        items=[
+            OrderItem(
+                description="X", quantity=1, unit_price=10.0, ean="789000", product_code="NAO-EXISTE"
+            ),
+        ],
+    )
+    cur = MagicMock()
+    cur.fetchone.side_effect = [
+        (4242,),  # FIND_CLIENT_BY_CNPJ
+        (0,),  # CHECK_ORDER_EXISTS
+        (100,),  # GET_NEXT_CABVENDAS_CODIGO
+        None,  # FIND_PRODUCT_BY_EAN
+        None,  # FIND_PRODUCT_BY_CODE
+    ]
+    exporter = _exporter_with_fake_cursor(monkeypatch, cur)
+
+    result = exporter.export(order)
+
+    assert result.skipped is True
+    assert result.skip_reason == "PRODUCT_NOT_FOUND"
+    sql = [c.args[0] for c in cur.execute.call_args_list]
+    assert queries.INSERT_CORPO_VENDAS not in sql

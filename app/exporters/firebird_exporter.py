@@ -304,10 +304,11 @@ class FirebirdExporter:
 
     def _find_product(
         self, cur, row: ERPRow, *, seq: int | None = None
-    ) -> tuple[int | None, str]:
+    ) -> tuple[int, str]:
         """Retorna (product_seq, unid). `unid` vem de PRODUTOS.UNIDADE no
-        cadastro do Fire — "UN" quando o produto nao e encontrado ou a
-        coluna vem vazia/NULL (kits cadastrados usam 'KIT').
+        cadastro do Fire — "UN" quando a coluna vem vazia/NULL (kits
+        cadastrados usam 'KIT'). Produto nao encontrado levanta
+        FirebirdProductNotFoundError.
 
         `seq` (vínculo de-para): busca so pelo SEQ. Sumiu do Fire = erro,
         nunca cai para EAN/código (o código do vínculo e o SEQ em texto).
@@ -332,11 +333,9 @@ class FirebirdExporter:
             if result:
                 return result[0], self._unid_from_row(result)
 
-        logger.warning(
-            f"Produto não encontrado no ERP — EAN={row.ean!r} "
-            f"código={row.codigo_produto!r}. Inserindo sem FK."
-        )
-        return None, "UN"
+        # Sem produto = item sem CODPRODUTO no Fire. Recusa o pedido inteiro;
+        # a conexão desfaz o cabeçalho já inserido.
+        raise FirebirdProductNotFoundError(row.codigo_produto or row.ean or "")
 
     @staticmethod
     def _unid_from_row(result: tuple) -> str:
