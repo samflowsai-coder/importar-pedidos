@@ -22,8 +22,8 @@ import json
 import os
 import threading
 import time
-from datetime import date, datetime
-from decimal import Decimal
+from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 
 from app.consolidators import integracao
 from app.consolidators.lote import Consolidado, PernaDoLote, consolidar
@@ -37,6 +37,7 @@ from app.utils.logger import logger
 INTERVALO_S = 300.0
 _ABERTOS = ("aberto", "aguardando_fator")
 _FECHADOS = ("fechado", "enviado")
+_CARENCIA = timedelta(minutes=10)
 # Serializa a thread e o botão "fechar agora" dentro do processo. Reentrante
 # porque `fechar_vencidos` segura o lock e chama `fechar_lote`.
 _LOCK = threading.RLock()
@@ -85,53 +86,34 @@ def _fechar_lote(lote_id: int, *, por: str, agora: datetime) -> dict:
         cfg = lotes_repo.get_config(conn, lote["env_origem_slug"])
 
     try:
-        if cfg is None:
-            raise _FechamentoInvalidoError(f"sem lote_config para {lote['env_origem_slug']!r}")
-        env_espelho = environments_repo.get_by_slug(lote["env_espelho_slug"])
-        if env_espelho is None:
+        if environments_repo.get_by_slug(lote["env_espelho_slug"]) is None:
             raise _FechamentoInvalidoError(
                 f"ambiente espelho {lote['env_espelho_slug']!r} não existe"
             )
-        consolidado = consolidar(
-            _carregar_pernas(lote["env_origem_slug"], pernas),
-            env_origem_slug=lote["env_origem_slug"],
-            cnpj_revenda=cfg["cnpj_revenda"],
-            nome_revenda=cfg["nome_revenda"],
-            chave_lote=lote["chave_lote"],
-            fator_preco=Decimal(lote["fator_preco_aplicado"]),
-            modo_preco=lote["modo_preco_aplicado"],
-        )
-    except (_FechamentoInvalidoError, ValueError) as exc:
-        motivo = str(exc)
+        consolidado = _consolidar(lote, cfg, pernas)
+    except (_FechamentoInvalidoError, ValueError, InvalidOperation) as exc:
+        motivo = str(exc) or type(exc).__name__
         with db.connect_shared() as conn:
             lotes_repo.marcar_erro(conn, lote_id=lote_id, motivo=motivo, agora=agora)
         logger.error(f"lote: {lote['chave_lote']} não fechou: {motivo}")
         return _resultado("erro", motivo=motivo)
 
+    # Fecha PRIMEIRO (banco compartilhado, commitado) e só então materializa o
+    # espelho: fechar recusado nunca deixa linha `lote-<chave>` no MM.
     import_id_espelho = f"lote-{lote['chave_lote']}"
-    _gravar_espelho(import_id_espelho, lote, cfg, env_espelho, consolidado, len(pernas), agora)
-    composicao = [
-        [
-            {"import_id": o.import_id, "indice": o.indice, "quantidade": str(o.quantidade)}
-            for o in linha
-        ]
-        for linha in consolidado.composicao
-    ]
-
     with db.connect_shared() as conn:
         ok = lotes_repo.fechar(
             conn,
             lote_id=lote_id,
             import_id_espelho=import_id_espelho,
-            composicao=composicao,
+            composicao=_serializar(consolidado.composicao),
             pernas_esperadas=len(pernas),
             por=por,
             agora=agora,
         )
-        atual = None if ok else lotes_repo.get(conn, lote_id)
-    if atual is not None:
+        atual = lotes_repo.get(conn, lote_id)
+    if not ok:
         if atual["status"] in _ABERTOS:
-            # O espelho é upsert de id fixo: o próximo ciclo o reescreve com a perna nova.
             motivo = "perna nova chegou durante o fechamento; tenta no próximo ciclo"
             logger.warning(f"lote: {lote['chave_lote']} {motivo}")
             return _resultado("erro", motivo=motivo)
@@ -142,9 +124,42 @@ def _fechar_lote(lote_id: int, *, por: str, agora: datetime) -> dict:
     logger.info(
         f"lote: {lote['chave_lote']} fechado — {len(pernas)} pernas, "
         f"{len(consolidado.order.items)} linhas, espelho {import_id_espelho} em "
-        f"{env_espelho['slug']}"
+        f"{lote['env_espelho_slug']}"
     )
+    try:
+        materializar_espelho(atual, agora=agora)
+    except Exception as exc:  # noqa: BLE001 — lote já fechado; o próximo ciclo repara
+        logger.error(
+            f"lote: espelho {import_id_espelho} não materializado, fica para o próximo "
+            f"ciclo: {type(exc).__name__}: {exc}"
+        )
     return _resultado("fechado", import_id_espelho=import_id_espelho)
+
+
+def _consolidar(lote: dict, cfg: dict | None, pernas: list[dict]) -> Consolidado:
+    """Mesma entrada (pernas em ordem de id, fator/modo congelados) no fechamento e
+    na materialização: a composição gravada é a do pedido materializado."""
+    if cfg is None:
+        raise _FechamentoInvalidoError(f"sem lote_config para {lote['env_origem_slug']!r}")
+    return consolidar(
+        _carregar_pernas(lote["env_origem_slug"], pernas),
+        env_origem_slug=lote["env_origem_slug"],
+        cnpj_revenda=cfg["cnpj_revenda"],
+        nome_revenda=cfg["nome_revenda"],
+        chave_lote=lote["chave_lote"],
+        fator_preco=Decimal(lote["fator_preco_aplicado"]),
+        modo_preco=lote["modo_preco_aplicado"],
+    )
+
+
+def _serializar(composicao: list) -> list[list[dict]]:
+    return [
+        [
+            {"import_id": o.import_id, "indice": o.indice, "quantidade": str(o.quantidade)}
+            for o in linha
+        ]
+        for linha in composicao
+    ]
 
 
 def _carregar_pernas(env_origem_slug: str, pernas: list[dict]) -> list[PernaDoLote]:
@@ -168,18 +183,55 @@ def _carregar_pernas(env_origem_slug: str, pernas: list[dict]) -> list[PernaDoLo
     return out
 
 
-def _gravar_espelho(
-    import_id: str,
-    lote: dict,
-    cfg: dict,
-    env: dict,
-    consolidado: Consolidado,
-    n_pernas: int,
-    agora: datetime,
-) -> None:
+def _tem_evento_imported(import_id: str) -> bool:
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM order_lifecycle_events WHERE import_id = ? AND event_type = ? LIMIT 1",
+            (import_id, LifecycleEvent.IMPORTED.value),
+        ).fetchone()
+    return row is not None
+
+
+def materializar_espelho(lote: dict, *, agora: datetime) -> bool:
+    """Cria a linha `lote-<chave>` do lote fechado no ambiente espelho. Idempotente.
+
+    Linha e evento `imported` já existem → no-op (não sobrescreve edição feita na
+    revisão, como troca de produto). Reconstrói o pedido das pernas do lote
+    (congeladas: `anexar_perna` recusa lote fechado) com o fator/modo do lote e
+    confere a composição contra a gravada no fechamento. Devolve True se gravou.
+    Falha propaga: quem chama loga e o próximo ciclo tenta de novo.
+    """
+    import_id = lote.get("import_id_espelho")
+    if lote["status"] != "fechado" or not import_id:
+        return False
+    env = environments_repo.get_by_slug(lote["env_espelho_slug"])
+    if env is None:
+        raise _FechamentoInvalidoError(f"ambiente espelho {lote['env_espelho_slug']!r} não existe")
+    with env_context.active_env(env["id"], env["slug"]):
+        existe = repo.get_import(import_id) is not None
+        tem_evento = _tem_evento_imported(import_id)
+    if existe and tem_evento:
+        return False
+
+    with db.connect_shared() as conn:
+        pernas = lotes_repo.pernas_do_lote(conn, lote["id"])
+        cfg = lotes_repo.get_config(conn, lote["env_origem_slug"])
+    consolidado = _consolidar(lote, cfg, pernas)
+    if _serializar(consolidado.composicao) != lote["composicao"]:
+        raise RuntimeError(f"composição de {import_id} diverge da gravada no fechamento")
+    order = consolidado.order
+    if lote.get("closed_at"):
+        fechado_em = datetime.fromisoformat(lote["closed_at"])
+        order = order.model_copy(
+            update={
+                "header": order.header.model_copy(
+                    update={"issue_date": fechado_em.strftime("%d/%m/%Y")}
+                )
+            }
+        )
+
     chave = lote["chave_lote"]
     with env_context.active_env(env["id"], env["slug"]):
-        nova = repo.get_import(import_id) is None
         repo.insert_import(
             {
                 "id": import_id,
@@ -192,7 +244,7 @@ def _gravar_espelho(
                 "output_files": [],
                 "status": "success",
                 "error": None,
-                "snapshot": consolidado.order.model_dump(),
+                "snapshot": order.model_dump(),
                 "portal_status": "parsed",
                 "trace_id": current_trace_id() or new_trace_id(),
             }
@@ -203,19 +255,20 @@ def _gravar_espelho(
             {
                 "source": "lote_intercompany",
                 "chave_lote": chave,
-                "pernas": n_pernas,
-                "linhas": len(consolidado.order.items),
+                "pernas": len(pernas),
+                "linhas": len(order.items),
                 "fator": lote["fator_preco_aplicado"],
                 "modo": lote["modo_preco_aplicado"],
             },
         )
-        if nova:
+        if not tem_evento:
             transition(
                 import_id,
                 LifecycleEvent.IMPORTED,
                 source=EventSource.SYSTEM,
                 payload={"source": "lote_intercompany", "chave_lote": chave},
             )
+    return True
 
 
 # --- varredura de recuperação -------------------------------------------------
@@ -226,8 +279,11 @@ def _recuperar(cfg: dict, agora: datetime) -> int:
     slug = cfg["env_origem_slug"]
     try:
         with db.connect_shared() as conn:
+            # Piso = 1ª perna anexada de verdade, não o início da janela mais
+            # antiga: janela antiga (pedido de backlog) recuaria o piso e varreria
+            # envios anteriores à ativação.
             desde = conn.execute(
-                "SELECT MIN(janela_inicio) FROM intercompany_lote WHERE env_origem_slug = ?",
+                "SELECT MIN(created_at) FROM intercompany_lote_item WHERE env_origem_slug = ?",
                 (slug,),
             ).fetchone()[0]
             if desde is None:
@@ -242,22 +298,34 @@ def _recuperar(cfg: dict, agora: datetime) -> int:
         env = environments_repo.get_by_slug(slug)
         if env is None:
             return 0
+        # Carência: o request path anexa logo depois do envio; não disputar com ele.
+        ate = (agora - _CARENCIA).isoformat(timespec="seconds")
         with env_context.active_env(env["id"], env["slug"]), db.connect() as conn:
-            rows = conn.execute(
+            ids = conn.execute(
                 """
-                SELECT id, imported_at, fire_codigo, order_number, customer_cnpj,
-                       customer_name, snapshot_json
-                FROM imports
+                SELECT id FROM imports
                 WHERE portal_status = 'sent_to_fire'
                   AND sent_to_fire_at IS NOT NULL AND fire_codigo IS NOT NULL
-                  AND sent_to_fire_at >= ?
+                  AND sent_to_fire_at >= ? AND sent_to_fire_at < ?
                 ORDER BY sent_to_fire_at, id
                 """,
-                (desde,),
+                (desde, ate),
             ).fetchall()
-            candidatas = [dict(r) for r in rows if r["id"] not in no_lote]
-            for c in candidatas:
-                c["itens_fire"] = erp_vinculo_repo.vinculos_do_import(conn, c["id"])
+            candidatas = []
+            for (ident,) in ids:
+                if ident in no_lote:
+                    continue
+                row = conn.execute(
+                    """
+                    SELECT id, imported_at, fire_codigo, order_number, customer_cnpj,
+                           customer_name, snapshot_json
+                    FROM imports WHERE id = ?
+                    """,
+                    (ident,),
+                ).fetchone()
+                c = dict(row)
+                c["itens_fire"] = erp_vinculo_repo.vinculos_do_import(conn, ident)
+                candidatas.append(c)
     except Exception as exc:  # noqa: BLE001 — a varredura não derruba o fechamento
         logger.warning(f"lote: varredura de {slug} falhou: {type(exc).__name__}: {exc}")
         return 0
@@ -312,22 +380,25 @@ def _order_da_perna(c: dict) -> Order:
 
 
 def fechar_vencidos(agora: datetime | None = None) -> dict:
-    """Varredura de recuperação + fecha os lotes vencidos das configs ativas."""
+    """Varredura de recuperação (configs ativas), fecha os lotes vencidos (de
+    qualquer config: `ativo` só barra perna nova) e repara espelho que faltou."""
     agora = agora or datetime.now()
-    out = {"fechados": 0, "aguardando_fator": 0, "vazios": 0, "erros": 0, "recuperadas": 0}
+    out = {
+        "fechados": 0,
+        "aguardando_fator": 0,
+        "vazios": 0,
+        "erros": 0,
+        "recuperadas": 0,
+        "materializados": 0,
+    }
     contador = {"fechado": "fechados", "aguardando_fator": "aguardando_fator", "vazio": "vazios"}
     with _LOCK:
         with db.connect_shared() as conn:
             configs = lotes_repo.listar_configs(conn, so_ativas=True)
         for cfg in configs:
             out["recuperadas"] += _recuperar(cfg, agora)
-        ativas = {c["env_origem_slug"] for c in configs}
         with db.connect_shared() as conn:
-            vencidos = [
-                lt
-                for lt in lotes_repo.lotes_vencidos(conn, agora)
-                if lt["env_origem_slug"] in ativas
-            ]
+            vencidos = lotes_repo.lotes_vencidos(conn, agora)
         for lote in vencidos:
             try:
                 r = fechar_lote(lote["id"], por="sistema", agora=agora)
@@ -339,7 +410,32 @@ def fechar_vencidos(agora: datetime | None = None) -> dict:
                 out["erros"] += 1
             elif r["resultado"] in contador:
                 out[contador[r["resultado"]]] += 1
+        out["materializados"] = _reparar_espelhos(agora, ja_fechados={lt["id"] for lt in vencidos})
     return out
+
+
+def _reparar_espelhos(agora: datetime, *, ja_fechados: set[int]) -> int:
+    """Lote `fechado` sem a linha do espelho (ou sem o evento `imported`) no MM."""
+    with db.connect_shared() as conn:
+        fechados = [
+            lotes_repo.get(conn, r[0])
+            for r in conn.execute(
+                "SELECT id FROM intercompany_lote WHERE status = 'fechado' ORDER BY id"
+            ).fetchall()
+            if r[0] not in ja_fechados
+        ]
+    feitos = 0
+    for lote in fechados:
+        try:
+            if materializar_espelho(lote, agora=agora):
+                feitos += 1
+                logger.warning(f"lote: espelho {lote['import_id_espelho']} materializado no reparo")
+        except Exception as exc:  # noqa: BLE001 — fica para o próximo ciclo
+            logger.error(
+                f"lote: espelho {lote['import_id_espelho']} segue sem materializar: "
+                f"{type(exc).__name__}: {exc}"
+            )
+    return feitos
 
 
 def loop() -> None:

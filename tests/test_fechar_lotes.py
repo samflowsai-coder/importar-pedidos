@@ -322,10 +322,11 @@ def test_fechamento_nao_chama_o_fire(portal_lote_com_perna, monkeypatch):
     assert fechamento.fechar_vencidos(agora=SEGUNDA_8H)["fechados"] == 1
 
 
-def test_config_inativa_nao_fecha(portal_lote_com_perna):
+def test_config_inativa_ainda_fecha_lote_vencido(portal_lote_com_perna):
+    """`ativo` só barra perna nova; lote que já tem perna fecha quando vence."""
     _config(ativo=False)
-    assert fechamento.fechar_vencidos(agora=SEGUNDA_8H)["fechados"] == 0
-    assert _lote(portal_lote_com_perna["lote_id"])["status"] == "aberto"
+    assert fechamento.fechar_vencidos(agora=SEGUNDA_8H)["fechados"] == 1
+    assert _lote(portal_lote_com_perna["lote_id"])["status"] == "fechado"
 
 
 def test_perna_nova_durante_o_fechamento_nao_fecha_nem_marca_erro(
@@ -359,6 +360,8 @@ def test_perna_nova_durante_o_fechamento_nao_fecha_nem_marca_erro(
     lote = _lote(portal_lote_com_perna["lote_id"])
     assert lote["status"] == "aberto"
     assert lote["erro_motivo"] is None
+    assert lote["import_id_espelho"] is None
+    assert _imports("mm") == []  # fechar recusou: espelho nenhum nesta tentativa
 
 
 def test_falha_num_lote_nao_impede_os_outros(portal_lote_com_perna, monkeypatch):
@@ -368,6 +371,67 @@ def test_falha_num_lote_nao_impede_os_outros(portal_lote_com_perna, monkeypatch)
     monkeypatch.setattr(fechamento, "fechar_lote", _explode)
     r = fechamento.fechar_vencidos(agora=SEGUNDA_8H)
     assert r["erros"] == 1
+
+
+def test_falha_ao_gravar_espelho_depois_de_fechar_repara_no_proximo_ciclo(
+    portal_lote_com_perna, monkeypatch
+):
+    original = repo.insert_import
+
+    def _mm_fora(entry):
+        if entry["id"].startswith("lote-"):
+            raise RuntimeError("disco do MM cheio")
+        return original(entry)
+
+    monkeypatch.setattr(repo, "insert_import", _mm_fora)
+    r = fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+    assert r["fechados"] == 1
+    lote = _lote(portal_lote_com_perna["lote_id"])
+    assert lote["status"] == "fechado"
+    assert lote["import_id_espelho"] == "lote-NAS-2026-S34"
+    assert lote["erro_motivo"] is None
+    assert _imports("mm") == []
+
+    monkeypatch.setattr(repo, "insert_import", original)
+    r = fechamento.fechar_vencidos(agora=datetime(2026, 8, 24, 8, 5))
+
+    assert r["materializados"] == 1
+    (esp,) = _imports("mm")
+    assert esp["id"] == "lote-NAS-2026-S34"
+    assert json.loads(esp["snapshot_json"])["items"][0]["unit_price"] == pytest.approx(14.9916)
+    assert _eventos_imported("mm", "lote-NAS-2026-S34") == 1
+    assert fechamento.fechar_vencidos(agora=datetime(2026, 8, 24, 8, 10))["materializados"] == 0
+
+
+def test_reparo_nao_duplica_o_evento_imported(portal_lote_com_perna, monkeypatch):
+    """Linha gravada mas evento não: o reparo transiciona uma vez só."""
+    original = fechamento.transition
+
+    def _falha(*a, **kw):
+        raise RuntimeError("caiu antes do evento")
+
+    monkeypatch.setattr(fechamento, "transition", _falha)
+    fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+    assert len(_imports("mm")) == 1
+    assert _eventos_imported("mm", "lote-NAS-2026-S34") == 0
+
+    monkeypatch.setattr(fechamento, "transition", original)
+    assert fechamento.fechar_vencidos(agora=datetime(2026, 8, 24, 8, 5))["materializados"] == 1
+    assert fechamento.fechar_vencidos(agora=datetime(2026, 8, 24, 8, 10))["materializados"] == 0
+    assert _eventos_imported("mm", "lote-NAS-2026-S34") == 1
+    assert len(_imports("mm")) == 1
+
+
+def test_fator_corrompido_marca_erro(portal_lote_com_perna):
+    with router.shared_connect() as conn:
+        conn.execute(
+            "UPDATE intercompany_lote SET fator_preco_aplicado = 'abc' WHERE id = ?",
+            (portal_lote_com_perna["lote_id"],),
+        )
+    r = fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+    assert r["erros"] == 1
+    assert _lote(portal_lote_com_perna["lote_id"])["status"] == "erro"
+    assert _imports("mm") == []
 
 
 # --- varredura de recuperação ---------------------------------------------------
@@ -484,3 +548,55 @@ def test_habilitado_respeita_portal_lotes(monkeypatch):
     assert fechamento.habilitado() is False
     monkeypatch.delenv("PORTAL_LOTES")
     assert fechamento.habilitado() is True
+
+
+def _pernas_de(lote_id: int) -> list[str]:
+    with router.shared_connect() as conn:
+        return sorted(p["import_id"] for p in lotes_repo.pernas_do_lote(conn, lote_id))
+
+
+def test_varredura_ativacao_no_meio_da_semana_nao_puxa_envios_anteriores(
+    portal_lote_com_perna,
+):
+    """1ª perna anexada em 20/08 10h; envio de 19/08 (mesma janela) é anterior à ativação."""
+    _enviada_sem_lote("PRE", fire=1001, sent="2026-08-19T09:00:00")
+
+    r = fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+
+    assert r["recuperadas"] == 0
+    assert _pernas_de(portal_lote_com_perna["lote_id"]) == ["N1"]
+
+
+def test_varredura_lote_de_backlog_nao_recua_o_piso(portal_lote_com_perna):
+    """Pedido de backlog (importado em 01/07) cria lote na S27; o piso continua
+    sendo a 1ª perna anexada, não o início da janela mais antiga."""
+    _enviada_sem_lote("PRE", fire=1001, sent="2026-08-05T09:00:00")
+    _grava("nasmar", "OLD", imported_at="2026-07-01T10:00:00")
+    order = Order(header=OrderHeader(order_number="OLD"), items=[])
+    res = FirebirdExportResult(order_number="OLD", items_inserted=1, fire_codigo=1002)
+    old_lote = integracao.anexar_perna_de_origem(
+        "OLD",
+        {"imported_at": "2026-07-01T10:00:00"},
+        order,
+        res,
+        {"slug": "nasmar"},
+        agora=datetime(2026, 8, 20, 11, 0),
+    )
+    assert _lote(old_lote)["chave_lote"] == "NAS-2026-S27"
+
+    r = fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+
+    assert r["recuperadas"] == 0
+    with router.shared_connect() as conn:
+        todas = [p for lt in lotes_repo.listar(conn) for p in _pernas_de(lt["id"])]
+    assert "PRE" not in todas
+
+
+def test_varredura_ignora_envio_recente(portal_lote_com_perna):
+    """Enviado há menos de 10 min: o request path ainda pode estar anexando."""
+    _enviada_sem_lote("N2", fire=1160, sent="2026-08-24T07:55:00")
+
+    r = fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+
+    assert r["recuperadas"] == 0
+    assert _pernas_de(portal_lote_com_perna["lote_id"]) == ["N1"]
