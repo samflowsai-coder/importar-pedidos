@@ -195,3 +195,28 @@ def test_issue_date_e_hoje():
 
     c = _consolidado([_perna(1, [_item("M", 1.0, 1.0)])])
     assert c.order.header.issue_date == date.today().strftime("%d/%m/%Y")
+
+
+@pytest.mark.parametrize("preco", [0.0, -5.0, float("nan"), float("inf")])
+def test_preco_invalido_levanta_com_import_e_posicao(preco):
+    with pytest.raises(ValueError, match="preço inválido") as e:
+        _consolidado([_perna(1, [_item("M", 1.0, preco)], imp="zz")])
+    assert "zz" in str(e.value) and "item 0" in str(e.value)
+
+
+def test_quantidade_nan_levanta_com_import_e_posicao():
+    with pytest.raises(ValueError, match="quantidade") as e:
+        _consolidado([_perna(1, [_item("M", float("nan"), 1.0)], imp="zz")])
+    assert "zz" in str(e.value)
+
+
+@pytest.mark.parametrize("modo", ["desconto", "divisor"])
+@pytest.mark.parametrize("fator", ["1", "1.5", "-0.1", "-1", "NaN"])
+def test_fator_fora_de_faixa_levanta(modo, fator):
+    with pytest.raises(ValueError, match="fator"):
+        preco_espelho(Decimal("10"), fator=Decimal(fator), modo=modo)
+
+
+def test_modo_invalido_levanta_em_consolidar_mesmo_sem_itens_validos():
+    with pytest.raises(ValueError, match="modo_preco"):
+        _consolidado([_perna(1, [_item("M", 1.0, 1.0)])], modo="markup")

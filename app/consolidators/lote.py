@@ -63,6 +63,8 @@ def preco_espelho(preco: Decimal, *, fator: Decimal, modo: str) -> Decimal:
     Sao contas diferentes (~0,46% do valor); a escolha e comercial. O modo e
     explicito, sem default aqui.
     """
+    if not fator.is_finite() or not (Decimal("0") <= fator < Decimal("1")):
+        raise ValueError(f"fator invalido: {fator!r} (use 0 <= fator < 1)")
     if modo == "desconto":
         return (preco * (Decimal("1") - fator)).quantize(_QUANT, rounding=ROUND_HALF_UP)
     if modo == "divisor":
@@ -83,6 +85,8 @@ def consolidar(
     """Um pedido no nome da revenda com os itens de todas as pernas."""
     if not pernas:
         raise ValueError("lote sem pernas: nao ha o que consolidar")
+    if modo_preco not in MODOS_PRECO:
+        raise ValueError(f"modo_preco invalido: {modo_preco!r} (use {MODOS_PRECO})")
 
     # chave: (produto, ean, descricao, data de entrega, preco JA convertido)
     chaves: dict[tuple, int] = {}
@@ -94,10 +98,13 @@ def consolidar(
             onde = f"import {perna.import_id}, item {indice}"
             if item.unit_price is None:
                 raise ValueError(f"item sem preço ({onde})")
+            bruto = Decimal(str(item.unit_price))
+            if not bruto.is_finite() or bruto <= 0:
+                raise ValueError(f"item com preço inválido: {item.unit_price!r} ({onde})")
             qtd = Decimal(str(item.quantity)) if item.quantity is not None else Decimal("0")
-            if qtd <= 0:
-                raise ValueError(f"item com quantidade <= 0 ({onde})")
-            preco = preco_espelho(Decimal(str(item.unit_price)), fator=fator_preco, modo=modo_preco)
+            if not qtd.is_finite() or qtd <= 0:
+                raise ValueError(f"item com quantidade inválida (<= 0 ou não finita) ({onde})")
+            preco = preco_espelho(bruto, fator=fator_preco, modo=modo_preco)
             chave = (item.product_code, item.ean, item.description, item.delivery_date, preco)
             pos = chaves.get(chave)
             if pos is None:
