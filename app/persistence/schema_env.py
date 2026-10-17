@@ -329,6 +329,39 @@ CREATE TABLE IF NOT EXISTS erp_lote_perna (
     criado_em               TEXT NOT NULL,
     PRIMARY KEY (base_origem, erp_item_codigo_origem)
 );
+
+-- Cópia local da tabela de preço do Flow (trava de preço por rede). O Portal
+-- nunca edita: só aplica lotes vindos do Flow (precos_repo.aplicar_lote).
+CREATE TABLE IF NOT EXISTS preco_rede (
+    id             TEXT PRIMARY KEY,
+    nome           TEXT NOT NULL,
+    travada        INTEGER NOT NULL DEFAULT 0,
+    travada_motivo TEXT,
+    atualizado_em  TEXT NOT NULL
+);
+
+-- cnpj = 8 dígitos (raiz) ou 14 (completo; vence a raiz).
+CREATE TABLE IF NOT EXISTS preco_rede_cnpj (
+    cnpj    TEXT PRIMARY KEY,
+    rede_id TEXT NOT NULL
+);
+
+-- Datas ISO (YYYY-MM-DD); vigente_ate exclusivo; preço em centavos.
+CREATE TABLE IF NOT EXISTS preco_tabela (
+    rede_id         TEXT NOT NULL,
+    fire_produto_id TEXT NOT NULL,
+    vigente_desde   TEXT NOT NULL,
+    preco_centavos  INTEGER NOT NULL,
+    vigente_ate     TEXT,
+    PRIMARY KEY (rede_id, fire_produto_id, vigente_desde)
+);
+
+-- Um cursor por recurso do contrato (redes e preços podem andar separados).
+CREATE TABLE IF NOT EXISTS preco_sync (
+    recurso     TEXT PRIMARY KEY,
+    cursor      TEXT,
+    ultima_ok_em TEXT
+);
 """
 
 INDEXES_SQL = """
