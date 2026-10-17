@@ -217,3 +217,30 @@ def test_decisao_invalida_levanta(conn):
     ass, _ = _pendencia(conn)
     with pytest.raises(ValueError):
         _decidir(conn, ass, decisao="qualquer")
+
+
+def test_a_b_a_reativa_a_pendencia(conn):
+    ass_a, ids_a = _pendencia(conn, preco=54.0)
+    repo.marcar_enviada(conn, ids_a, em=AGORA)
+    ass_b = repo.assinatura(_item(55.0), "123")
+    repo.substituir_obsoletas(conn, "imp1", {0: ass_b}, em=DEPOIS)
+    repo.registrar_pendencias(conn, "imp1", [(_aval(0, 5500), ass_b)], agora=DEPOIS)
+    repo.substituir_obsoletas(conn, "imp1", {0: ass_a}, em=DEPOIS)
+    novos = repo.registrar_pendencias(conn, "imp1", [(_aval(0, 5400), ass_a)], agora=DEPOIS)
+    assert novos == ids_a
+    ativas = conn.execute(
+        "SELECT id FROM preco_aprovacao WHERE item_index = 0 AND cancelada_em IS NULL"
+    ).fetchall()
+    assert [r["id"] for r in ativas] == ids_a
+    assert [r["id"] for r in repo.pendentes_nao_enviadas(conn, 10)] == ids_a
+    assert repo.registrar_pendencias(conn, "imp1", [(_aval(0, 5400), ass_a)], agora=DEPOIS) == []
+
+
+def test_decidida_substituida_que_volta_e_pendente_sem_decisao(conn):
+    ass_a, ids = _pendencia(conn)
+    _decidir(conn, ass_a)
+    repo.substituir_obsoletas(conn, "imp1", {0: "b"}, em=DEPOIS)
+    repo.registrar_pendencias(conn, "imp1", [(_aval(0), ass_a)], agora=DEPOIS)
+    assert repo.decisoes_validas(conn, "imp1", {0: ass_a}) == {}
+    r = conn.execute("SELECT * FROM preco_aprovacao WHERE id = ?", (ids[0],)).fetchone()
+    assert r["situacao"] == "pendente" and r["decisao"] is None and r["flow_id"] is None

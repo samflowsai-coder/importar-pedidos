@@ -67,6 +67,34 @@ def registrar_pendencias(
             )
             if cur.rowcount:
                 novos.append(int(cur.lastrowid))
+                continue
+            # A -> B -> A: a linha de A foi 'substituida'; reativa como pendência nova.
+            row = conn.execute(
+                "SELECT id FROM preco_aprovacao WHERE import_id = ? AND item_index = ? "
+                "AND assinatura = ? AND motivo_cancelamento = 'substituido'",
+                (import_id, av.item_index, ass),
+            ).fetchone()
+            if row:
+                conn.execute(
+                    """
+                    UPDATE preco_aprovacao
+                       SET situacao = 'pendente', decisao = NULL, preco_final_centavos = NULL,
+                           decidido_por = NULL, decidido_em = NULL, motivo_recusa = NULL,
+                           flow_id = NULL, cancelada_em = NULL, motivo_cancelamento = NULL,
+                           cancelamento_avisado_em = NULL, enviada_em = NULL,
+                           motivo_fila = ?, preco_pedido_centavos = ?,
+                           preco_tabela_centavos = ?, criado_em = ?
+                     WHERE id = ?
+                    """,
+                    (
+                        av.motivo,
+                        av.preco_pedido_centavos,
+                        av.preco_tabela_centavos,
+                        agora.isoformat(),
+                        row["id"],
+                    ),
+                )
+                novos.append(int(row["id"]))
     return novos
 
 
