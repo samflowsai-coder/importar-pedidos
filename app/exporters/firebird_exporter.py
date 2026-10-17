@@ -33,6 +33,7 @@ class FirebirdExportResult:
         skipped: bool = False,
         skip_reason: str | None = None,
         itens: list[tuple[int, int]] | None = None,
+        produtos: dict[int, int] | None = None,
     ) -> None:
         self.order_number = order_number
         self.items_inserted = items_inserted
@@ -41,6 +42,8 @@ class FirebirdExportResult:
         self.skip_reason = skip_reason
         # SP1: (CORPO_VENDAS.CODIGO, posição em order.items) de cada item inserido.
         self.itens = itens or []
+        # Lote: posição em order.items -> CODPRODUTO gravado na linha.
+        self.produtos = produtos or {}
 
     def to_dict(self) -> dict:
         return {
@@ -139,11 +142,14 @@ class FirebirdExporter:
         *,
         override_client_id: int | None = None,
         produtos_por_item: dict[int, int] | None = None,
+        obs: str | None = None,
     ) -> FirebirdExportResult:
         """Insere o pedido em CAB_VENDAS / CORPO_VENDAS.
 
         `produtos_por_item`: {posição em order.items: SEQ} dos itens casados por
         vínculo de-para. Esses entram pelo SEQ, sem nova busca por EAN/código.
+
+        `obs`: CAB_VENDAS.OBS. Só o espelho do lote intercompany preenche.
 
         `override_client_id`: quando o usuário escolheu manualmente o cliente
         no portal (recovery do CLIENT_NOT_FOUND), pula o lookup por CNPJ e
@@ -162,7 +168,7 @@ class FirebirdExporter:
         try:
             with _insert_lock, self._open() as conn:
                 return self._insert_order(
-                    conn, order, override_client_id, produtos_por_item or {}
+                    conn, order, override_client_id, produtos_por_item or {}, obs=obs
                 )
         except FirebirdOrderAlreadyExistsError as exc:
             logger.warning(str(exc))
@@ -200,6 +206,8 @@ class FirebirdExporter:
         order: Order,
         override_client_id: int | None = None,
         produtos_por_item: dict[int, int] | None = None,
+        *,
+        obs: str | None = None,
     ) -> FirebirdExportResult:
         cur = conn.cursor()
 
@@ -231,8 +239,8 @@ class FirebirdExporter:
         #    e a menor data de entrega entre eles (precisa dos erp_rows antes
         #    do insert do cabecalho); perfil vem do ambiente atual
         #    (CODFIGFISCAL difere MM x Nasmar), default medido se ausente.
-        #    OBS fica None aqui — carrega a lista de pedidos de origem do
-        #    lote intercompany, que e um call-site futuro.
+        #    `obs` so vem preenchido no espelho do lote intercompany (a
+        #    lista de pedidos de origem); pedido comum grava NULL.
         indexados = _to_erp_rows_indexados(order)
         erp_rows = [row for _, row in indexados]
         valor_total = _valor_total(erp_rows)
@@ -245,6 +253,7 @@ class FirebirdExporter:
             perfil=perfil,
             valor_total=valor_total,
             dt_entrega=dt_entrega,
+            obs=obs,
         )
         # ULT_ALT_USER repete ULT_INS_USER (ultimo elemento da tupla) — nao
         # entra no mapper pra um erro de ordem na tupla nao passar despercebido.
@@ -261,6 +270,7 @@ class FirebirdExporter:
         #    (que tem 15 elementos).
         items_inserted = 0
         itens: list[tuple[int, int]] = []
+        produtos: dict[int, int] = {}
         for indice, row in indexados:
             product_seq, unid = self._find_product(
                 cur, row, seq=(produtos_por_item or {}).get(indice)
@@ -273,6 +283,7 @@ class FirebirdExporter:
             cur.execute(queries.INSERT_CORPO_VENDAS, (*item_params, perfil.cfop_principal))
             items_inserted += 1
             itens.append((item_pk, indice))
+            produtos[indice] = product_seq
 
         cur.close()
         logger.info(
@@ -284,6 +295,7 @@ class FirebirdExporter:
             items_inserted=items_inserted,
             fire_codigo=header_pk,
             itens=itens,
+            produtos=produtos,
         )
 
     def _find_client(self, cur, cnpj: str | None) -> int | None:

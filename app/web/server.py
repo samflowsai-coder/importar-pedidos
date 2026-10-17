@@ -2755,6 +2755,7 @@ def _send_one_to_fire(
         - On Fire failure: log SEND_TO_FIRE_FAILED (state stays PARSED).
         - On Fire success: update aux fields then transition SEND_TO_FIRE_SUCCEEDED.
     """
+    from app.consolidators import integracao
     from app.exporters.firebird_exporter import FirebirdExporter
     from app.models.order import Order
     from app.persistence import repo
@@ -2921,6 +2922,7 @@ def _send_one_to_fire(
             },
         )
         _registrar_aplicados(import_id, decisao)
+        integracao.anexar_perna_de_origem(import_id, entry, order, result, request_env)
 
         # SP1: vínculo exato item do ERP ↔ posição em order.items (best-effort).
         if request_env:
