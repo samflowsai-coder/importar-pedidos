@@ -179,6 +179,7 @@ def test_mesmo_produto_duas_linhas_avalia_cada_uma():
 def test_intercompany_fica_fora():
     a = _run(_order([52.00]), _check(1), tabela={"1000": 5200}, grupo={"12345678"})
     assert a.itens[0].situacao == "fora_intercompany"
+    assert a.itens[0].motivo == "intercompany"
 
 
 def test_seq_int_do_check_casa_com_preco_str():
@@ -205,3 +206,27 @@ def test_sem_data_usa_agora():
     _run(_order([52.00]), _check(1), vigente=vig)
     _run(_order([52.00], issue_date="lixo"), _check(1), vigente=vig)
     assert vistas == [AGORA.date(), AGORA.date()]
+
+
+def test_intercompany_decide_antes_da_copia_velha():
+    a = _run(_order([52.00]), _check(1), grupo={"12345678"}, sync=None)
+    assert [(i.situacao, i.motivo) for i in a.itens] == [("fora_intercompany", "intercompany")]
+
+
+def test_cnpj_cliente_invalido_cai_para_raiz_das_lojas():
+    o = _order([1.0], cnpj=None, delivery_cnpjs=["33447100000111"])
+    assert cnpj_da_rede(o, "123.456.789-09") == "33447100"
+    assert cnpj_da_rede(o, "123") == "33447100"
+
+
+def test_cnpj_cliente_invalido_sem_lojas_e_none():
+    assert cnpj_da_rede(_order([1.0], cnpj=None), "12345678909") is None
+
+
+def test_cnpj_cliente_de_8_digitos_vale():
+    assert cnpj_da_rede(_order([1.0], cnpj=None), "12345678") == "12345678"
+
+
+def test_preco_de_tabela_zero_conta_como_sem_preco():
+    a = _run(_order([52.00]), _check(1), tabela={"1000": 0})
+    assert (a.itens[0].situacao, a.itens[0].motivo) == ("fila", "sem_preco_tabela")

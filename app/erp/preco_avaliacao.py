@@ -26,6 +26,7 @@ Motivo = Literal[
     "produto_nao_identificado",
     "cliente_sem_cnpj",
     "copia_desatualizada",
+    "intercompany",
 ]
 
 _LIMITE_COPIA = timedelta(hours=24)
@@ -60,7 +61,7 @@ def cnpj_da_rede(order: Order, cnpj_cliente: str | None) -> str | None:
     """CNPJ que identifica a rede: o do cliente; senão a raiz comum das lojas
     de entrega. Raízes diferentes ou nenhuma → None."""
     proprio = cnpj_digits(cnpj_cliente)
-    if proprio:
+    if len(proprio) in (8, 14):
         return proprio
     raizes = {d[:8] for d in (cnpj_digits(it.delivery_cnpj) for it in order.items) if len(d) >= 8}
     if len(raizes) == 1:
@@ -102,12 +103,12 @@ def avaliar(
             ],
         )
 
-    if ultima_sync is None or agora - ultima_sync > _LIMITE_COPIA:
-        return _tudo("nao_avaliado", "copia_desatualizada")
     if cnpj_rede is None:
         return _tudo("nao_avaliado", "cliente_sem_cnpj")
     if cnpj_rede[:8] in cnpjs_grupo:
-        return _tudo("fora_intercompany", "igual")
+        return _tudo("fora_intercompany", "intercompany")
+    if ultima_sync is None or agora - ultima_sync > _LIMITE_COPIA:
+        return _tudo("nao_avaliado", "copia_desatualizada")
 
     rede = resolver_rede(cnpj_rede)
     data = _data_referencia(order, agora)
@@ -127,7 +128,7 @@ def avaliar(
             itens.append(_item("fila", "rede_travada", preco_vigente(rede.id, pid, data)))
         else:
             tabela = preco_vigente(rede.id, pid, data)
-            if tabela is None:
+            if not tabela:
                 itens.append(_item("fila", "sem_preco_tabela"))
             elif pedido is None:
                 itens.append(_item("fila", "sem_preco_pedido", tabela))
