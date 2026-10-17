@@ -17,7 +17,7 @@
 | R1 | A Etapa 3 entra em duas partes: **3a** (Tasks 1 a 12, tudo testado, gravação real só contra cópia do `.fdb`) e **3b** (Task 13: aplicar o resultado da P0 e liberar o portão por ambiente) | O que a tela do Fire grava junto com um produto ainda não é conhecido (spec §3, §9). Sem a P0 o gravador cobre as colunas conhecidas e recusa produção | Se a P0 mostrar tabela obrigatória além de `PRODUTOS`/`PRODUTOS_KIT`, a Task 13 cresce; nada do 3a se perde |
 | R2 | Portão novo `PORTAL_FLOWPCP_CADASTRO_P0=<slug>[,<slug>]`: os modos `criar` e `criar_e_atualizar` recusam iniciar num ambiente fora dele | A P0 é por banco (a Confecção .4 tem cadastro diferente da Americanense .7). O ambiente DEV com cópia local entra no portão para a Task 19 do Flow | Nenhum: é variável de ambiente, sem migração |
 | R3 | `cor` **não** vai para `DESCRICAO2`, na ida nem na volta | `DESCRICAO2` é a "Descrição Interna" da tela do Fire, não cor (achado de 17/10). A ida da Etapa 1 mandava `DESCRICAO2` como `cor` (interruptor desligado, nada saiu) | Kit criado pelo Flow nasce sem descrição interna no Fire. O Flow pode pedir `descricaoInterna` na rev. 4 do contrato (pergunta aberta 1) |
-| R4 | `marca_ausente_erp` vai como erro **transitório** | O conserto é cadastrar a marca no Fire (saneamento), não mexer no cadastro do Flow. Transitório libera a reserva e o item volta sozinho. Decisão do Samuel (16/10) | Na 5ª tentativa o Flow abre alerta, que é o comportamento desejado |
+| R4 | **Revogada (Emenda 1):** `marca_ausente_erp` vai como erro **definitivo**, como diz o contrato §7 | Transitório não guarda o motivo no Flow e gira sem cura (só o Portal liga a marca ao código; código que sumiu do ERP não volta sozinho) | A área de cadastro precisa aprovar de novo depois de a marca existir no ERP |
 | R5 | Em `simular`, linhas do livro são **descartáveis**: entrar num modo de gravação reprocessa o item | Erro decidido em `simular` nunca foi ao Flow; se o livro o tratasse como final, o item ficaria preso para sempre | Nenhum |
 | R6 | Resultado pendente (`gravado_sem_volta`, `erro_a_enviar`) é reenviado em **todo** ambiente com FlowPCP habilitado, qualquer que seja o modo, inclusive `desligado` | Contrato §6: resultado nunca se descarta. Desligar a volta não pode deixar produto no Fire sem a volta registrada | Uma consulta SQLite por ambiente a cada 5 min |
 | R7 | O escopo de `atualizar`/`inativar` vale para SEQ da cópia local **ou** SEQ criado pelo próprio Portal (livro) | A MM roda o catálogo com `apenas_meias`; par novo sem subgrupo MEIAS e sem pedido não entra em `catalogo_fire`, e o `atualizar` dele viraria `seq_fora_do_escopo` | Nenhum: o livro só tem o que o Portal gravou |
@@ -74,6 +74,8 @@
 ---
 
 ### Task 1: Item da fila no contrato `cadastros.v1` rev. 3
+
+> **Emenda 1 (revisão do Flow, 17/10).** I7: `CadastroPendente` (só o modelo de topo) usa `extra="ignore"` com `strict=True`; os modelos aninhados seguem `extra="forbid"`. Nova função `chaves_desconhecidas(bruto: dict) -> list[str]` (nomes de topo desconhecidos, ordenados; nome fora de `^[A-Za-z0-9_]{1,40}$` vira `"?"`). Testes: chave extra no topo valida e aparece em `chaves_desconhecidas`; chave extra em `grupoErp` continua `contrato_invalido`.
 
 **Files:**
 - Modify: `app/integrations/flowpcp/cadastro_schema.py`
@@ -220,6 +222,11 @@ git commit -m "feat(cadastro): item da fila com produtoId e marcaErp (cadastros.
 ---
 
 ### Task 2: Corpo do resultado e leitura da resposta do Flow
+
+> **Emenda 1 (revisão do Flow, 17/10; vale acima do texto abaixo onde divergir).**
+> (a) I1: para corpo **`gravado`**, só 200 `gravado`, `ja_registrado` e `registrado_versao_superada` dão `CONFIRMADO`. 200 `erro_registrado` ou `transitorio_registrado` com corpo `gravado` (impossível hoje no Flow) dá **`BUG_CORPO`**, nunca fecha a linha. Troque as duas linhas correspondentes da tabela de teste: `("gravado", 200, {"status": "erro_registrado"}, Desfecho.BUG_CORPO)` e `("gravado", 200, {"status": "transitorio_registrado", "tentativas": 1}, Desfecho.BUG_CORPO)`.
+> (b) M1: `_RESERVADOS` ganha `fora_do_contrato` (o Flow passa a usar esse código para item que ele mesmo fecha). Acrescente `"fora_do_contrato"` ao parametrize de `test_erro_recusa_codigo_reservado`.
+> (c) M4: acrescente `mensagem_para_flow(codigo: str, detalhe: str | None = None) -> str`, que traduz o código interno para a frase que a área de cadastro lê no Flow. Português claro; diga "ERP" (nunca "Fire"); sem "SEQ", "erpProdutoId", nome de campo do contrato ou índice de lista. Tabela fixa: `contrato_invalido` → "O cadastro chegou incompleto ou com um campo em formato inesperado. Confira os dados e aprove de novo."; `campo_excede_fire` → "Um texto do cadastro é maior do que o ERP aceita. Encurte e aprove de novo."; `caractere_invalido` → "O cadastro tem um caractere que o ERP não grava (por exemplo, emoji). Troque e aprove de novo."; `componente_ausente` → "Um item da composição não existe no ERP."; `componente_bloqueado` → "Um item da composição está inativo no ERP."; `marca_ausente_erp` → "A marca do cadastro não existe no ERP. Cadastre a marca no ERP e aprove de novo."; `seq_fora_do_escopo` → "O produto não está entre os produtos que o Portal pode alterar no ERP."; `seq_inexistente` → "O produto não existe mais no ERP."; `tipo_nao_suportado` → "Este tipo de cadastro ainda não é gravado no ERP pelo Portal."; `ja_criado_no_erp` → "Este produto já foi criado no ERP (código N) e não foi vinculado. Fale com a área de cadastro." (N do `detalhe`); `erp_recusou` → "O ERP recusou a gravação do cadastro."; código desconhecido → "O ERP recusou o cadastro.". `nome_existe` continua com `mensagem_nome_existe`. Teste: cada código da tabela; nenhuma saída contém "Fire", "SEQ" ou "erpProdutoId".
 
 **Files:**
 - Create: `app/integrations/flowpcp/cadastro_resultado.py`
@@ -449,6 +456,10 @@ git commit -m "feat(cadastro): corpo do resultado e leitura da resposta do Flow 
 
 ### Task 3: Cliente HTTP — fila com `acoes`/`simular` e POST do resultado
 
+> **Emenda 1 (revisão do Flow, 17/10; vale acima do texto abaixo onde divergir).**
+> (a) M8: em `post_cadastro_resultado`, o `except` genérico não pode engolir erro de programação. Capture só falha de transporte (`httpx.HTTPError`, `OSError`, e o tipo de timeout/conexão que `app/http/client.py` levanta) e devolva `status_http=None`; `TypeError`, `KeyError` etc. sobem. Teste: um `handler` que levanta `TypeError` faz o método levantar.
+> (b) O contrato rev. 4 vai aceitar `simular=1` **combinado** com `acoes`. Troque a regra "`simular=True` nunca manda `acoes`" por: `simular=True` manda `simular=1` e, se `acoes` vier, manda `acoes` também. Ajuste `test_simular_manda_simular_1_sem_acoes` para chamar sem `acoes` (espera `{"limite": "50", "simular": "1"}`) e acrescente `test_simular_com_acoes` (espera `{"limite": "50", "simular": "1", "acoes": "atualizar"}`). Quem chama com `simular=True` hoje (Task 5) não passa `acoes`.
+
 **Files:**
 - Modify: `app/integrations/flowpcp/client.py:127-143`
 - Test: `tests/test_flowpcp_client_cadastros.py` (novo)
@@ -623,6 +634,12 @@ git commit -m "feat(flowpcp): fila com acoes/simular e POST do resultado do cada
 ---
 
 ### Task 4: Livro v2 — estados de gravação, reenvio e regra 9b
+
+> **Emenda 1 (revisão do Flow, 17/10; vale acima do texto abaixo onde divergir).**
+> (a) C1 (crítico): **`gravado_sem_volta` só sai para `confirmado` ou `orfao`.** `marcar_desfecho` com outro estado numa linha `gravado_sem_volta` não muda nada e devolve `False` (a função passa a devolver `bool`: `True` se mudou). Implemente no SQL: `UPDATE ... WHERE cadastro_id = ? AND versao = ? AND (estado <> 'gravado_sem_volta' OR ? IN ('confirmado', 'orfao'))`. `marcar_erro_a_enviar` também não toca linha `gravado_sem_volta` (mesmo `WHERE`). Testes: `test_gravado_sem_volta_nao_vira_transitorio` (`marcar_desfecho(..., "transitorio")` devolve `False` e o estado continua), `test_gravado_sem_volta_vira_confirmado`, `test_erro_a_enviar_nao_sobrescreve_gravado`.
+> (b) I2: `criar_do_produto` passa a considerar também `incerto`, e `liberado` **com** `seq_reservado` não nulo (o INSERT pode ter comitado). A ordem de preferência quando há várias: `gravado_sem_volta`, `em_andamento`, `incerto`, `liberado` com SEQ, `orfao`, `confirmado`, e dentro do mesmo estado a mais recente. Testes: acha `incerto`; acha `liberado` com SEQ; ignora `liberado` sem SEQ.
+> (c) M3: coluna nova `resposta_flow TEXT` (status ou erro devolvido pelo Flow, até 64 caracteres), gravada por `marcar_desfecho(..., resposta=...)` e por `adiar(..., resposta=...)` (parâmetro opcional nas duas).
+> (d) Acrescente `seqs_em_aberto(conn) -> set[str]`: `erp_produto_id` e `seq_reservado` (como texto) das linhas em `em_andamento`, `gravado_sem_volta`, `incerto` e `liberado` com SEQ. A Task 9 usa para tirar esses SEQs da ida (I11). Teste com uma linha de cada.
 
 **Files:**
 - Modify: `app/persistence/schema_env.py` (lista `_ADD_COLUMNS`, perto da linha 366)
@@ -890,6 +907,8 @@ git commit -m "feat(cadastro): livro da volta v2 com estados de gravação, reen
 
 ### Task 5: `simular` lê sem reservar e confere a marca
 
+> **Emenda 1 (revisão do Flow, 17/10).** `marca_ausente_erp` é erro **definitivo** (contrato §7; R4 revogada). Em `simular` isso não muda nada (o estado no livro já é `erro_definitivo`), mas o texto do plano e os comentários não devem dizer "transitório".
+
 **Files:**
 - Modify: `app/integrations/flowpcp/cadastro_volta.py`
 - Test: `tests/test_cadastro_volta.py`
@@ -993,6 +1012,11 @@ git commit -m "feat(cadastro): simular lê a fila sem reservar e confere a marca
 ---
 
 ### Task 6: Gravador no Fire (`app/erp/cadastro_fire.py`)
+
+> **Emenda 1 (revisão do Flow, 17/10; vale acima do texto abaixo onde divergir).**
+> (a) I8: em `atualizar`, valor `None` em `campos` significa **limpar** a coluna (`SET COL = ?` com parâmetro `None`). Quem decide o que vai em `campos` é a Task 7. Teste: `atualizar(fire, seq=3990, campos={"CODIGO_EAN13": None}, componentes=None)` gera `("UPDATE PRODUTOS SET CODIGO_EAN13 = ? WHERE SEQ = ?", (None, 3990))`.
+> (b) I4: acrescente `classificar_erro(exc: BaseException) -> Literal["colisao", "lock", "conexao", "recusa"]`, pura, pelo texto e pelo tipo da exceção do `fdb`: `colisao` = violação de chave (a regra de `_colisao`); `lock` = "deadlock", "lock conflict", "update conflicts"; `conexao` = `FirebirdConnectionError`, "network", "connection", "Error writing data to the connection", "Unable to complete network request"; o resto = `recusa` (NOT NULL, truncamento, conversão). `_colisao` passa a usar `classificar_erro`. Teste cada classe com uma exceção montada com o texto típico do Firebird 2.5 (`"violation of PRIMARY or UNIQUE KEY constraint"`, `"deadlock\nupdate conflicts with concurrent update"`, `"Unable to complete network request to host"`, `"validation error for column DESCRICAO, value \"*** null ***\""`).
+> (c) Em `criar`, exceção que não é colisão sai depois do `rollback()` **sem** tentar de novo (já é assim), e a Task 7 classifica com `classificar_erro`.
 
 **Files:**
 - Create: `app/erp/cadastro_fire.py`
@@ -1347,6 +1371,37 @@ git commit -m "feat(erp): gravador do cadastro no Fire (criar, atualizar, inativ
 ---
 
 ### Task 7: Modos de gravação — ciclo, regras de ouro e reenvio
+
+> **Emenda 1 (revisão do Flow, 17/10; VALE ACIMA do fluxo abaixo onde divergir).** Ordem nova do ciclo de gravação:
+> 1. **`reenviar_pendencias` primeiro, sempre**, antes da checagem da P0 (I5). Sem P0, o ciclo reenvia as pendências e só então recusa o resto.
+> 2. Checa a P0 (recusa como antes).
+> 3. GET (como antes). Em `criar`, o Flow (rev. 4) vai mandar também `atualizar` derivado de `criar`: **trate pela `acao` do item** — `atualizar` que chega no modo `criar` é processado como `atualizar` (mesmo escopo, mesmo gravador). `inativar` que chegue sem o portão próprio: não processa, não responde, WARNING (volta depois da reserva).
+> 4. **Triagem sem o ERP, para todos os itens, antes de abrir o ERP** (C1): validação, livro (`gravado_sem_volta`/`erro_a_enviar` → só reenvia o corpo guardado; `em_andamento`/`incerto`/`orfao`/`confirmado`/... → pula), 9b, escopo, `reservar`. Só os itens que saem da triagem como "a gravar" seguem.
+> 5. Abre o ERP se houver item "a gravar" **ou** linha `em_andamento` (M2). Falha de conexão: `transitorio` `conexao_recusada` **só** para os itens "a gravar" desta rodada (linhas recém-reservadas, nunca uma linha que já estava gravada).
+> 6. Recuperação (Task 8) e depois a gravação item a item, com o prazo do lote.
+>
+> Mudanças de regra:
+> - **9b com `incerto` ou `liberado` com SEQ** (I2): não grava, não responde a esta versão, ERROR com o alerta (uma pessoa resolve pela ferramenta da Task 15). **9b com `orfao`**: responde a esta versão com erro **definitivo** `ja_criado_no_erp`, mensagem `mensagem_para_flow("ja_criado_no_erp", detalhe=<código do ERP>)`, e não grava (senão ela volta a cada 10 min para sempre). **9b com `confirmado`**: pula com ERROR, como antes.
+> - **`nome_existe` sobre o próprio produto** (I3): se o SEQ achado pelo nome é `seq_reservado` ou `erp_produto_id` de alguma linha do livro com o mesmo `produto_id`, **não** reporta `nome_existe`: chama a recuperação dessa linha (adota se bater; senão `incerto`).
+> - **Erro do ERP na gravação** (I4), depois do `rollback()` do gravador: `classificar_erro` = `lock` → `transitorio` `erp_ocupado` ("O ERP estava ocupado; o Portal tenta de novo."); `recusa` → definitivo `erp_recusou` com `mensagem_para_flow("erp_recusou")` (o detalhe técnico, sem valor, vai só para o log e o livro); `conexao` depois de enviar o comando → deixa `em_andamento` e interrompe o lote (resultado incerto, a recuperação confere). `SeqTomadoError` → `transitorio` `erp_ocupado` (não `liberado`).
+> - **`marca_ausente_erp` é definitivo** (R4 revogada; contrato §7).
+> - **`atualizar` limpa** (I8): `ean` e `codigoNfe` `null` no item = coluna `NULL` no ERP (`campos` leva a chave com `None`); os demais campos `null` = não mexer. `marcaErp: null` = não mexer.
+> - **Chave desconhecida no item** (I7): o item valida (Task 1); loga WARNING uma vez por nome de chave com `chaves_desconhecidas`.
+> - **Mensagem ao Flow** (M4): toda mensagem de erro que vai ao Flow sai de `mensagem_para_flow` (ou `mensagem_nome_existe`). O texto técnico do validador fica só no livro e no log.
+> - **Dois itens com o mesmo nome no lote** (M6): depois de cada `criar` gravado, acrescente o nome normalizado ao mapa de nomes do ciclo; o segundo vira `nome_existe` com o SEQ do primeiro.
+> - **Reenvio respeita a espera** (M8): `pendencias_de_envio` já filtra; o reenvio da triagem (item reentregue com `gravado_sem_volta`) também respeita `proxima_tentativa_em` (se ainda não venceu, não manda).
+>
+> Testes que entram (além dos do texto abaixo, ajustando o de `marca_ausente` para definitivo e o de `SeqTomado`):
+> - `test_erp_fora_com_item_gravado_sem_volta_reentregue_so_reenvia_o_gravado` (C1): livro com a linha em `gravado_sem_volta` vencida, Flow reentrega o mesmo item, conexão do ERP falha → um único POST, com o corpo `gravado`; estado continua `gravado_sem_volta` ou vira `confirmado`; nenhum `transitorio`.
+> - `test_bug_corpo_mantem_gravado_sem_volta` (M7).
+> - `test_pendencias_antes_da_p0` (I5): sem `VAR_P0`, com pendência vencida → 1 POST e `recusado` no resumo, sem GET.
+> - `test_9b_orfao_responde_ja_criado_no_erp`, `test_9b_incerto_nao_grava_nem_responde`.
+> - `test_nome_existe_do_proprio_produto_vai_para_recuperacao`.
+> - `test_erro_recusa_do_erp_vira_definitivo_erp_recusou`, `test_lock_do_erp_vira_transitorio`.
+> - `test_atualizar_ean_null_limpa_no_erp`.
+> - `test_atualizar_no_modo_criar_e_processado`.
+> - `test_mesmo_nome_duas_vezes_no_lote`.
+> - `test_mensagem_ao_flow_sem_jargao`: em todos os POSTs de erro dos testes deste arquivo, a mensagem não contém "Fire", "SEQ", "erpProdutoId" nem "componentes[".
 
 **Files:**
 - Modify: `app/integrations/flowpcp/cadastro_volta.py`
@@ -1771,6 +1826,10 @@ git commit -m "feat(cadastro): recuperação de cadastro interrompido (adota, li
 
 ### Task 9: Ida com `marcasErp` e `temNotaFiscal`
 
+> **Emenda 1 (revisão do Flow, 17/10; vale acima do texto abaixo onde divergir).**
+> (a) I10: leia a resposta. Guarde em `rep.marcas_portal` também o que o Flow devolveu em `marcas` (`vinculadas`, `jaVinculadas`, `semPar`, `conflitos`, ou `recebidas` no dry-run) e em `rep.nota_portal` o `notaFiscal` (`atualizados`). `marcas: {"erro": true}` ou `notaFiscal: {"erro": true}` → ERROR no log e `reenviar: true` no bloco correspondente do relatório (o diário tenta de novo no próximo ciclo; a rota manual mostra). `semPar` ou `conflitos` não vazios → WARNING com os nomes. Testes para cada caso.
+> (b) I11: a ida tira do lote os SEQs de `cadastro_volta_repo.seqs_em_aberto` (Task 4) do ambiente, somados a `fora_do_envio`, em toda rodada (manual e diária), e reporta em `rep.fora_do_envio_volta`. Sem isso, um SEQ gravado pelo Portal e ainda sem volta entraria no lote e o Flow criaria outro produto. Teste: com uma linha `gravado_sem_volta` de SEQ 3992 no livro e o 3992 no extract, o 3992 não vai no corpo.
+
 **Files:**
 - Modify: `app/erp/catalog_extract.py` (duas leituras novas), `app/erp/queries.py` (duas constantes)
 - Create: `app/integrations/flowpcp/catalogo_marcas.py`
@@ -2000,6 +2059,8 @@ git commit -m "feat(tools): saneamento das marcas do Flow no Fire com dry-run, b
 
 ### Task 12: Métricas e tela do ambiente
 
+> **Emenda 1 (revisão do Flow, 17/10).** I9: em `criar` e em `criar_e_atualizar` sem o portão de inativar, a cada ciclo de gravação faça um `GET ?simular=1&acoes=<as ações que este modo não consome>` (`criar_e_atualizar` sem portão → `inativar`; `criar` → `inativar`), que não reserva, e guarde a contagem em `ultimo_ciclo` como `aguardando_modo` e na métrica `portal_flowpcp_cadastro_volta_aguardando_modo{env}`. A tela mostra "Aguardando outro modo: N" com o texto "Itens aprovados no Flow que este modo da volta não grava." Se o Flow responder 400 a `simular` com `acoes` (rev. 3), registre `aguardando_modo = None`, WARNING uma vez, e siga. Testes: contagem guardada; 400 vira `None` sem derrubar o ciclo.
+
 **Files:**
 - Modify: `app/observability/metrics.py`, `app/web/routes_environments.py` (rota `GET .../flowpcp/cadastro-volta`), `app/web/static/admin-ambiente-edit.html`
 - Test: `tests/test_cadastro_volta_route.py`, `tests/test_admin_ambiente_edit_cadastro.py`
@@ -2093,8 +2154,28 @@ Roteiro para a MM, numa **cópia** do `.fdb` aberta pela tela do Fire:
 
 ---
 
+### Task 15: Ferramenta do operador para `incerto` e `orfao` (Emenda 1, I2)
+
+**Files:**
+- Create: `tools/cadastro_volta_operar.py`
+- Modify: `app/persistence/cadastro_volta_repo.py`
+- Test: `tests/test_cadastro_volta_operar.py`
+
+**Interfaces:**
+- Produces (repo): `adotar_manual(conn, cadastro_id, versao, *, seq: int, operador: str, corpo_json: str) -> bool` (só de `incerto` ou `liberado` para `gravado_sem_volta`, gravando `alerta="adotado_manual:<operador>"`); `liberar_manual(conn, cadastro_id, versao, *, operador: str) -> bool` (só de `incerto` para `liberado`, e só se `seq_reservado` é nulo ou a linha do ERP comprovadamente não existe — quem confere é a ferramenta); `fechar_orfao(conn, cadastro_id, versao, *, operador: str, nota: str) -> bool` (só de `orfao` para `superado`, com `alerta="fechado_manual:<operador>"`).
+- CLI: `python tools/cadastro_volta_operar.py <slug> listar`; `... adotar <cadastroId> <versao> <seq> --operador NOME`; `... liberar <cadastroId> <versao> --operador NOME`; `... fechar-orfao <cadastroId> <versao> --operador NOME --nota TEXTO`. Sem `--confirmar`, toda ação só mostra o que faria. `adotar` lê o ERP **só leitura** (`connect_somente_leitura` + `cadastro_fire.ler_produto`) e recusa se a linha não existir; `liberar` recusa se `seq_reservado` existe no ERP. Nenhuma ação escreve no ERP nem no Flow: o envio do `gravado` adotado fica para o ciclo normal (`reenviar_pendencias`).
+
+- [ ] **Step 1:** Testes do repo: cada transição permitida e cada recusada (estado errado devolve `False` e não muda nada); `adotar_manual` grava `erp_produto_id` e `corpo_json`.
+- [ ] **Step 2:** Rode e veja falhar.
+- [ ] **Step 3:** Implemente repo e CLI (`argparse`; a CLI monta o `corpo_gravado` com `datetime.now(UTC)`).
+- [ ] **Step 4:** Rode e veja passar.
+- [ ] **Step 5:** Commit: `git commit -m "feat(tools): ferramenta do operador para cadastro incerto e órfão"`.
+
+---
+
 ## Ordem de ligar (fora deste plano, cada passo com o ok do Samuel)
 
+0. A Task 10 (descrição interna não vai como cor) precisa estar no pacote **antes** de ligar `PORTAL_FLOWPCP_CATALOGO_FISCAL`.
 1. Deploy do pacote com tudo desligado.
 2. Saneamento das marcas: dry-run → revisão → backup → `--gravar`.
 3. `PORTAL_FLOWPCP_CATALOGO_MARCAS=mm` num dryRun do catálogo; conferir `marcas` (`vinculadas`, `semPar`, `conflitos`); apply.
