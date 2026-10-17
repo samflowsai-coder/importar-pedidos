@@ -116,7 +116,10 @@ def test_seq_criado_pelo_portal(conn):
 def test_gravado_sem_volta_nao_vira_transitorio(conn):
     _reservar(conn)
     repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
-    for estado in ("transitorio", "liberado", "erro_registrado", "incerto", "em_andamento"):
+    for estado in (
+        "transitorio", "liberado", "erro_registrado", "incerto", "em_andamento",
+        "simulado", "erro_definitivo", "superado", "erro_a_enviar",
+    ):
         assert repo.marcar_desfecho(conn, "c1", 1, estado) is False
         assert repo.buscar(conn, "c1", 1)["estado"] == "gravado_sem_volta"
 
@@ -166,3 +169,125 @@ def test_seqs_em_aberto(conn):
     repo.marcar_seq(conn, "f", 1, 500)
     repo.marcar_desfecho(conn, "f", 1, "transitorio")  # fora
     assert repo.seqs_em_aberto(conn) == {"100", "200", "300", "400"}
+
+
+def test_reservar_nao_reaproveita_liberado_com_seq(conn):
+    _reservar(conn)
+    repo.marcar_seq(conn, "c1", 1, 4001)
+    repo.marcar_desfecho(conn, "c1", 1, "liberado")
+    assert _reservar(conn) is False
+    linha = repo.buscar(conn, "c1", 1)
+    assert (linha["estado"], linha["seq_reservado"]) == ("liberado", 4001)
+
+
+def test_reservar_zera_rastros_ao_reaproveitar(conn):
+    _reservar(conn)
+    repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
+    conn.execute("UPDATE cadastro_volta SET estado = 'transitorio' WHERE cadastro_id = 'c1'")
+    repo.adiar(conn, "c1", 1, ate="2026-10-17T13:00:00", alerta="a", resposta="r")
+    assert _reservar(conn) is True
+    linha = repo.buscar(conn, "c1", 1)
+    assert linha["erp_produto_id"] is None
+    assert linha["tentativas"] == 0
+    assert linha["proxima_tentativa_em"] is None
+    assert linha["alerta"] is None
+    assert linha["resposta_flow"] is None
+
+
+def test_cadeia_orfao_nao_volta_a_gravar(conn):
+    _reservar(conn)
+    repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
+    assert repo.marcar_desfecho(conn, "c1", 1, "orfao") is True
+    assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}") is False
+    assert repo.buscar(conn, "c1", 1)["estado"] == "orfao"
+    assert repo.marcar_desfecho(conn, "c1", 1, "transitorio") is False
+    assert repo.buscar(conn, "c1", 1)["estado"] == "orfao"
+    assert _reservar(conn) is False
+
+
+def test_confirmado_nao_tem_saida(conn):
+    _reservar(conn)
+    repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
+    repo.marcar_desfecho(conn, "c1", 1, "confirmado")
+    for estado in ("transitorio", "orfao", "liberado", "erro_registrado"):
+        assert repo.marcar_desfecho(conn, "c1", 1, estado) is False
+    assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}") is False
+    assert repo.buscar(conn, "c1", 1)["estado"] == "confirmado"
+    assert _reservar(conn) is False
+
+
+def test_marcar_gravado_so_uma_vez(conn):
+    _reservar(conn)
+    assert repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json='{"a":1}') is True
+    assert repo.marcar_gravado(conn, "c1", 1, erp_produto_id="9999", corpo_json='{"b":2}') is False
+    linha = repo.buscar(conn, "c1", 1)
+    assert (linha["erp_produto_id"], linha["corpo_json"]) == ("3992", '{"a":1}')
+
+
+def test_marcar_gravado_sem_linha(conn):
+    assert repo.marcar_gravado(conn, "nada", 1, erp_produto_id="1", corpo_json="{}") is False
+
+
+def test_resposta_flow_truncada_em_64(conn):
+    _reservar(conn)
+    repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
+    repo.adiar(conn, "c1", 1, ate="2026-10-17T13:00:00", resposta="x" * 200)
+    assert len(repo.buscar(conn, "c1", 1)["resposta_flow"]) == 64
+    repo.marcar_desfecho(conn, "c1", 1, "confirmado", resposta="y" * 200)
+    assert len(repo.buscar(conn, "c1", 1)["resposta_flow"]) == 64
+
+
+def test_marcar_desfecho_estado_desconhecido(conn):
+    _reservar(conn)
+    with pytest.raises(ValueError):
+        repo.marcar_desfecho(conn, "c1", 1, "inventado")
+
+
+def test_marcar_seq_so_em_andamento(conn):
+    _reservar(conn)
+    assert repo.marcar_seq(conn, "c1", 1, 10) is True
+    repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
+    assert repo.marcar_seq(conn, "c1", 1, 11) is False
+    assert repo.buscar(conn, "c1", 1)["seq_reservado"] == 10
+
+
+def test_criar_do_produto_desempate_andamento_vs_incerto(conn):
+    _reservar(conn, cid="a", versao=1)
+    repo.marcar_desfecho(conn, "a", 1, "incerto")
+    _reservar(conn, cid="b", versao=2)
+    assert repo.criar_do_produto(conn, "p1")["cadastro_id"] == "b"
+
+
+def test_criar_do_produto_mais_recente_no_mesmo_estado(conn):
+    _reservar(conn, cid="a", versao=1)
+    repo.marcar_desfecho(conn, "a", 1, "incerto")
+    _reservar(conn, cid="b", versao=2)
+    repo.marcar_desfecho(conn, "b", 2, "incerto")
+    assert repo.criar_do_produto(conn, "p1")["cadastro_id"] == "b"
+
+
+def test_ensure_schema_migra_banco_antigo(tmp_path):
+    caminho = tmp_path / "antigo.db"
+    c = sqlite3.connect(caminho)
+    c.execute(
+        "CREATE TABLE cadastro_volta (cadastro_id TEXT NOT NULL, versao INTEGER NOT NULL, "
+        "estado TEXT NOT NULL, acao TEXT, tipo TEXT, seq_reservado INTEGER, erro_codigo TEXT, "
+        "erro_mensagem TEXT, plano_json TEXT, iniciado_em TEXT NOT NULL DEFAULT (datetime('now')), "
+        "atualizado_em TEXT NOT NULL DEFAULT (datetime('now')), PRIMARY KEY (cadastro_id, versao))"
+    )
+    c.execute("INSERT INTO cadastro_volta (cadastro_id, versao, estado) VALUES ('x', 1, 'simulado')")
+    c.commit()
+    c.close()
+    router.reset_init_cache()
+    router._ensure_schema(caminho, schema_env)
+    c = sqlite3.connect(caminho)
+    try:
+        colunas = {r[1] for r in c.execute("PRAGMA table_info(cadastro_volta)")}
+        assert {"produto_id", "modo", "erp_produto_id", "corpo_json", "tentativas",
+                "proxima_tentativa_em", "alerta", "resposta_flow"} <= colunas
+        indices = {r[1] for r in c.execute("PRAGMA index_list(cadastro_volta)")}
+        assert "idx_cadastro_volta_produto" in indices
+        assert c.execute("SELECT tentativas FROM cadastro_volta").fetchone() == (0,)
+    finally:
+        c.close()
+        router.reset_init_cache()

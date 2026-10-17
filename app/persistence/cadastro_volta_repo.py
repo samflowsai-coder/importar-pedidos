@@ -25,9 +25,30 @@ _COLS = (
     "atualizado_em",
 )
 
-# Estados em que o lease pode ser reaproveitado: nada foi gravado no Fire.
+# Estados em que o lease pode ser reaproveitado. `liberado` só vale sem SEQ
+# reservado: com SEQ o INSERT pode ter comitado no ERP (ver `reservar`).
 ESTADOS_DESCARTAVEIS = ("simulado", "erro_definitivo", "transitorio", "liberado")
 _PENDENTES = ("gravado_sem_volta", "erro_a_enviar")
+# O produto existe no ERP: nenhuma transição daqui pode levar a gravar de novo.
+_JA_NO_ERP = ("gravado_sem_volta", "confirmado", "orfao")
+_JA_NO_ERP_SQL = ", ".join(f"'{e}'" for e in _JA_NO_ERP)
+ESTADOS = frozenset(
+    {
+        "simulado",
+        "erro_definitivo",
+        "em_andamento",
+        "gravado_sem_volta",
+        "erro_a_enviar",
+        "confirmado",
+        "erro_registrado",
+        "transitorio",
+        "liberado",
+        "orfao",
+        "superado",
+        "incerto",
+    }
+)
+_RESPOSTA_MAX = 64
 _DESCARTAVEIS_SQL = ", ".join(f"'{e}'" for e in ESTADOS_DESCARTAVEIS)
 _PENDENTES_SQL = ", ".join(f"'{e}'" for e in _PENDENTES)
 
@@ -88,7 +109,8 @@ def reservar(
     plano_json: str,
 ) -> bool:
     """Lease de `(cadastro_id, versao)`. True = este ciclo é dono do item.
-    Linha descartável (simulação, transitório, liberada) é reaproveitada."""
+    Linha descartável (simulação, transitório, liberada sem SEQ) é reaproveitada;
+    `liberado` com SEQ não, porque o INSERT pode ter comitado no ERP."""
     cur = conn.execute(
         "INSERT OR IGNORE INTO cadastro_volta "
         "(cadastro_id, versao, estado, acao, tipo, produto_id, modo, plano_json) "
@@ -100,20 +122,24 @@ def reservar(
     cur = conn.execute(
         "UPDATE cadastro_volta SET estado = 'em_andamento', acao = ?, tipo = ?, produto_id = ?, "
         "modo = ?, plano_json = ?, seq_reservado = NULL, erro_codigo = NULL, "
-        "erro_mensagem = NULL, corpo_json = NULL, iniciado_em = datetime('now'), "
-        "atualizado_em = datetime('now') "
-        f"WHERE cadastro_id = ? AND versao = ? AND estado IN ({_DESCARTAVEIS_SQL})",
+        "erro_mensagem = NULL, corpo_json = NULL, erp_produto_id = NULL, tentativas = 0, "
+        "proxima_tentativa_em = NULL, alerta = NULL, resposta_flow = NULL, "
+        "iniciado_em = datetime('now'), atualizado_em = datetime('now') "
+        f"WHERE cadastro_id = ? AND versao = ? AND estado IN ({_DESCARTAVEIS_SQL}) "
+        "AND NOT (estado = 'liberado' AND seq_reservado IS NOT NULL)",
         (acao, tipo, produto_id, modo, plano_json, cadastro_id, versao),
     )
     return cur.rowcount == 1
 
 
-def marcar_seq(conn: sqlite3.Connection, cadastro_id: str, versao: int, seq: int) -> None:
-    conn.execute(
+def marcar_seq(conn: sqlite3.Connection, cadastro_id: str, versao: int, seq: int) -> bool:
+    """Só age em `em_andamento`. True se gravou."""
+    cur = conn.execute(
         "UPDATE cadastro_volta SET seq_reservado = ?, atualizado_em = datetime('now') "
-        "WHERE cadastro_id = ? AND versao = ?",
+        "WHERE cadastro_id = ? AND versao = ? AND estado = 'em_andamento'",
         (seq, cadastro_id, versao),
     )
+    return cur.rowcount == 1
 
 
 def marcar_gravado(
@@ -123,13 +149,15 @@ def marcar_gravado(
     *,
     erp_produto_id: str,
     corpo_json: str,
-) -> None:
-    conn.execute(
+) -> bool:
+    """Só age em `em_andamento` (uma vez). True se gravou."""
+    cur = conn.execute(
         "UPDATE cadastro_volta SET estado = 'gravado_sem_volta', erp_produto_id = ?, "
         "corpo_json = ?, proxima_tentativa_em = NULL, atualizado_em = datetime('now') "
-        "WHERE cadastro_id = ? AND versao = ?",
+        "WHERE cadastro_id = ? AND versao = ? AND estado = 'em_andamento'",
         (erp_produto_id, corpo_json, cadastro_id, versao),
     )
+    return cur.rowcount == 1
 
 
 def marcar_erro_a_enviar(
@@ -140,15 +168,16 @@ def marcar_erro_a_enviar(
     codigo: str,
     mensagem: str,
     corpo_json: str,
-) -> None:
-    """Nunca toca linha `gravado_sem_volta`: o produto já está no ERP."""
-    conn.execute(
+) -> bool:
+    """Nunca toca linha que já está no ERP (`_JA_NO_ERP`). True se mudou."""
+    cur = conn.execute(
         "UPDATE cadastro_volta SET estado = 'erro_a_enviar', erro_codigo = ?, "
         "erro_mensagem = ?, corpo_json = ?, proxima_tentativa_em = NULL, "
         "atualizado_em = datetime('now') "
-        "WHERE cadastro_id = ? AND versao = ? AND estado <> 'gravado_sem_volta'",
+        f"WHERE cadastro_id = ? AND versao = ? AND estado NOT IN ({_JA_NO_ERP_SQL})",
         (codigo, mensagem, corpo_json, cadastro_id, versao),
     )
+    return cur.rowcount == 1
 
 
 def marcar_desfecho(
@@ -160,13 +189,18 @@ def marcar_desfecho(
     alerta: str | None = None,
     resposta: str | None = None,
 ) -> bool:
-    """True se mudou. `gravado_sem_volta` só sai para `confirmado` ou `orfao`:
-    qualquer outro estado faria o Portal gravar o produto de novo no ERP."""
+    """True se mudou. `gravado_sem_volta` só sai para `confirmado` ou `orfao`;
+    `confirmado` e `orfao` não saem por aqui (o produto existe no ERP: qualquer
+    outro estado faria o Portal gravar de novo). Estado desconhecido: ValueError."""
+    if estado not in ESTADOS:
+        raise ValueError("estado desconhecido no livro da volta")
+    resposta = resposta[:_RESPOSTA_MAX] if resposta is not None else None
     cur = conn.execute(
         "UPDATE cadastro_volta SET estado = ?, alerta = ?, resposta_flow = ?, "
         "proxima_tentativa_em = NULL, atualizado_em = datetime('now') "
         "WHERE cadastro_id = ? AND versao = ? "
-        "AND (estado <> 'gravado_sem_volta' OR ? IN ('confirmado', 'orfao'))",
+        "AND (estado NOT IN (" + _JA_NO_ERP_SQL + ") "
+        "OR (estado = 'gravado_sem_volta' AND ? IN ('confirmado', 'orfao')))",
         (estado, alerta, resposta, cadastro_id, versao, estado),
     )
     return cur.rowcount == 1
@@ -181,6 +215,7 @@ def adiar(
     alerta: str | None = None,
     resposta: str | None = None,
 ) -> None:
+    resposta = resposta[:_RESPOSTA_MAX] if resposta is not None else None
     conn.execute(
         "UPDATE cadastro_volta SET tentativas = tentativas + 1, proxima_tentativa_em = ?, "
         "alerta = COALESCE(?, alerta), resposta_flow = COALESCE(?, resposta_flow), "
