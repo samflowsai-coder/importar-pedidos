@@ -293,6 +293,7 @@ CREATE TABLE IF NOT EXISTS lote_config (
     dia_inicio       INTEGER NOT NULL DEFAULT 0,
     hora_fechamento  INTEGER NOT NULL DEFAULT 8,
     ativo            INTEGER NOT NULL DEFAULT 0,
+    ativo_desde      TEXT,
     alterado_por     TEXT,
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL

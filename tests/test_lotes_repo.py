@@ -341,3 +341,18 @@ def test_listar_ordena_do_mais_recente(conn):
     b = _lote(conn, date(2026, 8, 24))
     lst = lotes_repo.listar(conn, limite=1)
     assert [x["id"] for x in lst] == [b["id"]]
+
+
+def test_ativo_desde_grava_na_ativacao_e_mantem_se_segue_ativo(conn):
+    t1, t2, t3, t4 = (datetime(2026, 8, d, 9, 0, 0) for d in (1, 2, 3, 4))
+    assert _config(conn, agora=t1)["ativo_desde"] == "2026-08-01T09:00:00"
+    assert _config(conn, agora=t2)["ativo_desde"] == "2026-08-01T09:00:00"
+    desligada = _config(conn, ativo=False, agora=t3)
+    assert desligada["ativo_desde"] == "2026-08-01T09:00:00"
+    assert _config(conn, agora=t4)["ativo_desde"] == "2026-08-04T09:00:00"
+    ativas = lotes_repo.listar_configs(conn, so_ativas=True)
+    assert ativas[0]["ativo_desde"] == "2026-08-04T09:00:00"
+
+
+def test_ativo_desde_de_config_nascida_desligada_e_none(conn):
+    assert _config(conn, ativo=False)["ativo_desde"] is None

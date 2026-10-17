@@ -600,3 +600,33 @@ def test_varredura_ignora_envio_recente(portal_lote_com_perna):
 
     assert r["recuperadas"] == 0
     assert _pernas_de(portal_lote_com_perna["lote_id"]) == ["N1"]
+
+
+def _salvar_config(*, ativo: bool, agora: datetime) -> None:
+    with router.shared_connect() as conn:
+        lotes_repo.save_config(
+            conn,
+            env_origem_slug="nasmar",
+            env_espelho_slug="mm",
+            cnpj_revenda=NASMAR,
+            nome_revenda="Nasmar",
+            janela="semanal",
+            dia_inicio=0,
+            hora_fechamento=8,
+            ativo=ativo,
+            por="teste",
+            agora=agora,
+        )
+
+
+def test_varredura_ignora_envio_feito_com_lote_desligado(portal_lote_com_perna):
+    """T0 1ª perna (20/08 10h); T1 desliga; T2 envio sem anexo; T3 religa; T4 envio."""
+    _salvar_config(ativo=False, agora=datetime(2026, 8, 21, 9, 0))  # T1
+    _enviada_sem_lote("N2", fire=1160, sent="2026-08-21T11:00:00")  # T2
+    _salvar_config(ativo=True, agora=datetime(2026, 8, 22, 9, 0))  # T3
+    _enviada_sem_lote("N3", fire=1161, sent="2026-08-22T11:00:00")  # T4
+
+    r = fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+
+    assert r["recuperadas"] == 1
+    assert _pernas_de(portal_lote_com_perna["lote_id"]) == ["N1", "N3"]

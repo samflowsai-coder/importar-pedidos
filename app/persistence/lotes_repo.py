@@ -103,12 +103,17 @@ def save_config(
         if com_perna:
             raise JanelaComLoteAbertoError(env_origem_slug)
     ts = _ts(agora)
+    # Só o religamento (ou a 1ª ativação) carimba; segue ativo mantém; desligar não apaga.
+    if atual is not None and atual["ativo"]:
+        ativo_desde = atual["ativo_desde"]
+    else:
+        ativo_desde = ts if ativo else (atual["ativo_desde"] if atual else None)
     conn.execute(
         """
         INSERT INTO lote_config (env_origem_slug, env_espelho_slug, cnpj_revenda, nome_revenda,
-                                 janela, dia_inicio, hora_fechamento, ativo, alterado_por,
-                                 created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 janela, dia_inicio, hora_fechamento, ativo, ativo_desde,
+                                 alterado_por, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(env_origem_slug) DO UPDATE SET
             env_espelho_slug = excluded.env_espelho_slug,
             cnpj_revenda     = excluded.cnpj_revenda,
@@ -117,6 +122,7 @@ def save_config(
             dia_inicio       = excluded.dia_inicio,
             hora_fechamento  = excluded.hora_fechamento,
             ativo            = excluded.ativo,
+            ativo_desde      = excluded.ativo_desde,
             alterado_por     = excluded.alterado_por,
             updated_at       = excluded.updated_at
         """,
@@ -129,6 +135,7 @@ def save_config(
             dia_inicio,
             hora_fechamento,
             1 if ativo else 0,
+            ativo_desde,
             por,
             ts,
             ts,

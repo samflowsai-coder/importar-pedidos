@@ -295,15 +295,16 @@ def _recuperar(cfg: dict, agora: datetime) -> int:
     slug = cfg["env_origem_slug"]
     try:
         with db.connect_shared() as conn:
-            # Piso = 1ª perna anexada de verdade, não o início da janela mais
-            # antiga: janela antiga (pedido de backlog) recuaria o piso e varreria
-            # envios anteriores à ativação.
-            desde = conn.execute(
+            # Piso = o mais recente entre a 1ª perna anexada de verdade (não o início
+            # da janela mais antiga: backlog recuaria o piso) e o último religamento
+            # do lote (envio feito com o lote desligado não entra).
+            primeira = conn.execute(
                 "SELECT MIN(created_at) FROM intercompany_lote_item WHERE env_origem_slug = ?",
                 (slug,),
             ).fetchone()[0]
-            if desde is None:
+            if primeira is None:  # sem perna anexada da origem, não há o que recuperar
                 return 0
+            desde = max(p for p in (primeira, cfg.get("ativo_desde")) if p)
             no_lote = {
                 r[0]
                 for r in conn.execute(
