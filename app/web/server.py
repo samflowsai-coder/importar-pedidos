@@ -2868,7 +2868,8 @@ def _send_one_to_fire(
         output_path = Path(cfg["output_dir"]).expanduser().resolve()
         output_path.mkdir(parents=True, exist_ok=True)
         output_files: list[dict] = []
-        if export_mode in ("xlsx", "both"):
+        # Espelho de lote vai ao Fire só pelo insert direto (rastro do lote_fiscal).
+        if export_mode in ("xlsx", "both") and not espelho:
             from app.exporters.erp_exporter import ERPExporter
 
             paths = ERPExporter().export(order, str(output_path))
@@ -2923,6 +2924,10 @@ def _send_one_to_fire(
                 ),
             )
 
+        # Fire aceitou: o rastro do lote vem ANTES de tudo que ainda pode levantar.
+        if espelho:
+            integracao.concluir_envio_espelho(espelho, result, request_env)
+
         now = datetime.now().isoformat(timespec="seconds")
         repo.update_fire_metadata(
             import_id,
@@ -2950,8 +2955,6 @@ def _send_one_to_fire(
                 "cliente_override_codigo": override,
             },
         )
-        if espelho:
-            integracao.concluir_envio_espelho(espelho, result, request_env)
         _registrar_aplicados(import_id, decisao)
         integracao.anexar_perna_de_origem(import_id, entry, order, result, request_env)
 

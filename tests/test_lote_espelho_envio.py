@@ -18,6 +18,7 @@ from app.consolidators import fechamento, integracao
 from app.erp import product_check
 from app.erp_eventos import lote_fiscal
 from app.exporters.firebird_exporter import FirebirdExportResult
+from app.models.order import Order
 from app.persistence import context as env_context
 from app.persistence import environments_repo, erp_bases_repo, lotes_repo, repo, router
 from app.web import server
@@ -82,6 +83,7 @@ def portal_lote(tmp_path, monkeypatch):
         "reservas_no_insert": [],
         "pushes": [],
         "resultado": None,
+        "planilhas": [],
     }
 
     monkeypatch.setattr(
@@ -89,7 +91,11 @@ def portal_lote(tmp_path, monkeypatch):
         "check_order",
         lambda order, *, env=None: estado["check"],  # noqa: ARG005
     )
-    monkeypatch.setattr(erp_mod.ERPExporter, "export", lambda self, order, out: [])  # noqa: ARG005
+    monkeypatch.setattr(
+        erp_mod.ERPExporter,
+        "export",
+        lambda self, order, out: estado["planilhas"].append(order.header.order_number) or [],  # noqa: ARG005
+    )
 
     def _export(self, order, **kw):  # noqa: ARG001
         estado["exports"].append({"order": order, **kw})
@@ -411,3 +417,68 @@ def test_espelho_nao_sai_por_planilha(espelho_pronto):
     r = c.post(f"/api/imported/{ESPELHO}/export-xlsx")
     assert r.status_code == 409
     assert "EXPORT_MODE=db" in r.json()["detail"]
+
+
+# --- rodada de correção 1 -------------------------------------------------------
+
+
+def test_excecao_depois_do_insert_nao_perde_o_lote_fiscal(espelho_pronto_sp1, monkeypatch):
+    def _explode(*a, **kw):
+        raise RuntimeError("estado não andou")
+
+    monkeypatch.setattr(server, "transition", _explode)
+    r = _enviar(espelho_pronto_sp1, client=TestClient(app, raise_server_exceptions=False))
+    assert r.status_code == 500
+    lote = _lote(espelho_pronto_sp1)
+    assert lote["status"] == "enviado"
+    assert lote["lote_fiscal_ok"] == 1
+    assert lote["fire_codigo_espelho"] == 7001
+    (perna,) = _pernas_sp1()
+    assert perna["linha_lote"] == 900011
+    assert _reservas() == []
+
+
+def test_base_sp1_desligada_conta_como_sem_sp1(espelho_pronto_sp1):
+    erp_bases_repo.salvar(
+        espelho_pronto_sp1["mm"]["id"],
+        base="mm",
+        papel="produtora",
+        tenant_id=TENANT,
+        destino_url="https://flow.test",
+        foto_hora=None,
+        ativo=False,
+    )
+    assert _enviar(espelho_pronto_sp1).status_code == 200
+    assert espelho_pronto_sp1["estado"]["reservas_no_insert"] == [[]]
+    assert _pernas_sp1() == []
+    assert _lote(espelho_pronto_sp1)["lote_fiscal_ok"] == 0
+    assert _audit(espelho_pronto_sp1, "lote_fiscal_falhou") == [{"motivo": "sp1_desligado"}]
+
+
+def test_espelho_fora_do_ambiente_espelho_bloqueia(espelho_pronto_sp1):
+    env = espelho_pronto_sp1["mm"]
+    with env_context.active_env(env["id"], env["slug"]):
+        order = Order.model_validate(repo.get_import(ESPELHO)["snapshot"])
+    r = integracao.preparar_envio_espelho(ESPELHO, order, {}, {"slug": "nasmar"})
+    assert isinstance(r, integracao.BloqueioEspelho)
+    assert r.motivo == "ambiente_errado"
+    assert _reservas() == []
+
+
+def test_modo_both_nao_gera_planilha_do_espelho(espelho_pronto, monkeypatch):
+    monkeypatch.setenv("EXPORT_MODE", "both")
+    _grava("mm", "M1")
+    assert _enviar(espelho_pronto).status_code == 200
+    assert _enviar(espelho_pronto, "M1").status_code == 200
+    assert espelho_pronto["estado"]["planilhas"] == ["M1"]
+    assert len(espelho_pronto["estado"]["exports"]) == 2
+
+
+def test_falha_ao_concluir_deixa_rastro_na_auditoria(espelho_pronto, monkeypatch):
+    def _explode(*a, **kw):
+        raise RuntimeError("banco compartilhado caiu")
+
+    monkeypatch.setattr(lotes_repo, "marcar_enviado", _explode)
+    assert _enviar(espelho_pronto).status_code == 200
+    (falha,) = _audit(espelho_pronto, "lote_fiscal_falhou")
+    assert "banco compartilhado caiu" in falha["motivo"]

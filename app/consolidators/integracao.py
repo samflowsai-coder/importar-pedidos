@@ -155,11 +155,14 @@ def anexar_na_janela(
 @dataclass
 class EnvioEspelho:
     """Espelho liberado para o insert. `reservado` vira False quando a reserva do
-    `lote_fiscal` é consumida (registro) ou cancelada — abortar fica idempotente."""
+    `lote_fiscal` é consumida (registro) ou cancelada — abortar fica idempotente.
+    `concluido` marca que o Fire aceitou o insert: dali em diante exceção no
+    request path não cancela mais nada (o rastro já foi gravado ou auditado)."""
 
     lote: dict
     obs: str
     reservado: bool
+    concluido: bool = False
 
 
 @dataclass(frozen=True)
@@ -178,6 +181,11 @@ class BloqueioEspelho:
         if self.motivo.startswith("lote_status_"):
             status = self.motivo.removeprefix("lote_status_")
             return f"Lote {self.detalhe.get('chave_lote')} está '{status}', não 'fechado'."
+        if self.motivo == "ambiente_errado":
+            return (
+                f"Pedido do lote {self.detalhe.get('chave_lote')} só vai ao Fire pela empresa "
+                f"{self.detalhe.get('env_espelho_slug')}."
+            )
         if self.motivo == "reserva_falhou":
             return "Não foi possível reservar o lote fiscal do SP1. Tente de novo."
         return f"Lote {self.detalhe.get('chave_lote')} não pôde ser conferido: {self.motivo}."
@@ -193,8 +201,10 @@ def e_espelho(import_id: str) -> bool:
 
 
 def _base_sp1(slug: str) -> BaseErpConfig | None:
+    """Base SP1 ligada do ambiente; desligada (`ativo = 0`) conta como sem SP1."""
     env = environments_repo.get_by_slug(slug)
-    return erp_bases_repo.obter(env["id"]) if env else None
+    cfg = erp_bases_repo.obter(env["id"]) if env else None
+    return cfg if cfg is not None and cfg.ativo else None
 
 
 def _dec(valor: float | None) -> Decimal | None:
@@ -233,7 +243,7 @@ def _divergencias(order: Order, esperado: Order, composicao: list) -> list[dict]
 def preparar_envio_espelho(
     import_id: str,
     order: Order,
-    request_env: dict | None,  # noqa: ARG001 — o ambiente vem do lote
+    request_env: dict | None,
 ) -> EnvioEspelho | BloqueioEspelho | None:
     """`None` = não é espelho (caminho de sempre). Roda depois do portão de preço
     (`preco_trava.decidir_envio`)."""
@@ -242,6 +252,15 @@ def preparar_envio_espelho(
     if lote is None:
         return None
     base = {"chave_lote": lote["chave_lote"], "lote_id": lote["id"]}
+    if (request_env or {}).get("slug") != lote["env_espelho_slug"]:
+        return BloqueioEspelho(
+            "ambiente_errado",
+            {
+                **base,
+                "env_espelho_slug": lote["env_espelho_slug"],
+                "env_request": (request_env or {}).get("slug"),
+            },
+        )
     if lote["status"] != "fechado":
         return BloqueioEspelho(f"lote_status_{lote['status']}", base)
 
@@ -291,11 +310,12 @@ def abortar_envio_espelho(envio: EnvioEspelho, request_env: dict | None) -> None
 
 @contextmanager
 def guardar_reserva(envio: EnvioEspelho | None, request_env: dict | None) -> Iterator[None]:
-    """Exceção no caminho do insert cancela a reserva e propaga como sempre."""
+    """Exceção ANTES de o Fire aceitar o insert cancela a reserva e propaga como
+    sempre. Depois de `concluir_envio_espelho` não cancela: o espelho está no Fire."""
     try:
         yield
     except BaseException:
-        if envio is not None:
+        if envio is not None and not envio.concluido:
             abortar_envio_espelho(envio, request_env)
         raise
 
@@ -361,6 +381,7 @@ def concluir_envio_espelho(
 ) -> None:
     """Fire aceitou o espelho: registra o `lote_fiscal` e marca o lote `enviado`.
     Nunca levanta — falha no rastro vira `lote_fiscal_ok = 0` + auditoria."""
+    envio.concluido = True
     lote = envio.lote
     import_id = lote["import_id_espelho"]
     try:
@@ -391,3 +412,11 @@ def concluir_envio_espelho(
         logger.error(
             f"lote: conclusão do envio de {lote['chave_lote']} falhou: {type(exc).__name__}: {exc}"
         )
+        try:
+            repo.append_audit(
+                import_id,
+                "lote_fiscal_falhou",
+                {"motivo": f"conclusao_falhou: {type(exc).__name__}: {exc}"},
+            )
+        except Exception as exc_audit:  # noqa: BLE001
+            logger.error(f"lote: auditoria de {lote['chave_lote']} falhou: {exc_audit!r}")
