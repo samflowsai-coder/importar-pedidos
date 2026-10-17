@@ -2160,6 +2160,8 @@ Roteiro para a MM, numa **cópia** do `.fdb` aberta pela tela do Fire:
 
 ### Task 15: Ferramenta do operador para `incerto` e `orfao` (Emenda 1, I2)
 
+> **Emenda 4 (revisão da Task 4, 17/10).** O repositório já traz `fechar_orfao` (de `orfao` para o estado final `orfao_fechado`, não `superado`) e `liberar_comprovado`; a Task 15 só acrescenta `adotar_manual`/`liberar_manual` e a CLI, e as duas novas entram na lista branca `TRANSICOES` do repo (`gravado_sem_volta` ← `incerto`/`liberado` para adotar; `liberado` ← `incerto` para liberar, zerando o SEQ só se a ferramenta comprovou a ausência no ERP).
+
 **Files:**
 - Create: `tools/cadastro_volta_operar.py`
 - Modify: `app/persistence/cadastro_volta_repo.py`
