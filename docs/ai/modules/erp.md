@@ -244,13 +244,20 @@ PRECO_VENDA, então a validação de preço segue funcionando. Novo
 `match_source='depara'`. De-para órfão (SEQ sumiu do Fire) → `match=False`.
 Best-effort: sem ambiente ativo / SQLite off, pula o degrau sem quebrar o check.
 
-### Gap conhecido: de-para só no caminho XLS
+### De-para no insert direto (`EXPORT_MODE=db|both`)
 
-Enriquecimento de-para no XLS só ocorre no caminho `EXPORT_MODE=xlsx`
-(`_export_one_xlsx`, via `app.erp.depara_apply`); o caminho de inserção direta
-no Firebird (`_send_one_to_fire`, modo `db`/`both`) ainda NÃO aplica de-para —
-um item casado só por vínculo de-para entra no Fire sem FK de produto.
-Fast-follow se o cliente migrar de `xlsx`.
+`_send_one_to_fire` aplica `depara_apply` (antes do XLS do modo `both` e do
+insert) e passa ao `FirebirdExporter.export` o mapa
+`produtos_por_item = {posição em order.items: SEQ}` dos itens vinculados. Esses
+itens são buscados **só** por `FIND_PRODUCT_BY_SEQ`: o `fire_codigo` do vínculo
+é `str(SEQ)` e relido como `CODPROD_ALTERN` casaria outro produto. SEQ sumido do
+Fire → `PRODUCT_NOT_FOUND`, sem cair para EAN/código. Audita
+`depara_aplicado_no_fire`.
+
+**Item sem produto no Fire recusa o pedido inteiro** (`PRODUCT_NOT_FOUND`): o
+exporter levanta `FirebirdProductNotFoundError` e a conexão desfaz o cabeçalho.
+Até 2026-10-17 o item entrava com `CODPRODUTO` NULL. Teste:
+`tests/test_firebird_exporter_produto.py`.
 
 ### Batelamento (perf)
 
