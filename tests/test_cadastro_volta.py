@@ -284,7 +284,6 @@ def test_plano_do_item_bom(env_conn, monkeypatch):
     assert plano["acao"] == "criar" and plano["tabela"] == "PRODUTOS"
     assert plano["campos"] == {
         "DESCRICAO": "KIT3 MEIA CURTO PRETO",
-        "DESCRICAO2": "PRETO",
         "UNIDADE": "KIT",
         "CLASSIF_FISCAL": "61159500",
         "CODITEMSPED": 4,
@@ -292,6 +291,7 @@ def test_plano_do_item_bom(env_conn, monkeypatch):
         "CODPARANFE": "KIT3-MEIA-CURTO/PRT",
         "MARCA": "Kolosh",
     }
+    assert "DESCRICAO2" not in plano["campos"]  # cor do item não vai à Descrição Interna
     assert plano["componentes"] == [{"erpProdutoId": "3170", "quantidade": 3.0}]
 
 

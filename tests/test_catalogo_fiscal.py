@@ -79,7 +79,6 @@ def test_campos_fiscais_completo_com_acento():
             grupo_codigo=8,
             grupo_nome="CONFECCIONADO",
             codigo_nfe="KIT3-MEIA-CURTO/BCOM",
-            cor="AÇÚCAR",
         )
     )
     assert campos == {
@@ -87,15 +86,20 @@ def test_campos_fiscais_completo_com_acento():
         "tipoItemSped": 4,
         "grupoErp": {"codigo": "8", "nome": "CONFECCIONADO"},
         "codigoNfe": "KIT3-MEIA-CURTO/BCOM",
-        "cor": "AÇÚCAR",
     }
     assert motivos == []
 
 
+def test_descricao_interna_nao_vai_como_cor():
+    # DESCRICAO2 do Fire é a "Descrição Interna", não a cor: nunca vira campo fiscal.
+    campos, motivos = cf.campos_fiscais(_dto(cor="BRANCO-BRANCO-BRANCO"))
+    assert "cor" not in campos and "cor_longa" not in motivos
+
+
 def test_campos_fiscais_invalido_fica_ausente_com_motivo():
-    campos, motivos = cf.campos_fiscais(_dto(ncm_bruto="611595", sped_bruto=12, cor="x" * 121))
-    assert "ncm" not in campos and "tipoItemSped" not in campos and "cor" not in campos
-    assert sorted(motivos) == ["cor_longa", "ncm_invalido", "sped_invalido"]
+    campos, motivos = cf.campos_fiscais(_dto(ncm_bruto="611595", sped_bruto=12))
+    assert "ncm" not in campos and "tipoItemSped" not in campos
+    assert sorted(motivos) == ["ncm_invalido", "sped_invalido"]
 
 
 def test_campos_fiscais_grupo_sem_nome_fica_ausente():

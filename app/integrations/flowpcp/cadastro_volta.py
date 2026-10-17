@@ -1,13 +1,14 @@
 """Volta Flow -> Fire dos cadastros aprovados, em modo `simular` (Etapa 1).
 
 Regra da Etapa 1: este módulo só LÊ (a fila do Flow com `simular=1`, que não
-reserva, a cópia local e o Fire por conexão somente leitura); nunca grava no Fire nem confirma no Flow, e os modos de
-escrita (`criar`, `criar_e_atualizar`) se recusam a iniciar até a Etapa 3.
+reserva, a cópia local e o Fire por conexão somente leitura); nunca grava no
+Fire nem confirma no Flow, e os modos de escrita (`criar`, `criar_e_atualizar`)
+se recusam a iniciar até a Etapa 3.
 
 Cada item da fila é validado à parte (`cadastro_schema.validar_item`), conferido
 contra a cópia local e contra o Fire (só SELECT, sempre parametrizado) e vira uma
 linha no livro `cadastro_volta`: `simulado` com o plano do que seria gravado, ou
-`erro_definitivo` com código e mensagem sem o valor recebido. O par
+`erro_definitivo` com código e mensagem sem texto livre recebido. O par
 `(cadastro_id, versao)` é o lease: o mesmo item não é processado duas vezes.
 """
 
@@ -51,7 +52,7 @@ _ultimo_ciclo: dict[str, dict] = {}
 # wire -> coluna do Fire (PRODUTOS)
 COLUNAS = {
     "nome": "DESCRICAO",
-    "cor": "DESCRICAO2",
+    # "cor" não tem coluna: DESCRICAO2 é a "Descrição Interna" da tela do Fire (17/10/2026).
     "unidadeErp": "UNIDADE",
     "ean": "CODIGO_EAN13",
     "ncm": "CLASSIF_FISCAL",
@@ -333,7 +334,7 @@ def _processar_ambiente(slug: str, *, _client, _fire_conn, _env_conn) -> dict:
         # Chave nova do Flow é ignorada, mas a simulação é onde ela precisa aparecer.
         for nome in {n for b in brutos for n in chaves_desconhecidas(b)}:
             _avisa_uma_vez(
-                f"chave-desconhecida:{nome}",
+                f"chave-desconhecida:{slug}:{nome}",
                 f"flowpcp.cadastro_volta env={slug}: chave desconhecida no item da fila: {nome!r}",
                 nivel="WARNING",
             )
