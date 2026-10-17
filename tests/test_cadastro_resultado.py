@@ -110,6 +110,15 @@ def test_mensagem_para_flow_nome_existe_delega_para_mensagem_nome_existe():
     assert mensagem_para_flow("nome_existe", detalhe="3100") == mensagem_nome_existe(3100)
 
 
+def test_mensagem_para_flow_aceita_detalhe_int():
+    assert "código 3992" in mensagem_para_flow("ja_criado_no_erp", detalhe=3992)
+
+
+def test_mensagem_para_flow_recusa_bool_como_detalhe():
+    with pytest.raises(ValueError):
+        mensagem_para_flow("ja_criado_no_erp", detalhe=True)
+
+
 def test_mensagem_para_flow_ja_criado_usa_o_detalhe_como_codigo():
     msg = mensagem_para_flow("ja_criado_no_erp", detalhe="3992")
     assert "código 3992" in msg
@@ -139,7 +148,7 @@ def test_mensagem_para_flow_ja_criado_usa_o_detalhe_como_codigo():
 )
 def test_mensagem_para_flow_nunca_expoe_termo_interno(codigo):
     msg = mensagem_para_flow(codigo)
-    for proibido in ("Fire", "SEQ", "erpProdutoId"):
+    for proibido in ("Fire", "SEQ", "erpProdutoId", "componentes["):
         assert proibido not in msg
 
 
@@ -149,7 +158,7 @@ def test_mensagem_para_flow_nunca_expoe_termo_interno(codigo):
 )
 def test_mensagem_para_flow_com_detalhe_nunca_expoe_termo_interno(codigo, detalhe):
     msg = mensagem_para_flow(codigo, detalhe=detalhe)
-    for proibido in ("Fire", "SEQ", "erpProdutoId"):
+    for proibido in ("Fire", "SEQ", "erpProdutoId", "componentes["):
         assert proibido not in msg
 
 

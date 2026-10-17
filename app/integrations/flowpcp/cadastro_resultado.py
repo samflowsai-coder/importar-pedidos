@@ -69,10 +69,13 @@ def mensagem_nome_existe(seq: int | str) -> str:
     return f"Já existe produto com esse nome no ERP (código {seq})"
 
 
-def _exige_erp_id(detalhe: str | None) -> str:
-    if not detalhe or not _ERP_ID.fullmatch(detalhe):
+def _exige_erp_id(detalhe: str | int | None) -> str:
+    if detalhe is None or isinstance(detalhe, bool):
         raise ValueError("detalhe fora de ^[1-9][0-9]{0,8}$")
-    return detalhe
+    texto = str(detalhe)
+    if not _ERP_ID.fullmatch(texto):
+        raise ValueError("detalhe fora de ^[1-9][0-9]{0,8}$")
+    return texto
 
 
 _MENSAGENS_ERRO: dict[str, str] = {
