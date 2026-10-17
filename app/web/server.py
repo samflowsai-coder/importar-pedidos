@@ -154,6 +154,11 @@ from app.web.routes_roteamento import router as roteamento_router  # noqa: E402
 
 app.include_router(roteamento_router)
 
+# Lote semanal intercompany: config, fator com vigência, fechar agora.
+from app.web.routes_lotes import router as lotes_router  # noqa: E402
+
+app.include_router(lotes_router)
+
 
 @app.on_event("startup")
 def _iniciar_reconciliacao_periodica() -> None:

@@ -170,6 +170,17 @@ def consolidado_do_lote(lote: dict) -> Consolidado:
     return _reconstruir(lote, cfg, pernas)
 
 
+def previa_do_lote(lote: dict) -> Consolidado:
+    """O pedido espelho que o lote geraria com o fator/modo já congelados nele.
+
+    Serve a tela (lote aberto ou fechado): não compara com a composição gravada
+    nem escreve nada. Falha propaga (snapshot ilegível, config ausente)."""
+    with db.connect_shared() as conn:
+        pernas = lotes_repo.pernas_do_lote(conn, lote["id"])
+        cfg = lotes_repo.get_config(conn, lote["env_origem_slug"])
+    return _consolidar(lote, cfg, pernas)
+
+
 def _serializar(composicao: list) -> list[list[dict]]:
     return [
         [
