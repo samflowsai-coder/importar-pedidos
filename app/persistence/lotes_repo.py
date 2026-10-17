@@ -25,6 +25,10 @@ class LoteFechadoError(Exception):
     """Operação que só vale em lote aberto/aguardando_fator."""
 
 
+class ChaveDeLoteEmUsoError(Exception):
+    """A chave do lote (3 letras do slug) já pertence a outra empresa de origem."""
+
+
 class JanelaComLoteAbertoError(Exception):
     """Trocar a janela com lote aberto que já tem pernas sobreporia intervalos."""
 
@@ -218,9 +222,21 @@ def lote_para(
             _ts(agora),
         ),
     )
-    return _lote_out(
-        _fetch_one(conn, "SELECT * FROM intercompany_lote WHERE chave_lote = ?", (chave,))
-    )  # type: ignore[return-value]
+    lote = _lote_out(
+        _fetch_one(
+            conn,
+            "SELECT * FROM intercompany_lote WHERE chave_lote = ? AND env_origem_slug = ?",
+            (chave, env_origem_slug),
+        )
+    )
+    if lote is None:
+        dono = conn.execute(
+            "SELECT env_origem_slug FROM intercompany_lote WHERE chave_lote = ?", (chave,)
+        ).fetchone()
+        raise ChaveDeLoteEmUsoError(
+            f"chave {chave} de {env_origem_slug!r} já é de {dono[0] if dono else '?'!r}"
+        )
+    return lote
 
 
 def buscar_lote(conn: sqlite3.Connection, env_origem_slug: str, inicio: date) -> dict | None:
@@ -291,22 +307,23 @@ def anexar_perna(
     razao_cliente_final: str | None,
     agora: datetime,
 ) -> None:
-    """Mesma perna no mesmo lote = no-op; em outro lote, IntegrityError propaga."""
-    lote = get(conn, lote_id)
-    if lote is None or lote["status"] not in _ABERTOS:
-        raise LoteFechadoError(str(lote_id))
+    """Mesma perna no mesmo lote = no-op (mesmo se o lote já fechou); em outro lote,
+    IntegrityError propaga. Checagem de status e INSERT são um só statement, para
+    que um `fechar` concorrente não deixe entrar perna em lote fechado."""
     existente = conn.execute(
         "SELECT lote_id FROM intercompany_lote_item WHERE env_origem_slug = ? AND import_id = ?",
         (env_origem_slug, import_id),
     ).fetchone()
     if existente is not None and existente[0] == lote_id:
         return
-    conn.execute(
+    cur = conn.execute(
         """
         INSERT INTO intercompany_lote_item (lote_id, import_id, env_origem_slug,
             fire_codigo_origem, itens_fire_json, pedido_cliente, cnpj_cliente_final,
             razao_cliente_final, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+        WHERE EXISTS (SELECT 1 FROM intercompany_lote
+                      WHERE id = ? AND status IN ('aberto','aguardando_fator'))
         """,
         (
             lote_id,
@@ -318,8 +335,11 @@ def anexar_perna(
             cnpj_cliente_final,
             razao_cliente_final,
             _ts(agora),
+            lote_id,
         ),
     )
+    if cur.rowcount == 0:
+        raise LoteFechadoError(str(lote_id))
 
 
 def pernas_do_lote(conn: sqlite3.Connection, lote_id: int) -> list[dict]:
@@ -370,10 +390,12 @@ def fechar(
     lote_id: int,
     import_id_espelho: str,
     composicao: list[list[dict]],
+    pernas_esperadas: int,
     por: str,
     agora: datetime,
 ) -> bool:
-    """False = outro fechamento chegou antes, ou o lote não tem fator."""
+    """False = outro fechamento chegou antes, o lote não tem fator, ou chegou perna
+    depois que o chamador leu as pernas (`pernas_esperadas` diverge da contagem)."""
     cur = conn.execute(
         """
         UPDATE intercompany_lote
@@ -381,8 +403,10 @@ def fechar(
             closed_at = ?, closed_by = ?
         WHERE id = ? AND status IN ('aberto','aguardando_fator')
           AND fator_preco_aplicado IS NOT NULL
+          AND (SELECT COUNT(*) FROM intercompany_lote_item
+               WHERE lote_id = intercompany_lote.id) = ?
         """,
-        (import_id_espelho, json.dumps(composicao), _ts(agora), por, lote_id),
+        (import_id_espelho, json.dumps(composicao), _ts(agora), por, lote_id, pernas_esperadas),
     )
     return cur.rowcount == 1
 
@@ -401,13 +425,15 @@ def marcar_enviado(
     fire_codigo_espelho: int,
     lote_fiscal_ok: bool,
     agora: datetime,
-) -> None:
-    conn.execute(
+) -> bool:
+    """Só transita de 'fechado'; segunda chamada devolve False e não sobrescreve."""
+    cur = conn.execute(
         """
         UPDATE intercompany_lote
         SET status = 'enviado', fire_codigo_espelho = ?, lote_fiscal_ok = ?, sent_at = ?,
             erro_motivo = NULL
-        WHERE id = ?
+        WHERE id = ? AND status = 'fechado' AND import_id_espelho IS NOT NULL
         """,
         (fire_codigo_espelho, 1 if lote_fiscal_ok else 0, _ts(agora), lote_id),
     )
+    return cur.rowcount == 1

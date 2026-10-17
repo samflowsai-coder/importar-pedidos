@@ -60,12 +60,13 @@ def _perna(conn, lote_id, import_id="imp-1", codigo=1157):
     )
 
 
-def _fechar(conn, lote_id):
+def _fechar(conn, lote_id, pernas=0):
     return lotes_repo.fechar(
         conn,
         lote_id=lote_id,
         import_id_espelho="esp-1",
         composicao=[[{"a": 1}]],
+        pernas_esperadas=pernas,
         por="job",
         agora=AGORA,
     )
@@ -228,19 +229,69 @@ def test_fechar_sem_fator_nao_fecha(conn):
     assert lotes_repo.get(conn, lote["id"])["status"] == "aberto"
 
 
-def test_marcar_erro_e_enviado(conn):
-    _fator(conn)
+def test_marcar_erro(conn):
     lote = _lote(conn, date(2026, 8, 17))
     lotes_repo.marcar_erro(conn, lote_id=lote["id"], motivo="boom", agora=AGORA)
     g = lotes_repo.get(conn, lote["id"])
     assert g["status"] == "erro" and g["erro_motivo"] == "boom"
-    lotes_repo.marcar_enviado(
-        conn, lote_id=lote["id"], fire_codigo_espelho=77, lote_fiscal_ok=True, agora=AGORA
-    )
+
+
+def test_marcar_enviado_so_de_fechado_e_so_uma_vez(conn):
+    _fator(conn)
+    lote = _lote(conn, date(2026, 8, 17))
+
+    def enviar(codigo):
+        return lotes_repo.marcar_enviado(
+            conn, lote_id=lote["id"], fire_codigo_espelho=codigo, lote_fiscal_ok=True, agora=AGORA
+        )
+
+    assert enviar(77) is False  # ainda aberto
+    assert _fechar(conn, lote["id"]) is True
+    assert enviar(77) is True
+    assert enviar(99) is False
     g = lotes_repo.get(conn, lote["id"])
     assert g["status"] == "enviado"
     assert g["fire_codigo_espelho"] == 77 and g["lote_fiscal_ok"] is True
     assert g["sent_at"] is not None
+
+
+def test_fechar_recusa_se_chegou_perna_depois_da_leitura(conn):
+    _fator(conn)
+    lote = _lote(conn, date(2026, 8, 17))
+    _perna(conn, lote["id"])
+    lidas = len(lotes_repo.pernas_do_lote(conn, lote["id"]))
+    _perna(conn, lote["id"], import_id="imp-2", codigo=1189)
+    assert _fechar(conn, lote["id"], pernas=lidas) is False
+    assert lotes_repo.get(conn, lote["id"])["status"] == "aberto"
+    assert _fechar(conn, lote["id"], pernas=2) is True
+
+
+def test_reanexar_perna_em_lote_fechado_e_noop(conn):
+    _fator(conn)
+    lote = _lote(conn, date(2026, 8, 17))
+    _perna(conn, lote["id"])
+    assert _fechar(conn, lote["id"], pernas=1) is True
+    _perna(conn, lote["id"])  # já está lá: no-op, sem erro
+    assert len(lotes_repo.pernas_do_lote(conn, lote["id"])) == 1
+
+
+def test_anexar_nao_passa_se_fechamento_concorrente_comitou(conn, tmp_path):
+    """Fechamento de outra conexão entre a leitura do chamador e o INSERT."""
+    _fator(conn)
+    lote = _lote(conn, date(2026, 8, 17))
+    conn.commit()
+    with db.connect_shared() as outra:
+        assert _fechar(outra, lote["id"]) is True
+        outra.commit()
+    with pytest.raises(lotes_repo.LoteFechadoError):
+        _perna(conn, lote["id"], import_id="imp-late")
+    assert lotes_repo.pernas_do_lote(conn, lote["id"]) == []
+
+
+def test_chave_de_outra_origem_levanta(conn):
+    _lote(conn, date(2026, 8, 17), slug="nasmar")
+    with pytest.raises(lotes_repo.ChaveDeLoteEmUsoError, match="nasmar2"):
+        _lote(conn, date(2026, 8, 17), slug="nasmar2")
 
 
 def test_config_upsert_e_listagem(conn):
