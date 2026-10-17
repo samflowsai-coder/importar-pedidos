@@ -379,8 +379,8 @@ def test_lotes_vencidos_respeita_a_hora(conn): ...
 **Interfaces:**
 - Consumes: `lotes_repo` (3), `janela` (1).
 - Produces:
-  - `FirebirdExporter.export(order, *, override_client_id: int | None = None, obs: str | None = None)` — `obs` vai para `order_to_cabvendas(..., obs=obs)`.
-  - `FirebirdExportResult.produtos: dict[int, int | None]` — posição em `order.items` → `CODPRODUTO` gravado (o `product_seq` do `_find_product`).
+  - `FirebirdExporter.export(order, *, override_client_id: int | None = None, produtos_por_item: dict[int, int] | None = None, obs: str | None = None)` — `obs` vai para `order_to_cabvendas(..., obs=obs)` (`produtos_por_item` veio do PR #87, BACKLOG §2.1).
+  - `FirebirdExportResult.produtos: dict[int, int]` — posição em `order.items` → `CODPRODUTO` gravado (o `product_seq` do `_find_product`; desde o PR #87 item sem produto recusa o pedido inteiro com `PRODUCT_NOT_FOUND`, então nunca há `None`).
   - `integracao.anexar_perna_de_origem(import_id: str, entry: dict, order: Order, result: FirebirdExportResult, request_env: dict | None, *, agora: datetime | None = None) -> int | None` — devolve o `lote_id` ou `None`. Nunca levanta (log `lote: ...` e `None`).
 
 Regra do anexo: ambiente atual é origem de uma `lote_config` **ativa**; data = `imports.imported_at` (`entry["imported_at"]`); janela pela config; lote dessa janela; se `LoteFechadoError` → `proxima_janela` até achar uma aberta (máx. 8 saltos, depois log de erro). `itens_fire` = `result.itens`.
@@ -403,7 +403,7 @@ def test_obs_chega_no_insert_do_cabecalho(fake_fb): ...
 def test_sem_obs_continua_none(fake_fb): ...
 
 def test_resultado_traz_o_produto_de_cada_posicao(fake_fb): ...
-    # 2 itens, _find_product devolve (501,'KIT') e (None,'UN') -> produtos == {0: 501, 1: None}
+    # 2 itens, _find_product devolve (501,'KIT') e (502,'UN') -> produtos == {0: 501, 1: 502}
 ```
 
 `tests/test_lote_anexo.py` — fixture `portal_lote`: montar como o `portal` de `tests/test_routing_wiring.py:28-65` (ambientes `nasmar` e `mm`), `lote_config` ativa `nasmar→mm`, `FirebirdExporter.export` trocado por um dublê que devolve `FirebirdExportResult(fire_codigo=1157, itens=[(9001, 0)], produtos={0: 501}, ...)`, `check_order` trocado para `{"available": False}`.
@@ -525,8 +525,8 @@ export(order, override_client_id=override, obs=espelho.obs if espelho else None)
 ```
 
 `preparar_envio_espelho`, para o espelho:
-1. `check["available"]` falso → bloqueio `lote_sem_conferencia_no_fire` ("não deu para conferir os produtos no Fire").
-2. Item com `price_status == "no_product_match"` → bloqueio `lote_produto_fora_do_fire`, detalhe com `product_code`/`description` de cada um.
+1. (Removido após o PR #87: o exportador já recusa o pedido inteiro com `PRODUCT_NOT_FOUND` quando falta produto; o espelho herda isso. Ver Ruling no ledger.)
+2. (Idem.)
 3. Linhas divergem da composição gravada (contagem, ou `quantity`/`unit_price` de alguma linha) → bloqueio `lote_alterado`.
 4. Lote com status ≠ `fechado` → bloqueio `lote_status_<status>`.
 5. Se o ambiente espelho tem base SP1 (`erp_bases_repo.obter(env_id)`): `reservar_lote(conn, chave_lote, base_espelho=cfg.base, agora)` no banco do ambiente espelho; `reservado=True`.
@@ -546,8 +546,8 @@ def test_espelho_passa_pelo_mesmo_is_blocking(espelho_pronto, monkeypatch):
 def test_trava_de_preco_bloqueia_o_espelho_como_qualquer_pedido(espelho_pronto): ...
     # item com price_status 'mismatch' -> 409 "preço divergente", exportador não chamado
 
-def test_espelho_com_item_sem_produto_no_fire_bloqueia(espelho_pronto): ...
-    # 'no_product_match' -> 409 reason lote_produto_fora_do_fire, exportador não chamado
+def test_espelho_com_item_sem_produto_no_fire_bloqueia(espelho_pronto_sp1): ...
+    # exportador devolve skipped PRODUCT_NOT_FOUND -> 409, reserva cancelada, lote continua 'fechado'
 
 def test_espelho_alterado_depois_do_fechamento_bloqueia(espelho_pronto): ...
     # snapshot do espelho com quantity da linha 0 mudada -> 409 lote_alterado
