@@ -53,6 +53,8 @@ API pública para páginas-filho:
 - `GET /api/imported/{id}/arquivo-original` → cópia exata do arquivo recebido, antes do
   parse (`require_user`). Serve só de dentro de `<APP_DATA_DIR>/recebidos/` (403 fora);
   404 amigável em pedido anterior à guarda. Nome do download = `source_filename`.
+- `POST /api/admin/environments/{env_id}/flowpcp/sync-materiais?apply=` → carga de material Fire → Flow (`require_admin`). Padrão dryRun; `apply=true` exige `materiais.v1` do Flow (422 antes de enviar se faltar; 422 também com `PORTAL_FLOWPCP_MATERIAIS` desligado; 409 se o FlowPCP não está habilitado no ambiente ou se o Flow já está gravando; 502 em falha). Sem o interruptor e sem apply, devolve `{local_only, itens, extraido_em}`. Ver `modules/flowpcp.md` §4.
+- `GET /api/admin/environments/{env_id}/flowpcp/cadastro-volta` → livro da volta Flow → Fire (`require_admin`, só leitura do SQLite do ambiente): `{modo, por_estado, ultimos, ultimo_ciclo, thread_desligada}` (50 últimos, `plano_json` truncado em 2 KB com `plano_truncado`; `ultimo_ciclo` = `{em, resumo}` do último ciclo deste processo ou `null`; `thread_desligada` = `PORTAL_FLOWPCP_ENVIO=0`). Ver `modules/flowpcp.md` §5.
 - `GET /api/fs?path=` → listagem de pastas (usado pelo browser de `/configuracoes/diretorios`).
 - `GET /api/clientes/search?q=&limit=` → busca em `CADASTRO` (razão social ou
   CNPJ). Min 2 chars; clamp `limit` em [1, 50]. 503 se Fire não configurado.

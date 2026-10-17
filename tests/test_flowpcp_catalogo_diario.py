@@ -154,6 +154,7 @@ def test_resumo_traz_os_blocos_de_composicao():
         {"composicao": {"erpSemChave": 4}},
         {"composicao_portal": {"leitura_ok": False}},
         {"composicao_portal": {"leitura_ok": True, "divergencia_nome": {"3151": "nome diz 22, composição soma 1"}}},
+        {"fiscal_portal": {"capacidade_ok": False}},
     ],
 )
 def test_atencao_quando_trava_falha_ou_kit_sem_chave(extra):

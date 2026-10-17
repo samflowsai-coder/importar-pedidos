@@ -8,6 +8,7 @@ import httpx
 
 from app.http.client import HttpError, OutboundClient
 from app.http.policies import apply_post_policy, idempotent_post_policy
+from app.integrations.flowpcp.cadastro_schema import PendentesResposta
 from app.integrations.flowpcp.catalogo_schema import (
     CatalogoReconciliacaoResponse,
     CatalogoRequest,
@@ -16,6 +17,7 @@ from app.integrations.flowpcp.clientes_schema import (
     ClientesReconciliacaoResponse,
     ClientesRequest,
 )
+from app.integrations.flowpcp.materiais_schema import MateriaisRequest, MateriaisResposta
 from app.integrations.flowpcp.schema import (
     ConfirmarReconciliacaoRequest,
     DecisoesResponse,
@@ -29,6 +31,8 @@ _RECEBIMENTO_PATH = RECEBIMENTO_PATH
 _DECISOES_PATH = "/api/portal-pedidos/decisoes"
 _CATALOGO_PATH = "/api/portal-pedidos/catalogo"
 _CLIENTES_PATH = "/api/portal-pedidos/clientes"
+_MATERIAIS_PATH = "/api/portal-pedidos/materiais"
+_CADASTROS_PENDENTES_PATH = "/api/portal-pedidos/cadastros/pendentes"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 # Apply do catálogo: o Flow tem maxDuration 300 s e um apply por vez (409).
 APPLY_TIMEOUT_SECONDS = 300.0
@@ -55,14 +59,18 @@ def _apply_timeout() -> httpx.Timeout:
     )
 
 
-def _idem_catalogo(request: CatalogoRequest) -> str:
+def _idem(prefixo: str, request) -> str:
     """Chave estável em retry e nova quando o conteúdo muda (só a contagem colidia:
     os mesmos 1.026 itens com composição nova). `origem` fica fora: muda a cada
     extração mesmo sem nada novo."""
     corpo = {k: v for k, v in request.model_dump(by_alias=True).items() if k != "origem"}
     serializado = json.dumps(corpo, sort_keys=True, default=str)
     digest = hashlib.sha256(serializado.encode()).hexdigest()[:16]
-    return f"catalogo-{int(request.dryRun)}-{len(request.itens)}-{digest}"
+    return f"{prefixo}-{int(request.dryRun)}-{len(request.itens)}-{digest}"
+
+
+def _idem_catalogo(request: CatalogoRequest) -> str:
+    return _idem("catalogo", request)
 
 
 class FlowPCPClient:
@@ -116,6 +124,24 @@ class FlowPCPClient:
             )
         return DecisoesResponse.model_validate(resp.json())
 
+    def list_cadastros_pendentes(self, limite: int = 20) -> PendentesResposta:
+        """Fila de cadastros aprovados no Flow. Só leitura: nada é confirmado."""
+        try:
+            resp = self._client.get(_CADASTROS_PENDENTES_PATH, params={"limite": limite})
+        except HttpError as exc:
+            raise FlowPCPClientError(
+                f"list_cadastros_pendentes falhou: {exc}",
+                status_code=exc.status_code,
+                body=exc.body,
+            ) from exc
+        if not resp.is_success:
+            raise FlowPCPClientError(
+                f"cadastros pendentes status {resp.status_code}",
+                status_code=resp.status_code,
+                body=(resp.text or "")[:500],
+            )
+        return PendentesResposta.model_validate(resp.json())
+
     def confirmar_reconciliacao(
         self, decisao_id: str, request: ConfirmarReconciliacaoRequest
     ) -> dict[str, Any]:
@@ -141,34 +167,52 @@ class FlowPCPClient:
         return resp.json()
 
     def send_catalogo(self, request: CatalogoRequest) -> CatalogoReconciliacaoResponse:
+        return self._post_relatorio(
+            _CATALOGO_PATH,
+            "catalogo",
+            request,
+            CatalogoReconciliacaoResponse,
+            em_andamento="o Flow já está gravando um catálogo deste ambiente",
+        )
+
+    def send_materiais(self, request: MateriaisRequest) -> MateriaisResposta:
+        return self._post_relatorio(
+            _MATERIAIS_PATH,
+            "materiais",
+            request,
+            MateriaisResposta,
+            em_andamento="o Flow já está gravando materiais deste ambiente",
+        )
+
+    def _post_relatorio(self, path, nome, request, modelo, *, em_andamento: str):
+        """POST de carga com relatório (`dryRun`). Apply grava e o Flow não deduplica
+        pela chave: não repetir depois que a conexão abriu, e esperar até o maxDuration
+        do Flow. Dry-run segue a política padrão."""
         body = request.model_dump(by_alias=True)
-        idem = _idem_catalogo(request)
-        # Apply grava e o Flow não deduplica pela chave: não repetir depois que a
-        # conexão abriu, e esperar até o maxDuration do Flow. Dry-run segue como era.
         extras = (
             {}
             if request.dryRun
             else {"timeout": _apply_timeout(), "retry_policy": apply_post_policy()}
         )
         try:
-            resp = self._client.post_json(_CATALOGO_PATH, json=body, idempotency_key=idem, **extras)
+            resp = self._client.post_json(
+                path, json=body, idempotency_key=_idem(nome, request), **extras
+            )
         except HttpError as exc:
             raise FlowPCPClientError(
-                f"send_catalogo falhou: {exc}", status_code=exc.status_code, body=exc.body
+                f"send_{nome} falhou: {exc}", status_code=exc.status_code, body=exc.body
             ) from exc
         if resp.status_code == 409:
             raise FlowPCPApplyEmAndamentoError(
-                "o Flow já está gravando um catálogo deste ambiente",
-                status_code=409,
-                body=(resp.text or "")[:500],
+                em_andamento, status_code=409, body=(resp.text or "")[:500]
             )
         if not resp.is_success:
             raise FlowPCPClientError(
-                f"catalogo status {resp.status_code}",
+                f"{nome} status {resp.status_code}",
                 status_code=resp.status_code,
                 body=(resp.text or "")[:500],
             )
-        return CatalogoReconciliacaoResponse.model_validate(resp.json())
+        return modelo.model_validate(resp.json())
 
     def send_clientes(self, request: ClientesRequest) -> ClientesReconciliacaoResponse:
         body = request.model_dump(by_alias=True)

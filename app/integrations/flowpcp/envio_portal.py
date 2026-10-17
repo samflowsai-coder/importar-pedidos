@@ -58,7 +58,7 @@ from datetime import datetime, timedelta
 
 from app.erp import queries
 from app.erp.connection import FirebirdConnection
-from app.integrations.flowpcp import catalogo_diario
+from app.integrations.flowpcp import cadastro_volta, catalogo_diario
 from app.integrations.flowpcp.client import FLOWPCP_TARGET_NAME
 from app.integrations.flowpcp.config import (
     FlowPCPConfig,
@@ -357,6 +357,10 @@ def ciclo(ultima_decisao: datetime, agora: datetime) -> datetime:
         catalogo_diario.rodar()
     except Exception as exc:  # noqa: BLE001
         logger.error(f"flowpcp.envio: catálogo diário falhou: {exc!r}")
+    try:
+        cadastro_volta.rodar_se_devido(agora)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"flowpcp.envio: volta de cadastro falhou: {exc!r}")
     if not decisoes_habilitadas() or agora - ultima_decisao < INTERVALO_DECISOES:
         return ultima_decisao
     try:

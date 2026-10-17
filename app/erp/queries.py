@@ -314,14 +314,21 @@ UPDATE_DT_ENTREGA = """
 # que o cliente usa (codigo = str(SEQ)). BLOQUEADO ∈ {'Sim','Nao'} → ativo =
 # (BLOQUEADO <> 'Sim'). IS_KIT = 1 se o SEQ é pai em PRODUTOS_KIT; o tipo final
 # (pack/kit/simples) sai de catalog_extract._tipo, que também olha unidade e nome.
-# CODPROD_ALTERN = código do par no Apontaê (7ª coluna; ver catalog_extract).
+# 13 colunas, nesta ordem (catalog_extract lê por posição): SEQ, DESCRICAO,
+# UNIDADE, CODIGO_EAN13, BLOQUEADO, IS_KIT, CODPROD_ALTERN (código do par no
+# Apontaê), e as 6 fiscais/cadastrais CLASSIF_FISCAL, CODITEMSPED, GRUPO,
+# GRUPO_NOME, CODPARANFE, DESCRICAO2 (catalogo_fiscal valida). GRUPO_NOME vem de
+# LEFT JOIN GRUPO_PRODUTOS: produto sem grupo (ou com grupo apagado) não some.
 LIST_PRODUTOS_CATALOGO = """
     SELECT P.SEQ, P.DESCRICAO, P.UNIDADE, P.CODIGO_EAN13, P.BLOQUEADO,
            CASE WHEN EXISTS (
                SELECT 1 FROM PRODUTOS_KIT K WHERE K.CODPRODUTO_PAI = P.SEQ
            ) THEN 1 ELSE 0 END AS IS_KIT,
-           P.CODPROD_ALTERN
+           P.CODPROD_ALTERN,
+           P.CLASSIF_FISCAL, P.CODITEMSPED, P.GRUPO, G.GRUPO AS GRUPO_NOME,
+           P.CODPARANFE, P.DESCRICAO2
     FROM PRODUTOS P
+    LEFT JOIN GRUPO_PRODUTOS G ON G.CODIGO = P.GRUPO
     ORDER BY P.SEQ
 """
 
@@ -370,9 +377,12 @@ LIST_PRODUTOS_CATALOGO_MEIAS = """
            CASE WHEN EXISTS (
                SELECT 1 FROM PRODUTOS_KIT K WHERE K.CODPRODUTO_PAI = P.SEQ
            ) THEN 1 ELSE 0 END AS IS_KIT,
-           P.CODPROD_ALTERN
+           P.CODPROD_ALTERN,
+           P.CLASSIF_FISCAL, P.CODITEMSPED, P.GRUPO, G.GRUPO AS GRUPO_NOME,
+           P.CODPARANFE, P.DESCRICAO2
     FROM (SELECT DISTINCT SEQ FROM RECORTE) R
     JOIN PRODUTOS P ON P.SEQ = R.SEQ
+    LEFT JOIN GRUPO_PRODUTOS G ON G.CODIGO = P.GRUPO
     ORDER BY P.SEQ
 """
 
@@ -541,4 +551,32 @@ CODIGOS_POR_PEDIDO_CLIENTE_E_CLIENTE = """
     SELECT CODIGO FROM CAB_VENDAS
     WHERE TRIM(PEDIDO_CLIENTE) = ?
       AND CLIENTE = ?
+"""
+
+
+# Carga de material (spec 2026-10-16-flow-fonte-do-cadastro §6.2): tudo que não é
+# CONFECCIONADO (grupo 8). Vai com BLOQUEADO para o Flow saber o ativo; o Flow não
+# cria insumo inativo novo. Em 16/10/2026: ~381 na MM (.7).
+LIST_MATERIAIS = """
+    SELECT P.SEQ, P.DESCRICAO, P.UNIDADE, P.CODIGO_EAN13, P.BLOQUEADO,
+           P.CLASSIF_FISCAL, P.CODITEMSPED, P.GRUPO, G.GRUPO AS GRUPO_NOME
+    FROM PRODUTOS P
+    LEFT JOIN GRUPO_PRODUTOS G ON G.CODIGO = P.GRUPO
+    WHERE P.GRUPO IS NOT NULL AND P.GRUPO <> 8
+    ORDER BY P.SEQ
+"""
+
+# NCM das notas de ENTRADA (CFOP 1xxx/2xxx/3xxx) de material nos últimos 24
+# meses; a mais recente por produto é escolhida em Python (Firebird 2.5 não tem
+# janela). Referência para o fiscal, nunca valor do cadastro.
+LIST_ENTRADAS_NCM = """
+    SELECT I.CODPRODUTO, N.NF_EMISSAO, I.NCM
+    FROM NOTAPROD I
+    JOIN NOTA N ON N.CODIGO = I.CODNOTA
+    JOIN PRODUTOS P ON P.SEQ = I.CODPRODUTO
+    WHERE P.GRUPO <> 8
+      AND N.NF_EMISSAO >= DATEADD(-24 MONTH TO CURRENT_DATE)
+      AND SUBSTRING(TRIM(I.CFOP) FROM 1 FOR 1) IN ('1', '2', '3')
+      AND I.NCM IS NOT NULL
+    ORDER BY N.NF_EMISSAO, N.CODIGO
 """

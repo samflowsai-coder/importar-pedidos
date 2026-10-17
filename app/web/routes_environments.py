@@ -403,6 +403,69 @@ def sync_clientes_flowpcp(env_id: str, apply: bool = False, _=Depends(require_ad
     return body
 
 
+@router.post("/{env_id}/flowpcp/sync-materiais")
+def sync_materiais_flowpcp(env_id: str, apply: bool = False, _=Depends(require_admin)):
+    """Carga de material (Fire → FlowPCP), spec 2026-10-16 §6.2. `apply=false` (padrão):
+    o Flow só calcula o relatório. `apply=true` exige a capacidade `materiais.v1` do Flow
+    (422 antes de enviar se faltar). A cópia local (`materiais_fire`) é sempre atualizada."""
+    env = environments_repo.get(env_id)
+    if not env:
+        raise HTTPException(404, "Ambiente não encontrado")
+    if not env.get("flowpcp_enabled"):
+        raise HTTPException(409, "FlowPCP não está habilitado neste ambiente")
+
+    from app.integrations.flowpcp import materiais_sync
+    from app.integrations.flowpcp.client import FlowPCPApplyEmAndamentoError
+
+    try:
+        res = materiais_sync.run_materiais_sync(env["slug"], dry_run=not apply, full_sync=True)
+    except (materiais_sync.ApplySemCapacidadeError, materiais_sync.MateriaisDesligadoError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except FlowPCPApplyEmAndamentoError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — vira erro HTTP legível pro operador
+        raise HTTPException(502, f"Falha na carga de materiais: {exc}") from exc
+    if res is None:
+        raise HTTPException(409, "FlowPCP não está habilitado neste ambiente")
+    if isinstance(res, materiais_sync.MateriaisLocalResult):
+        return {"local_only": True, "itens": res.itens, "extraido_em": res.extraido_em}
+    return res.model_dump(by_alias=True)
+
+
+_PLANO_MAX_BYTES = 2048
+
+
+@router.get("/{env_id}/flowpcp/cadastro-volta")
+def cadastro_volta_flowpcp(env_id: str, _=Depends(require_admin)):
+    """Livro da volta Flow → Fire (spec 2026-10-16 §6.3). Só leitura do SQLite do ambiente."""
+    env = environments_repo.get(env_id)
+    if not env:
+        raise HTTPException(404, "Ambiente não encontrado")
+
+    from app.integrations.flowpcp import cadastro_volta
+    from app.persistence import cadastro_volta_repo
+
+    with db_router.env_connect(env["slug"]) as conn:
+        por_estado = cadastro_volta_repo.contar_por_estado(conn)
+        ultimos = cadastro_volta_repo.listar(conn, limite=50)
+    for linha in ultimos:
+        plano = linha.get("plano_json")
+        bruto = plano.encode("utf-8") if plano else b""
+        linha["plano_truncado"] = len(bruto) > _PLANO_MAX_BYTES
+        if linha["plano_truncado"]:
+            linha["plano_json"] = bruto[:_PLANO_MAX_BYTES].decode("utf-8", errors="ignore")
+    from app.integrations.flowpcp.envio_portal import envio_habilitado
+
+    return {
+        "modo": cadastro_volta.modo(env["slug"]),
+        "por_estado": por_estado,
+        "ultimos": ultimos,
+        # Último ciclo deste processo (None desde que subiu) e a thread que o roda.
+        "ultimo_ciclo": cadastro_volta.ultimo_ciclo(env["slug"]),
+        "thread_desligada": not envio_habilitado(),
+    }
+
+
 @router.delete("/{env_id}", status_code=204)
 def delete_environment(env_id: str, _=Depends(require_admin)):
     if not environments_repo.get(env_id):

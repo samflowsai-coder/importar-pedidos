@@ -12,6 +12,11 @@ class CatalogoComponente(BaseModel):
     quantidade: float
 
 
+class CatalogoGrupoErp(BaseModel):
+    codigo: str
+    nome: str
+
+
 def _sem_os_nao_preenchidos(modelo: BaseModel, corpo: dict, campos: tuple[str, ...]) -> dict:
     """Chave só vai no JSON quando foi preenchida: ausente ≠ [] ≠ null (ausente =
     "não mexer" no Flow). Com o interruptor desligado o payload fica igual ao de
@@ -40,10 +45,20 @@ class CatalogoProdutoItem(BaseModel):
     )
     componentes: list[CatalogoComponente] | None = None
     codigoMes: str | None = None  # noqa: N815 — CODPROD_ALTERN só dígitos, só em par ativo
+    # Fiscais (catalogo_fiscal): só vão no JSON quando preenchidos
+    ncm: str | None = None
+    tipoItemSped: int | None = None  # noqa: N815
+    grupoErp: CatalogoGrupoErp | None = None  # noqa: N815
+    codigoNfe: str | None = None  # noqa: N815
+    cor: str | None = None
 
     @model_serializer(mode="wrap")
     def _omite_nao_preenchidos(self, handler):
-        return _sem_os_nao_preenchidos(self, handler(self), ("componentes", "codigoMes"))
+        return _sem_os_nao_preenchidos(
+            self,
+            handler(self),
+            ("componentes", "codigoMes", "ncm", "tipoItemSped", "grupoErp", "codigoNfe", "cor"),
+        )
 
 
 class CatalogoOrigem(BaseModel):

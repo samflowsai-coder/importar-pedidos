@@ -120,22 +120,32 @@ def rodar(
     return enviados
 
 
-_BLOCOS = ("composicao", "vinculoMes", "composicao_portal", "fora_do_envio_guardado")
+_BLOCOS = (
+    "composicao",
+    "vinculoMes",
+    "composicao_portal",
+    "fora_do_envio_guardado",
+    "fiscal_portal",
+)
 
 
 def _precisa_atencao(rep: object) -> bool:
     """Trava do Flow ativa, leitura da composição com falha no Portal, kit com
-    composição do ERP que deixou de vir (C3: apagar no Fire não chega ao Flow), ou
-    kit congelado por quantidade divergente do nome (fica parado até o Fire mudar)."""
+    composição do ERP que deixou de vir (C3: apagar no Fire não chega ao Flow),
+    kit congelado por quantidade divergente do nome (fica parado até o Fire mudar),
+    ou campos fiscais ignorados pelo Flow (`fiscal_portal.capacidade_ok is False`:
+    o envio fiscal está ligado e o Flow não devolveu `fiscal.v1`)."""
     extra = getattr(rep, "model_extra", None) or {}
     comp = extra.get("composicao") or {}
     portal = extra.get("composicao_portal") or {}
+    fiscal = extra.get("fiscal_portal") or {}
     trava = comp.get("travaRemocaoAtiva") is True or comp.get("travaSubstituicaoAtiva") is True
     return bool(
         trava
         or comp.get("erpSemChave")
         or portal.get("leitura_ok") is False
         or portal.get("divergencia_nome")
+        or fiscal.get("capacidade_ok") is False
     )
 
 

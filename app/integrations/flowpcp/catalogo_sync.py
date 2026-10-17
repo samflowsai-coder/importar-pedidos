@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from app.erp.catalog_extract import extract_composicao, extract_produtos
 from app.erp.connection import FirebirdConnection
-from app.integrations.flowpcp import catalogo_composicao
+from app.integrations.flowpcp import capacidades, catalogo_composicao, catalogo_fiscal
 from app.integrations.flowpcp.catalogo_mapper import build_catalogo_request
 from app.integrations.flowpcp.catalogo_schema import CatalogoReconciliacaoResponse
 from app.integrations.flowpcp.client import FlowPCPClient, FlowPCPClientError
@@ -86,6 +86,10 @@ def run_catalogo_sync(
     relatório ganha `composicao_portal`. `PORTAL_FLOWPCP_CATALOGO_EXCLUIR_<SLUG>`
     soma-se a `fora_do_envio` em toda rodada, manual ou diária. As confirmações
     liberam as travas do Flow e só valem com `dry_run=False`.
+    Fiscal (`PORTAL_FLOWPCP_CATALOGO_FISCAL` com o slug): manda NCM, tipo SPED, grupo,
+    código NF-e e cor só quando válidos; o relatório ganha `fiscal_portal`, e sem
+    `fiscal.v1` nas `capacidades` da resposta (o Flow ignorou os campos) vira
+    `capacidade_ok=false` e erro no log.
     `_client`/`_fire_conn`/`_env_conn` são injeção de teste (default constrói os reais)."""
     if dry_run and (confirmar_remocao or confirmar_substituicao):
         raise ConfirmacaoSemApplyError(
@@ -148,6 +152,15 @@ def run_catalogo_sync(
         codigos, repetidos = catalogo_composicao.codigos_mes(enviados)
         resumo = catalogo_composicao.resumo(composicao, codigos, repetidos)
         _logar_composicao(slug, resumo)
+    fiscal = fiscal_resumo = None
+    if catalogo_fiscal.envio_ligado(slug):
+        fiscal, pendencias = {}, {}
+        for d in enviados:
+            campos, motivos = catalogo_fiscal.campos_fiscais(d)
+            fiscal[d.fire_produto_id] = campos
+            if motivos:
+                pendencias[d.fire_produto_id] = motivos
+        fiscal_resumo = catalogo_fiscal.resumo(pendencias, enviados=len(enviados))
     client = _client or _build_client(cfg)
     try:
         request = build_catalogo_request(
@@ -160,6 +173,7 @@ def run_catalogo_sync(
             codigos_mes=codigos,
             confirmar_remocao=confirmar_remocao,
             confirmar_substituicao=confirmar_substituicao,
+            fiscal=fiscal,
         )
         logger.info(
             f"catalogo sync env={slug} itens={len(enviados)} dry_run={dry_run} full_sync={full_sync}"
@@ -181,6 +195,21 @@ def run_catalogo_sync(
             raise
         if resumo is not None:
             rep.composicao_portal = resumo
+        if fiscal_resumo is not None:
+            ok = capacidades.FISCAL in capacidades.de(rep)
+            fiscal_resumo["capacidade_ok"] = ok
+            rep.fiscal_portal = fiscal_resumo
+            if not ok:
+                logger.error(
+                    f"catalogo sync env={slug}: o Flow ignorou os campos fiscais (sem "
+                    f"'{capacidades.FISCAL}' na resposta) — tire '{slug}' de PORTAL_FLOWPCP_CATALOGO_FISCAL "
+                    "até o Flow aceitar"
+                )
+            elif fiscal_resumo["com_pendencia"]:
+                logger.warning(
+                    f"catalogo sync env={slug} fiscal: {fiscal_resumo['com_pendencia']} com pendência "
+                    f"{fiscal_resumo['por_motivo']}"
+                )
         if guardado:
             rep.fora_do_envio_guardado = sorted(guardado, key=int)
         return rep

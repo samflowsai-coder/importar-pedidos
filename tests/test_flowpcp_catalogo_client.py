@@ -128,3 +128,8 @@ def test_idempotencia_muda_quando_o_conteudo_muda_com_mesma_contagem():
     a, b = _req_apply("X"), _req_apply("X NOVO")
     assert _idem_catalogo(a) != _idem_catalogo(b)
     assert _idem_catalogo(a) == _idem_catalogo(_req_apply("X"))  # estável em retry
+
+
+def test_chave_de_idempotencia_do_catalogo_nao_mudou():
+    # valor medido antes de extrair `_idem` (formato catalogo-{dryRun}-{n}-{digest})
+    assert _idem_catalogo(_req_apply("X")) == "catalogo-0-1-de903dce018cb2a2"

@@ -101,6 +101,15 @@ completo em [`modules/routing.md`](routing.md), aqui só o schema:
   (degrau 3, memória). `divergiu_em`/`divergiu_de` marcam quando um degrau
   mais forte contradisse depois — nunca reescreve, só marca.
 
+### Cadastro Fire ↔ Flow (db do ambiente, `schema_env.py`)
+- `materiais_fire` — PK `erp_produto_id`; cópia local dos materiais (fora do grupo 8),
+  substituída a cada sync (`materiais_fire_repo.py`). Colunas: `nome`, `unidade`, `ean`,
+  `ativo`, `grupo_codigo`, `ncm`, `tipo_item_sped`, `exige_aprovacao`, `extraido_em`.
+- `cadastro_volta` — livro da volta Flow → Fire (`cadastro_volta_repo.py`); PK
+  `(cadastro_id, versao)` é o lease. Colunas: `estado` (`simulado` | `erro_definitivo` na
+  Etapa 1), `acao`, `tipo`, `seq_reservado`, `erro_codigo`, `erro_mensagem`, `plano_json`,
+  `iniciado_em`, `atualizado_em`. Ver `modules/flowpcp.md` §5.
+
 ## Testes
 - `tests/test_persistence_repo.py` —
   `.venv/bin/pytest tests/test_persistence_repo.py -v`
