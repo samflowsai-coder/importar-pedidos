@@ -361,6 +361,8 @@ CREATE INDEX IF NOT EXISTS idx_erp_xlsx_linha_pedido   ON erp_xlsx_linha(pedido_
 CREATE INDEX IF NOT EXISTS idx_erp_estado_situacao     ON erp_pedido_estado(base, situacao);
 CREATE INDEX IF NOT EXISTS idx_erp_eventos_pendentes   ON erp_eventos_saida(base, situacao, ordem);
 CREATE INDEX IF NOT EXISTS idx_erp_lote_perna_chave    ON erp_lote_perna(chave_lote);
+
+CREATE INDEX IF NOT EXISTS idx_cadastro_volta_produto  ON cadastro_volta(produto_id);
 """
 
 # Cada entrada: (table, column_name, ALTER TABLE DDL) — aplicada só se a coluna ainda não existir.
@@ -381,4 +383,13 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("flowpcp_decisoes_mapping", "erp_codigos_json", "ALTER TABLE flowpcp_decisoes_mapping ADD COLUMN erp_codigos_json TEXT"),
     ("flowpcp_decisoes_mapping", "nova_data", "ALTER TABLE flowpcp_decisoes_mapping ADD COLUMN nova_data TEXT"),
     ("flowpcp_decisoes_mapping", "aplicada_em", "ALTER TABLE flowpcp_decisoes_mapping ADD COLUMN aplicada_em TEXT"),
+    # Livro da volta v2: gravação no Fire, reenvio do resultado ao Flow e regra 9b.
+    ("cadastro_volta", "produto_id", "ALTER TABLE cadastro_volta ADD COLUMN produto_id TEXT"),
+    ("cadastro_volta", "modo", "ALTER TABLE cadastro_volta ADD COLUMN modo TEXT"),
+    ("cadastro_volta", "erp_produto_id", "ALTER TABLE cadastro_volta ADD COLUMN erp_produto_id TEXT"),
+    ("cadastro_volta", "corpo_json", "ALTER TABLE cadastro_volta ADD COLUMN corpo_json TEXT"),
+    ("cadastro_volta", "tentativas", "ALTER TABLE cadastro_volta ADD COLUMN tentativas INTEGER NOT NULL DEFAULT 0"),
+    ("cadastro_volta", "proxima_tentativa_em", "ALTER TABLE cadastro_volta ADD COLUMN proxima_tentativa_em TEXT"),
+    ("cadastro_volta", "alerta", "ALTER TABLE cadastro_volta ADD COLUMN alerta TEXT"),
+    ("cadastro_volta", "resposta_flow", "ALTER TABLE cadastro_volta ADD COLUMN resposta_flow TEXT"),
 )
