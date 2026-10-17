@@ -1,7 +1,7 @@
 """Volta Flow -> Fire dos cadastros aprovados, em modo `simular` (Etapa 1).
 
-Regra da Etapa 1: este módulo só LÊ (a fila do Flow, a cópia local e o Fire por
-conexão somente leitura); nunca grava no Fire nem confirma no Flow, e os modos de
+Regra da Etapa 1: este módulo só LÊ (a fila do Flow com `simular=1`, que não
+reserva, a cópia local e o Fire por conexão somente leitura); nunca grava no Fire nem confirma no Flow, e os modos de
 escrita (`criar`, `criar_e_atualizar`) se recusam a iniciar até a Etapa 3.
 
 Cada item da fila é validado à parte (`cadastro_schema.validar_item`), conferido
@@ -23,7 +23,11 @@ from datetime import UTC, datetime, timedelta
 
 from app.erp.connection import FirebirdConnection
 from app.integrations.flowpcp import capacidades
-from app.integrations.flowpcp.cadastro_schema import CadastroPendente, validar_item
+from app.integrations.flowpcp.cadastro_schema import (
+    CadastroPendente,
+    chaves_desconhecidas,
+    validar_item,
+)
 from app.integrations.flowpcp.catalogo_sync import _build_client
 from app.integrations.flowpcp.config import enabled_flowpcp_envs, flowpcp_config_for_slug
 from app.observability import metrics
@@ -59,6 +63,7 @@ COLUNAS = {
 # Nomes lidos uma vez por ciclo e comparados em Python: DESCRICAO é WIN1252 e o
 # UPPER do Firebird não é confiável para Ç/Ã/Ú (364 nomes da MM têm acento).
 _SQL_NOMES = "SELECT SEQ, DESCRICAO FROM PRODUTOS"
+_SQL_MARCAS = "SELECT CODIGO, MARCA FROM PRODUTOS_MARCA"
 _SQL_SONDA = "SELECT 1 FROM RDB$DATABASE"
 _SQL_COMPONENTE = "SELECT SEQ, BLOQUEADO FROM PRODUTOS WHERE SEQ = ?"
 
@@ -133,27 +138,43 @@ def _nomes_do_fire(fire_conn) -> dict[str, list]:
     return nomes
 
 
-def _contra_o_fire(fire_conn, item: CadastroPendente, nomes: dict) -> tuple[str, str] | None:
+def _marcas_do_fire(fire_conn) -> dict[int, str]:
+    """PRODUTOS_MARCA inteira (16 linhas na MM em 17/10), uma vez por ciclo."""
+    return {
+        int(codigo): str(nome or "").strip()
+        for codigo, nome in _select(fire_conn, _SQL_MARCAS, ())
+        if codigo is not None
+    }
+
+
+def _contra_o_fire(
+    fire_conn, item: CadastroPendente, nomes: dict, marcas: dict
+) -> tuple[str, str] | None:
     if item.acao == "criar":
         achou = nomes.get(_normaliza_nome(item.nome))
         if achou:
             return "nome_existe", f"já existe produto com esse nome no Fire (SEQ {achou[0]})"
+    if item.marcaErp is not None and item.marcaErp.codigo not in marcas:
+        # Erro definitivo (contrato §7): a marca não existe no ERP, esperar não resolve.
+        return "marca_ausente_erp", f"marca código {item.marcaErp.codigo} não existe no ERP"
     for i, comp in enumerate(item.componentes or []):
         linhas = _select(fire_conn, _SQL_COMPONENTE, (int(comp.erpProdutoId),))
         if not linhas:
-            return "componente_invalido", f"componentes[{i}] não existe no Fire"
+            return "componente_ausente", f"componentes[{i}] não existe no Fire"
         if str(linhas[0][1] or "").strip().lower() == "sim":
-            return "componente_invalido", f"componentes[{i}] está bloqueado no Fire"
+            return "componente_bloqueado", f"componentes[{i}] está bloqueado no Fire"
     return None
 
 
-def _plano(item: CadastroPendente) -> dict:
+def _plano(item: CadastroPendente, marcas: dict) -> dict:
     campos = {
         coluna: getattr(item, wire)
         for wire, coluna in COLUNAS.items()
         if getattr(item, wire) is not None
     }
     campos["GRUPO"] = item.grupoErp.codigo
+    if item.marcaErp is not None:
+        campos["MARCA"] = marcas[item.marcaErp.codigo]
     return {
         "acao": item.acao,
         "tabela": "PRODUTOS",
@@ -204,7 +225,7 @@ def _idade_mais_antiga(brutos: list) -> float:
     return maior
 
 
-def _decidir(bruto, env_conn, fire_conn, nomes):
+def _decidir(bruto, env_conn, fire_conn, nomes, marcas):
     """-> (estado, item|None, codigo, mensagem, plano|None)."""
     item, codigo, msg = validar_item(bruto)
     if item is None:
@@ -219,7 +240,7 @@ def _decidir(bruto, env_conn, fire_conn, nomes):
             None,
         )
     try:
-        falha = _contra_o_fire(fire_conn, item, nomes)
+        falha = _contra_o_fire(fire_conn, item, nomes, marcas)
     except Exception as exc:  # noqa: BLE001
         # Conexão perdida aborta o lote; erro só desta consulta rejeita só este item.
         try:
@@ -235,7 +256,7 @@ def _decidir(bruto, env_conn, fire_conn, nomes):
         )
     if falha:
         return "erro_definitivo", item, falha[0], falha[1][:500], None
-    return "simulado", item, None, None, _plano(item)
+    return "simulado", item, None, None, _plano(item, marcas)
 
 
 def _resumo_saneado(r: dict) -> dict:
@@ -296,7 +317,7 @@ def _processar_ambiente(slug: str, *, _client, _fire_conn, _env_conn) -> dict:
     client = _client or _build_client(cfg)
     try:
         try:
-            resp = client.list_cadastros_pendentes(limite=LIMITE_FILA)
+            resp = client.list_cadastros_pendentes(limite=LIMITE_FILA, simular=True)
         except ValueError as exc:  # JSON ou envelope inválido (`cadastros` não é lista)
             logger.error(
                 f"flowpcp.cadastro_volta env={slug}: resposta da fila inválida: "
@@ -309,6 +330,13 @@ def _processar_ambiente(slug: str, *, _client, _fire_conn, _env_conn) -> dict:
             )
             return {"modo": m, "erro_transitorio": f"fila do Flow: {type(exc).__name__}"}
         brutos = list(resp.cadastros)
+        # Chave nova do Flow é ignorada, mas a simulação é onde ela precisa aparecer.
+        for nome in {n for b in brutos for n in chaves_desconhecidas(b)}:
+            _avisa_uma_vez(
+                f"chave-desconhecida:{nome}",
+                f"flowpcp.cadastro_volta env={slug}: chave desconhecida no item da fila: {nome!r}",
+                nivel="WARNING",
+            )
         resumo = {
             "modo": m,
             "lidos": len(brutos),
@@ -360,7 +388,7 @@ def _processar_fila(slug, brutos, resumo, _fire_conn, _env_conn) -> dict:
                 )
                 continue
             triagem.append((cadastro_id, versao, bruto, None if ja else "decidir"))
-        fire_conn = nomes = None
+        fire_conn = nomes = marcas = None
         if any(t[3] == "decidir" for t in triagem):
             if _fire_conn is not None:
                 fire_conn = _fire_conn
@@ -372,11 +400,12 @@ def _processar_fila(slug, brutos, resumo, _fire_conn, _env_conn) -> dict:
                     )
                 )
             nomes = _nomes_do_fire(fire_conn)
+            marcas = _marcas_do_fire(fire_conn)
         # Fase 1: decide tudo (lê o Fire); se o Fire cair, nada foi para o livro.
         decisoes = []
         for cadastro_id, versao, bruto, dec in triagem:
             if dec == "decidir":
-                dec = _decidir(bruto, env_conn, fire_conn, nomes)
+                dec = _decidir(bruto, env_conn, fire_conn, nomes, marcas)
             decisoes.append((cadastro_id, versao, dec))
         # Fase 2: registra.
         for cadastro_id, versao, dec in decisoes:
