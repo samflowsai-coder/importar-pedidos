@@ -620,7 +620,7 @@ def test_send_to_fire_inserts_when_success(monkeypatch):
         }
     )
 
-    def _fake_export(self, order, *, override_client_id=None):
+    def _fake_export(self, order, *, override_client_id=None, produtos_por_item=None):
         return fb_mod.FirebirdExportResult(
             order_number=order.header.order_number,
             items_inserted=1,
@@ -678,7 +678,7 @@ def _stub_fire_success(monkeypatch):
     monkeypatch.setattr(
         fb_mod.FirebirdExporter,
         "export",
-        lambda self, order, *, override_client_id=None: fb_mod.FirebirdExportResult(
+        lambda self, order, *, override_client_id=None, produtos_por_item=None: fb_mod.FirebirdExportResult(
             order_number=order.header.order_number, items_inserted=1, fire_codigo=4242
         ),
     )
@@ -780,7 +780,7 @@ def test_batch_send_to_fire_mixed_outcomes(monkeypatch):
 
     fire_seq = iter([4001, 4002])
 
-    def _fake_export(self, order, *, override_client_id=None):
+    def _fake_export(self, order, *, override_client_id=None, produtos_por_item=None):
         return fb_mod.FirebirdExportResult(
             order_number=order.header.order_number,
             items_inserted=1,
@@ -866,7 +866,7 @@ def test_export_xlsx_generates_files_without_calling_firebird(monkeypatch, tmp_p
     monkeypatch.setattr(erp_mod.ERPExporter, "export", _fake_erp_export)
 
     # Hard-fail if Firebird is touched.
-    def _explode(self, order, *, override_client_id=None):
+    def _explode(self, order, *, override_client_id=None, produtos_por_item=None):
         raise AssertionError("FirebirdExporter.export must not be called in xlsx mode")
 
     monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _explode)
@@ -1561,7 +1561,7 @@ def test_send_to_fire_passes_override_to_exporter(monkeypatch):
 
     captured = {}
 
-    def _fake_export(self, order, *, override_client_id=None):
+    def _fake_export(self, order, *, override_client_id=None, produtos_por_item=None):
         captured["override"] = override_client_id
         return fb_mod.FirebirdExportResult(
             order_number=order.header.order_number,
@@ -1841,7 +1841,7 @@ def test_send_to_fire_blocked_by_price_mismatch(monkeypatch):
 
     called = {"export": False}
 
-    def _no_export(self, order, *, override_client_id=None):
+    def _no_export(self, order, *, override_client_id=None, produtos_por_item=None):
         called["export"] = True
         raise AssertionError("FirebirdExporter.export não pode ser chamado")
 
@@ -2558,3 +2558,75 @@ def test_rehydrate_preview_informa_se_ha_arquivo_original(tmp_path, monkeypatch)
     assert com == {"disponivel": True, "nome": pdf.name}
     # pedido antigo sem snapshot dá 422 no rehydrate; o que importa é o contrato do campo
     assert sem.status_code == 422
+
+
+def test_send_to_fire_item_vinculado_vai_pelo_seq_do_depara(monkeypatch):
+    """BACKLOG §2.1: no insert direto, item casado por de-para entra pelo SEQ."""
+    import uuid
+    from datetime import datetime
+
+    from app.exporters import firebird_exporter as fb_mod
+    from app.persistence import produto_depara_repo, repo
+
+    entry_id = str(uuid.uuid4())
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "pedido.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "TEST-DEP",
+            "customer": "ACME",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {
+                "header": {
+                    "order_number": "TEST-DEP",
+                    "customer_name": "ACME",
+                    "customer_cnpj": "11111111000100",
+                },
+                "items": [
+                    {"description": "a", "quantity": 1.0, "product_code": "REF-X"},
+                    {"description": "b", "quantity": 1.0, "product_code": "SEM-VINCULO"},
+                ],
+                "source_file": "",
+            },
+        }
+    )
+    with db.connect() as conn:
+        produto_depara_repo.upsert(
+            conn,
+            client_key=produto_depara_repo.client_key("11111111000100", None),
+            chave_tipo="codigo",
+            chave_valor="REF-X",
+            fire_produto_id="77",
+            fire_codigo="77",
+            fire_ean=None,
+            fire_nome="KIT",
+            criado_em="t",
+            criado_por="t",
+        )
+
+    recebido: dict = {}
+
+    def _fake_export(self, order, *, override_client_id=None, produtos_por_item=None):
+        recebido["produtos_por_item"] = produtos_por_item
+        return fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number, items_inserted=2, fire_codigo=4242
+        )
+
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _fake_export)
+    monkeypatch.setattr("app.erp.product_check.check_order", lambda order, env=None: {})
+    monkeypatch.setattr(
+        "app.erp.product_check.is_blocking", lambda check, ack_items=None: (False, {})
+    )
+    from app import config as app_config
+
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": ".", "output_dir": ".", "export_mode": "db"},
+    )
+
+    r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    assert r.status_code == 200, r.text
+    assert recebido["produtos_por_item"] == {0: 77}

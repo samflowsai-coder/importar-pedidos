@@ -11,6 +11,7 @@ from app.erp.exceptions import (
     FirebirdClientNotFoundError,
     FirebirdError,
     FirebirdOrderAlreadyExistsError,
+    FirebirdProductNotFoundError,
 )
 from app.erp.fiscal import perfil_para
 from app.erp.mapper import FireSistemasMapper, item_total, parse_date
@@ -137,8 +138,12 @@ class FirebirdExporter:
         order: Order,
         *,
         override_client_id: int | None = None,
+        produtos_por_item: dict[int, int] | None = None,
     ) -> FirebirdExportResult:
         """Insere o pedido em CAB_VENDAS / CORPO_VENDAS.
+
+        `produtos_por_item`: {posição em order.items: SEQ} dos itens casados por
+        vínculo de-para. Esses entram pelo SEQ, sem nova busca por EAN/código.
 
         `override_client_id`: quando o usuário escolheu manualmente o cliente
         no portal (recovery do CLIENT_NOT_FOUND), pula o lookup por CNPJ e
@@ -156,7 +161,9 @@ class FirebirdExporter:
 
         try:
             with _insert_lock, self._open() as conn:
-                return self._insert_order(conn, order, override_client_id)
+                return self._insert_order(
+                    conn, order, override_client_id, produtos_por_item or {}
+                )
         except FirebirdOrderAlreadyExistsError as exc:
             logger.warning(str(exc))
             return FirebirdExportResult(
@@ -173,6 +180,14 @@ class FirebirdExporter:
                 skipped=True,
                 skip_reason="CLIENT_NOT_FOUND",
             )
+        except FirebirdProductNotFoundError as exc:
+            logger.warning(str(exc))
+            return FirebirdExportResult(
+                order_number=order.header.order_number,
+                items_inserted=0,
+                skipped=True,
+                skip_reason="PRODUCT_NOT_FOUND",
+            )
         except FirebirdError as exc:
             logger.error(f"Firebird export falhou [{order.header.order_number}]: {exc}")
             raise
@@ -184,6 +199,7 @@ class FirebirdExporter:
         conn,
         order: Order,
         override_client_id: int | None = None,
+        produtos_por_item: dict[int, int] | None = None,
     ) -> FirebirdExportResult:
         cur = conn.cursor()
 
@@ -246,7 +262,9 @@ class FirebirdExporter:
         items_inserted = 0
         itens: list[tuple[int, int]] = []
         for indice, row in indexados:
-            product_seq, unid = self._find_product(cur, row)
+            product_seq, unid = self._find_product(
+                cur, row, seq=(produtos_por_item or {}).get(indice)
+            )
             cur.execute(queries.GET_NEXT_CORPOVENDAS_CODIGO)
             item_pk: int = cur.fetchone()[0]
             item_params = self._mapper.item_to_corpovendas(
@@ -284,11 +302,23 @@ class FirebirdExporter:
         row = cur.fetchone()
         return row[0] if row else None
 
-    def _find_product(self, cur, row: ERPRow) -> tuple[int | None, str]:
+    def _find_product(
+        self, cur, row: ERPRow, *, seq: int | None = None
+    ) -> tuple[int | None, str]:
         """Retorna (product_seq, unid). `unid` vem de PRODUTOS.UNIDADE no
         cadastro do Fire — "UN" quando o produto nao e encontrado ou a
         coluna vem vazia/NULL (kits cadastrados usam 'KIT').
+
+        `seq` (vínculo de-para): busca so pelo SEQ. Sumiu do Fire = erro,
+        nunca cai para EAN/código (o código do vínculo e o SEQ em texto).
         """
+        if seq is not None:
+            cur.execute(queries.FIND_PRODUCT_BY_SEQ, (seq,))
+            result = cur.fetchone()
+            if result:
+                return result[0], self._unid_from_row(result)
+            raise FirebirdProductNotFoundError(str(seq))
+
         # Try EAN first, then alternative code
         if row.ean:
             cur.execute(queries.FIND_PRODUCT_BY_EAN, (row.ean,))

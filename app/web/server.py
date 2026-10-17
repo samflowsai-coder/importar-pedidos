@@ -2396,6 +2396,28 @@ def _send_one_to_fire(
     # Reuse the trace_id minted on commit so logs across commit→send-to-fire
     # are correlated for the same pedido.
     with with_trace_id(entry.get("trace_id")):
+        # De-para antes do XLS (modo both) e do insert. Item vinculado entra no
+        # Fire pelo SEQ do vínculo: o `fire_codigo` é str(SEQ) e relido como
+        # CODPROD_ALTERN casaria outro produto (BACKLOG §2.1). Falha aqui não
+        # derruba o envio — o item sem SEQ cai na busca normal e, sem match,
+        # o exporter recusa o pedido (PRODUCT_NOT_FOUND).
+        from app.erp import depara_apply
+        from app.persistence import db
+
+        produtos_por_item: dict[int, int] = {}
+        try:
+            with db.connect() as sconn:
+                dep_changed = depara_apply.apply(order, conn=sconn)
+            if dep_changed:
+                produtos_por_item = {
+                    c["item_index"]: int(c["fire_produto_id"]) for c in dep_changed
+                }
+                repo.append_audit(import_id, "depara_aplicado_no_fire", {"itens": dep_changed})
+        except Exception as exc:  # noqa: BLE001
+            from app.utils.logger import logger
+
+            logger.warning(f"de-para apply pulado no envio: {type(exc).__name__}: {exc}")
+
         output_path = Path(cfg["output_dir"]).expanduser().resolve()
         output_path.mkdir(parents=True, exist_ok=True)
         export_mode = cfg.get("export_mode", "xlsx")
@@ -2409,10 +2431,9 @@ def _send_one_to_fire(
 
         override = entry.get("cliente_override_codigo")
         # Multi-ambiente: usa creds do env atual em vez de env vars FB_*.
-        # NOTA: de-para (depara_apply) NÃO é aplicado aqui — só no _export_one_xlsx.
-        # Em EXPORT_MODE=db/both um item casado por de-para entra no Fire sem FK.
-        # Fast-follow se o cliente migrar de xlsx.
-        result = FirebirdExporter(env=request_env).export(order, override_client_id=override)
+        result = FirebirdExporter(env=request_env).export(
+            order, override_client_id=override, produtos_por_item=produtos_por_item
+        )
         db_result = result.to_dict()
 
         if result.skipped or result.fire_codigo is None:
@@ -2443,7 +2464,12 @@ def _send_one_to_fire(
                 False,
                 reason=result.skip_reason or "no_fire_codigo",
                 http_status=409,
-                detail=f"Fire rejeitou o pedido: {result.skip_reason or 'sem fire_codigo'}",
+                detail=(
+                    "Fire rejeitou o pedido: produto de um item não existe no Fire. "
+                    "Confira o vínculo do item e envie de novo."
+                    if result.skip_reason == "PRODUCT_NOT_FOUND"
+                    else f"Fire rejeitou o pedido: {result.skip_reason or 'sem fire_codigo'}"
+                ),
             )
 
         now = datetime.now().isoformat(timespec="seconds")
