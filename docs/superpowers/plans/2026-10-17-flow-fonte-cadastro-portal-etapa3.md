@@ -454,6 +454,8 @@ git commit -m "feat(cadastro): corpo do resultado e leitura da resposta do Flow 
 
 ---
 
+> **Emenda 2 da Task 2 (revisão da Task 2, 17/10).** `ler_resposta`: `status` que não é texto → `REPETIR`; corpo `erro` só fecha com 200 `ja_registrado`/`erro_registrado` (`ERRO_REGISTRADO`) e 409 `versao_superada` (`SUPERADO`), o resto da tabela para `erro` → `BUG_CORPO`; 4xx fora da tabela → `BUG_CORPO`. `mensagem_para_flow` ganha `conexao_recusada` ("O ERP recusou a conexão.") e `erp_ocupado` ("O ERP estava ocupado; o Portal tenta de novo."); `nome_existe` delega a `mensagem_nome_existe`; `ja_criado_no_erp`/`nome_existe` exigem `detalhe` que casa `^[1-9][0-9]{0,8}$`. Textos trocados porque o Flow prefixa "O ERP recusou: ": `erp_recusou` → "Um dado do cadastro não está no formato que o ERP aceita. Fale com o suporte do Portal."; genérico → "Motivo não identificado. Fale com o suporte do Portal.".
+
 ### Task 3: Cliente HTTP — fila com `acoes`/`simular` e POST do resultado
 
 > **Emenda 1 (revisão do Flow, 17/10; vale acima do texto abaixo onde divergir).**
