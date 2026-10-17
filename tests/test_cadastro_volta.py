@@ -12,6 +12,7 @@ from app.utils.logger import logger
 
 BOM = {
     "cadastroId": "7b0c1c3e-0f7e-4a51-9c39-2a8f3f1d9a10",
+    "produtoId": "77777777-7777-4777-8777-777777777771",
     "versao": 1,
     "acao": "criar",
     "erpProdutoId": None,
@@ -25,6 +26,7 @@ BOM = {
     "codigoNfe": "KIT3-MEIA-CURTO/PRT",
     "cor": "PRETO",
     "componentes": [{"erpProdutoId": "3170", "quantidade": 3}],
+    "marcaErp": {"codigo": 17},
     "codigoMes": None,
     "aprovadoEm": "2026-10-20T12:00:00Z",
 }
@@ -187,11 +189,12 @@ def test_tres_itens_bom_extra_e_seq_fora(env_conn, monkeypatch):
     r = cv.processar_ambiente(
         "mm", _client=_Client([BOM, ruim, fora]), _fire_conn=fire, _env_conn=env_conn
     )
-    assert (r["simulados"], r["erros"]) == (1, 2)
+    # Chave de topo nova é ignorada (rev. 3): `ruim` com `extra` vira simulado.
+    assert (r["simulados"], r["erros"]) == (2, 1)
     livro = _livro(env_conn)
     assert livro[(BOM["cadastroId"], 1)]["estado"] == "simulado"
     e = livro[("aaaaaaaa-0f7e-4a51-9c39-2a8f3f1d9a10", 1)]
-    assert (e["estado"], e["erro_codigo"]) == ("erro_definitivo", "contrato_invalido")
+    assert e["estado"] == "simulado"
     f = livro[("bbbbbbbb-0f7e-4a51-9c39-2a8f3f1d9a10", 1)]
     assert (f["estado"], f["erro_codigo"]) == ("erro_definitivo", "seq_fora_do_escopo")
     assert fire.executados and all(s.upper().startswith("SELECT") for s, _ in fire.executados)
@@ -215,7 +218,7 @@ def test_material_atualizar_usa_copia_de_materiais(env_conn, monkeypatch):
     env_conn.execute(
         "INSERT INTO materiais_fire (erp_produto_id, nome, extraido_em) VALUES ('250', 'FIO', 'x')"
     )
-    mat = dict(BOM, tipo="material", componentes=None, acao="inativar", erpProdutoId="250")
+    mat = dict(BOM, tipo="material", componentes=None, acao="inativar", erpProdutoId="250", marcaErp=None)
     cv.processar_ambiente("mm", _client=_Client([mat]), _fire_conn=_Fire(), _env_conn=env_conn)
     assert _livro(env_conn)[(BOM["cadastroId"], 1)]["estado"] == "simulado"
 
@@ -641,7 +644,7 @@ def test_inativar_kit_com_componentes_lixo_simula_sem_composicao(env_conn, monke
         "INSERT INTO catalogo_fire (fire_produto_id, codigo, nome, extraido_em) "
         "VALUES ('2645', '2645', 'X', '2026-10-16')"
     )
-    item = dict(BOM, acao="inativar", erpProdutoId="2645", componentes="lixo")
+    item = dict(BOM, acao="inativar", erpProdutoId="2645", componentes="lixo", marcaErp=None)
     cv.processar_ambiente("mm", _client=_Client([item]), _fire_conn=_Fire(), _env_conn=env_conn)
     linha = _livro(env_conn)[(BOM["cadastroId"], 1)]
     assert linha["estado"] == "simulado"

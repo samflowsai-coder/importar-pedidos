@@ -52,8 +52,18 @@ class ComponenteRef(_Estrito):
     quantidade: float
 
 
+class MarcaRef(_Estrito):
+    # PRODUTOS_MARCA.CODIGO é INTEGER no Fire: cabe em 32 bits.
+    codigo: int = Field(ge=1, le=2**31 - 1)
+
+
 class CadastroPendente(_Estrito):
+    # Chave de topo nova não derruba o item: o Flow só acrescenta campo junto com
+    # capacidade nova. `chaves_desconhecidas` lista o que foi ignorado, para o log.
+    model_config = ConfigDict(extra="ignore", strict=True)
+
     cadastroId: UUID  # noqa: N815
+    produtoId: UUID  # noqa: N815 — id estável do produto no Flow (igual em todas as versões)
     versao: int = Field(ge=1, le=2**31 - 1)
     acao: Literal["criar", "atualizar", "inativar"]
     erpProdutoId: str | None = Field(default=None, pattern=_ID)  # noqa: N815
@@ -68,10 +78,11 @@ class CadastroPendente(_Estrito):
     codigoNfe: str | None = Field(default=None, min_length=1)  # noqa: N815
     cor: str | None = Field(default=None, min_length=1)
     componentes: list[ComponenteRef] | None = None
+    marcaErp: MarcaRef | None = None  # noqa: N815
     codigoMes: str | None = Field(default=None, min_length=1)  # noqa: N815
     aprovadoEm: datetime  # noqa: N815
 
-    @field_validator("cadastroId", mode="before")
+    @field_validator("cadastroId", "produtoId", mode="before")
     @classmethod
     def _uuid(cls, v: object) -> UUID:
         if not isinstance(v, str):
@@ -173,6 +184,15 @@ def _erro_componentes(item: CadastroPendente) -> str | None:
     return None
 
 
+def chaves_desconhecidas(bruto: dict) -> list[str]:
+    """Nomes de chave de topo que `CadastroPendente` não conhece, ordenados.
+    Nome fora de `_NOME_SEGURO` vira "?": a chave veio do Flow e não vai cru ao log."""
+    if not isinstance(bruto, dict):
+        return []
+    conhecidas = CadastroPendente.model_fields.keys()
+    return sorted(_parte(k) for k in bruto if k not in conhecidas)
+
+
 def validar_item(bruto: dict) -> tuple[CadastroPendente | None, str | None, str | None]:
     """`(item, None, None)` se válido; senão `(None, codigo_erro, mensagem)`."""
     if isinstance(bruto, dict) and bruto.get("acao") == "inativar" and "componentes" in bruto:
@@ -202,6 +222,10 @@ def validar_item(bruto: dict) -> tuple[CadastroPendente | None, str | None, str 
         return None, "contrato_invalido", "criar não aceita erpProdutoId"
     if item.acao != "criar" and item.erpProdutoId is None:
         return None, "contrato_invalido", f"{item.acao} exige erpProdutoId"
+    if item.acao == "criar" and item.marcaErp is None:
+        return None, "contrato_invalido", "criar exige marcaErp"
+    if item.acao == "inativar" and item.marcaErp is not None:
+        return None, "contrato_invalido", "inativar exige marcaErp null"
     if item.tipo in ("simples", "material") and item.componentes is not None:
         return None, "contrato_invalido", f"{item.tipo} exige componentes null"
 
