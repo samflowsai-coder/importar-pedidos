@@ -281,6 +281,74 @@ FROM (
 ) k
 JOIN regra_faturamento_rede r ON r.nome = k.nome AND r.alterado_por = 'semente'
 WHERE NOT EXISTS (SELECT 1 FROM regra_faturamento_chave c WHERE c.rede_id = r.id);
+
+-- Lote intercompany semanal (Nasmar -> MM). Config por origem: sem linha ou
+-- ativo=0, nada acontece. Nasce desligado.
+CREATE TABLE IF NOT EXISTS lote_config (
+    env_origem_slug  TEXT PRIMARY KEY,
+    env_espelho_slug TEXT NOT NULL,
+    cnpj_revenda     TEXT NOT NULL,
+    nome_revenda     TEXT NOT NULL,
+    janela           TEXT NOT NULL DEFAULT 'semanal',
+    dia_inicio       INTEGER NOT NULL DEFAULT 0,
+    hora_fechamento  INTEGER NOT NULL DEFAULT 8,
+    ativo            INTEGER NOT NULL DEFAULT 0,
+    alterado_por     TEXT,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);
+-- Fator versionado: salvar cria linha com vigente_desde = inicio da PROXIMA
+-- janela; o lote copia o fator vigente no inicio da sua janela. Sem default.
+CREATE TABLE IF NOT EXISTS lote_fator (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    env_origem_slug  TEXT NOT NULL,
+    modo_preco       TEXT NOT NULL CHECK (modo_preco IN ('desconto','divisor')),
+    fator_preco      TEXT NOT NULL,
+    vigente_desde    TEXT NOT NULL,
+    informado_por    TEXT NOT NULL,
+    informado_em     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lote_fator_vig ON lote_fator(env_origem_slug, vigente_desde);
+-- Um lote por janela (chave_lote UNIQUE). Fator e modo ficam congelados aqui;
+-- fator e TEXT para nao passar por float.
+CREATE TABLE IF NOT EXISTS intercompany_lote (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    chave_lote           TEXT NOT NULL UNIQUE,
+    env_origem_slug      TEXT NOT NULL,
+    env_espelho_slug     TEXT NOT NULL,
+    janela               TEXT NOT NULL,
+    janela_inicio        TEXT NOT NULL,
+    janela_fim           TEXT NOT NULL,
+    status               TEXT NOT NULL DEFAULT 'aberto'
+                         CHECK (status IN ('aberto','aguardando_fator','fechado','enviado','erro')),
+    modo_preco_aplicado  TEXT,
+    fator_preco_aplicado TEXT,
+    fator_informado_por  TEXT,
+    fator_informado_em   TEXT,
+    import_id_espelho    TEXT,
+    composicao_json      TEXT,
+    fire_codigo_espelho  INTEGER,
+    lote_fiscal_ok       INTEGER,
+    erro_motivo          TEXT,
+    created_at           TEXT NOT NULL,
+    closed_at            TEXT,
+    closed_by            TEXT,
+    sent_at              TEXT
+);
+-- UNIQUE (origem, import_id): uma perna vive em um lote so.
+CREATE TABLE IF NOT EXISTS intercompany_lote_item (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    lote_id             INTEGER NOT NULL REFERENCES intercompany_lote(id),
+    import_id           TEXT NOT NULL,
+    env_origem_slug     TEXT NOT NULL,
+    fire_codigo_origem  INTEGER NOT NULL,
+    itens_fire_json     TEXT NOT NULL,
+    pedido_cliente      TEXT,
+    cnpj_cliente_final  TEXT,
+    razao_cliente_final TEXT,
+    created_at          TEXT NOT NULL,
+    UNIQUE (env_origem_slug, import_id)
+);
 """
 
 INDEXES_SQL = """
