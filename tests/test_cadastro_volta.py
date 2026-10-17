@@ -39,9 +39,11 @@ class _Client:
         caps = list(caps) if caps is not None else None
         self.resp = PendentesResposta(cadastros=cadastros, capacidades=caps)
         self.limites = []
+        self.chamadas = []
 
-    def list_cadastros_pendentes(self, limite=20):
+    def list_cadastros_pendentes(self, limite=20, **kw):
         self.limites.append(limite)
+        self.chamadas.append(kw)
         return self.resp
 
     def close(self):
