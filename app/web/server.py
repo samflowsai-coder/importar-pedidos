@@ -197,6 +197,16 @@ def _iniciar_envio_flowpcp() -> None:
         threading.Thread(target=envio_portal.loop, name="flowpcp-envio", daemon=True).start()
 
 
+@app.on_event("startup")
+def _iniciar_fechamento_lotes() -> None:
+    """Fecha os lotes intercompany vencidos numa thread daemon do processo web
+    (o worker não roda no Windows do cliente). `PORTAL_LOTES=0` desliga."""
+    from app.consolidators import fechamento
+
+    if fechamento.habilitado():
+        threading.Thread(target=fechamento.loop, name="lotes-fechamento", daemon=True).start()
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────
 
 

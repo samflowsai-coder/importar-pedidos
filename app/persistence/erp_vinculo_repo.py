@@ -59,6 +59,19 @@ def vinculos_por_item(
     return {r["erp_item_codigo"]: VinculoItem(*r) for r in rows}
 
 
+def vinculos_do_import(conn: sqlite3.Connection, import_id: str) -> list[tuple[int, int]]:
+    """Pares `(erp_item_codigo, indice_original)` gravados pelo insert direto no Fire."""
+    rows = conn.execute(
+        """
+        SELECT erp_item_codigo, indice_original FROM erp_item_vinculo
+        WHERE import_id = ? AND origem = 'insert'
+        ORDER BY indice_original, erp_item_codigo
+        """,
+        (import_id,),
+    ).fetchall()
+    return [(int(r[0]), int(r[1])) for r in rows]
+
+
 def gravar_produtor(
     conn: sqlite3.Connection, base: str, resolvidos: dict[int, int | None], agora: str
 ) -> None:

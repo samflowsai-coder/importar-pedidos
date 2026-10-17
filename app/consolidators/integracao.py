@@ -7,6 +7,7 @@ o pedido já está no Fire e a UI não pode ver erro por causa do lote.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import date, datetime
 
 from app.consolidators.janela import janela_de, proxima_janela
@@ -58,40 +59,73 @@ def _anexar(
         cfg = lotes_repo.get_config(conn, slug)
         if cfg is None or not cfg["ativo"]:
             return None
-        modo, dia_inicio = cfg["janela"], cfg["dia_inicio"]
         importado = date.fromisoformat(str(entry["imported_at"])[:10])
-        inicio, fim = janela_de(importado, modo=modo, dia_inicio=dia_inicio)
-        for _ in range(_MAX_SALTOS + 1):
-            lote = lotes_repo.lote_para(
-                conn,
-                env_origem_slug=slug,
-                env_espelho_slug=cfg["env_espelho_slug"],
-                inicio=inicio,
-                fim=fim,
-                modo_janela=modo,
-                agora=agora,
-            )
-            try:
-                lotes_repo.anexar_perna(
-                    conn,
-                    lote_id=lote["id"],
-                    import_id=import_id,
-                    env_origem_slug=slug,
-                    fire_codigo_origem=result.fire_codigo,
-                    itens_fire=result.itens,
-                    pedido_cliente=order.header.order_number,
-                    cnpj_cliente_final=order.header.customer_cnpj,
-                    razao_cliente_final=order.header.customer_name,
-                    agora=agora,
-                )
-            except lotes_repo.LoteFechadoError:
-                inicio, fim = proxima_janela(fim, modo=modo, dia_inicio=dia_inicio)
-                continue
-            return lote["id"]
-        # Não deixa os lotes vazios criados na procura.
-        conn.rollback()
+        lote_id = anexar_na_janela(
+            conn,
+            cfg,
+            import_id=import_id,
+            importado=importado,
+            fire_codigo=result.fire_codigo,
+            itens_fire=result.itens,
+            order=order,
+            agora=agora,
+        )
+        if lote_id is not None:
+            return lote_id
     logger.error(
         f"lote: perna {import_id} ({slug}, importada {importado}) sem lote aberto "
         f"em {_MAX_SALTOS} janelas seguintes — não anexada"
     )
+    return None
+
+
+def anexar_na_janela(
+    conn: sqlite3.Connection,
+    cfg: dict,
+    *,
+    import_id: str,
+    importado: date,
+    fire_codigo: int,
+    itens_fire: list[tuple[int, int]],
+    order: Order,
+    agora: datetime,
+) -> int | None:
+    """Anexa a perna ao lote da janela de `importado` (ou da próxima com lote aberto).
+
+    Regra única do envio ao Fire e da varredura de recuperação do fechamento.
+    Esgotou `_MAX_SALTOS` → `conn.rollback()` (não deixa os lotes vazios criados
+    na procura) e devolve `None`; o log fica com o chamador. Use uma conexão
+    só para esta perna: o rollback desfaz tudo que estiver pendente nela.
+    """
+    slug = cfg["env_origem_slug"]
+    modo, dia_inicio = cfg["janela"], cfg["dia_inicio"]
+    inicio, fim = janela_de(importado, modo=modo, dia_inicio=dia_inicio)
+    for _ in range(_MAX_SALTOS + 1):
+        lote = lotes_repo.lote_para(
+            conn,
+            env_origem_slug=slug,
+            env_espelho_slug=cfg["env_espelho_slug"],
+            inicio=inicio,
+            fim=fim,
+            modo_janela=modo,
+            agora=agora,
+        )
+        try:
+            lotes_repo.anexar_perna(
+                conn,
+                lote_id=lote["id"],
+                import_id=import_id,
+                env_origem_slug=slug,
+                fire_codigo_origem=fire_codigo,
+                itens_fire=itens_fire,
+                pedido_cliente=order.header.order_number,
+                cnpj_cliente_final=order.header.customer_cnpj,
+                razao_cliente_final=order.header.customer_name,
+                agora=agora,
+            )
+        except lotes_repo.LoteFechadoError:
+            inicio, fim = proxima_janela(fim, modo=modo, dia_inicio=dia_inicio)
+            continue
+        return lote["id"]
+    conn.rollback()
     return None
