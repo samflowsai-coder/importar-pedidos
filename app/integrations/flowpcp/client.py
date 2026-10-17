@@ -47,9 +47,11 @@ class RespostaResultado:
     retry_after: int | None
 
 
-def _retry_after(resp) -> int | None:
+def _retry_after(resp: httpx.Response) -> int | None:
     bruto = (resp.headers.get("Retry-After") or "").strip()
-    return int(bruto) if bruto.isdigit() and int(bruto) >= 1 else None
+    if not (bruto.isascii() and bruto.isdecimal()) or int(bruto) < 1:
+        return None
+    return min(int(bruto), 3600)
 
 
 class FlowPCPClientError(Exception):
@@ -147,7 +149,10 @@ class FlowPCPClient:
         if simular:
             params["simular"] = "1"
         if acoes:
-            params["acoes"] = ",".join(a for a in _ORDEM_ACOES if a in set(acoes))
+            pedidas = set(acoes)
+            if not pedidas <= set(_ORDEM_ACOES):
+                raise ValueError("acoes com valor fora de criar/atualizar/inativar")
+            params["acoes"] = ",".join(a for a in _ORDEM_ACOES if a in pedidas)
         try:
             resp = self._client.get(_CADASTROS_PENDENTES_PATH, params=params)
         except HttpError as exc:
@@ -164,7 +169,7 @@ class FlowPCPClient:
             )
         return PendentesResposta.model_validate(resp.json())
 
-    def post_cadastro_resultado(self, cadastro_id: str, corpo: dict) -> RespostaResultado:
+    def post_cadastro_resultado(self, cadastro_id: str, corpo: dict[str, Any]) -> RespostaResultado:
         """Resultado de um cadastro. Nunca levanta por status HTTP: quem decide é
         `cadastro_resultado.ler_resposta`. Transporte falhou = `status_http=None`.
         Idempotente no Flow por (cadastroId, versao)."""
