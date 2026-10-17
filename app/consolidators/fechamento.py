@@ -302,9 +302,10 @@ def _recuperar(cfg: dict, agora: datetime) -> int:
                 "SELECT MIN(created_at) FROM intercompany_lote_item WHERE env_origem_slug = ?",
                 (slug,),
             ).fetchone()[0]
-            if primeira is None:  # sem perna anexada da origem, não há o que recuperar
+            pisos = [p for p in (primeira, cfg.get("ativo_desde")) if p]
+            if not pisos:
                 return 0
-            desde = max(p for p in (primeira, cfg.get("ativo_desde")) if p)
+            desde = max(pisos)
             no_lote = {
                 r[0]
                 for r in conn.execute(

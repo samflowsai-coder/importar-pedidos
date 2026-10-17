@@ -499,7 +499,8 @@ def test_varredura_ignora_parsed_found_in_fire_e_anterior_ao_primeiro_lote(
 
 def test_varredura_sem_lote_da_origem_nao_faz_nada(portal_lote):
     _fator()
-    _enviada_sem_lote("N2", fire=1160)
+    # enviado antes da ativação (01/08 09h): abaixo do piso, sem perna anexada
+    _enviada_sem_lote("N2", fire=1160, sent="2026-07-30T09:00:00")
     r = fechamento.fechar_vencidos(agora=SEGUNDA_8H)
     assert r["recuperadas"] == 0
     with router.shared_connect() as conn:
@@ -630,3 +631,16 @@ def test_varredura_ignora_envio_feito_com_lote_desligado(portal_lote_com_perna):
 
     assert r["recuperadas"] == 1
     assert _pernas_de(portal_lote_com_perna["lote_id"]) == ["N1", "N3"]
+
+
+def test_primeira_anexacao_falhou_e_recuperada_pelo_ativo_desde(portal_lote):
+    """Config ativada em 01/08 09h, nenhuma perna anexada; envio de 21/08 11h ficou fora."""
+    _fator()
+    _enviada_sem_lote("N2", fire=1160, sent="2026-08-21T11:00:00")
+
+    r = fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+
+    assert r["recuperadas"] == 1
+    with router.shared_connect() as conn:
+        todas = [p for lt in lotes_repo.listar(conn) for p in _pernas_de(lt["id"])]
+    assert todas == ["N2"]
