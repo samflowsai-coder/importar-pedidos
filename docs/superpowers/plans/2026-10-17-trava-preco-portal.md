@@ -228,5 +228,5 @@ Comportamento por modo: `desligado` → só a regra de hoje (`check_order` + `is
 
 ## Em aberto que afeta este plano
 
-- **Nasmar não é tenant no Flow** (`enabled_flowpcp_envs`: "Só o ambiente MM liga"). A tabela da Nasmar precisa morar em algum lugar. O plano já prevê `preco_fonte_slug` (a Nasmar sincroniza pela config de outro ambiente), mas a resposta muda o contrato: ou a Nasmar ganha tenant próprio no Flow, ou a tabela do tenant MM ganha a dimensão "empresa que fatura". **Decisão do Samuel.**
+- **Nasmar (decidido 17/10, opção b):** a Nasmar não é tenant no Flow; a tabela dela mora no **tenant MM** com a dimensão **empresa faturadora** (CNPJ da MM ou da Nasmar). No Portal: o ambiente Nasmar usa `preco_fonte_slug = "mm"` e o sync filtra pela empresa faturadora = CNPJ do próprio ambiente. A Task 7 copia esse filtro do contrato.
 - Modelo de tabela (uma por rede ou base + exceção) e base do preço (bruto/líquido): decidem com o PDF; nenhuma task do Portal muda, só o conteúdo que o sync traz.

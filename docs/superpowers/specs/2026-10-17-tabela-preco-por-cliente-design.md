@@ -55,7 +55,7 @@ conseguem entrar de qualquer lugar.
 ## 5. Regras de negócio (decididas)
 
 ### 5.1 Onde mora o preço
-- **Dono:** o Flow, por tenant (empresa). MM e Nasmar têm tabelas independentes.
+- **Dono:** o Flow. A Nasmar não é tenant no Flow; as duas tabelas moram no **tenant MM**, separadas pela dimensão **empresa faturadora** (MM ou Nasmar). Decisão do Samuel, 17/10.
 - **Cópia:** o Portal guarda uma cópia de leitura, sincronizada do Flow, e avalia
   contra ela. O Portal nunca edita preço.
 - **Cliente = rede inteira** (Samuel). A rede é identificada pela **raiz do CNPJ**
