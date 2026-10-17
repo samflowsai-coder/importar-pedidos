@@ -86,7 +86,7 @@ class CadastroPendente(_Estrito):
     @classmethod
     def _uuid(cls, v: object) -> UUID:
         if not isinstance(v, str):
-            raise ValueError("cadastroId deve ser texto")
+            raise ValueError("id deve ser texto")
         return UUID(v)
 
     @field_validator("aprovadoEm", mode="before")

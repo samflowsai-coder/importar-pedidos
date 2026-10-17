@@ -131,7 +131,9 @@ def test_atualizar_kit_com_lista_segue_as_regras_do_criar():
 )
 @pytest.mark.parametrize("tipo", ["simples", "kit", "material"])
 def test_inativar_ignora_componentes(comps, tipo):
-    bruto = dict(BOM, acao="inativar", erpProdutoId="2645", tipo=tipo, componentes=comps, marcaErp=None)
+    bruto = dict(
+        BOM, acao="inativar", erpProdutoId="2645", tipo=tipo, componentes=comps, marcaErp=None
+    )
     item, cod, _ = validar_item(bruto)
     assert cod is None and item.componentes is None
 
@@ -185,7 +187,7 @@ def test_mensagem_nao_vaza_valor_inteiro():
 
 
 def test_mensagem_de_contrato_nao_vaza_valor_nem_chave_hostil():
-    _, cod, msg = validar_item(dict(BOM, acao="SEGREDO-ACAO", **{"chave SEGREDO\n": 1}))
+    _, cod, msg = validar_item(dict(BOM, grupoErp={"codigo": "8", "chave SEGREDO\n": 1}))
     assert cod == "contrato_invalido"
     assert "SEGREDO" not in msg and "\n" not in msg
 

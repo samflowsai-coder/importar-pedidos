@@ -176,7 +176,7 @@ def test_sem_capacidade_processa_assim_mesmo(env_conn, monkeypatch):
     assert r["capacidade_ok"] is False and r["simulados"] == 1
 
 
-def test_tres_itens_bom_extra_e_seq_fora(env_conn, monkeypatch):
+def test_tres_itens_bom_chave_nova_e_seq_fora(env_conn, monkeypatch):
     _simular(monkeypatch)
     ruim = dict(BOM, cadastroId="aaaaaaaa-0f7e-4a51-9c39-2a8f3f1d9a10", extra=1)
     fora = dict(
@@ -218,7 +218,9 @@ def test_material_atualizar_usa_copia_de_materiais(env_conn, monkeypatch):
     env_conn.execute(
         "INSERT INTO materiais_fire (erp_produto_id, nome, extraido_em) VALUES ('250', 'FIO', 'x')"
     )
-    mat = dict(BOM, tipo="material", componentes=None, acao="inativar", erpProdutoId="250", marcaErp=None)
+    mat = dict(
+        BOM, tipo="material", componentes=None, acao="inativar", erpProdutoId="250", marcaErp=None
+    )
     cv.processar_ambiente("mm", _client=_Client([mat]), _fire_conn=_Fire(), _env_conn=env_conn)
     assert _livro(env_conn)[(BOM["cadastroId"], 1)]["estado"] == "simulado"
 
@@ -449,15 +451,19 @@ def test_id_hostil_nao_chega_ao_livro_nem_ao_log(env_conn, monkeypatch):
 
 def test_versoes_invalidas_do_mesmo_uuid_sao_linhas_distintas(env_conn, monkeypatch):
     _simular(monkeypatch)
-    v2 = dict(BOM, versao=2, extra=1)
-    v3 = dict(BOM, versao=3, extra=1)
+    v2 = dict(BOM, versao=2, tipo="servico")
+    v3 = dict(BOM, versao=3, tipo="servico")
     cv.processar_ambiente("mm", _client=_Client([v2, v3]), _fire_conn=_Fire(), _env_conn=env_conn)
-    assert sorted(_livro(env_conn)) == [(BOM["cadastroId"], 2), (BOM["cadastroId"], 3)]
+    livro = _livro(env_conn)
+    assert sorted(livro) == [(BOM["cadastroId"], 2), (BOM["cadastroId"], 3)]
+    for versao in (2, 3):
+        linha = livro[(BOM["cadastroId"], versao)]
+        assert (linha["estado"], linha["erro_codigo"]) == ("erro_definitivo", "contrato_invalido")
 
 
 def test_versao_bool_ou_negativa_cai_em_zero(env_conn, monkeypatch):
     _simular(monkeypatch)
-    a = dict(BOM, versao=True, extra=1)
+    a = dict(BOM, versao=True)
     cv.processar_ambiente("mm", _client=_Client([a]), _fire_conn=_Fire(), _env_conn=env_conn)
     assert list(_livro(env_conn)) == [(BOM["cadastroId"], 0)]
 
