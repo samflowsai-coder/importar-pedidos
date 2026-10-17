@@ -149,11 +149,11 @@ O pedido só entra em `pedido_items` (via `/recebimento`, como hoje) **depois** 
 ao Fire. Assim nada entra no pool de planejamento antes do preço aprovado.
 
 ### 6.3 Pré-requisitos encontrados
-- **Jobs no processo web do Portal.** O envio da fila de saída (`drain_outbox`) e a
-  busca de decisões (`poll_flowpcp`) só existem no worker (`app/worker/scheduler.py`),
-  que não roda no Windows do cliente. Sem levar esses jobs (e o sync da tabela) para o
-  processo do `ui.py`, nenhuma aprovação volta. Não verificado no servidor se o worker
-  roda hoje.
+- **Jobs no processo web do Portal: já existe na `main`.** A fila do `/recebimento` e
+  as decisões do Flow rodam numa thread do processo web
+  (`app/integrations/flowpcp/envio_portal.py`; `PORTAL_FLOWPCP_ENVIO`, decisões
+  desligadas por padrão via `PORTAL_FLOWPCP_DECISOES`). O sync da tabela e as decisões
+  de preço entram nessa mesma thread.
 - **Catálogo do Flow completo.** KIT que não existe no Flow não tem preço e cai em
   "não avaliado". Em 15/10 faltavam 45% dos produtos dos pedidos abertos; houve
   promote de 376 depois.
@@ -196,7 +196,7 @@ ao Fire. Assim nada entra no pool de planejamento antes do preço aprovado.
     manda nada para a fila do Flow; mede quantos pedidos cairiam na fila;
   - **ligado:** regras da seção 5 valem.
 
-Ordem: jobs no processo web → Flow com redes, tabela e carga do PDF → Portal
+Ordem: Flow com redes, tabela e carga do PDF → Portal
 observando na MM → fila do Flow → Portal ligado na MM → Nasmar.
 
 ## 9. Carga inicial (PDF de 19/10)
@@ -250,5 +250,5 @@ observando na MM → fila do Flow → Portal ligado na MM → Nasmar.
 13. **Preço aprovado também no XLSX:** o override vale para os dois caminhos (Fire e
     XLSX). O aprovador só muda o preço que vai no caso "pedido sem preço"; nos demais
     vai sempre o do pedido.
-14. **Jobs no processo web são a Fase 0 do plano do Portal** (scheduler dentro do
-    `ui.py`, com trava contra execução dupla), coordenada com a pendência igual do SP1.
+14. **Sync da tabela e decisões de preço reusam a thread do processo web** que já leva a
+    fila do Flow (`envio_portal.py`), sem scheduler novo.
