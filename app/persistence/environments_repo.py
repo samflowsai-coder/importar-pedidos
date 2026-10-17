@@ -24,6 +24,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from loguru import logger
+
 from app.erp.cnpj import cnpj_digits
 from app.persistence import router
 from app.security import secret_store
@@ -61,7 +63,11 @@ _PUBLIC_FIELDS = (
     "intercompany_env_slug",
     # Perfil fiscal do ambiente (CODFIGFISCAL).
     "fiscal_codfigfiscal",
+    # Trava de preço por rede (desligado | observando | ligado) e ambiente-fonte da tabela.
+    "preco_trava_modo",
+    "preco_fonte_slug",
 )
+PRECO_MODOS = ("desligado", "observando", "ligado")
 
 
 class SlugTaken(Exception):
@@ -353,6 +359,22 @@ def set_intercompany_config(
         conn.execute(f"UPDATE environments SET {sets} WHERE id = ?", [*fields.values(), env_id])
     limpar_cache()
     return get(env_id)
+
+
+def set_preco_trava_modo(env_id: str, valor: str, *, por: str) -> None:
+    """Troca o interruptor da trava de preço do ambiente.
+
+    `valor` fora de `PRECO_MODOS` levanta ValueError sem tocar no banco.
+    `por` (quem mudou) vai pro log: não existe audit de mudança de ambiente.
+    """
+    if valor not in PRECO_MODOS:
+        raise ValueError(f"modo inválido: {valor!r} — use um de {PRECO_MODOS}")
+    with router.shared_connect() as conn:
+        conn.execute(
+            "UPDATE environments SET preco_trava_modo = ?, updated_at = ? WHERE id = ?",
+            (valor, _now(), env_id),
+        )
+    logger.info("preco_trava_modo env_id={} -> {} por={}", env_id, valor, por)
 
 
 def get_flowpcp_token(env_id: str) -> str | None:

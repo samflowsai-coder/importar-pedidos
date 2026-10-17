@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
@@ -166,6 +167,21 @@ def set_environment_intercompany(
     if data["revenda_slug"]:
         data["revenda_slug"] = data["revenda_slug"].strip().lower()
     return environments_repo.set_intercompany_config(env_id, **data)
+
+
+class PrecoTravaRequest(BaseModel):
+    modo: Literal["desligado", "observando", "ligado"]
+
+
+@router.patch("/{env_id}/preco-trava")
+def set_environment_preco_trava(
+    env_id: str, payload: PrecoTravaRequest, user=Depends(require_admin)
+):
+    """Troca o interruptor da trava de preço (desligado | observando | ligado)."""
+    if environments_repo.get(env_id) is None:
+        raise HTTPException(status_code=404, detail="Ambiente não encontrado")
+    environments_repo.set_preco_trava_modo(env_id, payload.modo, por=user.email)
+    return environments_repo.get(env_id)
 
 
 class ErpBaseRequest(BaseModel):

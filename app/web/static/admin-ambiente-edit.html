@@ -209,6 +209,29 @@
         </p>
       </fieldset>
 
+      <!-- Trava de preço: só existe na edição (o ambiente precisa existir). Sem
+           `name` no select pra não entrar no payload do formulário principal. -->
+      <fieldset id="preco-trava-fs" hidden>
+        <legend>Trava de preço</legend>
+        <div class="row">
+          <label>
+            <span>Modo</span>
+            <select id="preco-trava-modo">
+              <option value="desligado">Desligado</option>
+              <option value="observando">Observando</option>
+              <option value="ligado">Ligado</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint">
+          Desligado: como hoje. Observando: avalia e mostra, não bloqueia. Ligado: pedido só sai com preço da tabela ou aprovado no Flow.
+        </p>
+        <div class="actions" style="margin-top:.75rem">
+          <button type="button" id="btn-save-preco-trava" class="btn btn-secondary">Salvar trava de preço</button>
+          <span id="preco-trava-status" class="flowpcp-status"></span>
+        </div>
+      </fieldset>
+
       <fieldset>
         <legend>Pastas</legend>
         <label>
@@ -532,6 +555,7 @@
       // aceita) — esconder na criação evita o campo parecer salvo e não ser.
       document.getElementById('figura-fiscal-label').hidden = false;
       document.getElementById('figura-fiscal-hint').hidden = false;
+      document.getElementById('preco-trava-fs').hidden = false;
       Promise.all([
         fetch('/api/admin/environments/' + envId).then(r => {
           if (r.status === 401) { location.href = '/login'; return; }
@@ -551,6 +575,7 @@
         }
         f.elements['slug'].readOnly = true;
         erpBasePadrao();
+        document.getElementById('preco-trava-modo').value = env.preco_trava_modo || 'desligado';
         // FlowPCP: prefill (sem o token, que é write-only) e revela a seção.
         fv('flowpcp_enabled').checked = !!env.flowpcp_enabled;
         fv('flowpcp_base_url').value = env.flowpcp_base_url ?? '';
@@ -844,6 +869,36 @@
         erpStatus.className = 'flowpcp-status err';
       } finally {
         erpDesbloquear.disabled = false;
+      }
+    });
+
+    // Trava de preço: PATCH só do modo (select sem `name`, fora do payload do form).
+    document.getElementById('btn-save-preco-trava').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const status = document.getElementById('preco-trava-status');
+      status.textContent = '';
+      status.className = 'flowpcp-status';
+      btn.disabled = true;
+      try {
+        const r = await fetch('/api/admin/environments/' + envId + '/preco-trava', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ modo: document.getElementById('preco-trava-modo').value }),
+        });
+        if (r.ok) {
+          status.textContent = '✓ Trava de preço salva';
+          status.classList.add('ok');
+        } else {
+          const t = await r.text();
+          let msg;
+          try { msg = JSON.parse(t).detail || t; } catch { msg = t || ('Erro ' + r.status); }
+          status.textContent = '✗ ' + (typeof msg === 'string' ? msg : 'Erro ' + r.status);
+          status.classList.add('err');
+        }
+      } catch (err) {
+        status.textContent = '✗ ' + err.message; status.classList.add('err');
+      } finally {
+        btn.disabled = false;
       }
     });
 
