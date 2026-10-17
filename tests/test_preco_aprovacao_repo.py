@@ -173,3 +173,47 @@ def test_cancelar_marca_tambem_linha_decidida(conn):
     _decidir(conn, ass)
     assert repo.cancelar_do_pedido(conn, "imp1", motivo="substituido", em=DEPOIS) == ids
     assert repo.decisoes_validas(conn, "imp1", {0: ass}) == {}
+
+
+def test_item_editado_substitui_pendencia_antiga(conn):
+    ass_velha, ids_velhos = _pendencia(conn, preco=54.0)
+    ass_nova = repo.assinatura(_item(55.0), "123")
+    ids = repo.substituir_obsoletas(conn, "imp1", {0: ass_nova}, em=DEPOIS)
+    assert ids == ids_velhos
+    novos = repo.registrar_pendencias(conn, "imp1", [(_aval(0, 5500), ass_nova)], agora=DEPOIS)
+    fila = repo.pendentes_nao_enviadas(conn, 10)
+    assert [r["id"] for r in fila] == novos
+    assert repo.substituir_obsoletas(conn, "imp1", {0: ass_nova}, em=DEPOIS) == []
+    assert ass_velha != ass_nova
+
+
+def test_edicao_que_regulariza_o_item_cancela_a_linha_antiga(conn):
+    _, ids = _pendencia(conn, preco=54.0)
+    assert repo.substituir_obsoletas(conn, "imp1", {0: "outra"}, em=DEPOIS) == ids
+    assert repo.pendentes_nao_enviadas(conn, 10) == []
+    # item removido (fora do mapa)
+    _, ids2 = _pendencia(conn, "imp2", 3)
+    assert repo.substituir_obsoletas(conn, "imp2", {}, em=DEPOIS) == ids2
+
+
+def test_substituida_ja_enviada_precisa_de_aviso_ao_flow(conn):
+    _, ids = _pendencia(conn)
+    repo.marcar_enviada(conn, ids, em=AGORA)
+    repo.substituir_obsoletas(conn, "imp1", {0: "outra"}, em=DEPOIS)
+    avisar = repo.cancelamentos_nao_avisados(conn, 10)
+    assert [r["id"] for r in avisar] == ids
+    assert avisar[0]["motivo_cancelamento"] == "substituido"
+
+
+def test_nao_registra_pendencia_em_pedido_cancelado(conn):
+    ass, _ = _pendencia(conn)
+    repo.cancelar_do_pedido(conn, "imp1", motivo="pedido_cancelado", em=DEPOIS)
+    ass2 = repo.assinatura(_item(60.0), "123")
+    assert repo.registrar_pendencias(conn, "imp1", [(_aval(1, 6000), ass2)], agora=DEPOIS) == []
+    assert repo.pendentes_nao_enviadas(conn, 10) == []
+
+
+def test_decisao_invalida_levanta(conn):
+    ass, _ = _pendencia(conn)
+    with pytest.raises(ValueError):
+        _decidir(conn, ass, decisao="qualquer")

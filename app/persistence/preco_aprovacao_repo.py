@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 Decisao = Literal["acordo", "regra", "preco_inicial", "recusado", "auto_tabela"]
 MotivoCancelamento = Literal["pedido_cancelado", "substituido"]
+_DECISOES = frozenset({"acordo", "regra", "preco_inicial", "recusado", "auto_tabela"})
 
 
 def assinatura(item: OrderItem, fire_produto_id: str | None) -> str:
@@ -39,6 +40,12 @@ def registrar_pendencias(
 ) -> list[int]:
     """Cria pendência para (item, assinatura) ainda sem linha; devolve só os ids novos."""
     novos: list[int] = []
+    if conn.execute(
+        "SELECT 1 FROM preco_aprovacao WHERE import_id = ? "
+        "AND motivo_cancelamento = 'pedido_cancelado' LIMIT 1",
+        (import_id,),
+    ).fetchone():
+        return novos
     with conn:
         for av, ass in itens:
             cur = conn.execute(
@@ -78,6 +85,8 @@ def aplicar_decisao(
 ) -> bool:
     """Grava a decisão. False (nada gravado) se não há linha com essa assinatura
     (item mudou) ou se ela foi cancelada. Nova decisão sobrescreve (Flow manda)."""
+    if decisao not in _DECISOES:
+        raise ValueError(f"decisão inválida: {decisao!r}")
     with conn:
         cur = conn.execute(
             """
@@ -168,6 +177,34 @@ def cancelar_do_pedido(
                 f"UPDATE preco_aprovacao SET cancelada_em = ?, motivo_cancelamento = ? "  # noqa: S608
                 f"WHERE id IN ({_in(ids)})",
                 (em.isoformat(), motivo, *ids),
+            )
+    return ids
+
+
+def substituir_obsoletas(
+    conn: sqlite3.Connection,
+    import_id: str,
+    assinaturas_atuais: dict[int, str],
+    *,
+    em: datetime,
+) -> list[int]:
+    """Cancela (motivo 'substituido') as linhas ativas cuja assinatura não é a atual
+    do item, ou cujo item não existe mais. Devolve os ids."""
+    with conn:
+        ids = [
+            r["id"]
+            for r in conn.execute(
+                "SELECT id, item_index, assinatura FROM preco_aprovacao "
+                "WHERE import_id = ? AND cancelada_em IS NULL ORDER BY id",
+                (import_id,),
+            )
+            if assinaturas_atuais.get(r["item_index"]) != r["assinatura"]
+        ]
+        if ids:
+            conn.execute(
+                f"UPDATE preco_aprovacao SET cancelada_em = ?, "  # noqa: S608
+                f"motivo_cancelamento = 'substituido' WHERE id IN ({_in(ids)})",
+                (em.isoformat(), *ids),
             )
     return ids
 
