@@ -1763,6 +1763,8 @@ git commit -m "feat(cadastro): modos de gravação da volta com livro idempotent
 
 ### Task 8: Recuperação de item interrompido e `incerto`
 
+> **Emenda 3 (revisão da Task 4, 17/10).** Quem libera uma linha com `seq_reservado` ("existe e é diferente" ou "não existe") **zera o `seq_reservado` na mesma transição**, porque a ausência do nosso produto naquele SEQ está comprovada. O repositório recusa reaproveitar `liberado` que ainda tem SEQ, então liberar sem zerar deixaria o item parado. Use uma função do repo `liberar_comprovado(conn, cadastro_id, versao) -> bool` (de `em_andamento` para `liberado`, zerando `seq_reservado`; acrescente-a com teste). `confirmado` e `orfao` são finais no repositório.
+
 **Files:**
 - Modify: `app/integrations/flowpcp/cadastro_volta.py`
 - Test: `tests/test_cadastro_volta_recuperar.py` (novo)
