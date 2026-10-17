@@ -17,6 +17,9 @@ if TYPE_CHECKING:
     import sqlite3
 
 RECURSO_PRECOS = "precos"
+RECURSO_REDES = "redes"
+# Frescor exige AMBOS: recurso esperado sem linha = nunca sincronizou (bloqueia).
+RECURSOS_ESPERADOS = (RECURSO_PRECOS, RECURSO_REDES)
 
 
 @dataclass(frozen=True)
@@ -35,13 +38,23 @@ def aplicar_lote(
     precos: list[dict[str, Any]],
     cursor: str,
     agora: datetime,
-    recurso: str = RECURSO_PRECOS,
+    recursos: tuple[str, ...] | None = None,
 ) -> None:
     """Upsert idempotente numa única transação (tudo ou nada).
 
-    `removido=True` apaga a linha. `recurso` identifica o cursor gravado em
-    `preco_sync` (default `precos`; o contrato pode trazer cursor de redes
-    separado)."""
+    `removido=True` apaga a linha. `agora` deve ter timezone. O cursor/hora é
+    gravado em `preco_sync` para cada recurso que o lote carrega (redes ou
+    cnpjs -> "redes"; preços -> "precos"); lote vazio conta como sync dos
+    dois. `recursos` força o conjunto explicitamente."""
+    if agora.tzinfo is None or agora.utcoffset() is None:
+        raise ValueError("agora deve ter timezone (datetime aware)")
+    if recursos is None:
+        marcados = []
+        if redes or cnpjs:
+            marcados.append(RECURSO_REDES)
+        if precos:
+            marcados.append(RECURSO_PRECOS)
+        recursos = tuple(marcados) or RECURSOS_ESPERADOS
     agora_iso = agora.isoformat()
     with conn:
         for r in redes:
@@ -91,12 +104,13 @@ def aplicar_lote(
                     " vigente_ate=excluded.vigente_ate",
                     (*chave, int(p["preco_centavos"]), ate.isoformat() if ate else None),
                 )
-        conn.execute(
-            "INSERT INTO preco_sync (recurso, cursor, ultima_ok_em) VALUES (?, ?, ?)"
-            " ON CONFLICT(recurso) DO UPDATE SET cursor=excluded.cursor,"
-            " ultima_ok_em=excluded.ultima_ok_em",
-            (recurso, cursor, agora_iso),
-        )
+        for recurso in recursos:
+            conn.execute(
+                "INSERT INTO preco_sync (recurso, cursor, ultima_ok_em) VALUES (?, ?, ?)"
+                " ON CONFLICT(recurso) DO UPDATE SET cursor=excluded.cursor,"
+                " ultima_ok_em=excluded.ultima_ok_em",
+                (recurso, cursor, agora_iso),
+            )
 
 
 def _rede(conn: sqlite3.Connection, rede_id: str) -> Rede | None:
@@ -128,17 +142,19 @@ def resolver_rede(conn: sqlite3.Connection, cnpj: str) -> Rede | None:
 def preco_vigente(
     conn: sqlite3.Connection, rede_id: str, fire_produto_id: str, data: date
 ) -> int | None:
-    """Preço em centavos da linha com `vigente_desde <= data` e `vigente_ate`
-    nulo ou `> data`; em empate, a de maior `vigente_desde`."""
+    """Preço em centavos. Só conta a linha com maior `vigente_desde <= data`;
+    se ela já expirou (`vigente_ate <= data`) → None (nunca cai numa linha
+    mais antiga: preço velho é fail-open)."""
     iso = data.isoformat()
     row = conn.execute(
-        "SELECT preco_centavos FROM preco_tabela"
+        "SELECT preco_centavos, vigente_ate FROM preco_tabela"
         " WHERE rede_id = ? AND fire_produto_id = ? AND vigente_desde <= ?"
-        " AND (vigente_ate IS NULL OR vigente_ate > ?)"
         " ORDER BY vigente_desde DESC LIMIT 1",
-        (str(rede_id), str(fire_produto_id), iso, iso),
+        (str(rede_id), str(fire_produto_id), iso),
     ).fetchone()
-    return None if row is None else int(row[0])
+    if row is None or (row[1] is not None and row[1] <= iso):
+        return None
+    return int(row[0])
 
 
 def estado_sync(conn: sqlite3.Connection, recurso: str) -> tuple[str | None, datetime | None]:
@@ -153,16 +169,10 @@ def estado_sync(conn: sqlite3.Connection, recurso: str) -> tuple[str | None, dat
 def ultima_sync_ok(
     conn: sqlite3.Connection, recursos: tuple[str, ...] | None = None
 ) -> datetime | None:
-    """A `ultima_ok_em` MAIS ANTIGA entre os recursos (decide a regra das 24 h).
+    """A `ultima_ok_em` MAIS ANTIGA entre os recursos esperados (decide as 24 h).
 
-    Sem `recursos`: todos os recursos já gravados; tabela vazia → None. Com
-    `recursos`: exige cada um; se algum nunca sincronizou → None."""
-    if recursos is None:
-        rows = conn.execute("SELECT ultima_ok_em FROM preco_sync").fetchall()
-        valores = [r[0] for r in rows]
-    else:
-        valores = [estado_sync(conn, r)[1] for r in recursos]
-        valores = [v.isoformat() if v else None for v in valores]
-    if not valores or any(v is None for v in valores):
+    Default `RECURSOS_ESPERADOS`: se algum nunca sincronizou → None."""
+    datas = [estado_sync(conn, r)[1] for r in (recursos or RECURSOS_ESPERADOS)]
+    if any(d is None for d in datas):
         return None
-    return min(datetime.fromisoformat(v) for v in valores)
+    return min(d for d in datas if d is not None)

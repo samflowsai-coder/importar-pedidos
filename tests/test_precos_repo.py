@@ -123,15 +123,48 @@ def test_estado_sync_grava_cursor_e_hora(conn):
 
 def test_ultima_sync_ok_e_a_mais_antiga(conn):
     antes = datetime(2026, 10, 16, 8, 0, tzinfo=UTC)
-    precos_repo.aplicar_lote(
-        conn, redes=[], cnpjs=[], precos=[], cursor="r1", agora=antes, recurso="redes"
+    _lote(conn, precos=[_preco("A", "7", 1, date(2026, 10, 1))], agora=antes)
+    assert precos_repo.estado_sync(conn, "redes") == (None, None)
+    assert precos_repo.ultima_sync_ok(conn) is None  # redes nunca sincronizou
+    _lote(
+        conn,
+        redes=[{"id": "A", "nome": "A", "travada": False, "travada_motivo": None}],
     )
     assert precos_repo.ultima_sync_ok(conn) == antes
-    # recurso exigido que nunca sincronizou: sem garantia de frescor
-    assert precos_repo.ultima_sync_ok(conn, recursos=("redes", "precos")) is None
-    _lote(conn)
-    assert precos_repo.ultima_sync_ok(conn) == antes
-    assert precos_repo.ultima_sync_ok(conn, recursos=("redes", "precos")) == antes
+
+
+def test_ultima_sync_ok_none_se_so_redes_sincronizou(conn):
+    _lote(
+        conn,
+        redes=[{"id": "A", "nome": "A", "travada": False, "travada_motivo": None}],
+    )
+    assert precos_repo.ultima_sync_ok(conn) is None
+
+
+def test_lote_com_redes_e_precos_marca_os_dois(conn):
+    _lote(
+        conn,
+        redes=[{"id": "A", "nome": "A", "travada": False, "travada_motivo": None}],
+        precos=[_preco("A", "7", 1, date(2026, 10, 1))],
+    )
+    assert precos_repo.ultima_sync_ok(conn) == AGORA
+
+
+def test_preco_expirado_nao_cai_em_linha_antiga(conn):
+    _lote(
+        conn,
+        precos=[
+            _preco("A", "7", 5200, date(2026, 10, 1)),  # aberta
+            _preco("A", "7", 5460, date(2026, 11, 1), date(2026, 11, 10)),
+        ],
+    )
+    assert precos_repo.preco_vigente(conn, "A", "7", date(2026, 11, 5)) == 5460
+    assert precos_repo.preco_vigente(conn, "A", "7", date(2026, 11, 10)) is None
+
+
+def test_agora_naive_e_recusado(conn):
+    with pytest.raises(ValueError):
+        _lote(conn, agora=datetime(2026, 10, 17, 12, 0))
 
 
 def test_lote_e_atomico(conn):
