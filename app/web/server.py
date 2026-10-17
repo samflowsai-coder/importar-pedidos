@@ -461,7 +461,6 @@ def _run_exporters(order, output_path: Path, *, env: dict | None = None) -> dict
     """
     from app import config as app_config
     from app.exporters.erp_exporter import ERPExporter
-    from app.exporters.firebird_exporter import FirebirdExporter
 
     cfg = app_config.load()
     export_mode = cfg.get("export_mode", "xlsx")
@@ -476,10 +475,9 @@ def _run_exporters(order, output_path: Path, *, env: dict | None = None) -> dict
         output_files = [{"name": p.name, "path": str(p)} for p in paths]
 
     if export_mode in ("db", "both"):
-        db_exp = FirebirdExporter(env=env)
-        db_result = db_exp.export(order)
-        db_result_dict = db_result.to_dict()
-        fire_codigo = db_result.fire_codigo
+        # Gravação no Fire só pelo preview → enviar (preço, de-para e cliente
+        # checados em `_send_one_to_fire`). Este caminho legado nunca grava.
+        db_result_dict = {"skipped": True, "skip_reason": "USE_PREVIEW"}
 
     return {
         "output_files": output_files,

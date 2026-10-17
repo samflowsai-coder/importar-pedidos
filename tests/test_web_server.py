@@ -2630,3 +2630,41 @@ def test_send_to_fire_item_vinculado_vai_pelo_seq_do_depara(monkeypatch):
     r = client.post(f"/api/imported/{entry_id}/send-to-fire")
     assert r.status_code == 200, r.text
     assert recebido["produtos_por_item"] == {0: 77}
+
+
+# ── Caminhos legados nunca gravam no Fire sem o preview ──────────────────────
+
+
+@pytest.mark.parametrize("modo", ["db", "both"])
+def test_import_direto_em_modo_db_nunca_chama_firebird(monkeypatch, tmp_path, modo):
+    from app import config as app_config
+    from app.exporters import firebird_exporter as fb_mod
+    from app.web import server as server_mod
+
+    def _explode(self, *a, **kw):
+        raise AssertionError("FirebirdExporter.export não pode ser chamado fora do preview")
+
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _explode)
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": modo},
+    )
+
+    pdf = SAMPLES / "2600009562-2026-02-25.pdf"
+    if not pdf.exists():
+        pytest.skip("Sample PDF not available")
+    from app.ingestion.file_loader import LoadedFile
+    from app.pipeline import process
+
+    loaded = LoadedFile(path=pdf, extension=".pdf", raw=pdf.read_bytes())
+    order = process(loaded)
+
+    out = server_mod._run_exporters(order, tmp_path)
+
+    assert out["db_result"] == {"skipped": True, "skip_reason": "USE_PREVIEW"}
+    assert out["fire_codigo"] is None
+    if modo == "both":
+        assert out["output_files"], "em both o XLSX ainda precisa ser gerado"
+    else:
+        assert out["output_files"] == []
