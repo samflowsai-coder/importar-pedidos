@@ -362,6 +362,32 @@ CREATE TABLE IF NOT EXISTS preco_sync (
     cursor      TEXT,
     ultima_ok_em TEXT
 );
+
+-- Aprovação de preço por linha do pedido (trava de preço). A decisão vem do
+-- Flow; a assinatura (produto|preço|qtd) invalida a decisão se o item mudar.
+CREATE TABLE IF NOT EXISTS preco_aprovacao (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    import_id               TEXT NOT NULL,
+    item_index              INTEGER NOT NULL,
+    assinatura              TEXT NOT NULL,
+    motivo_fila             TEXT NOT NULL,
+    preco_pedido_centavos   INTEGER,
+    preco_tabela_centavos   INTEGER,
+    situacao                TEXT NOT NULL DEFAULT 'pendente',
+    decisao                 TEXT,
+    preco_final_centavos    INTEGER,
+    decidido_por            TEXT,
+    decidido_em             TEXT,
+    motivo_recusa           TEXT,
+    flow_id                 TEXT,
+    criado_em               TEXT NOT NULL,
+    enviada_em              TEXT,
+    cancelada_em            TEXT,
+    motivo_cancelamento     TEXT,
+    cancelamento_avisado_em TEXT,
+    UNIQUE (import_id, item_index, assinatura)
+);
+CREATE INDEX IF NOT EXISTS idx_preco_aprovacao_import ON preco_aprovacao(import_id);
 """
 
 INDEXES_SQL = """

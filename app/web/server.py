@@ -3122,6 +3122,20 @@ def cancel_import(
         except InvalidTransitionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         repo.append_audit(import_id, "cancelled", {"reason": reason})
+    try:
+        from datetime import UTC
+
+        from app.persistence import db as _db
+        from app.persistence import preco_aprovacao_repo
+
+        with _db.connect() as _pconn:
+            preco_aprovacao_repo.cancelar_do_pedido(
+                _pconn, import_id, motivo="pedido_cancelado", em=datetime.now(UTC)
+            )
+    except Exception as exc:  # cancelar nunca falha por causa da trava de preço
+        from app.utils.logger import logger
+
+        logger.warning(f"cancelar aprovações de preço falhou ({type(exc).__name__}): {exc}")
     return JSONResponse(
         {
             "entry_id": import_id,

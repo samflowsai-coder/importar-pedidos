@@ -2668,3 +2668,43 @@ def test_import_direto_em_modo_db_nunca_chama_firebird(monkeypatch, tmp_path, mo
         assert out["output_files"], "em both o XLSX ainda precisa ser gerado"
     else:
         assert out["output_files"] == []
+
+
+def test_cancel_marca_pendencias_de_preco_como_canceladas():
+    import uuid
+    from datetime import UTC, datetime
+
+    from app.erp.preco_avaliacao import ItemAvaliado
+    from app.persistence import preco_aprovacao_repo, repo
+
+    entry_id = str(uuid.uuid4())
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "x.pdf",
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "TEST-PRECO",
+            "customer": "ACME",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {"header": {"order_number": "TEST-PRECO"}, "items": []},
+        }
+    )
+    with db.connect() as conn:
+        preco_aprovacao_repo.registrar_pendencias(
+            conn,
+            entry_id,
+            [(ItemAvaliado(0, "1", "fila", "preco_diferente", 5400, 5000), "ass")],
+            agora=datetime.now(UTC),
+        )
+
+    r = client.post(f"/api/imported/{entry_id}/cancel", json={"reason": "duplicado"})
+    assert r.status_code == 200
+
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT cancelada_em, motivo_cancelamento FROM preco_aprovacao WHERE import_id = ?",
+            (entry_id,),
+        ).fetchone()
+    assert row["cancelada_em"] is not None
+    assert row["motivo_cancelamento"] == "pedido_cancelado"
