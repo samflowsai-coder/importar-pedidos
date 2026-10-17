@@ -620,7 +620,7 @@ def test_send_to_fire_inserts_when_success(monkeypatch):
         }
     )
 
-    def _fake_export(self, order, *, override_client_id=None, produtos_por_item=None):
+    def _fake_export(self, order, *, override_client_id=None, produtos_por_item=None, obs=None):
         return fb_mod.FirebirdExportResult(
             order_number=order.header.order_number,
             items_inserted=1,
@@ -678,8 +678,10 @@ def _stub_fire_success(monkeypatch):
     monkeypatch.setattr(
         fb_mod.FirebirdExporter,
         "export",
-        lambda self, order, *, override_client_id=None, produtos_por_item=None: fb_mod.FirebirdExportResult(
-            order_number=order.header.order_number, items_inserted=1, fire_codigo=4242
+        lambda self, order, *, override_client_id=None, produtos_por_item=None, obs=None: (
+            fb_mod.FirebirdExportResult(
+                order_number=order.header.order_number, items_inserted=1, fire_codigo=4242
+            )
         ),
     )
     # Neutraliza price-check (sem Fire real) — deterministico.
@@ -780,7 +782,7 @@ def test_batch_send_to_fire_mixed_outcomes(monkeypatch):
 
     fire_seq = iter([4001, 4002])
 
-    def _fake_export(self, order, *, override_client_id=None, produtos_por_item=None):
+    def _fake_export(self, order, *, override_client_id=None, produtos_por_item=None, obs=None):
         return fb_mod.FirebirdExportResult(
             order_number=order.header.order_number,
             items_inserted=1,
@@ -866,7 +868,7 @@ def test_export_xlsx_generates_files_without_calling_firebird(monkeypatch, tmp_p
     monkeypatch.setattr(erp_mod.ERPExporter, "export", _fake_erp_export)
 
     # Hard-fail if Firebird is touched.
-    def _explode(self, order, *, override_client_id=None, produtos_por_item=None):
+    def _explode(self, order, *, override_client_id=None, produtos_por_item=None, obs=None):
         raise AssertionError("FirebirdExporter.export must not be called in xlsx mode")
 
     monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _explode)
@@ -1561,7 +1563,7 @@ def test_send_to_fire_passes_override_to_exporter(monkeypatch):
 
     captured = {}
 
-    def _fake_export(self, order, *, override_client_id=None, produtos_por_item=None):
+    def _fake_export(self, order, *, override_client_id=None, produtos_por_item=None, obs=None):
         captured["override"] = override_client_id
         return fb_mod.FirebirdExportResult(
             order_number=order.header.order_number,
@@ -1841,7 +1843,7 @@ def test_send_to_fire_blocked_by_price_mismatch(monkeypatch):
 
     called = {"export": False}
 
-    def _no_export(self, order, *, override_client_id=None, produtos_por_item=None):
+    def _no_export(self, order, *, override_client_id=None, produtos_por_item=None, obs=None):
         called["export"] = True
         raise AssertionError("FirebirdExporter.export não pode ser chamado")
 
@@ -2712,7 +2714,7 @@ def test_send_to_fire_item_vinculado_vai_pelo_seq_do_depara(monkeypatch):
 
     recebido: dict = {}
 
-    def _fake_export(self, order, *, override_client_id=None, produtos_por_item=None):
+    def _fake_export(self, order, *, override_client_id=None, produtos_por_item=None, obs=None):
         recebido["produtos_por_item"] = produtos_por_item
         return fb_mod.FirebirdExportResult(
             order_number=order.header.order_number, items_inserted=2, fire_codigo=4242

@@ -152,6 +152,24 @@ def _consolidar(lote: dict, cfg: dict | None, pernas: list[dict]) -> Consolidado
     )
 
 
+def _reconstruir(lote: dict, cfg: dict | None, pernas: list[dict]) -> Consolidado:
+    consolidado = _consolidar(lote, cfg, pernas)
+    if _serializar(consolidado.composicao) != lote["composicao"]:
+        raise RuntimeError(
+            f"composição de {lote.get('import_id_espelho')} diverge da gravada no fechamento"
+        )
+    return consolidado
+
+
+def consolidado_do_lote(lote: dict) -> Consolidado:
+    """O pedido espelho (itens, composição e OBS) que o lote fechado gera hoje,
+    conferido contra a composição gravada no fechamento. Falha propaga."""
+    with db.connect_shared() as conn:
+        pernas = lotes_repo.pernas_do_lote(conn, lote["id"])
+        cfg = lotes_repo.get_config(conn, lote["env_origem_slug"])
+    return _reconstruir(lote, cfg, pernas)
+
+
 def _serializar(composicao: list) -> list[list[dict]]:
     return [
         [
@@ -216,9 +234,7 @@ def materializar_espelho(lote: dict, *, agora: datetime) -> bool:
     with db.connect_shared() as conn:
         pernas = lotes_repo.pernas_do_lote(conn, lote["id"])
         cfg = lotes_repo.get_config(conn, lote["env_origem_slug"])
-    consolidado = _consolidar(lote, cfg, pernas)
-    if _serializar(consolidado.composicao) != lote["composicao"]:
-        raise RuntimeError(f"composição de {import_id} diverge da gravada no fechamento")
+    consolidado = _reconstruir(lote, cfg, pernas)
     order = consolidado.order
     if lote.get("closed_at"):
         fechado_em = datetime.fromisoformat(lote["closed_at"])
