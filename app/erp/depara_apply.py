@@ -1,4 +1,4 @@
-"""Aplica o de-para no Order antes de gerar o XLS.
+"""Aplica o de-para no Order antes de gerar o XLS ou inserir no Fire.
 
 Item resolvido por vínculo sai com a identidade do Fire (codigo/ean), com a
 referência original do varejista anexada ao OBS (rastreabilidade). Mutação
@@ -55,5 +55,12 @@ def apply(order: Order, *, conn: sqlite3.Connection) -> list[dict]:
             it.ean = dv["fire_ean"]
         ref_note = f"ref cliente: {orig}"
         it.obs = f"{it.obs} | {ref_note}" if it.obs else ref_note
-        changed.append({"item_index": idx, "fire_codigo": dv["fire_codigo"], "orig": orig})
+        changed.append(
+            {
+                "item_index": idx,
+                "fire_produto_id": dv["fire_produto_id"],
+                "fire_codigo": dv["fire_codigo"],
+                "orig": orig,
+            }
+        )
     return changed

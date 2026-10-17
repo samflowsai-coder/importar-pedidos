@@ -46,7 +46,9 @@ rota `/api/imported/{id}/export-xlsx` (regressão real: pedido AF185/H2S4,
 
 ## Identidade do Fire via de-para (`depara_apply`)
 
-Antes de gerar o XLS, `_export_one_xlsx` (web) chama
+Antes de gerar o XLS, `_export_one_xlsx` (web) — e também `_send_one_to_fire`
+no insert direto, que além disso passa o SEQ do vínculo ao `FirebirdExporter`
+(ver `docs/ai/modules/erp.md`) — chama
 `app/erp/depara_apply.apply(order, *, conn)`: para cada item com vínculo de-para
 (ver `docs/ai/modules/erp.md`), **muta o item** com a identidade do Fire —
 `product_code = fire_codigo`, `ean = fire_ean` (quando houver), e anexa

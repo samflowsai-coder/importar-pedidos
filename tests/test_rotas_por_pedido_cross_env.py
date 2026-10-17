@@ -214,7 +214,7 @@ def espia(monkeypatch, tmp_path):
         def __init__(self, env=None):
             visto["firebird"] = (env or {}).get("slug")
 
-        def export(self, order, *, override_client_id=None):  # noqa: ARG002
+        def export(self, order, *, override_client_id=None, produtos_por_item=None):  # noqa: ARG002
             return _ResultadoSkip()
 
     class _ResultadoSkip:
