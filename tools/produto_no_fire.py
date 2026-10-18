@@ -23,12 +23,15 @@ COLUNAS_PRODUTO = frozenset(
 )
 _PREFIXOS_SISTEMA = ("RDB$", "MON$", "SEC$")
 LIMITE_LINHAS = 50
+TIPOS_INTEIROS = frozenset({7, 8, 16})  # SMALLINT, INTEGER, BIGINT
+MAX_TEXTO = 200
 _SO_SELECT = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
 _IDENT = re.compile(r"^[A-Z][A-Z0-9_$]*$")
 
 SQL_CATALOGO = (
-    "SELECT TRIM(RF.RDB$RELATION_NAME), TRIM(RF.RDB$FIELD_NAME) "
+    "SELECT TRIM(RF.RDB$RELATION_NAME), TRIM(RF.RDB$FIELD_NAME), F.RDB$FIELD_TYPE "
     "FROM RDB$RELATION_FIELDS RF "
+    "JOIN RDB$FIELDS F ON F.RDB$FIELD_NAME = RF.RDB$FIELD_SOURCE "
     "JOIN RDB$RELATIONS R ON R.RDB$RELATION_NAME = RF.RDB$RELATION_NAME "
     "WHERE COALESCE(R.RDB$SYSTEM_FLAG, 0) = 0 AND R.RDB$VIEW_BLR IS NULL"
 )
@@ -40,15 +43,18 @@ def so_select(sql: str) -> str:
 
 
 def _ident(nome: str) -> str:
-    if not _IDENT.match(nome):
+    if not _IDENT.fullmatch(nome):
         raise ValueError(f"identificador inválido: {nome!r}")
     return f'"{nome}"'
 
 
-def escolher_alvos(catalogo: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    """(tabela, coluna) do catálogo cuja coluna é de produto, sem tabelas de sistema."""
+def escolher_alvos(catalogo: list[tuple[str, str, int]]) -> list[tuple[str, str]]:
+    """(tabela, coluna) do catálogo (tabela, coluna, tipo) cuja coluna é de produto
+    e de tipo inteiro, sem tabelas de sistema."""
     alvos = {
-        (t, c) for t, c in catalogo if c in COLUNAS_PRODUTO and not t.startswith(_PREFIXOS_SISTEMA)
+        (t, c)
+        for t, c, tipo in catalogo
+        if c in COLUNAS_PRODUTO and tipo in TIPOS_INTEIROS and not t.startswith(_PREFIXOS_SISTEMA)
     }
     return sorted(alvos)
 
@@ -60,7 +66,8 @@ def montar_sql(tabela: str, coluna: str) -> str:
 def _texto(valor) -> str:
     if isinstance(valor, bytes):
         return f"<{len(valor)} bytes>"
-    return repr(valor)
+    texto = repr(valor)
+    return texto if len(texto) <= MAX_TEXTO else texto[:MAX_TEXTO] + "…"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -81,11 +88,17 @@ def main(argv: list[str] | None = None) -> int:
     with FirebirdConnection().connect_somente_leitura(environments_repo.to_fb_config(env)) as conn:
         cur = conn.cursor()
         cur.execute(so_select(SQL_CATALOGO))
-        alvos = escolher_alvos([(r[0], r[1]) for r in cur.fetchall()])
+        alvos = escolher_alvos([(r[0], r[1], r[2]) for r in cur.fetchall()])
         for tabela, coluna in alvos:
-            cur.execute(so_select(montar_sql(tabela, coluna)), (args.seq,))
-            nomes = [d[0].strip() for d in cur.description]
-            linhas = cur.fetchall()
+            # Uma tabela problemática (permissão, view quebrada, identificador
+            # fora do padrão) vira aviso e não derruba o rastro inteiro.
+            try:
+                cur.execute(so_select(montar_sql(tabela, coluna)), (args.seq,))
+                nomes = [d[0].strip() for d in cur.description]
+                linhas = cur.fetchall()
+            except Exception as e:  # noqa: BLE001
+                print(f"AVISO {tabela}.{coluna}: {type(e).__name__}", file=sys.stderr)
+                continue
             if not linhas:
                 continue
             print(f"\n==== {tabela}.{coluna} = {args.seq}: {len(linhas)} linha(s) ====")

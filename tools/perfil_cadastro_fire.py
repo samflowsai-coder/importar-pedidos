@@ -32,7 +32,7 @@ def so_select(sql: str) -> str:
 
 
 def _ident(nome: str) -> str:
-    if not _IDENT.match(nome):
+    if not _IDENT.fullmatch(nome):
         raise ValueError(f"identificador inválido: {nome!r}")
     return f'"{nome}"'
 
@@ -67,7 +67,7 @@ def _colunas_produtos(cur) -> list[str]:
 
 
 def _ultimos_seqs(cur, filtro: str, n: int) -> list[int]:
-    # `n` é int validado pelo argparse; FIRST não aceita placeholder em FB 2.5.
+    # `n` é int validado pelo argparse; inline com int() (o FB 2.x aceitaria `?`).
     cur.execute(
         so_select(
             f"SELECT FIRST {int(n)} SEQ FROM PRODUTOS WHERE GRUPO = ? AND {filtro} ORDER BY SEQ DESC"
