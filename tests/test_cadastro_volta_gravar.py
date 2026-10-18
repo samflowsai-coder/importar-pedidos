@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.erp import cadastro_fire
+from app.erp.exceptions import FirebirdConnectionError
 from app.integrations.flowpcp import cadastro_volta as cv
 from app.integrations.flowpcp.cadastro_resultado import mensagem_para_flow
 from app.integrations.flowpcp.cadastro_schema import PendentesResposta
@@ -522,7 +523,7 @@ def test_fire_fora_responde_transitorio(modo, env_slug, env_conn, monkeypatch):
     flow = Flow([PAR])
 
     def _falha(*a, **k):
-        raise cv.FirebirdConnectionError("recusou")
+        raise FirebirdConnectionError("recusou")
 
     monkeypatch.setattr(cv, "_abrir_fire_escrita", _falha)
     cv.processar_ambiente(env_slug, _client=flow, _fire_conn=None, _env_conn=env_conn,
@@ -544,7 +545,7 @@ def test_erp_fora_com_item_gravado_sem_volta_reentregue_so_reenvia_o_gravado(
            FireGravavel(), env_conn)
 
     def _falha(*a, **k):
-        raise cv.FirebirdConnectionError("recusou")
+        raise FirebirdConnectionError("recusou")
 
     monkeypatch.setattr(cv, "_abrir_fire_escrita", _falha)
     flow = Flow([PAR], respostas=[resposta] if resposta else None)

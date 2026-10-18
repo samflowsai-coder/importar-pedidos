@@ -24,7 +24,6 @@ from contextlib import ExitStack, nullcontext
 from datetime import UTC, datetime, timedelta
 
 from app.erp.connection import FirebirdConnection
-from app.erp.exceptions import FirebirdConnectionError  # noqa: F401 — reexportado
 from app.integrations.flowpcp import capacidades
 from app.integrations.flowpcp.cadastro_schema import (
     CadastroPendente,

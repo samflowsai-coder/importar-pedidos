@@ -220,7 +220,7 @@ recusa o lote com 400. Spec: `docs/superpowers/specs/2026-10-15-catalogo-composi
 tudo desligado por padrão). *Fiscal* (`catalogo_fiscal.py`, `PORTAL_FLOWPCP_CATALOGO_FISCAL`): o
 catálogo passa a levar `ncm` (tira pontos, espaços e hífens; só vai se sobrar exatamente 8
 dígitos), `tipoItemSped` (0–10 ou 99), `grupoErp` e `codigoNfe`. **`cor` não sai mais**: `DESCRICAO2` é a
-"Descrição Interna" da tela do Fire, não cor (17/10/2026), e `cor_longa` deixou de existir. Valor
+"Descrição Interna" da tela do Fire, não cor (17/10/2026); a extração do catálogo nem a lê mais, e `cor_longa` deixou de existir. Valor
 que não passa vai **ausente** ("não mexer" no Flow) e vira pendência no relatório (`ncm_vazio`,
 `ncm_invalido`, `sped_invalido`). **Pacotes anteriores a 17/10/2026 mandam `DESCRICAO2` como `cor`; só ligar
 `PORTAL_FLOWPCP_CATALOGO_FISCAL` com pacote posterior.** O Flow descarta campo desconhecido sem erro, então o sucesso só

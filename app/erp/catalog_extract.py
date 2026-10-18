@@ -32,7 +32,6 @@ class ProdutoFireDTO:
     grupo_codigo: int | None = None  # GRUPO
     grupo_nome: str | None = None  # GRUPO_PRODUTOS.GRUPO
     codigo_nfe: str | None = None  # CODPARANFE
-    cor: str | None = None  # DESCRICAO2
 
 
 @dataclass(frozen=True)
@@ -119,7 +118,6 @@ def extract_produtos(fire_conn, *, apenas_meias: bool = False) -> list[ProdutoFi
         grupo,
         grupo_nome,
         nfe,
-        cor,
     ) in rows:
         seq_s = str(seq)
         nome = _clean(desc) or ""
@@ -139,7 +137,6 @@ def extract_produtos(fire_conn, *, apenas_meias: bool = False) -> list[ProdutoFi
                 grupo_codigo=_int_ou_none(grupo),
                 grupo_nome=_clean(grupo_nome),
                 codigo_nfe=_clean(nfe),
-                cor=_clean(cor),
             )
         )
     return out

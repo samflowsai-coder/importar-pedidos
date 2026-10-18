@@ -91,8 +91,10 @@ def test_campos_fiscais_completo_com_acento():
 
 
 def test_descricao_interna_nao_vai_como_cor():
-    # DESCRICAO2 do Fire é a "Descrição Interna", não a cor: nunca vira campo fiscal.
-    campos, motivos = cf.campos_fiscais(_dto(cor="BRANCO-BRANCO-BRANCO"))
+    # DESCRICAO2 do Fire é a "Descrição Interna", não a cor: nem é lida do Fire.
+    d = _dto()
+    assert not hasattr(d, "cor")
+    campos, motivos = cf.campos_fiscais(d)
     assert "cor" not in campos and "cor_longa" not in motivos
 
 
