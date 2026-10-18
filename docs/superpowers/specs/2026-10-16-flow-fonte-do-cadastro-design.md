@@ -138,13 +138,13 @@ Os nomes no wire seguem o papel do campo (regra P-PROD-08 do Flow): `erpProdutoI
 | `tipoItemSped` | `CODITEMSPED` (inteiro) | Inteiro de 0 a 10 ou 99. Fora disso vai ausente + pendência |
 | `grupoErp` | `GRUPO` (inteiro) + `GRUPO_PRODUTOS.GRUPO` | `{codigo: str, nome: str 1..80}`. Sem nome vai ausente |
 | `codigoNfe` | `CODPARANFE` (varchar 20) | Aparado, de 1 a 60 caracteres |
-| `cor` | `DESCRICAO2` (varchar 200) | Aparado, de 1 a 120 caracteres. Se for maior, vai ausente + pendência |
+| ~~`cor`~~ | ~~`DESCRICAO2`~~ | **Fora** (17/10/2026): `DESCRICAO2` é a "Descrição Interna" da tela do Fire, não cor. O Portal não manda `cor` |
 
 - A unidade continua no campo `unidade`, que já existe e já leva o `UNIDADE` cru. A lista fechada de unidades é decisão do Flow (P4).
 - Interruptor por empresa: `PORTAL_FLOWPCP_CATALOGO_FISCAL=mm`, mesmo formato de `PORTAL_FLOWPCP_CATALOGO_COMPOSICAO`. É variável de ambiente, sem migração.
 - O relatório do Portal ganha `fiscal_portal`:
   - `enviados`;
-  - `pendencias` por SEQ e motivo: `ncm_invalido`, `ncm_vazio`, `sped_invalido`, `cor_longa`;
+  - `pendencias` por SEQ e motivo: `ncm_invalido`, `ncm_vazio`, `sped_invalido` (`cor_longa` saiu com a `cor`);
   - `capacidade_ok`.
 - O Flow devolve o resumo dele em `fiscal`.
 
@@ -212,14 +212,7 @@ Garantia do Flow: um kit só entra na fila quando todos os componentes já têm 
 - `{versao, resultado: "gravado", erpProdutoId, gravadoEm}`;
 - `{versao, resultado: "erro", erro: {tipo: "transitorio"|"definitivo", codigo, mensagem}}`.
 
-Respostas do Flow e o que o Portal faz com cada uma:
-
-| Resposta | Portal |
-|---|---|
-| 200 `confirmado` / `ja_confirmado` | ok, encerra o item no livro |
-| 409 `versao_superada` | descarta a versão local e pega a nova no próximo ciclo |
-| 409 `conflito_erp_id` / `erp_id_diverge` | ERROR + alerta, item `incerto`, sem nova tentativa |
-| 404 | ERROR, item `incerto` |
+Respostas do Flow e o que o Portal faz com cada uma: ver **contrato P4a §5** (rev. 4); a decisão é pelo `status` da resposta, implementada em `cadastro_resultado.ler_resposta` (`docs/ai/modules/flowpcp.md` §5).
 
 #### Validação de borda (antes de qualquer acesso ao Fire)
 

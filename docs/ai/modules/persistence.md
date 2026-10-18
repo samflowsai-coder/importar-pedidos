@@ -106,9 +106,22 @@ completo em [`modules/routing.md`](routing.md), aqui só o schema:
   substituída a cada sync (`materiais_fire_repo.py`). Colunas: `nome`, `unidade`, `ean`,
   `ativo`, `grupo_codigo`, `ncm`, `tipo_item_sped`, `exige_aprovacao`, `extraido_em`.
 - `cadastro_volta` — livro da volta Flow → Fire (`cadastro_volta_repo.py`); PK
-  `(cadastro_id, versao)` é o lease. Colunas: `estado` (`simulado` | `erro_definitivo` na
-  Etapa 1), `acao`, `tipo`, `seq_reservado`, `erro_codigo`, `erro_mensagem`, `plano_json`,
-  `iniciado_em`, `atualizado_em`. Ver `modules/flowpcp.md` §5.
+  `(cadastro_id, versao)` é o lease. Colunas da Etapa 1: `estado`, `acao`, `tipo`,
+  `seq_reservado`, `erro_codigo`, `erro_mensagem`, `plano_json`, `iniciado_em`, `atualizado_em`.
+  Colunas da Etapa 3 (aditivas, `COLUMN_MIGRATIONS`): `produto_id` (UUID do produto no Flow; índice
+  `idx_cadastro_volta_produto`, base da regra 9b), `modo`, `erp_produto_id` (SEQ gravado),
+  `corpo_json` (corpo do `POST .../gravado` guardado para reenvio), `tentativas`,
+  `proxima_tentativa_em` (ISO UTC), `alerta`, `resposta_flow` (rótulo curto, até 64), `nota_operador`
+  (nota do `fechar-orfao`, até 500; o `erro_mensagem` aparece como erro na tela, por isso a nota
+  tem coluna própria). `estado` ganhou `em_andamento`, `gravado_sem_volta`, `erro_a_enviar`,
+  `confirmado`, `erro_registrado`, `transitorio`, `liberado`, `orfao`, `superado`, `incerto` e
+  `orfao_fechado` (final). As transições valem pela lista branca `TRANSICOES` e pelas portas
+  próprias do repo (`liberar_comprovado`, `marcar_erro_a_enviar(rollback_comprovado=)`,
+  `retomar_transitorio_com_seq`, `fechar_orfao`, `adotar_manual`, `liberar_manual`); `gravado`
+  e o que pode ter comitado no ERP nunca voltam a estado reaproveitável. `listar` (alimenta a
+  rota admin) não traz `corpo_json` (a rota trunca o `plano_json`); as listas de atenção da tela usam
+  `listar_por_estado`, só com colunas permitidas. `seqs_em_aberto` alimenta a ida do catálogo (`fora_do_envio_volta`).
+  Detalhe de estados, recuperação e métricas em `modules/flowpcp.md` §5.
 
 ## Testes
 - `tests/test_persistence_repo.py` —

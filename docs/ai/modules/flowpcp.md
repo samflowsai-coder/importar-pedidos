@@ -26,10 +26,14 @@ acontece — uma falha aqui vira outbox/retry e **nunca** pode derrubar o fluxo 
 | `intercompany.py` | **política** do de-para de cliente (quando aplica) |
 | `poll_decisoes.py` | consome decisões do Flow e reconcilia no Fire |
 | `catalogo_*.py` / `clientes_*.py` | sync de produto e de cliente (extract → local → push) |
-| `catalogo_fiscal.py` | campos fiscais do produto (NCM, SPED, grupo, `codigoNfe`, cor): normaliza e devolve pendências |
-| `capacidades.py` | o que o Flow declara aceitar (`fiscal.v1`, `materiais.dryrun.v1`, `materiais.v1`, `cadastros.v1`) |
+| `catalogo_fiscal.py` | campos fiscais do produto (NCM, SPED, grupo, `codigoNfe`): normaliza e devolve pendências |
+| `capacidades.py` | o que o Flow declara aceitar (`fiscal.v1`, `materiais.dryrun.v1`, `materiais.v1`, `cadastros.v1`, `marcas.v1`, `produtos.nota.v1`) |
 | `materiais_sync.py` / `materiais_schema.py` | carga de material (grupo ≠ 8) Fire → cópia local → Flow |
-| `cadastro_volta.py` / `cadastro_schema.py` | volta Flow → Fire dos cadastros aprovados (só `simular` na Etapa 1) |
+| `cadastro_volta.py` / `cadastro_schema.py` | volta Flow → Fire: modos, portões, `simular` e a ordem do ciclo (§5) |
+| `cadastro_gravacao.py` | volta nos modos de gravação: triagem, reserva, gravação, reenvio do resultado (§5) |
+| `cadastro_recuperacao.py` | resolve o que um processo caído deixou `em_andamento` (§5) |
+| `cadastro_resultado.py` | corpo do `POST .../gravado`, leitura da resposta do Flow, `mensagem_para_flow` |
+| `catalogo_marcas.py` | `marcasErp` do catálogo: filtro das regras do Flow e interruptores de marcas e nota (§4) |
 
 ## Configuração — por ambiente, não global
 
@@ -55,6 +59,10 @@ Variáveis de ambiente do processo (todas **ausentes = desligado**; `slug` em mi
 | `PORTAL_FLOWPCP_MATERIAIS` | `mm` (lista por vírgula) | envio da carga de material ao Flow; desligada, só atualiza a cópia local `materiais_fire` e `apply` dá 422 |
 | `PORTAL_FLOWPCP_MATERIAIS_GRUPOS_PRODUCAO_<SLUG>` | `1,4,5,...` | grupos que exigem aprovação (slug em maiúsculas, não alfanumérico vira `_`); padrão `1,4,5,6,11,13,19`; inválido loga ERROR e usa o padrão |
 | `PORTAL_FLOWPCP_CADASTRO_VOLTA` | `mm:simular,nas:desligado` | modo da volta por ambiente: `desligado` (padrão), `simular`, `criar`, `criar_e_atualizar`; entrada inválida = desligado, com ERROR uma vez |
+| `PORTAL_FLOWPCP_CADASTRO_P0` | `mm` (lista por vírgula) | portão da gravação: sem o slug aqui, `criar`/`criar_e_atualizar` são recusados (o resultado já guardado ainda é reenviado). Só liga depois da P0 (diff da tela do Fire numa cópia do `.fdb`) |
+| `PORTAL_FLOWPCP_CADASTRO_VOLTA_INATIVAR` | `mm` (lista por vírgula) | portão da ação `inativar` (só em `criar_e_atualizar`); sem ele o item `inativar` é pulado com WARNING |
+| `PORTAL_FLOWPCP_CATALOGO_MARCAS` | `mm` (lista por vírgula) | catálogo manda `marcasErp` (PRODUTOS_MARCA filtrada); exige `marcas.v1` na resposta do Flow |
+| `PORTAL_FLOWPCP_CATALOGO_NOTA` | `mm` (lista por vírgula) | catálogo manda `temNotaFiscal` por produto (NOTAPROD); exige `produtos.nota.v1` na resposta |
 
 Rotas admin: `PUT /api/admin/environments/{env_id}/flowpcp`,
 `PUT /api/admin/environments/{env_id}/intercompany`,
@@ -211,9 +219,11 @@ recusa o lote com 400. Spec: `docs/superpowers/specs/2026-10-15-catalogo-composi
 **Fiscal e material** (Etapa 1 de `docs/superpowers/specs/2026-10-16-flow-fonte-do-cadastro-design.md`,
 tudo desligado por padrão). *Fiscal* (`catalogo_fiscal.py`, `PORTAL_FLOWPCP_CATALOGO_FISCAL`): o
 catálogo passa a levar `ncm` (tira pontos, espaços e hífens; só vai se sobrar exatamente 8
-dígitos), `tipoItemSped` (0–10 ou 99), `grupoErp`, `codigoNfe` e `cor`. Valor que não passa vai
-**ausente** ("não mexer" no Flow) e vira pendência no relatório (`ncm_vazio`, `ncm_invalido`,
-`sped_invalido`, `cor_longa`). O Flow descarta campo desconhecido sem erro, então o sucesso só
+dígitos), `tipoItemSped` (0–10 ou 99), `grupoErp` e `codigoNfe`. **`cor` não sai mais**: `DESCRICAO2` é a
+"Descrição Interna" da tela do Fire, não cor (17/10/2026), e `cor_longa` deixou de existir. Valor
+que não passa vai **ausente** ("não mexer" no Flow) e vira pendência no relatório (`ncm_vazio`,
+`ncm_invalido`, `sped_invalido`). **A Task 10 (retirada de `cor`) precisa estar no pacote antes de
+ligar `PORTAL_FLOWPCP_CATALOGO_FISCAL`**: um pacote sem ela manda `DESCRICAO2` como cor. O Flow descarta campo desconhecido sem erro, então o sucesso só
 vale com `fiscal.v1` nas `capacidades` da resposta. *Material* (`materiais_sync.run_materiais_sync`,
 `PORTAL_FLOWPCP_MATERIAIS`): tudo fora do grupo 8 CONFECCIONADO vai para
 `materiais_fire` (sempre) e ao Flow; bloqueado vai com `ativo=false` (o Flow não cria insumo
@@ -226,47 +236,157 @@ padrão; `apply=true`/`--apply` manda a sonda dryRun primeiro e só grava se o F
 ausente marca `capacidade_ok=false` e loga ERROR. 403 do Flow = flag `materiaisErpAtivo`
 desligada no tenant. A tela do ambiente tem um bloco para cada um.
 
+**Marcas, nota e SEQs em aberto** (Etapa 3, `catalogo_sync.run_catalogo_sync`; só com
+`flowpcp_catalogo_push` ligado e o interruptor do slug). *Marcas*
+(`PORTAL_FLOWPCP_CATALOGO_MARCAS`): lê `PRODUTOS_MARCA` inteira e manda `marcasErp`
+`[{codigo, nome}]` depois de `catalogo_marcas.filtrar`, porque uma marca fora das regras do Flow
+derruba o lote com 400 (código inteiro 1..999999999, nome aparado de 1 a 30 caracteres, até 500;
+o resto vai para `filtradas` com `codigo_invalido`, `nome_vazio`, `nome_longo` ou `excede_500`).
+Leitura que falha = `marcasErp` ausente e `marcas_portal.leitura_ok=false`. *Nota*
+(`PORTAL_FLOWPCP_CATALOGO_NOTA`): `temNotaFiscal` por produto, de `SELECT DISTINCT CODPRODUTO FROM
+NOTAPROD`. `NOTAPROD` vazia ou sem nenhum SEQ do lote é tratada como anomalia (banco errado, base
+restaurada): ERROR e **nada** de `temNotaFiscal` (mandar `false` em todos tiraria a nota de todo
+produto no Flow); leitura que falha idem, nunca `false`. O relatório ganha `marcas_portal` e
+`nota_portal` (`capacidade_ok`, contagens, e o que o Flow devolveu em `marcas`/`notaFiscal`); sem
+`marcas.v1`/`produtos.nota.v1` na resposta o Flow ignorou o campo (`capacidade_ok=false`, ERROR, tirar
+o slug da variável); `erro: true` no bloco do Flow vira `reenviar: true` e ERROR; `semPar`/`conflitos`
+viram WARNING. 400 do Flow com marcas, nota ou composição ligadas aponta no erro as variáveis a retirar.
+O diário (`catalogo_diario`) conhece os dois blocos e entra em atenção com `capacidade_ok`/`leitura_ok`
+falsos ou `reenviar`. *SEQs em aberto*: em **toda** rodada com envio saem do lote os SEQs que o livro
+da volta tem em trânsito (`cadastro_volta_repo.seqs_em_aberto`: `em_andamento`, `gravado_sem_volta`,
+`incerto` e `liberado`/`transitorio` com SEQ), reportados em `fora_do_envio_volta`: o Flow criaria
+outro produto para um SEQ que o Portal acabou de gravar. A leitura do livro é falha fechada: se
+falhar, a cópia local fica e o envio aborta.
+
 Tabelas locais em `modules/persistence.md`. Ferramentas de linha de comando:
 `tools/sync_catalogo_fire.py`, `tools/configurar_flowpcp.py`, `tools/sync_materiais_fire.py`.
 
 ## 5. Volta de cadastro (Flow → Fire)
 
-`cadastro_volta.py` lê a fila de cadastros aprovados do Flow
-(`client.list_cadastros_pendentes`, até 50 por rodada, o máximo do Flow) e a thread `flowpcp-envio`
-(`envio_portal.ciclo`) chama `rodar_se_devido` no máximo a cada 5 min. Modo por ambiente em
-`PORTAL_FLOWPCP_CADASTRO_VOLTA`:
+`cadastro_volta.py` lê a fila de cadastros aprovados do Flow e a thread `flowpcp-envio`
+(`envio_portal.ciclo`) chama `rodar_se_devido` no máximo a cada 5 min (`INTERVALO`). Contrato com o
+Flow: P4a rev. 4. Um consumidor só por ambiente (`PORTAL_FLOWPCP_ENVIO=0` desliga a thread).
 
-| Modo | Efeito na Etapa 1 |
+### Modos e portões
+
+| Variável | Efeito |
 |---|---|
-| `desligado` (padrão) | não lê a fila |
-| `simular` | lê a fila, valida cada item, confere a cópia local e o Fire (conexão somente leitura, só SELECT parametrizado) e grava no livro o plano do que seria feito |
-| `criar`, `criar_e_atualizar` | **recusados** (ERROR no log, `recusado`) até a Etapa 3: gravação exige P0 e `cadastros.v1` |
+| `PORTAL_FLOWPCP_CADASTRO_VOLTA=mm:simular,nas:desligado` | modo por ambiente: `desligado` (padrão), `simular`, `criar`, `criar_e_atualizar`. Entrada inválida = desligado, com ERROR uma vez |
+| `PORTAL_FLOWPCP_CADASTRO_P0=mm` | portão da gravação. Sem o slug, `criar`/`criar_e_atualizar` voltam `recusado` (ERROR uma vez); o resultado já guardado ainda é reenviado antes da recusa |
+| `PORTAL_FLOWPCP_CADASTRO_VOLTA_INATIVAR=mm` | portão de `inativar`. Sem ele a fila só pede `criar` (modo `criar`) ou `criar`+`atualizar` (`criar_e_atualizar`) e um `inativar` que chegar é pulado com WARNING |
 
-Em `simular` o portal **nunca grava no Fire e nunca confirma no Flow**. O livro é a tabela
-`cadastro_volta`, cuja chave `(cadastro_id, versao)` é o lease (o mesmo item não é processado
-duas vezes). **Limitação de `simular`:** a fila do Flow não tem cursor (só o confirmar a anda)
-e `simular` nunca confirma, então a volta só enxerga os 50 mais antigos; o que já está no livro
-nem abre o Fire. Estados registrados: `simulado` (com `plano_json`) e `erro_definitivo` (com
-`erro_codigo`/`erro_mensagem`, sem o valor recebido; ex.: `seq_fora_do_escopo`, `nome_existe`,
-`componente_invalido`, `consulta_fire_falhou`, `livro_falhou`). Item inválido ou que quebra não
-trava a fila (item que nem é objeto vira `contrato_invalido` com id `sem-id-<hash>`;
-`capacidades` malformada = nenhuma); `cadastros` que não é lista = `erro_transitorio`
-`resposta_invalida`, nada registrado. Fire fora aborta a rodada sem registrar nada e tenta no
-ciclo seguinte. `nome_existe` compara em Python (`casefold`) sobre `SELECT SEQ, DESCRICAO FROM
-PRODUTOS`, lido uma vez por ciclo: o `UPPER` do Firebird não é confiável para Ç/Ã/Ú em WIN1252.
-Componentes: `criar` de kit/pack exige lista; `atualizar` com `componentes: null` não mexe na
-composição (plano com `"componentes": null`, sem consulta de componente no Fire); `inativar`
-ignora o campo; `simples`/`material` exigem `null`. Texto opcional `""` = `contrato_invalido`.
-Variável vazia: `rodar()` volta na hora, sem listar ambientes nem abrir token; slug na variável
-que não é ambiente com FlowPCP habilitado loga WARNING uma vez. Métricas:
-`portal_flowpcp_cadastro_volta_total{env,resultado}` (`simulado`, `erro_definitivo`,
-`ja_no_livro`), `portal_flowpcp_cadastro_volta_pendentes{env}` (lidos na última leitura, não o
-tamanho da fila) e
-`portal_flowpcp_cadastro_volta_mais_antigo_segundos{env}`. A tela do ambiente lê o livro por
-`GET .../flowpcp/cadastro-volta` (modo, contagem por estado e os 50 últimos, plano truncado em 2 KB,
-`ultimo_ciclo` deste processo e `thread_desligada` com `PORTAL_FLOWPCP_ENVIO=0`). O último ciclo
-(`cadastro_volta.ultimo_ciclo(slug)`) guarda só contagens, `capacidade_ok` e o código/classe do
+| Modo | O que faz |
+|---|---|
+| `desligado` | não lê a fila; só reenvia resultado guardado, se houver |
+| `simular` | `simular=1` (não reserva): valida, confere cópia local e Fire (conexão somente leitura, só SELECT parametrizado) e grava no livro o plano (`simulado`). Nunca grava no Fire nem confirma no Flow |
+| `criar` | grava só `criar` |
+| `criar_e_atualizar` | grava `criar` e `atualizar`; `inativar` só com o portão |
+
+Em `simular` a fila não tem cursor (só o confirmar a anda) e `simular` nunca confirma: a volta só
+enxerga os 50 mais antigos (`LIMITE_FILA`), e o que já está no livro nem abre o Fire. Nos modos de
+gravação o GET reserva os itens no Flow e pede no máximo 20 (`LIMITE_GRAVACAO`).
+
+### Onde roda e a ordem do ciclo
+
+`cadastro_volta.processar_ambiente` → `cadastro_gravacao.processar_gravacao` →
+`cadastro_recuperacao.recuperar`. Nos modos de gravação, a ordem é esta (nada mais sobe se um
+passo anterior parar o ciclo):
+
+1. **Pendências**: `reenviar_pendencias` manda ao Flow o corpo guardado das linhas
+   `gravado_sem_volta` e `erro_a_enviar` cuja espera venceu (até 20). Atualiza o gauge `sem_volta`. Para no primeiro `401`.
+2. **P0**: sem `PORTAL_FLOWPCP_CADASTRO_P0` para o slug, devolve `recusado` e o ciclo termina.
+3. **Recuperação** (só se há linha `em_andamento`, ou `transitorio` com SEQ, com mais de 15 min): abre a conexão bloqueante e resolve o que um processo caído deixou. Falha de conexão vira `{"erro": ...}` no resumo e o ciclo segue.
+4. **"Aguardando modo"**: GET com `simular=1` e `acoes=` das ações que o modo **não** consome, só para contar. Roda antes do GET que reserva para não gastar a janela da reserva.
+5. **GET** com reserva (`acoes=` do modo, limite 20).
+6. **Triagem sem ERP**, item a item: validação de borda; `(cadastroId, versao)` no livro; regra 9b (`criar` de produto que já tem `criar` que pode ter gravado); `material` (`tipo_nao_suportado`, ainda não é gravado); `inativar` sem portão; escopo de `atualizar`/`inativar` (SEQ na cópia local ou criado pelo Portal, senão `seq_fora_do_escopo`). Só os itens que sobram "a gravar" abrem o ERP.
+7. **Gravação**: abre `connect_escrita_cadastro`, lê nomes e marcas do Fire uma vez e, para cada item, confere (nome, marca, componentes; só SELECT), **reserva a linha no livro** (lease, com commit do SQLite) e só então grava. Antes de cada item checa `PRAZO_LOTE`.
+
+### Regras de ouro do contrato P4a rev. 4 e como cada uma foi implementada
+
+1. **Idempotência**: o livro decide antes do ERP. Linha com resultado guardado só reenvia o corpo, nunca chama o ERP de novo; `em_andamento` espera a recuperação; `incerto`, `orfao`, `orfao_fechado`, `confirmado`, `erro_registrado` e `superado` são pulados (WARNING). O SEQ vai ao disco (`ao_reservar` → `marcar_seq` + commit) **antes** do INSERT. **`gravado` nunca é descartado**: só `simulado`, `erro_definitivo`, `transitorio` e `liberado` são reaproveitáveis (`ESTADOS_DESCARTAVEIS`), e `transitorio`/`liberado` **com SEQ** não são, porque o INSERT pode ter comitado.
+2. **Resultado guardado sai antes de tudo**, até sem a P0.
+3. **Timeout incerto**: conexão que cai depois do comando de escrita nunca vira erro nem resposta. A linha fica `em_andamento` com o SEQ, o lote para e a recuperação confere no Fire. Erro só é respondido ao Flow com o rollback provado (`rollback_comprovado=True`: o Fire respondeu erro e desfez, ou nenhum comando de escrita saiu); sem a prova a linha fica `em_andamento` e o lote para.
+4. **Lote < 10 min** (a reserva do Flow dura 10): `PRAZO_LOTE` = 8 min, checado antes de cada item; o que sobra fica para a reentrega do Flow. Rede travada no meio de um item ainda passa do prazo (o `fdb` não tem timeout de socket).
+5. **Decisão pelo status** da resposta, nunca pela `acao`: `cadastro_resultado.ler_resposta` devolve um `Desfecho` (`confirmado`, `erro_registrado`, `transitorio_registrado`, `orfao`, `superado`, `repetir` com espera crescente, `bug_corpo` com espera de 60 min e alerta, `credencial` que para os envios do ciclo). `409 versao_superada`/`conflito_codigo` sobre um `gravado` = `orfao`.
+
+### Estados do livro
+
+`cadastro_volta_repo.TRANSICOES` é uma **lista branca** (destino → origens) usada só por `marcar_desfecho`; destino fora dela levanta `ValueError`:
+
+| Destino | Origem permitida |
+|---|---|
+| `confirmado`, `orfao` | `gravado_sem_volta` |
+| `erro_registrado`, `transitorio`, `superado` | `erro_a_enviar` |
+| `incerto` | `em_andamento` |
+
+O resto tem porta própria, de propósito: `reservar` (cria/reaproveita `em_andamento`), `marcar_gravado`
+(`em_andamento` → `gravado_sem_volta`), `marcar_erro_a_enviar(rollback_comprovado=)` (só de `em_andamento`;
+o SEQ só é zerado com `True`), `liberar_comprovado` (`em_andamento` → `liberado`, zera o SEQ),
+`retomar_transitorio_com_seq` (`transitorio` com SEQ → `em_andamento`), `fechar_orfao`
+(`orfao` → `orfao_fechado`), `adotar_manual` e `liberar_manual` (ferramenta do operador).
+
+| Estado | O que é | O que pede da operação |
+|---|---|---|
+| `simulado`, `erro_definitivo` | resultado do modo `simular` | nada; descartáveis |
+| `em_andamento` | lease de um item em gravação (ou de um processo que caiu) | nada nos primeiros 15 min; depois a recuperação resolve |
+| `gravado_sem_volta` | gravado no Fire, o Flow ainda não aceitou | nada, reenvio automático; olhar se o alerta for `bug_corpo` |
+| `erro_a_enviar` | erro definido, ainda não aceito pelo Flow | idem |
+| `confirmado`, `erro_registrado`, `superado` | finais | nada |
+| `transitorio` | erro passageiro (`erp_ocupado`, `conexao_recusada`...); o item volta no GET | nada se sem SEQ; **com SEQ** a recuperação o retoma; passado o prazo aparece como incerto na tela |
+| `liberado` | voltou para a fila (recuperação ou operador); as portas zeram o SEQ, então o item é reservado de novo na reentrega do Flow | nada |
+| `orfao` | produto no Fire que o Flow não vinculou (`versao_superada`, `conflito_codigo`) | avisar a área de cadastro com o código; depois `fechar-orfao` com nota |
+| `orfao_fechado` | final: `orfao` fechado por uma pessoa (`nota_operador`). Não vira `superado` para não apagar a prova de que o produto existe | nada |
+| `incerto` | sem prova do que aconteceu; nem grava nem responde | `adotar` ou `liberar` pela ferramenta do operador |
+
+### Conexões com o Fire (`app/erp/connection.py`)
+
+- `connect_escrita_cadastro`: READ COMMITTED + REC_VERSION, WAIT com `isc_tpb_lock_timeout` de **10 s** (sem isso um SEQ aberto na tela do Fire travaria o gravador sem limite). A saída é **sempre rollback**, nunca commit (`default_action = "rollback"`): o gravador comita cada cadastro; o que sobra pendente não prova nada.
+- `connect_leitura_bloqueante`: READ COMMITTED + **NO_REC_VERSION**, WAIT, lock timeout de 10 s, saída sempre rollback. A transação é **WRITE**, não READ ONLY, porque READ ONLY + READ COMMITTED pode ser tratada como pré-comitada e ignorar o NO_REC_VERSION (não provado no Fire 2.5; ver riscos). Nada escreve por ela: o guarda `SoSelect` só deixa passar SELECT (recusa `WITH LOCK`, `GEN_ID`, `NEXT VALUE FOR`, comentário) e `commit` é proibido.
+- Com NO_REC_VERSION, ler um registro cujo INSERT está pendente em outra transação espera e, vencido o timeout, levanta conflito de lock: a recuperação para e **não marca nada** (um INSERT pendente nunca parece ausência). No Firebird 4+ o ReadConsistency faz o read committed ignorar o NO_REC_VERSION, então a recuperação **não roda em motor ≥ 4.0** (nem em versão ilegível): ERROR uma vez e `{"parado": "motor_sem_bloqueio"}`.
+
+### Recuperação (`cadastro_recuperacao.recuperar`)
+
+Idade mínima `IDADE_MINIMA_RECUPERACAO` = `PRAZO_LOTE` + 7 min = **15 min** (cobre um processo travado na rede). Só LÊ o Fire; cada linha sai por uma porta:
+
+- **`atualizar`/`inativar`**: idempotentes, `liberar_comprovado` (contagem `reaplicar`; a métrica sai como `liberado`).
+- **`criar` sem plano e sem SEQ**: nada saiu ao ERP, libera.
+- **`criar` com SEQ**: `ler_produto(SEQ)`. Não existe → libera. `DATA_CAD` ilegível → incerto. `DATA_CAD` anterior à janela da reserva → libera (é produto de outro). Senão compara `DESCRICAO`, `UNIDADE`, `GRUPO`, `CODIGO_EAN13`, `CLASSIF_FISCAL` e a composição com o plano: tudo bate → **adota** (`marcar_gravado`, o envio fica com `reenviar_pendencias`); qualquer divergência → incerto. **Descrição diferente sozinha não libera** (pode ser renomeado na tela ou trigger): vai a incerto.
+- **`criar` sem SEQ** (o commit do `marcar_seq` se perdeu): `cadastro_fire.candidatos_por_data` busca por `DATA_CAD` na janela, **sem `GRUPO`** (um grupo trocado na tela tem que aparecer). Zero → libera; mais de um → incerto; um só, com nome exato, não ligado a outra linha do livro e com tudo batendo → adota; qualquer outro → incerto.
+- **Janela**: dias locais da reserva (`iniciado_em`; reserva a menos de 10 min da meia-noite conta o dia seguinte) com **folga de 1 dia** para cada lado (outro fuso).
+- Falha de conexão ou de lock **para** a recuperação (`parado`), nada marcado; outro erro de leitura vira incerto só naquela linha. `ligado_a_outra_linha` (qualquer linha com o SEQ) manda para incerto. Linha `transitorio` com SEQ passa pelas mesmas regras e a retomada vai no mesmo commit da porta.
+
+### Ferramentas
+
+- `tools/cadastro_volta_operar.py <slug> <comando>` (nunca escreve no ERP nem no Flow, só o livro; sem `--confirmar` só mostra): `listar`; `adotar <cadastroId> <versao> <seq> --operador NOME [--aceito-divergencia]` (prova **presença**: lê o ERP somente leitura, recusa SEQ de outra linha, diferente do reservado, cadastrado antes da reserva ou inexistente); `liberar <cadastroId> <versao> --operador NOME [--candidatos-conferidos 4005,4006 | --nenhum-candidato]` (prova **ausência** pelo mesmo caminho da recuperação: conexão bloqueante, motor < 4, idade mínima; sem SEQ lista a janela e exige que o operador informe os SEQs conferidos, ou `--nenhum-candidato`, e relê a janela na hora); `fechar-orfao <cadastroId> <versao> --operador NOME --nota TEXTO`.
+- `tools/sanear_marcas_fire.py <slug>`: insere em `PRODUTOS_MARCA` as marcas ativas do Flow (lista de 17/10/2026). Dry-run por padrão; `--gravar` exige `--backup-servidor <.fbk no servidor>`, refaz o plano, recusa grafia parecida, faz o backup, grava numa transação, relê e confere. **Só roda com `--gravar` com o ok do Samuel.** Marca nova depois de 17/10 é cadastro manual.
+- `tools/perfil_cadastro_fire.py <slug> --ultimos N` e `tools/produto_no_fire.py <slug> --seq N`: só leitura (P0), perfil das colunas de `PRODUTOS` nos últimos pares e kits do grupo 8 e rastro de um SEQ em toda tabela com coluna de produto. Servem ao diff que preenche `PADROES_P0`.
+
+### Mensagens ao Flow
+
+A frase que a área de cadastro lê sai sempre de `cadastro_resultado.mensagem_para_flow` (ou `mensagem_nome_existe`), sem jargão e **sem o valor recebido**, SQL ou `str(exc)`; o texto técnico (até 500 caracteres) fica só no livro (`erro_mensagem`) e no log. Código desconhecido = "Motivo não identificado. Fale com o suporte do Portal." `nome_existe` e `ja_criado_no_erp` levam o SEQ como **primeiro número** da frase (o Flow mostra esse). Códigos de erro do Portal: `contrato_invalido`, `campo_excede_fire`, `caractere_invalido`, `componente_ausente`, `componente_bloqueado`, `marca_ausente_erp` (definitivo, contrato §7), `nome_existe`, `ja_criado_no_erp`, `seq_fora_do_escopo`, `seq_inexistente`, `tipo_nao_suportado`, `erp_recusou`, e os transitórios `conexao_recusada`, `erp_ocupado`, `consulta_erp_falhou`. Em `simular`, item que nem é objeto vira `contrato_invalido` com id `sem-id-<hash>`; nos modos de gravação, item sem `cadastroId`/`versao` legíveis é pulado com WARNING.
+
+### Validação do item (todos os modos)
+
+Item inválido ou que quebra não trava a fila; `chaves_desconhecidas` no item de topo só gera WARNING (uma vez por ambiente e nome). `nome_existe` compara em Python (`casefold`) sobre `SELECT SEQ, DESCRICAO FROM PRODUTOS`, lido uma vez por ciclo (o `UPPER` do Firebird não é confiável para Ç/Ã/Ú em WIN1252). `marcaErp.codigo` precisa existir em `PRODUTOS_MARCA` (lida uma vez por ciclo), senão `marca_ausente_erp`; `MARCA` é gravada com o nome da tabela. Componentes: `criar` de kit/pack exige lista; `atualizar` com `componentes: null` não mexe; `inativar` ignora; `simples`/`material` exigem `null`. `atualizar`: `ean` e `codigoNfe` `null` limpam no ERP; os demais `null` = não mexer (`ncm`, `tipoItemSped`). `cor` não tem coluna: `DESCRICAO2` não é gravada pela volta. Texto opcional `""` = `contrato_invalido`. Variável vazia: `rodar()` volta na hora, sem listar ambientes nem abrir token; slug que não é ambiente com FlowPCP habilitado loga WARNING uma vez.
+
+### Métricas
+
+- `portal_flowpcp_cadastro_volta_total{env,resultado}`. `resultado`: `simulado`, `erro_definitivo`, `ja_no_livro` (simular); `criado`, `atualizado`, `inativado` (gravado no Fire); `adotado`, `liberado`, `incerto` (recuperação); `confirmado`, `erro_registrado`, `transitorio`, `orfao`, `superado`, `repetir`, `bug_corpo`, `credencial` (o que o Flow respondeu ao POST).
+- `portal_flowpcp_cadastro_volta_pendentes{env}` (lidos na última leitura, não o tamanho da fila) e `..._mais_antigo_segundos{env}`.
+- `portal_flowpcp_cadastro_volta_sem_volta{env}`: `gravado_sem_volta` + `erro_a_enviar`, atualizado em todo ciclo de gravação (também quando recusado pela P0). Acima de zero por muito tempo = Flow não aceita o resultado.
+- `portal_flowpcp_cadastro_volta_aguardando_modo{env}`: itens aprovados que o modo não grava (contagem aproximada, até 50, lida sem reservar; em `criar` conta também o `atualizar` derivado de `criar`, que esse modo grava). `0` medido quando o modo consome as três ações (`criar_e_atualizar` com o portão de `inativar`). **Não publica série** (a série é removida) quando o modo é `desligado`/`simular`, a P0 está desligada, a credencial foi recusada ou o Flow não respondeu à contagem (um 400 do Flow rev. 3 vira WARNING uma vez): ausência de série é "não medido", nunca zero.
+
+A tela do ambiente lê tudo por `GET .../flowpcp/cadastro-volta` (ver `modules/web.md`). O último ciclo
+(`cadastro_volta.ultimo_ciclo(slug)`) guarda só contagens, `capacidade_ok`, `aguardando_modo` e o código/classe do
 erro, em memória: some quando o portal reinicia.
+
+### Riscos registrados e pendências da P0 (parte B)
+
+- **Provar no Fire 2.5** (cópia do `.fdb`, duas conexões) que NO_REC_VERSION espera por um INSERT pendente de outra transação **e** que a transação WRITE + READ COMMITTED não é tratada como pré-comitada. Até lá a recuperação é a decisão mais conservadora possível (na dúvida, incerto).
+- **Medir os índices de `PRODUTOS.DATA_CAD`**: a busca sem SEQ por `DATA_CAD` sem `GRUPO` é um full scan sem índice, e com NO_REC_VERSION uma edição aberta na tela do Fire pode parar a recuperação em todo ciclo (liveness).
+- **Trava entre processos por ambiente: backlog** (`docs/BACKLOG.md`). A spec garante um consumidor por ambiente; dois processos no mesmo ambiente não são impedidos por código, só mitigados pela idade mínima de 15 min e pela leitura bloqueante.
+- **`PADROES_P0` está vazio** (`app/erp/cadastro_fire.py`): colunas que a tela do Fire grava e a volta ainda não manda. Perfil medido em 18/10/2026 (spec §11): `EST_MINIMO_GERENCIA='Nao'` e `PRODUZIDO='Nao'` sempre; `CODORIG_MERC=0`, `CODSUBGRUPO=1`, `PRE_CADASTRO='Nao'` quase sempre. A P0 parte B confirma no diff da tela. Sem isso, gravação só em DEV.
+- Caminhos residuais de liberação com produto no ERP (aceitos): exigem `DATA_CAD` editado à mão no Fire ou perda do commit do WAL entre duas reservas; o custo é um produto duplicado, visível no Flow como `conflito_codigo`/órfão.
 
 ## Testes
 
@@ -281,7 +401,9 @@ Cobertura larga — 25+ arquivos. Os principais:
 Fiscal, material e volta: `test_catalogo_fiscal.py`, `test_catalog_extract.py`,
 `test_materiais_extract.py`, `test_materiais_sync.py`, `test_sync_materiais_route.py`,
 `test_cadastro_schema.py`, `test_cadastro_volta.py`, `test_cadastro_volta_route.py`,
-`test_admin_ambiente_edit_cadastro.py`.
+`test_admin_ambiente_edit_cadastro.py`, `test_cadastro_volta_gravar.py`, `test_cadastro_volta_recuperar.py`,
+`test_cadastro_volta_repo.py`, `test_cadastro_volta_operar.py`, `test_cadastro_resultado.py`, `test_cadastro_fire.py`,
+`test_catalogo_marcas.py`, `test_sanear_marcas.py`, `test_perfil_cadastro_fire.py`.
 
 Config e wiring: `test_flowpcp_config.py`, `test_flowpcp_worker_wiring.py`,
 `test_intercompany_config.py`. Mappers: `test_flowpcp_mapper_*.py`.

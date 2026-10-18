@@ -1033,7 +1033,7 @@ git commit -m "feat(cadastro): simular lê a fila sem reservar e confere a marca
   - `inativar(conn, *, seq: int) -> Gravacao`
   - `ler_produto(conn, seq: int) -> dict | None` (colunas de conferência: `SEQ, DESCRICAO, UNIDADE, GRUPO, CODIGO_EAN13, CLASSIF_FISCAL, DATA_CAD`)
   - `ler_composicao(conn, seq: int) -> list[tuple[int, float]]` (ordenada por filho)
-  - `buscar_por_nome(conn, *, nome: str, grupo: int, unidade: str, data_cad: date) -> list[int]`
+  - ~~`buscar_por_nome`~~: substituída por `candidatos_por_data` (Task 8 rodada 2); ver `cadastro_fire.candidatos_por_data(conn, *, de, ate)`, por `DATA_CAD` e sem `GRUPO`
   - `COLUNAS_PERMITIDAS: frozenset[str]` e `PADROES_P0: dict[str, object]` (vazio no 3a; a Task 13 preenche)
 
 Regras:
@@ -1341,19 +1341,7 @@ def ler_composicao(conn, seq: int) -> list[tuple[int, float]]:
         cur.close()
 
 
-def buscar_por_nome(conn, *, nome: str, grupo: int, unidade: str, data_cad: date) -> list[int]:
-    """Candidatos exatos para a recuperação sem `seq_reservado`. O filtro de nome
-    é em Python (o UPPER do Firebird não é confiável em WIN1252)."""
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            "SELECT SEQ, DESCRICAO FROM PRODUTOS WHERE GRUPO = ? AND UNIDADE = ? AND DATA_CAD = ?",
-            (grupo, unidade, data_cad),
-        )
-        alvo = nome.strip().casefold()
-        return [int(s) for s, d in cur.fetchall() if str(d or "").strip().casefold() == alvo]
-    finally:
-        cur.close()
+# `buscar_por_nome`: substituída por `candidatos_por_data` (Task 8 rodada 2).
 ```
 
 Em `test_criar_colisao_tenta_de_novo_em_transacao_nova`, o dublê aumenta `max_seq` na colisão para simular a tela do Fire ocupando o SEQ.
@@ -1770,7 +1758,7 @@ git commit -m "feat(cadastro): modos de gravação da volta com livro idempotent
 - Test: `tests/test_cadastro_volta_recuperar.py` (novo)
 
 **Interfaces:**
-- Consumes: `repo.em_andamento`, `cadastro_fire.ler_produto`, `ler_composicao`, `buscar_por_nome`, `corpo_gravado`.
+- Consumes: `repo.em_andamento`, `cadastro_fire.ler_produto`, `ler_composicao`, `candidatos_por_data` (substituída por `candidatos_por_data` (Task 8 rodada 2)), `corpo_gravado`.
 - Produces: `IDADE_MINIMA_RECUPERACAO = timedelta(minutes=2)`, `recuperar(slug, env_conn, fire_conn, *, agora) -> dict` (contagens `adotado`, `liberado`, `incerto`, `reaplicar`).
 
 Regras (spec §6.3 "Recuperação"), para cada linha `em_andamento` com `iniciado_em` há mais de `IDADE_MINIMA_RECUPERACAO` (a linha recém-reservada pelo próprio ciclo não é tocada), rodando no começo de cada ciclo de gravação, depois de abrir o Fire e antes do GET:
@@ -1780,7 +1768,7 @@ Regras (spec §6.3 "Recuperação"), para cada linha `em_andamento` com `iniciad
   - existe e é diferente → **libera** (`marcar_desfecho(..., "liberado")`): outra gravação tomou o SEQ; o item volta pela fila.
   - existe, igual em `PRODUTOS` e diferente na composição → **incerto**.
   - não existe → **libera**.
-- `acao == "criar"` sem `seq_reservado`: `buscar_por_nome(nome, grupo, unidade, data_cad=data de iniciado_em)`. 0 → libera; 1 → adota esse SEQ; mais de 1 → **incerto**.
+- `acao == "criar"` sem `seq_reservado`: `buscar_por_nome` — substituída por `candidatos_por_data` (Task 8 rodada 2). Hoje: `candidatos_por_data` na janela da reserva, sem `GRUPO`. 0 → libera; 1 que bate → adota; qualquer outro → **incerto**.
 - `acao` `atualizar` ou `inativar` → **libera** (reaplicar é idempotente; o item volta pela fila).
 - `incerto`: `marcar_desfecho(..., "incerto", alerta="recuperacao")`, ERROR com `cadastro_id`, `versao` e os SEQs candidatos. Nunca grava, nunca adota no chute.
 
