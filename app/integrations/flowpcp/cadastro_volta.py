@@ -209,7 +209,8 @@ def _no_escopo(env_conn, item: CadastroPendente) -> bool:
 
 
 def _normaliza_nome(s: str) -> str:
-    return unicodedata.normalize("NFC", s).strip().casefold()
+    # Espaço interno repetido (ou tab, NBSP) não faz outro nome: colapsa para um.
+    return " ".join(unicodedata.normalize("NFC", s).split()).casefold()
 
 
 def _nomes_do_fire(fire_conn) -> dict[str, list]:

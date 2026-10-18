@@ -260,6 +260,16 @@ def test_nome_acentuado_casa_sem_depender_do_upper_do_firebird(env_conn, monkeyp
     assert nomes == ["SELECT SEQ, DESCRICAO FROM PRODUTOS"]  # uma vez por ciclo, sem UPPER
 
 
+@pytest.mark.parametrize("no_fire", ["meia  soquete", "MEIA\tSOQUETE", " meia \u00a0soquete "])
+def test_nome_com_espacos_internos_diferentes_e_o_mesmo_nome(env_conn, monkeypatch, no_fire):
+    _simular(monkeypatch)
+    fire = _Fire(nomes={no_fire: 78})
+    item = dict(BOM, nome="MEIA SOQUETE")
+    cv.processar_ambiente("mm", _client=_Client([item]), _fire_conn=fire, _env_conn=env_conn)
+    r = _livro(env_conn)[(BOM["cadastroId"], 1)]
+    assert r["erro_codigo"] == "nome_existe" and "78" in r["erro_mensagem"]
+
+
 def test_nomes_lidos_uma_vez_por_ciclo(env_conn, monkeypatch):
     _simular(monkeypatch)
     fire = _Fire()
