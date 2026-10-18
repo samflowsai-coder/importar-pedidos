@@ -282,16 +282,11 @@ cópia no db do próprio ambiente):
 - **Só em `ligado`**, a cada 30 s e só com `precos.aprovacao.v1` declarado: revisões
   `pendente_envio` (`marcar_tentada` antes do POST; False = não envia), retiradas, e
   decisões (lê sem cursor → `gravar_decisao` → confirma com `empresaFaturadoraCnpj`, até vir vazia).
-- Tabela: 400 `cursor_invalido` com cursor salvo → reinicia a cópia (no máximo 2 reinícios
-  por volta; depois pausa).
-- Rota (b): 201/200 → `enviada` (2xx fora do contrato também, com o bruto guardado); 409 da
-  vigente → `subir_piso` e reenvio na mesma volta; 409 de revisão já substituída → não reenvia;
-  422 de conteúdo → `recusada_flow` com texto legível; 413, 400 `payload_invalido` e corpo
-  inválido aqui → `bloqueio_local` (revisão fora da fila; o portão bloqueia com o motivo e só
-  conteúdo novo cria outra revisão); 403/400/401/404/outros → pausa SÓ da aprovação (15 min),
-  sem tocar a revisão; 429/5xx/rede → encerra o envio da volta (retiradas e decisões seguem).
-  Retirada: 409 → reenvia com `revisaoVigente`; 200 com `aprovacaoId` nulo = feita; sem saída
-  → loga uma vez. Decisão de outra empresa → confirmada `descartada`.
+- Fila em rotação: revisões por `COALESCE(tentada_em, criado_em)` (`marcar_tentada` grava a
+  hora de cada tentativa), lote de 50; retirada que falhou vai para o fim (`_retiradas_presas`,
+  memória do processo). Um pedido preso não segura os outros. Mais de 5 falhas passageiras da
+  mesma revisão → aviso único no log. Decisão de revisão acima da maior local → `descartada`
+  e aviso no log (sinal de restore de backup do SQLite).
 - Estado (`gerado_em`, último erro, `pendente_envio`/`bloqueada_local`/`recusada_flow`) no log
   `flowpcp.precos estado env=…`, só quando muda. Pausas e intervalos vivem na memória do processo.
 
@@ -301,14 +296,30 @@ Quatro rotas do Flow (`/api/portal-pedidos/precos/…`): (a) `GET tabela`, (b) `
 | Resposta | Rota | Efeito |
 |---|---|---|
 | 400 `cursor_invalido` (com cursor salvo) ou `reiniciar: true` | a | reinicia a cópia (máx. 2 por volta; depois pausa tabela e aprovação por 15 min) |
-| 2xx sem objeto JSON (`resposta_sem_json`), 429/5xx, rede | a, b, c | transitório: tenta no próximo ciclo, nada muda na revisão |
+| 2xx sem objeto JSON (`resposta_sem_json`), 429, 503, rede | a, b, c | transitório: tenta no próximo ciclo, nada muda na revisão; em (b) encerra o envio da volta (retiradas e decisões seguem) |
+| 500, 502, 504 | a, c | transitório: tenta no próximo ciclo |
+| 500, 502, 504 | b | pula só aquele pedido ou retirada; a fila segue e ele vai para o fim |
+| 201/200 | b (pedido) | `enviada` |
 | 2xx com JSON fora do contrato | b | `enviada`, com o corpo bruto guardado (o Flow gravou) |
-| 2xx com JSON fora do contrato | c | confirmação tida como feita (se não, a decisão volta e é reconfirmada) |
+| 2xx com JSON fora do contrato | `POST decisoes/confirmar` | confirmação tida como feita (se não, a decisão volta e é reconfirmada) |
+| 2xx com JSON fora do contrato | `GET decisoes` | pausa a aprovação por 15 min |
+| 2xx com JSON fora do contrato | a | pausa tabela e aprovação por 15 min |
 | 409 `revisao_obsoleta`/`conteudo_divergente` | b | vigente aqui: sobe o piso e reenvia (máx. 3 por pedido na volta); já substituída: não reenvia |
+| 409 `revisao_obsoleta` sem `revisaoVigente` | b (pedido) | pausa só a aprovação por 15 min |
+| 409 `revisao_obsoleta` | b (retirada) | reenvia com `revisaoVigente`; sem revisão nova, loga uma vez e a retirada vai para o fim |
+| 200 com `aprovacaoId` nulo | b (retirada) | retirada feita |
 | 413, 400 `payload_invalido`, corpo inválido local | b | `bloqueio_local`: só conteúdo novo cria nova revisão; não há desbloqueio por clique |
 | 422 `rede_desconhecida`/`produto_desconhecido`/`empresa_faturadora_desconhecida` | b | `recusada_flow`; reenvio do operador cria a revisão seguinte (rev+1) |
 | 403, 400/401/404, outros | b, c | pausa só a aprovação por 15 min (a tabela segue) |
 | demais erros | a | pausa tabela e aprovação por 15 min |
+| decisão de outra empresa faturadora | c | não grava; confirmada `descartada` |
+
+Riscos conhecidos:
+- Uma decisão fora do schema (divergência entre o pydantic daqui e o zod do Flow) recusa a página inteira de `GET decisoes` e pausa a aprovação por 15 min, em laço,
+  até o Flow parar de mandá-la.
+- `reiniciar: true` e `cursor_invalido` apagam a cópia antes de baixá-la de novo: até a última
+  página chegar, a cópia fica sem `completo_em` e a trava bloqueia (`copia_desatualizada`).
+  Autocura na mesma volta ou na seguinte (60 s), se as páginas vierem.
 
 Intervalos: tabela 60 s (trava ≠ `desligado`), envio e decisões 30 s (só `ligado`); independem
 das janelas do Flow. `PORTAL_FLOWPCP_PRECOS=0` desliga tudo.

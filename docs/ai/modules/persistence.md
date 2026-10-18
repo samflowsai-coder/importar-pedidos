@@ -126,7 +126,7 @@ bootstrap derruba as tabelas do modelo anterior (`preco_rede`, `preco_rede_cnpj`
 - `preco_revisao` — PK `(import_id, revisao)`: revisão do pedido na aprovação de preço
   (contrato precos v1 §4). `conteudo_hash`, `corpo_json` (`aprovacaoEnvioV1` com a revisão),
   `situacao` (`pendente_envio | enviada | recusada_flow | substituida | retirada`),
-  `tentada_em` (POST saiu), `enviada_em`/`resposta_json`, `erro_definitivo` (422),
+  `tentada_em` (hora da última tentativa do POST; ordena a fila de envio), `enviada_em`/`resposta_json`, `erro_definitivo` (422),
   `bloqueio_local` (texto do bloqueio: corpo que não pode ir ao Flow; sai da fila de envio e só
   conteúdo novo cria outra revisão), `retirada_em`/`retirada_motivo`/
   `retirada_enviada_em`. Repo: `preco_revisao_repo`.

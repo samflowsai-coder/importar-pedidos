@@ -190,9 +190,11 @@ PORTAL_FLOWPCP_CATALOGO_EXCLUIR_<SLUG>=  # (slug em maiúsculas, não alfanumér
                                      # da empresa (manual e diário).
 
 # Trava de preço — conversa com o Flow (contrato precos v1), na mesma thread do FlowPCP
-PORTAL_FLOWPCP_PRECOS=           # 0 desliga a sync da tabela, o envio de revisões e a leitura de decisões; ausente = ligado.
+PORTAL_FLOWPCP_PRECOS=           # 0 desliga a sync da tabela, o envio de revisões e as decisões de preço; ausente = ligado.
                                  # Só age em ambiente com trava ≠ desligado. Tabela a cada 60 s (observando ou ligado);
                                  # envio/decisões a cada 30 s (só ligado); independe das janelas do Flow.
+                                 # Roda na thread do PORTAL_FLOWPCP_ENVIO: com ele em 0 a thread não sobe e a
+                                 # conversa de preço com o Flow para junto.
 
 # Webhooks do Gestor
 WEBHOOK_SECRET_GESTOR=

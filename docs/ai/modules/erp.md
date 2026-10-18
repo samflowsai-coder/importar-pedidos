@@ -485,8 +485,11 @@ tem tela de gestão de preço: a decisão (aprovar/recusar) vem do Flow. Spec:
    MM, com o CNPJ da Nasmar como `empresaFaturadora`) e o Flow ligado na MM.
 3. Passar por `observando` antes: a tabela sincroniza e o audit `preco_observado` mostra o que
    `ligado` faria. Conferir no log `flowpcp.precos estado env=…` (`gerado_em`, `ultimo_erro`).
-4. Recarregar o preview dos pedidos abertos: check salvo antes do deploy (sem `fire_unidade`,
-   ou de outra fonte) mostra "sem avaliação" até ser regravado (`/api/commit` ou `vincular-produto`).
+4. Recarregar o preview NÃO regrava o `check_preco`: só `/api/commit` e `vincular-produto`
+   regravam. Check salvo antes do deploy (sem `fire_unidade`, ou de outra fonte) mostra "sem
+   avaliação"; pedido já importado fica assim até vincular o produto ou reimportar.
+   Antes de ligar na Nasmar: resolver o timeout de conexão na ida ao Fire da MM no
+   `/api/commit` (hoje sem timeout de conexão; com a MM fora, o commit fica lento).
 5. Só então `ligado` (409 até a 1ª cópia completa). Desligar volta ao comportamento de hoje.
 
 ### Interruptor por ambiente (`environments.preco_trava_modo`)
