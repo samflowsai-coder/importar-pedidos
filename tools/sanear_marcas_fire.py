@@ -79,7 +79,8 @@ def planejar(existentes: list[tuple[int, str | None]], desejadas: list[str]) -> 
 
 
 _SQL_TRIGGERS = (
-    "SELECT TRIM(RDB$TRIGGER_NAME) FROM RDB$TRIGGERS WHERE RDB$RELATION_NAME = 'PRODUTOS_MARCA'"
+    "SELECT TRIM(RDB$TRIGGER_NAME), COALESCE(RDB$TRIGGER_INACTIVE, 0) FROM RDB$TRIGGERS "
+    "WHERE RDB$RELATION_NAME = 'PRODUTOS_MARCA' AND COALESCE(RDB$SYSTEM_FLAG, 0) = 0"
 )
 _SQL_GERADORES = (
     "SELECT TRIM(RDB$GENERATOR_NAME) FROM RDB$GENERATORS "
@@ -93,12 +94,13 @@ def _ler(conn) -> list[tuple[int, str | None]]:
     return [(int(c), m) for c, m in cur.fetchall()]
 
 
-def _ler_automatismos(conn) -> tuple[list[str], list[str]]:
-    """Triggers em PRODUTOS_MARCA e geradores com MARCA no nome: qualquer um
-    pode dar outro código ao INSERT, e o plano usa MAX+1 literal."""
+def _ler_automatismos(conn) -> tuple[list[tuple[str, bool]], list[str]]:
+    """Triggers em PRODUTOS_MARCA (nome, inativo) e geradores com MARCA no
+    nome: qualquer um pode dar outro código ao INSERT, e o plano usa MAX+1
+    literal. Só trigger ativo recusa; inativo apenas avisa."""
     cur = conn.cursor()
     cur.execute(_SQL_TRIGGERS)
-    triggers = [str(r[0]) for r in cur.fetchall()]
+    triggers = [(str(r[0]), bool(r[1])) for r in cur.fetchall()]
     cur.execute(_SQL_GERADORES)
     geradores = [str(r[0]) for r in cur.fetchall()]
     return triggers, geradores
@@ -124,6 +126,26 @@ def _curta(exc: BaseException, cfg: dict) -> str:
     if senha:
         texto = texto.replace(senha, "***")
     return f"{type(exc).__name__}: {texto[:160]}"
+
+
+class RollbackFalhouError(RuntimeError):
+    """Levantada DENTRO do `with` da conexão: sem isso o `_connect_with` comita
+    na saída limpa e grava o que devia ter sido desfeito."""
+
+
+def _desfazer_ou_levantar(conn) -> None:
+    if not cadastro_fire.desfazer(conn):
+        raise RollbackFalhouError("rollback falhou; resultado incerto")
+
+
+def _falha_backup(exc: BaseException, cfg: dict, out) -> None:
+    """Primeira linha da exceção no cabeçalho; o resto do log inteiro, uma
+    linha por vez, com a senha mascarada."""
+    senha = cfg.get("password") or ""
+    linhas = [ln.replace(senha, "***") if senha else ln for ln in str(exc).splitlines()] or [""]
+    out(f"Backup falhou ({type(exc).__name__}: {linhas[0]}). Nada foi gravado.")
+    for ln in linhas[1:]:
+        out(f"  {ln}")
 
 
 def executar(
@@ -157,20 +179,22 @@ def executar(
         out(f"Leitura falhou ({_curta(exc, cfg)}). Nada foi gravado.")
         return 1
     _imprimir(plano, out)
-    out(f"Triggers em PRODUTOS_MARCA: {', '.join(triggers) or 'nenhum'}")
+    ativos = [n for n, inativo in triggers if not inativo]
+    nomes = [f"{n} (inativo)" if inativo else n for n, inativo in triggers]
+    out(f"Triggers em PRODUTOS_MARCA: {', '.join(nomes) or 'nenhum'}")
     out(f"Geradores com MARCA no nome: {', '.join(geradores) or 'nenhum'}")
 
     if not gravar:
         if plano.parecidas:
             out("Atenção: há grafia parecida; o --gravar vai recusar até a revisão.")
-        if triggers or geradores:
+        if ativos or geradores:
             out("Atenção: há trigger/gerador; o --gravar vai recusar.")
         out("Dry-run: nada gravado.")
         return 0
     if plano.parecidas:
         out("Há marcas com grafia parecida no Fire. Revise antes de gravar; nada foi gravado.")
         return 1
-    if triggers or geradores:
+    if ativos or geradores:
         out("Há trigger ou gerador ligado a PRODUTOS_MARCA; o código planejado não é garantido. Nada foi gravado.")
         return 1
     if not plano.inserir:
@@ -180,14 +204,17 @@ def executar(
     try:
         prova = backup(cfg, backup_servidor)
     except Exception as exc:  # noqa: BLE001
-        out(f"Backup falhou ({_curta(exc, cfg)}). Nada foi gravado.")
+        _falha_backup(exc, cfg, out)
         return 1
     out(f"Backup concluído em {backup_servidor}. Última linha do log: {prova}")
 
     resultado = 0
     try:
-        with conn_factory.connect_with_config(cfg) as conn:
+        with conn_factory.connect_escrita_cadastro(cfg) as conn:
             resultado = _gravar(conn, plano, desejadas, cfg, out)
+    except RollbackFalhouError:
+        out("Gravação falhou e o rollback não confirmou. Resultado incerto: rode o dry-run para conferir.")
+        return 1
     except Exception as exc:  # noqa: BLE001
         out(f"Gravação falhou ({_curta(exc, cfg)}). Rode o dry-run para conferir.")
         return 1
@@ -199,27 +226,29 @@ def _gravar(conn, plano: Plano, desejadas: list[str], cfg: dict, out) -> int:
     try:
         # Se o banco mudou desde o dry-run, aborta em vez de gravar sobre plano velho.
         if planejar(_ler(conn), desejadas).inserir != plano.inserir:
-            cadastro_fire._desfaz(conn)
+            _desfazer_ou_levantar(conn)
             out("O banco mudou desde o plano. Nada foi gravado; rode de novo.")
             return 1
         cadastro_fire.inserir_marcas(conn, plano.inserir)
         lidas = dict(_ler(conn))
         faltando = [n for c, n in plano.inserir if lidas.get(c) != n]
+    except RollbackFalhouError:
+        raise
     except Exception as exc:  # noqa: BLE001
-        cadastro_fire._desfaz(conn)
+        _desfazer_ou_levantar(conn)
         if cadastro_fire.classificar_erro(exc) == "colisao":
             out("Outro cadastro tomou o código; rode de novo. Rollback feito.")
         else:
             out(f"Falha na gravação ({_curta(exc, cfg)}). Rollback feito.")
         return 1
     if faltando:
-        cadastro_fire._desfaz(conn)
+        _desfazer_ou_levantar(conn)
         out(f"Conferência falhou ({len(faltando)} marca(s) divergentes). Rollback feito.")
         return 1
     try:
         conn.commit()
     except Exception as exc:  # noqa: BLE001
-        cadastro_fire._desfaz(conn)
+        _desfazer_ou_levantar(conn)
         out(f"Commit falhou ({_curta(exc, cfg)}); resultado incerto; rode o dry-run para conferir.")
         return 1
     out(f"Gravado: {len(plano.inserir)} marca(s).")

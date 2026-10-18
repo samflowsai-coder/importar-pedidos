@@ -134,7 +134,7 @@ def _colisao(exc: BaseException) -> bool:
     return classificar_erro(exc) == "colisao"
 
 
-def _desfaz(conn) -> bool:
+def desfazer(conn) -> bool:
     """Rollback que nunca mascara a exceção original: se falhar, só loga e
     devolve False (quem chama relança a original, sem nova tentativa)."""
     try:
@@ -143,6 +143,9 @@ def _desfaz(conn) -> bool:
     except Exception as exc:  # noqa: BLE001
         logger.warning("cadastro_fire: rollback falhou ({})", type(exc).__name__)
         return False
+
+
+_desfaz = desfazer  # nome interno histórico
 
 
 def _insere_composicao(cur, pai: int, componentes: list[tuple[int, float]]) -> None:

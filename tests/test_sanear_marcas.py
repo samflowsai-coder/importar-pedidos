@@ -67,7 +67,7 @@ class _Cur:
                 raise self.c.falha_insert
             self.c.pend.append(tuple(params))
         elif "RDB$TRIGGERS" in sql:
-            self.c.visivel = [(t,) for t in self.c.triggers]
+            self.c.visivel = [t if isinstance(t, tuple) else (t, 0) for t in self.c.triggers]
         elif "RDB$GENERATORS" in sql:
             self.c.visivel = [(g,) for g in self.c.geradores]
         elif sql.startswith("SELECT"):
@@ -84,10 +84,11 @@ class _Cur:
 
 class _Conn:
     def __init__(self, linhas, esconde=False, falha_insert=None, triggers=(), geradores=(),
-                 falha_commit=False):
+                 falha_commit=False, falha_rollback=False):
         self.linhas, self.pend, self.visivel = list(linhas), [], []
         self.esconde, self.falha_insert = esconde, falha_insert
         self.triggers, self.geradores, self.falha_commit = triggers, geradores, falha_commit
+        self.falha_rollback = falha_rollback
         self.sqls, self.commits, self.rollbacks = [], 0, 0
 
     def cursor(self):
@@ -100,8 +101,15 @@ class _Conn:
         self.linhas += self.pend
         self.pend = []
 
+    def commit_na_saida(self):
+        """O commit que o `_connect_with` real faz na saída limpa do with."""
+        self.linhas += self.pend
+        self.pend = []
+
     def rollback(self):
         self.rollbacks += 1
+        if self.falha_rollback:
+            raise RuntimeError("rollback caiu")
         self.pend = []
 
 
@@ -117,9 +125,10 @@ class _Fabrica:
         yield self.leitura
 
     @contextmanager
-    def connect_with_config(self, cfg):
+    def connect_escrita_cadastro(self, cfg):
         self.usadas.append("escrita")
         yield self.escrita
+        self.escrita.commit_na_saida()  # como o real: só em saída limpa
 
 
 BASE = [(1, ""), (2, "Forn")]
@@ -193,6 +202,23 @@ def test_gravar_recusa_com_trigger_ou_gerador(kw):
     assert any("TRG_MARCA" in ln or "GEN_MARCA_ID" in ln for ln in saida)
 
 
+def test_trigger_inativo_so_avisa():
+    fab = _Fabrica(BASE, triggers=[("TRG_MARCA", 1)])
+    cod, saida = _rodar(fab, True, backup=_ok)
+    assert cod == 0 and "Triggers em PRODUTOS_MARCA: TRG_MARCA (inativo)" in saida
+
+
+def test_rollback_falhando_nao_deixa_o_commit_de_saida_gravar():
+    # divergência na conferência + rollback que cai: a exceção tem que sair do
+    # with, senão o commit da saída gravaria as linhas.
+    fab = _Fabrica(BASE, esconde=True, falha_rollback=True)
+    linhas_antes = list(fab.escrita.linhas)
+    cod, saida = _rodar(fab, True, backup=_ok)
+    assert cod == 1 and fab.escrita.linhas == linhas_antes
+    assert saida[-1].startswith("Gravação falhou e o rollback não confirmou. Resultado incerto")
+    assert not any("Rollback feito" in ln for ln in saida)
+
+
 def test_dry_run_com_trigger_imprime_e_sai_0():
     cod, saida = _rodar(_Fabrica(BASE, triggers=["TRG_MARCA"]), False)
     assert cod == 0 and "Triggers em PRODUTOS_MARCA: TRG_MARCA" in saida
@@ -207,6 +233,16 @@ def test_gravar_com_backup_falhando_nao_grava_e_avisa():
     cod, saida = _rodar(fab, True, backup=falha)
     assert cod == 1 and "escrita" not in fab.usadas
     assert any(ln.startswith("Backup falhou (RuntimeError: sem disco ***)") for ln in saida)
+
+
+def test_backup_falhando_imprime_log_inteiro_mascarado():
+    longa = "x" * 300 + " segredo"
+
+    def falha(cfg, dest):
+        raise RuntimeError(f"Log sem linha final. Últimas linhas:\n{longa}\nfim")
+
+    cod, saida = _rodar(_Fabrica(BASE), True, backup=falha)
+    assert cod == 1 and f"  {'x' * 300} ***" in saida and "  fim" in saida
 
 
 def test_leitura_falhando_vira_mensagem_clara():
@@ -335,10 +371,17 @@ def test_gbak_log_sem_linha_final_levanta_com_ultimas_linhas():
     assert "l7" in str(e.value) and "l3" in str(e.value) and "l2" not in str(e.value)
 
 
-def test_gbak_linha_com_error_levanta():
+def test_gbak_linha_com_error_levanta_com_a_linha():
     s = _Services(log=["gbak: ERROR: I/O error", *OK_LOG])
-    with pytest.raises(RuntimeError, match="erro no log"):
+    with pytest.raises(RuntimeError, match="erro no log") as e:
         backup_mod.gbak(CFG_BK, "a.fbk", services=s)
+    assert "I/O error" in str(e.value)
+
+
+def test_gbak_tabela_com_error_no_nome_nao_derruba_backup_bom():
+    s = _Services(log=["gbak:  writing table LOG_ERROR", *OK_LOG, ""])
+    prova = backup_mod.gbak(CFG_BK, "a.fbk", services=s)
+    assert "closing file" in prova  # e não a última linha, vazia
 
 
 def test_gbak_backup_levantando_propaga_e_fecha():

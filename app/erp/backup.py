@@ -5,10 +5,13 @@ disco do servidor). Usado antes de escritas pontuais no cadastro do Fire.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # Última linha do log verbose do gbak quando o backup fecha direito.
 _LINHA_FINAL = "closing file, committing, and finishing"
+# Erro do gbak: "gbak: ERROR: ..."; nome de tabela com ERROR no log não conta.
+_ERRO_GBAK = re.compile(r"gbak:\s*ERROR", re.IGNORECASE)
 
 
 def _host_do_servico(cfg: dict) -> str:
@@ -64,8 +67,10 @@ def gbak(cfg: dict, destino_no_servidor: str, *, services: Any = None) -> str:
             pass
 
     ultimas = "\n".join(linhas[-5:])
-    if any("ERROR" in ln for ln in linhas):
-        raise RuntimeError(f"Backup com erro no log do gbak. Últimas linhas:\n{ultimas}")
-    if not any(_LINHA_FINAL in ln for ln in linhas):
+    erro = next((ln for ln in linhas if _ERRO_GBAK.search(ln)), None)
+    if erro is not None:
+        raise RuntimeError(f"Backup com erro no log do gbak: {erro.strip()}\nÚltimas linhas:\n{ultimas}")
+    final = next((ln for ln in linhas if _LINHA_FINAL in ln), None)
+    if final is None:
         raise RuntimeError(f"Log do gbak sem a linha final de sucesso. Últimas linhas:\n{ultimas}")
-    return linhas[-1].strip()
+    return final.strip()
