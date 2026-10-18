@@ -396,6 +396,11 @@ LIST_PRODUTOS_KIT_COMPOSICAO = """
     ORDER BY K.CODPRODUTO_PAI, K.CODIGO
 """
 
+# Marcas do Fire e produtos que já têm nota fiscal, para a ida do catálogo
+# (marcasErp / temNotaFiscal). Sem filtro: quem decide o que vai é catalogo_marcas.
+LIST_PRODUTOS_MARCA = "SELECT CODIGO, MARCA FROM PRODUTOS_MARCA ORDER BY CODIGO"
+LIST_PRODUTOS_COM_NOTA = "SELECT DISTINCT CODPRODUTO FROM NOTAPROD"
+
 # ── Clientes ativos (carga Fire→Flow) ─────────────────────────────────────────
 # Clientes (RELAC_CLIENTE='Sim', não BLOQUEADO) com pelo menos um pedido em
 # CAB_VENDAS dentro da janela (bind = data de corte, calculada no Python).

@@ -8,6 +8,8 @@ FISCAL = "fiscal.v1"
 MATERIAIS_DRYRUN = "materiais.dryrun.v1"
 MATERIAIS = "materiais.v1"
 CADASTROS = "cadastros.v1"
+NOTA = "produtos.nota.v1"
+MARCAS = "marcas.v1"
 
 
 def de(resposta) -> frozenset[str]:
