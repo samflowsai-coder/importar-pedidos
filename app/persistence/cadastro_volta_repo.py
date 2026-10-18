@@ -311,15 +311,15 @@ def buscar(conn: sqlite3.Connection, cadastro_id: str, versao: int) -> dict[str,
 
 def criar_do_produto(conn: sqlite3.Connection, produto_id: str) -> dict[str, Any] | None:
     """Linha de `criar` deste produto que pode ter (ou já ter) comitado no ERP.
-    Preferência: gravado_sem_volta, em_andamento, incerto, liberado com SEQ,
+    Preferência: gravado_sem_volta, em_andamento, incerto, liberado/transitorio com SEQ,
     orfao, confirmado; dentro do estado, a mais recente."""
     linhas = _dicts(
         conn.execute(
             "SELECT * FROM cadastro_volta WHERE produto_id = ? AND acao = 'criar' AND ("
             "estado IN ('em_andamento', 'gravado_sem_volta', 'incerto', 'confirmado', 'orfao') "
-            "OR (estado = 'liberado' AND seq_reservado IS NOT NULL)) "
+            "OR (estado IN ('liberado', 'transitorio') AND seq_reservado IS NOT NULL)) "
             "ORDER BY CASE estado WHEN 'gravado_sem_volta' THEN 0 WHEN 'em_andamento' THEN 1 "
-            "WHEN 'incerto' THEN 2 WHEN 'liberado' THEN 3 WHEN 'orfao' THEN 4 ELSE 5 END, "
+            "WHEN 'incerto' THEN 2 WHEN 'liberado' THEN 3 WHEN 'transitorio' THEN 3 WHEN 'orfao' THEN 4 ELSE 5 END, "
             "iniciado_em DESC, rowid DESC LIMIT 1",
             (produto_id,),
         )
@@ -345,6 +345,6 @@ def seqs_em_aberto(conn: sqlite3.Connection) -> set[str]:
     rows = conn.execute(
         "SELECT erp_produto_id, seq_reservado FROM cadastro_volta WHERE "
         "estado IN ('em_andamento', 'gravado_sem_volta', 'incerto') "
-        "OR (estado = 'liberado' AND seq_reservado IS NOT NULL)"
+        "OR (estado IN ('liberado', 'transitorio') AND seq_reservado IS NOT NULL)"
     ).fetchall()
     return {str(v) for r in rows for v in r if v is not None}

@@ -166,8 +166,13 @@ def test_seqs_em_aberto(conn):
     repo.liberar_comprovado(conn, "e", 1)  # sem SEQ: fora
     _reservar(conn, cid="f", produto="pf")
     repo.marcar_seq(conn, "f", 1, 500)
-    _forcar(conn, "f", "transitorio")  # fora
-    assert repo.seqs_em_aberto(conn) == {"100", "200", "300", "400"}
+    _forcar(conn, "f", "transitorio")  # transitorio com SEQ pode ter gravado: dentro
+    _reservar(conn, cid="g", produto="pg")
+    repo.marcar_erro_a_enviar(
+        conn, "g", 1, codigo="X", mensagem="m", corpo_json="{}", rollback_comprovado=True
+    )
+    repo.marcar_desfecho(conn, "g", 1, "transitorio")  # transitorio sem SEQ: fora
+    assert repo.seqs_em_aberto(conn) == {"100", "200", "300", "400", "500"}
 
 
 def test_reservar_nao_reaproveita_liberado_com_seq(conn):
@@ -426,3 +431,16 @@ def test_invariante_ja_no_erp_nunca_reaproveitavel():
     for destino, origens in repo.TRANSICOES.items():
         if destino in repo.ESTADOS_DESCARTAVEIS:
             assert not set(repo._JA_NO_ERP) & set(origens)
+
+
+def test_criar_do_produto_acha_transitorio_com_seq(conn):
+    _reservar(conn)
+    repo.marcar_seq(conn, "c1", 1, 4001)
+    _forcar(conn, "c1", "transitorio")
+    assert repo.criar_do_produto(conn, "p1")["estado"] == "transitorio"
+
+
+def test_criar_do_produto_ignora_transitorio_sem_seq(conn):
+    _reservar(conn)
+    _forcar(conn, "c1", "transitorio")
+    assert repo.criar_do_produto(conn, "p1") is None
