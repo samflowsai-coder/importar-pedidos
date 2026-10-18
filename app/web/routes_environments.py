@@ -448,6 +448,19 @@ def cadastro_volta_flowpcp(env_id: str, _=Depends(require_admin)):
     with db_router.env_connect(env["slug"]) as conn:
         por_estado = cadastro_volta_repo.contar_por_estado(conn)
         ultimos = cadastro_volta_repo.listar(conn, limite=50)
+        # Itens que pedem a atenção do operador (colunas da tela, até 50 de cada).
+        orfaos = cadastro_volta_repo.listar_por_estado(conn, "orfao")
+        # `transitorio` com SEQ espera a recuperação: para o operador é incerto.
+        transitorios = cadastro_volta_repo.listar_por_estado(
+            conn, "transitorio", limite=-1, so_com_seq=True  # -1 = sem limite, para contar
+        )
+        incertos = [*cadastro_volta_repo.listar_por_estado(conn, "incerto"), *transitorios[:50]]
+        incertos.sort(key=lambda x: x["atualizado_em"] or "", reverse=True)
+        sem_volta_itens = [
+            *cadastro_volta_repo.listar_por_estado(conn, "gravado_sem_volta"),
+            *cadastro_volta_repo.listar_por_estado(conn, "erro_a_enviar"),
+        ]
+        sem_volta_itens.sort(key=lambda x: x["atualizado_em"] or "", reverse=True)
     for linha in ultimos:
         plano = linha.get("plano_json")
         bruto = plano.encode("utf-8") if plano else b""
@@ -463,6 +476,14 @@ def cadastro_volta_flowpcp(env_id: str, _=Depends(require_admin)):
         # Último ciclo deste processo (None desde que subiu) e a thread que o roda.
         "ultimo_ciclo": cadastro_volta.ultimo_ciclo(env["slug"]),
         "thread_desligada": not envio_habilitado(),
+        "p0_ok": cadastro_volta.p0_ok(env["slug"]),
+        "inativar_ligado": cadastro_volta.inativar_ligado(env["slug"]),
+        "sem_volta": por_estado.get("gravado_sem_volta", 0) + por_estado.get("erro_a_enviar", 0),
+        "n_orfaos": por_estado.get("orfao", 0),
+        "n_incertos": por_estado.get("incerto", 0) + len(transitorios),
+        "orfaos": orfaos,
+        "incertos": incertos[:50],
+        "sem_volta_itens": sem_volta_itens[:50],
     }
 
 

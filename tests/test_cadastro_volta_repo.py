@@ -577,3 +577,25 @@ def test_sem_as_portas_nada_que_pode_ter_gravado_volta_a_reservar(estado, seq):
             if op(c) and _no(c) not in vistos:
                 vistos.add(_no(c))
                 fila.append(_no(c))
+
+
+def test_listar_por_estado_so_colunas_da_tela(conn):
+    _reservar(conn, "c1")
+    _reservar(conn, "c2", produto="p2")
+    _forcar(conn, "c1", "orfao", seq=3992)
+    _forcar(conn, "c2", "incerto")
+    conn.execute("UPDATE cadastro_volta SET corpo_json = 'SEGREDO', nota_operador = 'NOTA'")
+    (linha,) = repo.listar_por_estado(conn, "orfao")
+    assert set(linha) == {"cadastro_id", "versao", "acao", "erp_produto_id", "seq_reservado",
+                          "tentativas", "alerta", "atualizado_em"}
+    assert linha["cadastro_id"] == "c1" and linha["seq_reservado"] == 3992
+    assert [x["cadastro_id"] for x in repo.listar_por_estado(conn, "incerto")] == ["c2"]
+    assert repo.listar_por_estado(conn, "confirmado") == []
+
+
+def test_listar_por_estado_limite_e_so_com_seq(conn):
+    for i in range(3):
+        _reservar(conn, f"c{i}", produto=f"p{i}")
+        _forcar(conn, f"c{i}", "transitorio", seq=100 + i if i else None)
+    assert len(repo.listar_por_estado(conn, "transitorio", limite=2)) == 2
+    assert {x["cadastro_id"] for x in repo.listar_por_estado(conn, "transitorio", so_com_seq=True)} == {"c1", "c2"}

@@ -58,6 +58,7 @@ _FECHA = {
     Desfecho.ORFAO: "orfao",
     Desfecho.SUPERADO: "superado",
 }
+_GRAVADO = {"criar": "criado", "atualizar": "atualizado", "inativar": "inativado"}
 _ESPERA_BUG = timedelta(minutes=60)
 _ESPERA_CREDENCIAL = timedelta(minutes=5)
 _ROTULO_SEGURO = re.compile(r"^[a-z_]{1,40}$")
@@ -135,7 +136,8 @@ def _enviar(lote: _Lote, cid: str, versao: int, corpo: dict, tentativas: int) ->
         if not repo.adiar(conn, cid, versao, ate=_iso(ate), alerta=alerta, resposta=resposta):
             logger.warning(lote.log(cid, versao, "adiamento não aplicado no livro"))
     conn.commit()
-    metrics.cadastro_volta_total.labels(env=lote.slug, resultado=d.value).inc()
+    resultado = "transitorio" if d is Desfecho.TRANSITORIO_REGISTRADO else d.value
+    metrics.cadastro_volta_total.labels(env=lote.slug, resultado=resultado).inc()
     if d is Desfecho.CREDENCIAL:
         lote.parar = True
     return d
@@ -504,7 +506,7 @@ def _gravar_item(lote: _Lote, fire, item: CadastroPendente) -> None:
         return
     conn.commit()
     lote.conta("gravados")
-    metrics.cadastro_volta_total.labels(env=lote.slug, resultado="gravado").inc()
+    metrics.cadastro_volta_total.labels(env=lote.slug, resultado=_GRAVADO[item.acao]).inc()
     if item.acao == "criar":  # o 2º item com o mesmo nome no lote vira nome_existe
         lote.nomes[cv._normaliza_nome(item.nome)] = [gravacao.seq]
     if not lote.parar:
@@ -602,8 +604,55 @@ def _recuperar(slug: str, env_conn, fire_conn, agora: datetime) -> dict | None:
         return {"erro": type(exc).__name__}
 
 
+def atualizar_sem_volta(slug: str, env_conn) -> None:
+    """Gauge das linhas gravadas no Fire que o Flow ainda não aceitou. Nunca levanta."""
+    try:
+        por_estado = repo.contar_por_estado(env_conn)
+    except Exception as exc:  # noqa: BLE001 — métrica não derruba o ciclo
+        logger.error(f"flowpcp.cadastro_volta env={slug}: contagem do livro falhou "
+                     f"({type(exc).__name__})")
+        return
+    n = por_estado.get("gravado_sem_volta", 0) + por_estado.get("erro_a_enviar", 0)
+    metrics.cadastro_volta_sem_volta.labels(env=slug).set(n)
+
+
+def _aguardando_modo(slug: str, m: str, client) -> int | None:
+    """Itens aprovados que este modo não grava, lidos sem reservar (Emenda 1, I9).
+    Aproximado: em `criar` entra o `atualizar` derivado de `criar`, que este modo grava.
+    `None` quando o Flow não respondeu; o ciclo segue."""
+    consumidas = cv._acoes(slug, m)
+    nao_consumidas = tuple(a for a in ("criar", "atualizar", "inativar") if a not in consumidas)
+    if not nao_consumidas:
+        return 0
+    try:
+        resp = client.list_cadastros_pendentes(
+            limite=cv.LIMITE_FILA, acoes=nao_consumidas, simular=True
+        )
+        return len(resp.cadastros)
+    except Exception as exc:  # noqa: BLE001 — a contagem é cortesia: nunca derruba o ciclo
+        if getattr(exc, "status_code", None) == 400:
+            cv._avisa_uma_vez(
+                f"aguardando-modo-400:{slug}",
+                f"flowpcp.cadastro_volta env={slug}: o Flow recusou simular com acoes "
+                "(contrato rev. 3); \"aguardando modo\" fica sem contagem",
+                nivel="WARNING",
+            )
+        else:
+            logger.warning(f"flowpcp.cadastro_volta env={slug}: contagem do que aguarda "
+                           f"outro modo falhou ({type(exc).__name__})")
+        return None
+
+
 def processar_gravacao(slug: str, m: str, client, env_conn, fire_conn, *,
                        relogio: Callable[[], datetime]) -> dict:
+    try:
+        return _processar_gravacao(slug, m, client, env_conn, fire_conn, relogio=relogio)
+    finally:
+        atualizar_sem_volta(slug, env_conn)
+
+
+def _processar_gravacao(slug: str, m: str, client, env_conn, fire_conn, *,
+                        relogio: Callable[[], datetime]) -> dict:
     inicio = relogio()
     recuperacao = _recuperar(slug, env_conn, fire_conn, inicio)
     try:
@@ -636,6 +685,15 @@ def processar_gravacao(slug: str, m: str, client, env_conn, fire_conn, *,
             logger.error(f"flowpcp.cadastro_volta env={slug}: fila sem {capacidades.CADASTROS}; "
                          f"{len(brutos)} item(ns) não processados")
         return resumo
+    resumo["aguardando_modo"] = _aguardando_modo(slug, m, client)
+    aguardando = resumo["aguardando_modo"]
+    if aguardando is None:
+        try:
+            metrics.cadastro_volta_aguardando_modo.remove(slug)
+        except KeyError:
+            pass
+    else:
+        metrics.cadastro_volta_aguardando_modo.labels(env=slug).set(aguardando)
     lote = _Lote(slug, m, env_conn, client, relogio, resumo)
     vistos: set = set()
     a_gravar = []

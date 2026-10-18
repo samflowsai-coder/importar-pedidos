@@ -103,6 +103,32 @@ def listar(conn: sqlite3.Connection, limite: int = 50) -> list[dict[str, Any]]:
     return [dict(zip(_COLS, r, strict=True)) for r in rows]
 
 
+# Colunas que a tela do operador pode ver: nunca corpo_json, plano_json nem nota_operador.
+_COLS_TELA = (
+    "cadastro_id",
+    "versao",
+    "acao",
+    "erp_produto_id",
+    "seq_reservado",
+    "tentativas",
+    "alerta",
+    "atualizado_em",
+)
+
+
+def listar_por_estado(
+    conn: sqlite3.Connection, estado: str, limite: int = 50, *, so_com_seq: bool = False
+) -> list[dict[str, Any]]:
+    """Linhas de um estado, as mais recentes primeiro, só com as colunas da tela."""
+    filtro = " AND seq_reservado IS NOT NULL" if so_com_seq else ""
+    rows = conn.execute(
+        f"SELECT {', '.join(_COLS_TELA)} FROM cadastro_volta WHERE estado = ?{filtro} "
+        "ORDER BY atualizado_em DESC, rowid DESC LIMIT ?",
+        (estado, limite),
+    ).fetchall()
+    return [dict(zip(_COLS_TELA, r, strict=True)) for r in rows]
+
+
 def contar_por_estado(conn: sqlite3.Connection) -> dict[str, int]:
     rows = conn.execute("SELECT estado, COUNT(*) FROM cadastro_volta GROUP BY estado").fetchall()
     return {r[0]: r[1] for r in rows}

@@ -158,6 +158,12 @@ def reenviar_pendencias(slug: str, env_conn, client, *, agora: datetime) -> dict
     return cadastro_gravacao.reenviar_pendencias(slug, env_conn, client, agora=agora)
 
 
+def _atualizar_sem_volta(slug, env_conn) -> None:
+    from app.integrations.flowpcp import cadastro_gravacao
+
+    cadastro_gravacao.atualizar_sem_volta(slug, env_conn)
+
+
 def _processar_gravacao(slug, m, client, env_conn, fire_conn, *, relogio) -> dict:
     from app.integrations.flowpcp import cadastro_gravacao
 
@@ -327,8 +333,11 @@ def _decidir(bruto, env_conn, fire_conn, nomes, marcas):
 def _resumo_saneado(r: dict) -> dict:
     """Só contagens e código/classe do erro: nada do que o Flow ou o Fire mandou."""
     saida = {
-        k: r.get(k) for k in ("modo", "lidos", "capacidade_ok", "simulados", "erros", "ja_no_livro")
+        k: r.get(k)
+        for k in ("modo", "lidos", "capacidade_ok", "simulados", "erros", "ja_no_livro")
     }
+    if "aguardando_modo" in r:  # só nos modos de gravação; None = o Flow não respondeu
+        saida["aguardando_modo"] = r["aguardando_modo"]
     if "erro_transitorio" in r or "erro" in r:
         erro = r.get("erro_transitorio") or r.get("erro")
     elif "recusado" in r:
@@ -394,6 +403,7 @@ def _processar_ambiente(slug: str, *, _client, _fire_conn, _env_conn, _relogio) 
             with _env(slug, _env_conn) as env_conn:
                 # Regra de ouro 2: o resultado guardado sai antes de tudo, até sem a P0.
                 reenvio = reenviar_pendencias(slug, env_conn, client, agora=_relogio())
+                _atualizar_sem_volta(slug, env_conn)
                 if not p0_ok(slug):
                     _avisa_uma_vez(
                         f"recusa-p0:{slug}",

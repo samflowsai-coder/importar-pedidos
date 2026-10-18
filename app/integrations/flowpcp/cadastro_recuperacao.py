@@ -35,6 +35,7 @@ from decimal import Decimal
 from app.erp import cadastro_fire
 from app.integrations.flowpcp import cadastro_volta as cv
 from app.integrations.flowpcp.cadastro_resultado import corpo_gravado
+from app.observability import metrics
 from app.persistence import cadastro_volta_repo as repo
 from app.utils.logger import logger
 
@@ -340,6 +341,9 @@ def _aplicar(slug: str, env_conn, linha: dict, decisao: tuple, agora: datetime,
         logger.error(f"{prefixo}: {texto} não aplicado no livro")
         return
     contagem[chave] += 1
+    metrics.cadastro_volta_total.labels(
+        env=slug, resultado="liberado" if chave == "reaplicar" else chave
+    ).inc()
     if chave == "incerto":
         logger.error(f"{prefixo}: {texto}; nem grava nem responde, a operação resolve")
     else:

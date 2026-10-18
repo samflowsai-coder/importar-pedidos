@@ -47,6 +47,20 @@ def _bloco_js() -> str:
         "A thread de envio está desligada neste servidor (PORTAL_FLOWPCP_ENVIO=0).",
         "fp.pendencias",
         "'Por motivo: '",
+        "Portão da P0",
+        "Portão de inativar",
+        "volta-n-orfaos",
+        "volta-n-incertos",
+        "volta-n-sem-volta",
+        "volta-n-aguardando",
+        "Órfãos: produto gravado no Fire que o Flow não vinculou. Avise a área de cadastro com o código.",
+        "Incertos: cadastro interrompido sem prova do que aconteceu. Confira no Fire antes de qualquer ação.",
+        "Sem volta: gravado no Fire, resultado ainda não aceito pelo Flow. O Portal reenvia sozinho.",
+        "Aguardando outro modo: ",
+        "Itens aprovados no Flow que este modo da volta não grava.",
+        "Nenhum item pede atenção.",
+        "volta-retry",
+        "Não foi possível carregar a volta do Flow agora.",
     ],
 )
 def test_tela_tem_os_blocos_novos(trecho):
@@ -63,3 +77,14 @@ def test_blocos_novos_usam_textcontent_e_nunca_innerhtml():
     js = _bloco_js()
     assert "textContent" in js
     assert "innerHTML" not in js
+
+
+def test_bloco_da_volta_tem_tabular_nums_foco_e_nao_cria_cor():
+    css = _HTML[_HTML.index("/* Volta de cadastro:") : _HTML.index(".file-row { font-size: 13px; }")]
+    assert "font-variant-numeric: tabular-nums" in css
+    assert ".volta-tabela-wrap:focus-visible" in css
+    assert "minmax(min(100%, 14rem), 1fr)" in css  # 320 px sem estourar
+    # só tokens que a página já usa; nenhum hex novo além dos fallbacks existentes
+    import re
+
+    assert set(re.findall(r"#[0-9a-fA-F]{3,6}", css)) <= {"#ef4444", "#B45309", "#3b82f6"}

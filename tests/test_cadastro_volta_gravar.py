@@ -1151,3 +1151,100 @@ def test_reenvio_da_v1_pela_9b_sem_espaco_nas_pendencias(modo, env_slug, env_con
     (cid, corpo), = flow.posts
     assert cid == PAR["cadastroId"] and corpo["versao"] == 1
     assert fire.escritas == [] and repo.buscar(env_conn, v2["cadastroId"], 2) is None
+
+
+# --- Task 12: métricas e "aguardando modo" ------------------------------------
+
+
+def _amostra(nome, **rotulos):
+    from prometheus_client import REGISTRY
+
+    return REGISTRY.get_sample_value(nome, {"env": "mm", **rotulos}) or 0.0
+
+
+class FlowAguarda(Flow):
+    """Responde `n` itens à leitura sem reserva (`simular`) e a fila normal ao resto."""
+
+    def __init__(self, itens, n=0, erro=None, **kw):
+        super().__init__(itens, **kw)
+        self.n, self.erro = n, erro
+
+    def list_cadastros_pendentes(self, limite=20, **kw):
+        if kw.get("simular"):
+            self.gets.append({"limite": limite, **kw})
+            if self.erro:
+                raise self.erro
+            return PendentesResposta(cadastros=[_outro(i) for i in range(self.n)], capacidades=self.caps)
+        return super().list_cadastros_pendentes(limite, **kw)
+
+
+def test_aguardando_modo_em_criar_conta_o_que_o_modo_nao_grava(modo, env_slug, env_conn):
+    modo("criar")
+    flow = FlowAguarda([], n=3)
+    _rodar(env_slug, flow, FireGravavel(), env_conn)
+    assert flow.gets[1] == {"limite": 50, "acoes": ("atualizar", "inativar"), "simular": True}
+    assert cv.ultimo_ciclo(env_slug)["resumo"]["aguardando_modo"] == 3
+    assert _amostra("portal_flowpcp_cadastro_volta_aguardando_modo") == 3
+
+
+def test_aguardando_modo_sem_portao_de_inativar_pede_so_inativar(modo, env_slug, env_conn):
+    modo("criar_e_atualizar")
+    flow = FlowAguarda([], n=2)
+    _rodar(env_slug, flow, FireGravavel(), env_conn)
+    assert flow.gets[1]["acoes"] == ("inativar",) and flow.gets[1]["simular"] is True
+    assert cv.ultimo_ciclo(env_slug)["resumo"]["aguardando_modo"] == 2
+
+
+def test_aguardando_modo_com_portao_nao_consulta(modo, env_slug, env_conn):
+    modo("criar_e_atualizar", inativar=True)
+    flow = FlowAguarda([], n=2)
+    _rodar(env_slug, flow, FireGravavel(), env_conn)
+    assert len(flow.gets) == 1
+    assert cv.ultimo_ciclo(env_slug)["resumo"]["aguardando_modo"] == 0
+
+
+def test_aguardando_modo_400_vira_none_sem_derrubar_o_ciclo(modo, env_slug, env_conn, avisos):
+    from app.integrations.flowpcp.client import FlowPCPClientError
+
+    modo("criar")
+    erro = FlowPCPClientError("x", status_code=400, body="VALOR-DO-FLOW")
+    flow = FlowAguarda([PAR], erro=erro)
+    r = _rodar(env_slug, flow, FireGravavel(), env_conn)
+    assert r["aguardando_modo"] is None and r["gravados"] == 1
+    assert cv.ultimo_ciclo(env_slug)["resumo"]["aguardando_modo"] is None
+    _rodar(env_slug, FlowAguarda([], erro=erro), FireGravavel(), env_conn, _mais())
+    assert sum("aguardando" in a for a in avisos) == 1  # WARNING uma vez
+    assert not any("VALOR-DO-FLOW" in a for a in avisos)
+
+
+def test_aguardando_modo_com_flow_fora_vira_none(modo, env_slug, env_conn):
+    modo("criar")
+    flow = FlowAguarda([PAR], erro=RuntimeError("rede"))
+    r = _rodar(env_slug, flow, FireGravavel(), env_conn)
+    assert r["aguardando_modo"] is None and r["gravados"] == 1
+
+
+def test_resultados_viram_metrica_por_rotulo_fixo(modo, env_slug, env_conn):
+    modo("criar")
+    antes = {k: _amostra("portal_flowpcp_cadastro_volta_total", resultado=k)
+             for k in ("criado", "confirmado")}
+    _rodar(env_slug, Flow([PAR]), FireGravavel(), env_conn)
+    for k in antes:
+        assert _amostra("portal_flowpcp_cadastro_volta_total", resultado=k) == antes[k] + 1
+
+
+def test_transitorio_registrado_conta_como_transitorio(modo, env_slug, env_conn):
+    modo("criar")
+    antes = _amostra("portal_flowpcp_cadastro_volta_total", resultado="transitorio")
+    _rodar(env_slug, Flow([PAR]), FireGravavel(falhas={"INSERT INTO PRODUTOS ": [LOCK()]}), env_conn)
+    assert _amostra("portal_flowpcp_cadastro_volta_total", resultado="transitorio") == antes + 1
+
+
+def test_gauge_sem_volta_conta_gravado_sem_volta_e_erro_a_enviar(modo, env_slug, env_conn):
+    modo("criar")
+    flow = Flow([PAR], respostas=[RespostaResultado(None, None, None)])
+    _rodar(env_slug, flow, FireGravavel(), env_conn)
+    assert repo.buscar(env_conn, PAR["cadastroId"], 1)["estado"] == "gravado_sem_volta"
+    assert _amostra("portal_flowpcp_cadastro_volta_sem_volta") == 1
+    _rodar(env_slug, Flow([]), FireGravavel(), env_conn, _mais())
+    assert _amostra("portal_flowpcp_cadastro_volta_sem_volta") == 0

@@ -115,6 +115,27 @@
       border-radius: 3px;
     }
     .hint strong { color: var(--text); font-weight: 600; }
+    /* Volta de cadastro: contadores de atenção e tabela de itens. */
+    .volta-portoes { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; margin-bottom: .6rem; }
+    .volta-contadores { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: .6rem; margin: .6rem 0; }
+    .volta-card { padding: .65rem .8rem; background: var(--bg-elev); border: 1px solid var(--border); border-left-width: 3px; border-radius: 8px; }
+    .volta-card[data-tom="err"] { border-left-color: var(--danger, #ef4444); }
+    .volta-card[data-tom="aviso"] { border-left-color: var(--warn-strong, #B45309); }
+    .volta-card-rot { font-weight: 600; }
+    .volta-card-n { display: inline-block; margin-left: .4rem; font-size: 1.25em; font-variant-numeric: tabular-nums; }
+    .volta-card[data-tom="err"] .volta-card-n { color: var(--danger, #ef4444); }
+    .volta-card[data-tom="aviso"] .volta-card-n { color: var(--warn-strong, #B45309); }
+    .volta-card-txt { margin: .25rem 0 0; font-size: .85em; line-height: 1.5; color: var(--text-muted); }
+    .volta-aguardando { margin: .4rem 0; font-variant-numeric: tabular-nums; }
+    .volta-tabela-wrap { overflow-x: auto; margin-top: .4rem; border: 1px solid var(--border); border-radius: 8px; }
+    .volta-tabela-wrap:focus-visible { outline: 2px solid var(--accent, #3b82f6); outline-offset: 2px; }
+    .volta-tabela { width: 100%; border-collapse: collapse; font-size: .85em; font-variant-numeric: tabular-nums; }
+    .volta-tabela caption { text-align: left; padding: .5rem .6rem; font-weight: 600; }
+    .volta-tabela th, .volta-tabela td { padding: .35rem .6rem; text-align: left; white-space: nowrap; border-top: 1px solid var(--border); }
+    .volta-tabela th { font-weight: 500; color: var(--text-muted); }
+    .volta-tabela td.volta-id { font-family: var(--font-mono, monospace); white-space: normal; overflow-wrap: anywhere; min-width: 9rem; }
+    .volta-vazio { margin: .4rem 0; color: var(--text-muted); }
+    .volta-retry { margin-top: .4rem; }
     .file-row { font-size: 13px; }
     .file-row.selected { background: color-mix(in srgb, var(--accent, #3b82f6) 18%, transparent); }
 
@@ -415,6 +436,37 @@
         <div style="font-weight:600;margin-bottom:.3rem">Volta do Flow para o Fire</div>
         <span id="volta-status" class="flowpcp-status"></span>
         <div id="volta-result" hidden style="margin-top:.5rem;font-size:.85em;line-height:1.6"></div>
+        <button type="button" id="volta-retry" class="btn btn-secondary volta-retry" hidden>Tentar de novo</button>
+        <!-- Itens que pedem atenção: contadores + tabela; preenchido por voltaAtencao(). -->
+        <div id="volta-atencao" hidden style="font-size:.85em;line-height:1.6">
+          <div id="volta-portoes" class="volta-portoes"></div>
+          <div class="volta-contadores" role="group" aria-label="Itens que pedem atenção">
+            <div class="volta-card" id="volta-card-orfaos">
+              <div class="volta-card-rot">Órfãos<strong id="volta-n-orfaos" class="volta-card-n">0</strong></div>
+              <p class="volta-card-txt">Órfãos: produto gravado no Fire que o Flow não vinculou. Avise a área de cadastro com o código.</p>
+            </div>
+            <div class="volta-card" id="volta-card-incertos">
+              <div class="volta-card-rot">Incertos<strong id="volta-n-incertos" class="volta-card-n">0</strong></div>
+              <p class="volta-card-txt">Incertos: cadastro interrompido sem prova do que aconteceu. Confira no Fire antes de qualquer ação.</p>
+            </div>
+            <div class="volta-card" id="volta-card-sem-volta">
+              <div class="volta-card-rot">Sem volta<strong id="volta-n-sem-volta" class="volta-card-n">0</strong></div>
+              <p class="volta-card-txt">Sem volta: gravado no Fire, resultado ainda não aceito pelo Flow. O Portal reenvia sozinho.</p>
+            </div>
+          </div>
+          <div id="volta-aguardando" class="volta-aguardando" hidden>
+            <strong>Aguardando outro modo: <span id="volta-n-aguardando">—</span></strong>
+            <div class="volta-card-txt">Itens aprovados no Flow que este modo da volta não grava.</div>
+          </div>
+          <div id="volta-vazio" class="volta-vazio" hidden>Nenhum item pede atenção.</div>
+          <div id="volta-tabela-wrap" class="volta-tabela-wrap" tabindex="0" role="region" aria-label="Itens que pedem atenção" hidden>
+            <table class="volta-tabela">
+              <caption>Itens que pedem atenção</caption>
+              <thead><tr><th scope="col">Situação</th><th scope="col">Cadastro</th><th scope="col">Ação</th><th scope="col">Código no Fire</th><th scope="col">Tentativas</th><th scope="col">Alerta</th><th scope="col">Atualizado</th></tr></thead>
+              <tbody id="volta-tabela-corpo"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </fieldset>
 
@@ -1315,11 +1367,69 @@
         g.appendChild(row);
       });
     }
+    // Órfãos, incertos e sem volta: contadores, portões e a tabela dos itens.
+    // `n_*` vêm da rota (contagem real); as listas têm no máximo 50 itens.
+    function voltaNum(v) { return typeof v === 'number' && isFinite(v) ? v : 0; }
+    function voltaCartao(id, n, tom) {
+      document.getElementById('volta-n-' + id).textContent = String(n);
+      document.getElementById('volta-card-' + id).dataset.tom = n > 0 ? tom : '';
+    }
+    function voltaCelula(tr, valor, classe) {
+      const td = document.createElement('td');
+      if (classe) td.className = classe;
+      td.textContent = (valor === undefined || valor === null || valor === '') ? '—' : String(valor);
+      tr.appendChild(td);
+    }
+    function voltaAtencao(d) {
+      const box = document.getElementById('volta-atencao');
+      const modo = d && typeof d.modo === 'string' ? d.modo : '';
+      const nOrf = voltaNum(d && d.n_orfaos), nInc = voltaNum(d && d.n_incertos), nSem = voltaNum(d && d.sem_volta);
+      // Desligada sem nada pendente: só "Desligada". Pendência em qualquer modo aparece.
+      box.hidden = modo === 'desligado' && nOrf + nInc + nSem === 0;
+      const portoes = document.getElementById('volta-portoes');
+      portoes.replaceChildren();
+      catLinha(portoes, 'Portão da P0', d && d.p0_ok === true ? 'liberado' : 'não liberado', d && d.p0_ok === true ? undefined : 'aviso');
+      catLinha(portoes, 'Portão de inativar', d && d.inativar_ligado === true ? 'ligado' : 'desligado');
+      voltaCartao('orfaos', nOrf, 'err');
+      voltaCartao('incertos', nInc, 'aviso');
+      voltaCartao('sem-volta', nSem, 'aviso');
+      const ag = document.getElementById('volta-aguardando');
+      const resumo = d && d.ultimo_ciclo && d.ultimo_ciclo.resumo;
+      const temAg = !!resumo && Object.prototype.hasOwnProperty.call(resumo, 'aguardando_modo');
+      ag.hidden = !temAg;
+      if (temAg) {
+        const n = resumo.aguardando_modo;
+        document.getElementById('volta-n-aguardando').textContent = typeof n === 'number' ? String(n) : '— (o Flow não respondeu)';
+      }
+      const corpo = document.getElementById('volta-tabela-corpo');
+      corpo.replaceChildren();
+      const grupos = [['Órfão', d && d.orfaos], ['Incerto', d && d.incertos], ['Sem volta', d && d.sem_volta_itens]];
+      let total = 0;
+      grupos.forEach(([rot, lista]) => {
+        (Array.isArray(lista) ? lista : []).forEach((x) => {
+          total += 1;
+          const tr = document.createElement('tr');
+          voltaCelula(tr, rot);
+          voltaCelula(tr, (x.cadastro_id ?? '—') + ' v' + (x.versao ?? '—'), 'volta-id');
+          voltaCelula(tr, x.acao);
+          voltaCelula(tr, x.erp_produto_id ?? x.seq_reservado);
+          voltaCelula(tr, x.tentativas);
+          voltaCelula(tr, x.alerta);
+          voltaCelula(tr, x.atualizado_em);
+          corpo.appendChild(tr);
+        });
+      });
+      document.getElementById('volta-tabela-wrap').hidden = total === 0;
+      document.getElementById('volta-vazio').hidden = total !== 0 || nOrf + nInc + nSem > 0;
+    }
     async function carregarVolta() {
       const st = document.getElementById('volta-status');
       const out = document.getElementById('volta-result');
+      const retry = document.getElementById('volta-retry');
       st.textContent = 'Carregando…';
       st.className = 'flowpcp-status';
+      st.removeAttribute('role');
+      retry.hidden = true;
       try {
         const r = await fetch('/api/admin/environments/' + envId + '/flowpcp/cadastro-volta');
         if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -1327,12 +1437,17 @@
         st.textContent = '';
         out.hidden = false;
         voltaRender(out, d);
+        voltaAtencao(d);
       } catch (err) {
         out.hidden = true;
+        document.getElementById('volta-atencao').hidden = true;
         st.textContent = '✗ Não foi possível carregar a volta do Flow agora.';
         st.classList.add('err');
+        st.setAttribute('role', 'alert');
+        retry.hidden = false;
       }
     }
+    document.getElementById('volta-retry').addEventListener('click', carregarVolta);
     if (isEdit) carregarVolta();
     // ── Cadastro: fiscal, materiais e volta (fim)
 

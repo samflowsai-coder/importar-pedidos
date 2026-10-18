@@ -860,3 +860,22 @@ def test_ciclo_recupera_pela_leitura_bloqueante_nao_pela_escrita(gravacao, env_c
     r = cv.processar_ambiente("mm", _client=Flow([]), _fire_conn=None, _env_conn=env_conn,
                               _relogio=Relogio())
     assert abertas == ["mm"] and r["recuperacao"]["liberado"] == 1
+
+
+def test_recuperacao_conta_liberado_e_incerto_na_metrica(env_conn):
+    from prometheus_client import REGISTRY
+
+    def lido(resultado):
+        return REGISTRY.get_sample_value(
+            "portal_flowpcp_cadastro_volta_total", {"env": "mm", "resultado": resultado}
+        ) or 0.0
+
+    antes = lido("liberado"), lido("incerto")
+    _linha(env_conn, "c1", seq=3992)  # SEQ inexistente no ERP: libera
+    _linha(env_conn, "c2", seq=3993)
+    fire = FireLeitura(produtos={3993: {"SEQ": 3993, "DESCRICAO": "OUTRA COISA", "UNIDADE": "PAR",
+                                        "GRUPO": 8, "CLASSIF_FISCAL": "61159500",
+                                        "CODIGO_EAN13": None, "DATA_CAD": date(2026, 10, 17)}})
+    r = rec.recuperar("mm", env_conn, fire, agora=AGORA)
+    assert (r["liberado"], r["incerto"]) == (1, 1)
+    assert (lido("liberado"), lido("incerto")) == (antes[0] + 1, antes[1] + 1)
