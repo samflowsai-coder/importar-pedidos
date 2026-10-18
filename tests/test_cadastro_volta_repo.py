@@ -1,6 +1,8 @@
 """Livro da volta (cadastro_volta) v2: lease, gravação, reenvio e 9b."""
 
+import ast
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -796,3 +798,64 @@ def test_outra_linha_com_seq_em_qualquer_estado_e_exclui_a_propria():
                   "'{}', '4001')", (estado,))
         assert repo.outra_linha_com_seq(c, 4001, "c1", 1) is True
     assert repo.outra_linha_com_seq(c, 4002, "c1", 1) is False
+
+
+# --- Condição do M1: todo erro respondido afirma o rollback -------------------
+#
+# `marcar_erro_a_enviar(rollback_comprovado=False)` deixaria um `em_andamento` com SEQ
+# preso em `erro_a_enviar` sem prova; hoje nenhum chamador passa False. A varredura
+# trava quem passar False (ou um valor que não seja o literal True) ou omitir o argumento.
+# A única exceção é o repasse dentro de `cadastro_gravacao._erro`, cujo parâmetro é
+# só-nome e obrigatório (e cujos chamadores entram na mesma varredura).
+
+_RAIZ_APP = Path(__file__).resolve().parent.parent / "app"
+_PORTAS_DE_ERRO = ("marcar_erro_a_enviar", "_erro")
+
+
+def _chamadas_sem_rollback_comprovado(fonte: str, arquivo: str) -> list[str]:
+    arvore, dono, ruins = ast.parse(fonte), {}, []
+    for funcao in ast.walk(arvore):  # função mais interna que contém cada nó
+        if isinstance(funcao, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for no in ast.walk(funcao):
+                dono[no] = funcao.name
+    for no in ast.walk(arvore):
+        if not isinstance(no, ast.Call):
+            continue
+        nome = getattr(no.func, "id", None) or getattr(no.func, "attr", None)
+        if nome not in _PORTAS_DE_ERRO:
+            continue
+        kw = next((k for k in no.keywords if k.arg == "rollback_comprovado"), None)
+        repasse = (
+            dono.get(no) == "_erro" and nome == "marcar_erro_a_enviar" and kw is not None
+            and isinstance(kw.value, ast.Name) and kw.value.id == "rollback_comprovado"
+        )
+        literal_true = kw is not None and isinstance(kw.value, ast.Constant) and kw.value.value is True
+        if not (literal_true or repasse):
+            ruins.append(f"{arquivo}:{no.lineno} {nome}")
+    return ruins
+
+
+def test_varredura_pega_false_omitido_e_valor_dinamico():
+    fonte = (
+        "def _erro(c, *, rollback_comprovado):\n"
+        "    repo.marcar_erro_a_enviar(c, rollback_comprovado=rollback_comprovado)\n"
+        "def f(c, x):\n"
+        "    repo.marcar_erro_a_enviar(c, 'a', 1, rollback_comprovado=False)\n"
+        "    _erro(lote, 'a', 1, 't', 'c', 'm')\n"
+        "    _erro(lote, 'a', 1, 't', 'c', 'm', rollback_comprovado=x)\n"
+        "    _erro(lote, 'a', 1, 't', 'c', 'm', rollback_comprovado=True)\n"
+    )
+    assert _chamadas_sem_rollback_comprovado(fonte, "x.py") == [
+        "x.py:4 marcar_erro_a_enviar", "x.py:5 _erro", "x.py:6 _erro"]
+
+
+def test_nenhum_chamador_em_app_responde_erro_sem_rollback_comprovado():
+    ruins, achados = [], 0
+    for arquivo in sorted(_RAIZ_APP.rglob("*.py")):
+        fonte = arquivo.read_text(encoding="utf-8")
+        if not any(p in fonte for p in _PORTAS_DE_ERRO):
+            continue
+        achados += fonte.count("rollback_comprovado=")
+        ruins += _chamadas_sem_rollback_comprovado(fonte, arquivo.name)
+    assert achados > 5  # a varredura enxerga os chamadores de verdade
+    assert ruins == []
