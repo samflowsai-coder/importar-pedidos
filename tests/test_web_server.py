@@ -3492,3 +3492,46 @@ def test_registrar_aplicados_que_falha_nao_pula_o_push_do_xlsx(monkeypatch, tmp_
     assert r.status_code == 200, r.text
     assert len(pushes) == 1
 
+
+@pytest.mark.parametrize("modo", ["observando", "ligado"])
+def test_api_process_recusa_com_trava_ativa(tmp_path, modo):
+    from app.persistence import environments_repo
+
+    env = _env_trava_ligada(tmp_path)
+    environments_repo.set_preco_trava_modo(env["id"], modo, por="teste")
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post(
+            "/api/process",
+            data={"output_dir": str(tmp_path)},
+            files=[("files", ("p.pdf", b"%PDF-1.4", "application/pdf"))],
+        )
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == (
+        "Com a trava de preço ativa, use a revisão do pedido para exportar."
+    )
+    assert list(tmp_path.glob("*.xlsx")) == []
+
+
+def test_api_process_desligado_segue_como_hoje(tmp_path):
+    from app.persistence import environments_repo
+
+    env = _env_trava_ligada(tmp_path)
+    environments_repo.set_preco_trava_modo(env["id"], "desligado", por="teste")
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post(
+            "/api/process",
+            data={"output_dir": str(tmp_path)},
+            files=[("files", ("malware.exe", b"MZ", "application/octet-stream"))],
+        )
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 200
+    assert any("suportado" in e["error"].lower() for e in r.json()["errors"])

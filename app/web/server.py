@@ -3686,12 +3686,22 @@ def rehydrate_preview(
 # Keep /api/process for backward compat (drag-drop upload flow)
 @app.post("/api/process")
 async def process_files(
+    request: Request,
     _user: User = Depends(require_user),
     files: list[UploadFile] = File(...),
     output_dir: str = Form("output"),
 ) -> JSONResponse:
+    from app.erp import preco_trava
     from app.exporters.erp_exporter import ERPExporter
     from app.ingestion.file_loader import LoadedFile
+
+    # Caminho legado: gera XLSX sem o portão de preço. Com a trava ativa, a
+    # planilha só sai pela revisão (preview → exportar/enviar).
+    if preco_trava.trava_ativa(_request_environment(request)):
+        raise HTTPException(
+            status_code=409,
+            detail="Com a trava de preço ativa, use a revisão do pedido para exportar.",
+        )
 
     output_path = Path(output_dir).expanduser().resolve()
     try:
