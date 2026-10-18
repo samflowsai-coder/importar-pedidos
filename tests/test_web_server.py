@@ -2670,18 +2670,15 @@ def test_import_direto_em_modo_db_nunca_chama_firebird(monkeypatch, tmp_path, mo
         assert out["output_files"] == []
 
 
-def test_cancel_marca_pendencias_de_preco_como_canceladas():
-    import uuid
-    from datetime import UTC, datetime
+def _import_parsed(entry_id, *, source_filename="x.pdf"):
+    from datetime import datetime
 
-    from app.erp.preco_avaliacao import ItemAvaliado
-    from app.persistence import preco_aprovacao_repo, repo
+    from app.persistence import repo
 
-    entry_id = str(uuid.uuid4())
     repo.insert_import(
         {
             "id": entry_id,
-            "source_filename": "x.pdf",
+            "source_filename": source_filename,
             "imported_at": datetime.now().isoformat(timespec="seconds"),
             "order_number": "TEST-PRECO",
             "customer": "ACME",
@@ -2690,34 +2687,90 @@ def test_cancel_marca_pendencias_de_preco_como_canceladas():
             "snapshot": {"header": {"order_number": "TEST-PRECO"}, "items": []},
         }
     )
+
+
+def _revisao_enviada(entry_id):
+    from datetime import UTC, datetime
+
+    from app.persistence import preco_revisao_repo as revs
+
     with db.connect() as conn:
-        preco_aprovacao_repo.registrar_pendencias(
-            conn,
-            entry_id,
-            [(ItemAvaliado(0, "1", "fila", "preco_diferente", 5400, 5000), "ass")],
-            agora=datetime.now(UTC),
-        )
+        revs.garantir_revisao(conn, entry_id, {"externalId": entry_id}, "sha256:a", agora=datetime.now(UTC))
+        revs.marcar_enviada(conn, entry_id, 1, {}, em=datetime.now(UTC))
+
+
+def test_cancel_grava_retirada_da_revisao_enviada():
+    import uuid
+
+    from app.persistence import preco_revisao_repo as revs
+
+    entry_id = str(uuid.uuid4())
+    _import_parsed(entry_id)
+    _revisao_enviada(entry_id)
 
     r = client.post(f"/api/imported/{entry_id}/cancel", json={"reason": "duplicado"})
     assert r.status_code == 200
 
     with db.connect() as conn:
-        row = conn.execute(
-            "SELECT cancelada_em, motivo_cancelamento FROM preco_aprovacao WHERE import_id = ?",
-            (entry_id,),
-        ).fetchone()
-    assert row["cancelada_em"] is not None
-    assert row["motivo_cancelamento"] == "pedido_cancelado"
+        assert revs.vigente(conn, entry_id) is None
+        pend = revs.retiradas_pendentes(conn, 10)
+    assert [(p["import_id"], p["revisao"], p["retirada_motivo"]) for p in pend] == [
+        (entry_id, 1, "duplicado")
+    ]
+
+
+def test_reimport_retira_a_revisao_do_pedido_antigo(monkeypatch, tmp_path):
+    import shutil
+    import uuid
+
+    from app import config as app_config
+    from app.persistence import preco_revisao_repo as revs
+
+    pdf = SAMPLES / "2600009562-2026-02-25.pdf"
+    if not pdf.exists():
+        pytest.skip("Sample PDF not available")
+    env = _env_trava_ligada(tmp_path)
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx"},
+    )
+    imp = tmp_path / "in" / "Pedidos importados"
+    imp.mkdir(parents=True)
+    shutil.copy(pdf, imp / pdf.name)
+    antigo = str(uuid.uuid4())
+    _import_parsed(antigo, source_filename=pdf.name)
+    _revisao_enviada(antigo)
+    outro = str(uuid.uuid4())
+    _import_parsed(outro, source_filename="outro.pdf")
+    _revisao_enviada(outro)
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post("/api/reimport", json={"filename": pdf.name})
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 200, r.text
+    with db.connect() as conn:
+        assert revs.vigente(conn, antigo) is None
+        assert revs.vigente(conn, outro) is not None
+        pend = revs.retiradas_pendentes(conn, 10)
+    assert [(p["import_id"], p["retirada_motivo"]) for p in pend] == [
+        (antigo, "pedido reimportado no Portal")
+    ]
 
 
 # ── Trava de preço (preco_trava.decidir_envio) nos dois caminhos de envio ─────
 
 
 _EMPRESA_TRAVA = "11111111000191"  # CNPJ do ambiente "test" = empresa faturadora
+_R1_TRAVA = "a1a1a1a1-0000-4000-8000-000000000001"
 
 
 def _pagina_trava(seq: str, centavos: int, cursor: str) -> None:
     """Página do contrato precos v1: rede r1 (raiz 11222333) com o produto `seq`."""
+    import uuid
     from datetime import UTC
     from datetime import datetime as _dt
 
@@ -2735,7 +2788,7 @@ def _pagina_trava(seq: str, centavos: int, cursor: str) -> None:
                 "mudancas": [
                     {
                         "tipo": "rede",
-                        "redeId": "r1",
+                        "redeId": _R1_TRAVA,
                         "nome": "Rede X",
                         "ativa": True,
                         "travada": False,
@@ -2744,8 +2797,8 @@ def _pagina_trava(seq: str, centavos: int, cursor: str) -> None:
                     },
                     {
                         "tipo": "preco",
-                        "precoId": f"p-r1-{seq}",
-                        "redeId": "r1",
+                        "precoId": str(uuid.uuid5(uuid.NAMESPACE_URL, f"r1-{seq}")),
+                        "redeId": _R1_TRAVA,
                         "empresaFaturadoraCnpj": _EMPRESA_TRAVA,
                         "erpProdutoId": seq,
                         "unidadeErp": "KIT",
@@ -2797,7 +2850,11 @@ def _seed_trava(entry_id, unit_price):
             "status": "success",
             "portal_status": "parsed",
             "snapshot": {
-                "header": {"order_number": "TRAVA-1", "customer_cnpj": "11.222.333/0001-44"},
+                "header": {
+                    "order_number": "TRAVA-1",
+                    "customer_name": "Rede X",
+                    "customer_cnpj": "11.222.333/0001-44",
+                },
                 "items": [item],
                 "source_file": "",
             },
@@ -2859,13 +2916,8 @@ def test_send_to_fire_bloqueado_pela_trava_ligada(monkeypatch, tmp_path):
 
 def test_export_xlsx_leva_preco_aprovado(monkeypatch, tmp_path):
     import uuid
-    from datetime import UTC
-    from datetime import datetime as _dt
 
     from openpyxl import load_workbook
-
-    from app.models.order import OrderItem
-    from app.persistence import preco_aprovacao_repo as aprov
 
     env = _env_trava_ligada(tmp_path)
     entry_id = str(uuid.uuid4())
@@ -2876,20 +2928,7 @@ def test_export_xlsx_leva_preco_aprovado(monkeypatch, tmp_path):
     try:
         r = client.post(f"/api/imported/{entry_id}/export-xlsx")
         assert r.status_code == 409, r.text
-        with db.connect() as conn:
-            item = OrderItem(description="x", quantity=10.0, ean="7891", product_code="C1")
-            assert aprov.aplicar_decisao(
-                conn,
-                import_id=entry_id,
-                item_index=0,
-                assinatura=aprov.assinatura(item, "123", "11222333000144", rede_id="r1"),
-                decisao="preco_inicial",
-                preco_final_centavos=4800,
-                por="rafael",
-                em=_dt.now(UTC),
-                motivo=None,
-                flow_id="f1",
-            )
+        did = _aprovar_preco_inicial(entry_id, 4800)
         r = client.post(f"/api/imported/{entry_id}/export-xlsx")
     finally:
         client.cookies.clear()
@@ -2902,30 +2941,41 @@ def test_export_xlsx_leva_preco_aprovado(monkeypatch, tmp_path):
     from app.persistence import repo
 
     aplicados = [a["detail"] for a in repo.list_audit(entry_id) if a["event_type"] == "preco_aplicado"]
-    assert aplicados == [{"item_index": 0, "preco": 48.0, "flow_id": "f1"}]
+    assert aplicados == [{"item_index": 0, "preco": 48.0, "flow_id": did}]
 
 
-def _aprovar_preco_inicial(entry_id, centavos):
+def _decisao_flow(entry_id, resultado, centavos=None, motivo=None):
+    """Decisão do Flow (rota c) para o item 0 na revisão vigente; devolve o decisaoId."""
+    import uuid
     from datetime import UTC
     from datetime import datetime as _dt
 
-    from app.models.order import OrderItem
-    from app.persistence import preco_aprovacao_repo as aprov
+    from app.persistence import preco_revisao_repo as revs
 
+    did = str(uuid.uuid4())
     with db.connect() as conn:
-        item = OrderItem(description="x", quantity=10.0, ean="7891", product_code="C1")
-        assert aprov.aplicar_decisao(
+        vig = revs.vigente(conn, entry_id)
+        assert vig is not None, "o portão ainda não criou a revisão"
+        assert revs.gravar_decisao(
             conn,
-            import_id=entry_id,
-            item_index=0,
-            assinatura=aprov.assinatura(item, "123", "11222333000144", rede_id="r1"),
-            decisao="preco_inicial",
-            preco_final_centavos=centavos,
-            por="rafael",
-            em=_dt.now(UTC),
-            motivo=None,
-            flow_id="f1",
-        )
+            {
+                "decisaoId": did,
+                "externalId": entry_id,
+                "revisao": vig["revisao"],
+                "itemChave": f"{entry_id}:0",
+                "resultado": resultado,
+                "precoAprovadoCentavos": centavos,
+                "motivoRecusa": motivo,
+                "observacao": None,
+                "decididoEm": "2026-10-18T12:00:00.000Z",
+            },
+            agora=_dt.now(UTC),
+        ) == "aplicada"
+    return did
+
+
+def _aprovar_preco_inicial(entry_id, centavos):
+    return _decisao_flow(entry_id, "acordo_comercial", centavos)
 
 
 def test_send_to_fire_ligado_entrega_o_preco_aprovado_ao_exporter(monkeypatch, tmp_path):
@@ -2968,7 +3018,7 @@ def test_send_to_fire_ligado_entrega_o_preco_aprovado_ao_exporter(monkeypatch, t
     assert r.status_code == 200, r.text
     assert recebidos == [[48.0]]
     aplicados = [a["detail"] for a in repo.list_audit(entry_id) if a["event_type"] == "preco_aplicado"]
-    assert aplicados == [{"item_index": 0, "preco": 48.0, "flow_id": "f1"}]
+    assert [(a["item_index"], a["preco"]) for a in aplicados] == [(0, 48.0)]
 
 
 def test_send_to_fire_que_falha_no_fire_nao_grava_preco_aplicado(monkeypatch, tmp_path):
@@ -3196,40 +3246,43 @@ def test_detalhe_sem_bloco_preco_em_desligado(tmp_path):
     assert "preco" not in r.json()
 
 
-def test_detalhe_mostra_decisao_do_item(tmp_path):
-    import uuid
+def _revisao_preview(entry_id):
+    """Revisão vigente com o conteúdo atual do pedido (o que o portão criaria)."""
     from datetime import UTC
     from datetime import datetime as _dt
 
-    from app.erp.preco_avaliacao import ItemAvaliado
+    from app.erp import preco_trava
     from app.models.order import Order
-    from app.persistence import preco_aprovacao_repo as aprov
+    from app.persistence import preco_revisao_repo as revs
     from app.persistence import repo
+
+    entry = repo.get_import(entry_id)
+    order = Order.model_validate(entry["snapshot"])
+    env = {"preco_trava_modo": "ligado", "cnpj": _EMPRESA_TRAVA}
+    agora = _dt.now(UTC)
+    av = preco_trava.avaliar_entry(entry, order, env=env, agora=agora)
+    h = preco_trava.conteudo_hash(order, av, cliente_cnpj=av.cnpj_rede, empresa_cnpj=_EMPRESA_TRAVA)
+    with db.connect() as conn:
+        revs.garantir_revisao(conn, entry_id, {"externalId": entry_id}, h, agora=agora)
+
+
+def test_detalhe_mostra_decisao_do_item(tmp_path):
+    import uuid
 
     env = _env_trava_ligada(tmp_path)
     entry_id = str(uuid.uuid4())
     _seed_preco_preview(entry_id, 54.0)
-    order = Order.model_validate(repo.get_import(entry_id)["snapshot"])
-    sig = aprov.assinatura(order.items[0], "123", "11222333000144", rede_id="r1")
-    agora = _dt.now(UTC)
-    with db.connect() as conn:
-        aprov.registrar_pendencias(
-            conn,
-            entry_id,
-            [(ItemAvaliado(0, "123", "fila", "preco_acima", 5400, 5000), sig)],
-            agora=agora,
-        )
-        assert aprov.aplicar_decisao(
-            conn, import_id=entry_id, item_index=0, assinatura=sig, decisao="acordo",
-            preco_final_centavos=None, por="rafael", em=agora, motivo=None, flow_id="f1",
-        )
+    _revisao_preview(entry_id)
+    _decisao_flow(entry_id, "acordo_comercial", 5400)
 
-    r = _preview_com_modo(entry_id, env, "observando")
+    r = _preview_com_modo(entry_id, env, "ligado")
 
     preco = r.json()["preco"]
-    assert preco["itens"][0]["decisao"] == "acordo"
+    assert preco["itens"][0]["decisao"] == "acordo_comercial"
+    assert preco["itens"][0]["estado"] == "aprovado"
     assert preco["resumo"]["aprovados"] == 1
     assert preco["resumo"]["fila"] == 0
+    assert preco["revisao"] == {"numero": 1, "situacao": "pendente_envio", "erro_flow": None}
 
 
 def test_detalhe_sem_preco_quando_avaliacao_falha(tmp_path, monkeypatch):
@@ -3250,27 +3303,9 @@ def test_detalhe_sem_preco_quando_avaliacao_falha(tmp_path, monkeypatch):
     assert "preco" not in r.json()
 
 
-def _decidir_web(entry_id, decisao, motivo=None):
-    import uuid  # noqa: F401
-    from datetime import UTC
-    from datetime import datetime as _dt
-
-    from app.erp.preco_avaliacao import ItemAvaliado
-    from app.models.order import Order
-    from app.persistence import preco_aprovacao_repo as aprov
-    from app.persistence import repo
-
-    order = Order.model_validate(repo.get_import(entry_id)["snapshot"])
-    sig = aprov.assinatura(order.items[0], "123", "11222333000144", rede_id="r1")
-    agora = _dt.now(UTC)
-    with db.connect() as conn:
-        aprov.registrar_pendencias(
-            conn, entry_id, [(ItemAvaliado(0, "123", "fila", "preco_acima", 5400, 5000), sig)], agora=agora
-        )
-        assert aprov.aplicar_decisao(
-            conn, import_id=entry_id, item_index=0, assinatura=sig, decisao=decisao,
-            preco_final_centavos=None, por="rafael", em=agora, motivo=motivo, flow_id="f1",
-        )
+def _decidir_web(entry_id, resultado, motivo=None):
+    _revisao_preview(entry_id)
+    _decisao_flow(entry_id, resultado, None if resultado == "recusado" else 5400, motivo)
 
 
 def test_detalhe_ligado_item_recusado(tmp_path):

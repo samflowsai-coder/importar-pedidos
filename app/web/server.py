@@ -1686,6 +1686,35 @@ class ReimportRequest(BaseModel):
     env_slug: str | None = None
 
 
+def _retirar_preco_do_reimportado(source_filename: str, novo_id: str) -> None:
+    """O reimport cria `import_id` novo: as importações anteriores do mesmo
+    arquivo (ainda fora do Fire) saem da fila de aprovação de preço do Flow
+    (contrato precos v1 §4.3). Sem revisão é no-op. Nunca derruba o reimport."""
+    try:
+        from datetime import UTC
+
+        from app.persistence import db as _db
+        from app.persistence import preco_revisao_repo
+
+        with _db.connect() as conn:
+            antigos = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT id FROM imports WHERE source_filename = ? AND id != ?"
+                    " AND COALESCE(portal_status, '') NOT IN ('sent_to_fire', 'found_in_fire')",
+                    (source_filename, novo_id),
+                )
+            ]
+            for antigo in antigos:
+                preco_revisao_repo.retirar(
+                    conn, antigo, "pedido reimportado no Portal", em=datetime.now(UTC)
+                )
+    except Exception as exc:  # noqa: BLE001
+        from app.utils.logger import logger
+
+        logger.warning(f"retirar revisão de preço do reimport falhou ({type(exc).__name__}): {exc}")
+
+
 @app.post("/api/reimport")
 def reimport_file(
     body: ReimportRequest,
@@ -1742,6 +1771,7 @@ def reimport_file(
                     db_result=result.get("db_result"),
                 )
                 _append_log(cfg, entry)
+                _retirar_preco_do_reimportado(name, entry["id"])
                 return JSONResponse(
                     {
                         "source": name,
@@ -3138,16 +3168,15 @@ def cancel_import(
         from datetime import UTC
 
         from app.persistence import db as _db
-        from app.persistence import preco_aprovacao_repo
+        from app.persistence import preco_revisao_repo
 
+        motivo = ((reason or "").strip() or "pedido cancelado no Portal")[:500]
         with _db.connect() as _pconn:
-            preco_aprovacao_repo.cancelar_do_pedido(
-                _pconn, import_id, motivo="pedido_cancelado", em=datetime.now(UTC)
-            )
+            preco_revisao_repo.retirar(_pconn, import_id, motivo, em=datetime.now(UTC))
     except Exception as exc:  # cancelar nunca falha por causa da trava de preço
         from app.utils.logger import logger
 
-        logger.warning(f"cancelar aprovações de preço falhou ({type(exc).__name__}): {exc}")
+        logger.warning(f"retirar revisão de preço falhou ({type(exc).__name__}): {exc}")
     return JSONResponse(
         {
             "entry_id": import_id,

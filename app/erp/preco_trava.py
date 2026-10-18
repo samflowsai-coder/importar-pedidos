@@ -8,19 +8,28 @@ de hoje (`check_order` + `is_blocking` + ack) e, em `ligado`, o avaliador puro
 - `desligado` (ou sem ambiente): bit a bit a regra de hoje.
 - `observando`: regra de hoje + avaliação gravada em audit `preco_observado`;
   a avaliação nunca bloqueia e nada é criado para o Flow.
-- `ligado`: a regra de hoje não decide; bloqueia por item não avaliado, item na
-  fila sem decisão válida ou decisão recusada. Qualquer falha ao avaliar
-  bloqueia (fail-closed): o portão grava direto no ERP de produção.
+- `ligado`: a regra de hoje não decide. Pedido 100% ok contra a cópia segue
+  sem falar com o Flow. Com item na fila, o portão garante a revisão do
+  pedido (`preco_revisao_repo`, contrato precos v1 §4) e só libera quando
+  toda `itemChave` da revisão vigente tem decisão do Flow e nenhuma é
+  `recusado` (§1 passo 6); o preço que vai ao ERP é o `precoAprovadoCentavos`
+  de cada decisão. Qualquer falha ao avaliar bloqueia (fail-closed): o portão
+  grava direto no ERP de produção.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any
 
 import app.erp.product_check as pc
 from app.erp import preco_regra
+from app.erp.mapper import parse_date
 from app.erp.preco_avaliacao import (
     Avaliacao,
     ItemAvaliado,
@@ -31,11 +40,12 @@ from app.erp.preco_avaliacao import (
     data_ref_do_pedido,
     unidade_normalizada,
 )
+from app.integrations.flowpcp import precos_schema
 from app.models.order import Order
 from app.persistence import db, environments_repo, precos_repo, repo
-from app.persistence import preco_aprovacao_repo as aprov
+from app.persistence import preco_revisao_repo as revs
 
-_APROVADAS = frozenset({"acordo", "regra", "preco_inicial", "auto_tabela"})
+MOTIVO_RETIRADA_LOCAL = "pedido liberado pela tabela de preço no Portal"
 
 _MOTIVO_LEGIVEL: dict[str, str] = {
     "produto_nao_identificado": "produto não identificado no Fire",
@@ -117,6 +127,7 @@ def _com_vinculos(check: dict | None, produtos_por_item: dict[int, int] | None) 
         if 0 <= i < len(itens):
             if str(itens[i].get("fire_product_id")) != str(seq):
                 itens[i]["fire_unidade"] = None
+                itens[i]["fire_description"] = None
             itens[i]["fire_product_id"] = seq
     return {**check, "items": itens}
 
@@ -223,52 +234,207 @@ def bloqueio_do_pedido(order: Order, entry: dict, check: dict | None) -> str | N
     return None
 
 
-def classificar_itens(
-    order: Order, av: Avaliacao, decisoes: dict[int, dict[str, Any]]
-) -> tuple[dict[int, str], dict[int, float], dict[int, Any]]:
-    """Estado final de cada item — a ÚNICA fonte do portão e do preview.
+def item_chave(import_id: str, item_index: int) -> str:
+    """Identidade estável da linha no contrato (`itemChave`)."""
+    return f"{import_id}:{item_index}"
 
-    Estados: ok | aguardando | aprovado | recusado | nao_avaliado | intercompany.
-    Também devolve os preços do aprovador a aplicar (item sem preço no pedido)
-    e o flow_id de cada um."""
-    estados: dict[int, str] = {}
-    precos: dict[int, float] = {}
-    flow_ids: dict[int, Any] = {}
+
+def _quantidade_2(q: float | None) -> Decimal | None:
+    """Quantidade a 2 casas (`Decimal.quantize`, decisão 3); None se ausente."""
+    if q is None or not math.isfinite(q):
+        return None
+    return Decimal(str(q)).quantize(Decimal("0.01"))
+
+
+def conteudo_hash(
+    order: Order, av: Avaliacao, *, cliente_cnpj: str | None, empresa_cnpj: str
+) -> str:
+    """`sha256:` do JSON canônico do que muda a avaliação (contrato §4.2):
+    cliente, empresa e, por item, produto, unidade, quantidade e preço. A
+    descrição não entra. CNPJs já normalizados (estável entre deploys)."""
+    itens = []
+    for it in av.itens:
+        q = _quantidade_2(order.items[it.item_index].quantity)
+        itens.append(
+            {
+                "linha": it.item_index,
+                "erpProdutoId": it.fire_produto_id,
+                "unidadeErp": it.unidade_erp,
+                "quantidade": None if q is None else str(q),
+                "precoPedidoCentavos": it.preco_pedido_centavos,
+            }
+        )
+    base = {"cliente_cnpj": cliente_cnpj, "empresa_cnpj": empresa_cnpj, "itens": itens}
+    texto = json.dumps(base, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(texto.encode("utf-8")).hexdigest()
+
+
+def _instante_z(dt: datetime) -> str:
+    """Instante como o `toISOString()` do JS (UTC, milissegundos, `Z`)."""
+    u = dt.astimezone(UTC)
+    return u.strftime("%Y-%m-%dT%H:%M:%S.") + f"{u.microsecond // 1000:03d}Z"
+
+
+def emitido_em_do_pedido(order: Order) -> str | None:
+    """`issue_date` à 00:00 em São Paulo, em UTC (decisão 2); sem emissão, None."""
+    d = parse_date(order.header.issue_date)
+    if d is None:
+        return None
+    return _instante_z(datetime(d.year, d.month, d.day, tzinfo=preco_regra.TZ))
+
+
+def recebido_em_do_pedido(recebido_em: str | datetime | None, agora: datetime) -> str:
+    """`imported_at` (sem fuso = hora de São Paulo) com fuso; sem ele, `agora`."""
+    dt: datetime | None = recebido_em if isinstance(recebido_em, datetime) else None
+    if isinstance(recebido_em, str) and recebido_em.strip():
+        try:
+            dt = datetime.fromisoformat(recebido_em.strip())
+        except ValueError:
+            dt = None
+    if dt is None:
+        dt = agora
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=preco_regra.TZ)
+    return _instante_z(dt)
+
+
+def _texto(*candidatos: object, maximo: int) -> str | None:
+    for c in candidatos:
+        if isinstance(c, str) and c.strip():
+            return c.strip()[:maximo]
+    return None
+
+
+def cliente_do_pedido(order: Order, entry: dict, check: dict | None, av: Avaliacao) -> dict:
+    """`cliente` do corpo: CNPJ que resolveu a rede; nome do override, do
+    cabeçalho ou, sem eles, a razão do Fire."""
+    nome = _texto(
+        entry.get("cliente_override_razao")
+        if entry.get("cliente_override_codigo") is not None
+        else None,
+        order.header.customer_name,
+        ((check or {}).get("client") or {}).get("razao_social"),
+        maximo=255,
+    )
+    return {"nome": nome, "cnpj": av.cnpj_rede}
+
+
+def montar_corpo(
+    import_id: str,
+    order: Order,
+    av: Avaliacao,
+    *,
+    empresa_cnpj: str,
+    cliente: dict,
+    emitido_em: str | None,
+    recebido_em: str,
+    cursor: str | None,
+    check: dict | None = None,
+) -> tuple[dict, str]:
+    """Corpo `aprovacaoEnvioV1` (`tipo: "pedido"`) sem `revisao`, e o
+    `conteudoHash`. Vão todos os itens, `ok` e `na_fila`. Sem validar: quem
+    chama passa por `precos_schema.validar_envio` antes de gravar.
+    `check`: o do envio (com os vínculos), para a descrição do Fire."""
+    h = conteudo_hash(order, av, cliente_cnpj=cliente.get("cnpj"), empresa_cnpj=empresa_cnpj)
+    check_itens = (check or {}).get("items") or []
+    itens = []
     for it in av.itens:
         i = it.item_index
-        d = decisoes.get(i)
+        oi = order.items[i]
+        fire = check_itens[i] if i < len(check_itens) else {}
+        q = _quantidade_2(oi.quantity)
+        ok = it.situacao == "ok"
+        itens.append(
+            {
+                "itemChave": item_chave(import_id, i),
+                "linha": i,
+                "erpProdutoId": it.fire_produto_id,
+                "codigo": _texto(oi.product_code, it.fire_produto_id, maximo=128),
+                "descricao": _texto(oi.description, fire.get("fire_description"), maximo=512),
+                "unidadeErp": it.unidade_erp,
+                "quantidade": float(q) if q is not None and q > 0 else oi.quantity,
+                "precoPedidoCentavos": it.preco_pedido_centavos,
+                "precoTabelaCentavos": it.preco_tabela_centavos,
+                "precoTabelaId": it.preco_tabela_id,
+                "situacao": "ok" if ok else "na_fila",
+                "motivo": None if ok else it.motivo,
+            }
+        )
+    corpo = {
+        "schema": "precos.aprovacao.v1",
+        "tipo": "pedido",
+        "externalId": import_id,
+        "conteudoHash": h,
+        "empresaFaturadoraCnpj": empresa_cnpj,
+        "pedidoNumero": order.header.order_number,
+        "emitidoEm": emitido_em,
+        "recebidoEm": recebido_em,
+        "cliente": cliente,
+        "redeId": av.rede.id if av.rede is not None else None,
+        "tabelaCursor": cursor,
+        "itens": itens,
+    }
+    return corpo, h
+
+
+def _acao_revisao(vig: dict | None, h: str, tem_fila: bool) -> str:
+    """O que a revisão vigente vira diante do conteúdo atual:
+    `vigente` (decisões dela valem) | `nova` (com fila: revisão nova) |
+    `retirar` (sem fila: libera pela regra local e tira do Flow) | `local`."""
+    obsoleta = vig is not None and (vig["conteudo_hash"] != h or vig["situacao"] == "recusada_flow")
+    if tem_fila:
+        return "nova" if vig is None or obsoleta else "vigente"
+    if vig is None:
+        return "local"
+    return "retirar" if obsoleta else "vigente"
+
+
+def _vai_ao_flow(av: Avaliacao) -> bool:
+    """Pedido que pode ter revisão: nenhum item não avaliado nem intercompany
+    (contrato §4.1: esses nunca chegam ao Flow)."""
+    return not any(it.situacao in ("nao_avaliado", "fora_intercompany") for it in av.itens)
+
+
+def classificar_itens(
+    order: Order,
+    av: Avaliacao,
+    revisao: dict | None,
+    decisoes: dict[str, dict[str, Any]],
+) -> tuple[dict[int, str], dict[int, float], dict[int, Any]]:
+    """Estado final de cada item — a ÚNICA fonte do portão e do preview (§1.6).
+
+    Estados: ok | aguardando | aprovado | recusado | nao_avaliado | intercompany.
+    Sem revisão vigente: item `ok` local fica `ok`, fila fica `aguardando`.
+    Com revisão: cada item usa a decisão da sua `itemChave` (`recusado` →
+    recusado; outra → aprovado com `precoAprovadoCentavos/100`; sem decisão
+    → aguardando); revisão `recusada_flow` → todos recusados.
+    Devolve também o preço a aplicar e o `decisaoId` de cada item aprovado."""
+    estados: dict[int, str] = {}
+    precos: dict[int, float] = {}
+    decisao_ids: dict[int, Any] = {}
+    for it in av.itens:
+        i = it.item_index
         if it.situacao == "fora_intercompany":
             estados[i] = "intercompany"
         elif it.situacao == "nao_avaliado":
             estados[i] = "nao_avaliado"
-        elif d is not None and d.get("decisao") == "recusado":
+        elif revisao is None:
+            estados[i] = "ok" if it.situacao == "ok" else "aguardando"
+        elif revisao.get("situacao") == "recusada_flow":
             estados[i] = "recusado"
-        elif it.situacao == "ok":
-            estados[i] = "ok"
-        elif d is None or d.get("decisao") not in _APROVADAS:
-            estados[i] = "aguardando"
-        elif order.items[i].unit_price is None:
-            if d.get("preco_final_centavos") is None:
+        else:
+            d = decisoes.get(item_chave(revisao["import_id"], i))
+            if d is None or (
+                d.get("resultado") != "recusado" and d.get("preco_aprovado_centavos") is None
+            ):
                 estados[i] = "aguardando"
+            elif d.get("resultado") == "recusado":
+                estados[i] = "recusado"
             else:
                 estados[i] = "aprovado"
-                precos[i] = int(d["preco_final_centavos"]) / 100
-                flow_ids[i] = d.get("flow_id")
-        else:
-            estados[i] = "aprovado"
-    return estados, precos, flow_ids
-
-
-def assinaturas_da_avaliacao(order: Order, av: Avaliacao) -> dict[int, str]:
-    """Assinatura atual de cada item avaliado (chave das decisões do Flow):
-    a rede resolvida quando há, senão a raiz do CNPJ."""
-    rede_id = av.rede.id if av.rede is not None else None
-    return {
-        it.item_index: aprov.assinatura(
-            order.items[it.item_index], it.fire_produto_id, av.cnpj_rede, rede_id=rede_id
-        )
-        for it in av.itens
-    }
+                precos[i] = int(d["preco_aprovado_centavos"]) / 100
+                decisao_ids[i] = d.get("decisao_id")
+    return estados, precos, decisao_ids
 
 
 def _reais(centavos: int | None) -> float | None:
@@ -285,16 +451,33 @@ def preview_preco(
     produtos_por_item: dict[int, int] | None = None,
 ) -> dict | None:
     """Bloco `preco` do preview: estado por item, igual ao que o portão decidiria
-    (mesmo `classificar_itens`). Só leitura (sem Fire, sem audit, sem pendência).
-    `desligado` → None."""
+    (mesmo `classificar_itens` e a mesma leitura da revisão). Só leitura: sem
+    Fire, sem audit, nunca cria nem retira revisão. `desligado` → None."""
     check = _check_utilizavel(entry.get("check"), order)
     av = avaliar_entry(entry, order, env=env, agora=agora, produtos_por_item=produtos_por_item)
     if av is None:
         return None
-    with db.connect() as conn:
-        decisoes = aprov.decisoes_validas(conn, import_id, assinaturas_da_avaliacao(order, av))
-    estados, _, _ = classificar_itens(order, av, decisoes)
     bloqueio = bloqueio_do_pedido(order, entry, check)
+    revisao, decisoes = None, {}
+    if _modo(env) == "ligado" and bloqueio is None and _vai_ao_flow(av):
+        with db.connect() as conn:
+            vig = revs.vigente(conn, import_id)
+            empresa = preco_regra.normalizar_cnpj((env or {}).get("cnpj")) or ""
+            h = conteudo_hash(order, av, cliente_cnpj=av.cnpj_rede, empresa_cnpj=empresa)
+            acao = _acao_revisao(vig, h, bool(av.pendentes))
+            if acao == "vigente":
+                revisao, decisoes = vig, revs.decisoes_da_vigente(conn, import_id)
+            elif (
+                acao == "nova"
+                and vig is not None
+                and vig["situacao"] == "recusada_flow"
+                and vig["conteudo_hash"] == h
+            ):
+                revisao = vig  # mostra o erro do Flow; o próximo envio cria a seguinte
+            elif acao == "nova":
+                # o portão criaria a revisão seguinte, ainda sem decisão
+                revisao = {"import_id": import_id, "situacao": "pendente_envio"}
+    estados, _, _ = classificar_itens(order, av, revisao, decisoes)
     if bloqueio is not None:
         estados = dict.fromkeys(estados, "nao_avaliado")
     resumo = {
@@ -317,6 +500,7 @@ def preview_preco(
     for it in av.itens:
         estado = estados[it.item_index]
         resumo[chave[estado]] += 1
+        d = decisoes.get(item_chave(import_id, it.item_index)) or {}
         itens.append(
             {
                 "item_index": it.item_index,
@@ -324,11 +508,23 @@ def preview_preco(
                 "motivo": it.motivo,
                 "preco_pedido": _reais(it.preco_pedido_centavos),
                 "preco_tabela": _reais(it.preco_tabela_centavos),
-                "decisao": (decisoes.get(it.item_index) or {}).get("decisao"),
+                "decisao": d.get("resultado"),
                 "estado": estado,
             }
         )
-    return {"modo": _modo(env), "itens": itens, "resumo": resumo, "bloqueio_pedido": bloqueio}
+    return {
+        "modo": _modo(env),
+        "itens": itens,
+        "resumo": resumo,
+        "bloqueio_pedido": bloqueio,
+        "revisao": None
+        if revisao is None or "revisao" not in revisao
+        else {
+            "numero": revisao["revisao"],
+            "situacao": revisao["situacao"],
+            "erro_flow": revisao.get("erro_definitivo"),
+        },
+    }
 
 
 def aplicar_precos(order: Order, precos: dict[int, float]) -> None:
@@ -372,7 +568,7 @@ def _regra_de_hoje(check: dict, ack_items: list) -> DecisaoEnvio:
 
 
 def _bloqueio_trava(
-    reason: str, detalhe: str, av: Avaliacao, decisoes: dict[int, dict[str, Any]]
+    reason: str, detalhe: str, av: Avaliacao, decisoes_por_item: dict[int, dict[str, Any]]
 ) -> DecisaoEnvio:
     itens = [
         {
@@ -380,10 +576,10 @@ def _bloqueio_trava(
             "fire_produto_id": it.fire_produto_id,
             "situacao": it.situacao,
             "motivo": it.motivo,
-            "decisao": (decisoes.get(it.item_index) or {}).get("decisao"),
+            "decisao": (decisoes_por_item.get(it.item_index) or {}).get("resultado"),
         }
         for it in av.itens
-        if it.situacao != "ok" or it.item_index in decisoes
+        if it.situacao != "ok" or it.item_index in decisoes_por_item
     ]
     return DecisaoEnvio(
         True,
@@ -393,6 +589,67 @@ def _bloqueio_trava(
         metric_labels=[reason],
         avaliacao=av,
     )
+
+
+def _revisao_do_envio(
+    import_id: str,
+    order: Order,
+    entry: dict,
+    check: dict,
+    av: Avaliacao,
+    agora: datetime,
+    env: dict | None,
+) -> tuple[dict | None, dict[str, dict[str, Any]], str | None, str | None]:
+    """Revisão que vale para este envio, com as decisões dela. Só chamado com
+    o pedido avaliável (nenhum bloqueio de pedido nem item não avaliado).
+    Com fila: corpo validado pelo schema e revisão garantida (nova se o hash
+    mudou ou a vigente foi recusada pelo Flow). Sem fila e vigente obsoleta:
+    ela é retirada e o pedido segue pela regra local.
+    Devolve (revisão, decisões, corpo inválido, erro do Flow da revisão anterior)."""
+    empresa = preco_regra.normalizar_cnpj((env or {}).get("cnpj"))
+    if empresa is None:  # o avaliador já devolve não avaliado; defesa (fail-closed)
+        raise ValueError("ambiente sem CNPJ da empresa faturadora")
+    with db.connect() as conn:
+        vig = revs.vigente(conn, import_id)
+        corpo, h = montar_corpo(
+            import_id,
+            order,
+            av,
+            empresa_cnpj=empresa,
+            cliente=cliente_do_pedido(order, entry, check, av),
+            emitido_em=emitido_em_do_pedido(order),
+            recebido_em=recebido_em_do_pedido(entry.get("imported_at"), agora),
+            cursor=precos_repo.estado_sync(conn).cursor,
+            check=check,
+        )
+        acao = _acao_revisao(vig, h, bool(av.pendentes))
+        if acao == "local":
+            return None, {}, None, None
+        if acao == "retirar":
+            revs.retirar(conn, import_id, MOTIVO_RETIRADA_LOCAL, em=agora)
+            return None, {}, None, None
+        erro_anterior = None
+        if acao == "nova":
+            try:
+                precos_schema.validar_envio({**corpo, "revisao": 1})
+            except ValueError as exc:
+                return None, {}, _erro_de_schema(exc), None
+            if vig is not None and vig["situacao"] == "recusada_flow":
+                erro_anterior = vig.get("erro_definitivo")
+            revs.garantir_revisao(conn, import_id, corpo, h, agora=agora)
+            vig = revs.vigente(conn, import_id)
+        return vig, revs.decisoes_da_vigente(conn, import_id), None, erro_anterior
+
+
+def _erro_de_schema(exc: ValueError) -> str:
+    erros = getattr(exc, "errors", None)
+    if callable(erros):
+        partes = []
+        for e in erros()[:3]:
+            local = ".".join(str(p) for p in e.get("loc", ()))
+            partes.append(f"{local}: {e.get('msg')}" if local else str(e.get("msg")))
+        return "; ".join(partes)
+    return str(exc)
 
 
 def _decidir_ligado(
@@ -410,14 +667,16 @@ def _decidir_ligado(
         produtos_por_item,
     )
     vazio = Avaliacao(rede=None, cnpj_rede=None)
+    revisao: dict | None = None
+    decisoes: dict[str, dict[str, Any]] = {}
+    erro_anterior: str | None = None
     try:
+        # Bloqueio de nível de pedido nunca toca revisão nem decisão: erro de
+        # configuração ou Fire fora não pode invalidar decisão já dada.
         bloqueio = bloqueio_do_pedido(order, entry, check)
         if bloqueio is not None:
             return _bloqueio_trava("preco_nao_avaliado", bloqueio, vazio, {})
         if check is None:
-            # Fire fora e sem check salvo: sem produto não há assinatura. Bloqueia
-            # ANTES de tocar em preco_aprovacao — senão substituir_obsoletas
-            # cancelaria toda decisão já dada e ela se perderia na volta do Fire.
             av = _todos(order, None, "nao_avaliado", "produto_nao_identificado")
             return _bloqueio_trava(
                 "preco_nao_avaliado",
@@ -427,13 +686,17 @@ def _decidir_ligado(
                 {},
             )
         av = _avaliar_local(order, check, entry, agora, env)
-        assinaturas = assinaturas_da_avaliacao(order, av)
-        with db.connect() as conn:
-            aprov.substituir_obsoletas(conn, import_id, assinaturas, em=agora)
-            fila = [(it, assinaturas[it.item_index]) for it in av.pendentes]
-            if fila:
-                aprov.registrar_pendencias(conn, import_id, fila, agora=agora)
-            decisoes = aprov.decisoes_validas(conn, import_id, assinaturas)
+        if _vai_ao_flow(av):
+            revisao, decisoes, corpo_invalido, erro_anterior = _revisao_do_envio(
+                import_id, order, entry, check, av, agora, env
+            )
+            if corpo_invalido is not None:
+                return _bloqueio_trava(
+                    "preco_nao_avaliado",
+                    f"Pedido não pode ir ao Flow para aprovação de preço: {corpo_invalido}.",
+                    av,
+                    {},
+                )
     except Exception as exc:  # noqa: BLE001 — fail-closed: sem avaliação não grava no ERP
         from app.utils.logger import logger
 
@@ -455,9 +718,14 @@ def _decidir_ligado(
         hoje.avaliacao = av
         return hoje
 
-    estados, precos, flow_ids = classificar_itens(order, av, decisoes)
+    estados, precos, decisao_ids = classificar_itens(order, av, revisao, decisoes)
+    por_item = {
+        it.item_index: decisoes[item_chave(import_id, it.item_index)]
+        for it in av.itens
+        if item_chave(import_id, it.item_index) in decisoes
+    }
     bloqueados = [it for it in av.itens if estados[it.item_index] == "nao_avaliado"]
-    recusados = [decisoes[i] for i, e in estados.items() if e == "recusado"]
+    recusados = [i for i, e in estados.items() if e == "recusado"]
     aguardando = [it for it in av.itens if estados[it.item_index] == "aguardando"]
 
     partes: list[str] = []
@@ -469,18 +737,27 @@ def _decidir_ligado(
         partes.append(f"{len(bloqueados)} item(ns) sem avaliação de preço: {motivos}.")
         reason = "preco_nao_avaliado"
     if recusados:
-        motivos = "; ".join(
-            dict.fromkeys((d.get("motivo_recusa") or "sem motivo informado") for d in recusados)
-        )
+        if revisao is not None and revisao.get("situacao") == "recusada_flow":
+            motivos = revisao.get("erro_definitivo") or "sem motivo informado"
+        else:
+            motivos = "; ".join(
+                dict.fromkeys(
+                    (por_item[i].get("motivo_recusa") or "sem motivo informado") for i in recusados
+                )
+            )
         partes.append(f"Preço recusado no Flow: {motivos}.")
         reason = reason or "preco_recusado"
     if aguardando:
         partes.append(f"Pedido aguardando aprovação de preço no Flow: {len(aguardando)} item(ns).")
+        if erro_anterior:
+            partes.append(f"A revisão anterior foi recusada pelo Flow: {erro_anterior}.")
         reason = reason or "preco_aguardando"
     if reason is not None:
-        return _bloqueio_trava(reason, " ".join(partes), av, decisoes)
+        return _bloqueio_trava(reason, " ".join(partes), av, por_item)
 
-    aplicados = [{"item_index": i, "preco": p, "flow_id": flow_ids[i]} for i, p in precos.items()]
+    aplicados = [
+        {"item_index": i, "preco": p, "flow_id": decisao_ids[i]} for i, p in precos.items()
+    ]
     return DecisaoEnvio(False, precos_aplicar=precos, avaliacao=av, aplicados=aplicados)
 
 

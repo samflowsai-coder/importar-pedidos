@@ -123,8 +123,18 @@ bootstrap derruba as tabelas do modelo anterior (`preco_rede`, `preco_rede_cnpj`
   `vigencia_inicio`, `registrado_em` (texto do Flow, comparado como instante).
 - `preco_sync_v1` — linha única: `empresa_cnpj`, `cursor`, `completo_em` (`geradoEm` da última
   página com `temMais: false`; base da regra de 24 h).
-- `preco_aprovacao` — uma linha por `(import_id, item_index, assinatura)`; `situacao`,
-  `decisao`, `preco_final_centavos`, `flow_id`, `enviada_em`, `cancelada_em`/`motivo_cancelamento`.
+- `preco_revisao` — PK `(import_id, revisao)`: revisão do pedido na aprovação de preço
+  (contrato precos v1 §4). `conteudo_hash`, `corpo_json` (`aprovacaoEnvioV1` com a revisão),
+  `situacao` (`pendente_envio | enviada | recusada_flow | substituida | retirada`),
+  `enviada_em`/`resposta_json`, `erro_definitivo` (422), `retirada_em`/`retirada_motivo`/
+  `retirada_enviada_em`. Repo: `preco_revisao_repo`.
+- `preco_revisao_piso` — PK `import_id`: piso vindo do 409 `revisao_obsoleta` (a próxima
+  revisão nasce acima dele).
+- `preco_decisao` — PK `decisao_id` (idempotente): decisão do Flow por `item_chave`
+  (`resultado`, `preco_aprovado_centavos`, `motivo_recusa`, `decidido_em`) e a `confirmacao`
+  a devolver (`aplicada | descartada`, `confirmada_em`).
+- `preco_aprovacao` (aprovação por item, modelo anterior) saiu: o bootstrap faz `DROP TABLE IF
+  EXISTS` (nunca saiu da branch).
 - `imports.cliente_override_cnpj` — CNPJ do cliente escolhido no override; é o que define a
   rede quando o pedido veio sem CNPJ. Ver `modules/erp.md` ("Trava de preço por rede").
 

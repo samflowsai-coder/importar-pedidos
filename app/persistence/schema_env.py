@@ -384,31 +384,56 @@ CREATE TABLE IF NOT EXISTS preco_sync_v1 (
     completo_em  TEXT
 );
 
--- Aprovação de preço por linha do pedido (trava de preço). A decisão vem do
--- Flow; a assinatura (produto|preço|qtd) invalida a decisão se o item mudar.
-CREATE TABLE IF NOT EXISTS preco_aprovacao (
-    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
-    import_id               TEXT NOT NULL,
-    item_index              INTEGER NOT NULL,
-    assinatura              TEXT NOT NULL,
-    motivo_fila             TEXT NOT NULL,
-    preco_pedido_centavos   INTEGER,
-    preco_tabela_centavos   INTEGER,
-    situacao                TEXT NOT NULL DEFAULT 'pendente',
-    decisao                 TEXT,
-    preco_final_centavos    INTEGER,
-    decidido_por            TEXT,
-    decidido_em             TEXT,
-    motivo_recusa           TEXT,
-    flow_id                 TEXT,
-    criado_em               TEXT NOT NULL,
-    enviada_em              TEXT,
-    cancelada_em            TEXT,
-    motivo_cancelamento     TEXT,
-    cancelamento_avisado_em TEXT,
-    UNIQUE (import_id, item_index, assinatura)
+-- Aprovação por item do modelo anterior (assinatura por linha): nunca saiu da
+-- branch; o contrato precos v1 aprova por revisão do pedido (abaixo).
+DROP TABLE IF EXISTS preco_aprovacao;
+
+-- Revisão do pedido enviada ao Flow (rota b): número monotônico por pedido +
+-- hash do conteúdo que muda a avaliação. corpo_json = aprovacaoEnvioV1 com a
+-- revisão. situacao: pendente_envio | enviada | recusada_flow | substituida | retirada.
+CREATE TABLE IF NOT EXISTS preco_revisao (
+    import_id           TEXT NOT NULL,
+    revisao             INTEGER NOT NULL,
+    conteudo_hash       TEXT NOT NULL,
+    corpo_json          TEXT NOT NULL,
+    situacao            TEXT NOT NULL CHECK (situacao IN
+                            ('pendente_envio', 'enviada', 'recusada_flow',
+                             'substituida', 'retirada')),
+    enviada_em          TEXT,
+    resposta_json       TEXT,
+    erro_definitivo     TEXT,
+    retirada_em         TEXT,
+    retirada_motivo     TEXT,
+    retirada_enviada_em TEXT,
+    criado_em           TEXT NOT NULL,
+    PRIMARY KEY (import_id, revisao)
 );
-CREATE INDEX IF NOT EXISTS idx_preco_aprovacao_import ON preco_aprovacao(import_id);
+CREATE INDEX IF NOT EXISTS idx_preco_revisao_situacao ON preco_revisao(situacao);
+
+-- Piso da revisão (409 revisao_obsoleta do Flow): a próxima nasce acima dele.
+CREATE TABLE IF NOT EXISTS preco_revisao_piso (
+    import_id TEXT PRIMARY KEY,
+    piso      INTEGER NOT NULL
+);
+
+-- Decisão do Flow por item (rota c), idempotente por decisao_id.
+-- confirmacao = o que vai ao Flow no confirmar: aplicada | descartada.
+CREATE TABLE IF NOT EXISTS preco_decisao (
+    decisao_id              TEXT PRIMARY KEY,
+    import_id               TEXT NOT NULL,
+    revisao                 INTEGER NOT NULL,
+    item_chave              TEXT NOT NULL,
+    resultado               TEXT NOT NULL,
+    preco_aprovado_centavos INTEGER,
+    motivo_recusa           TEXT,
+    observacao              TEXT,
+    decidido_em             TEXT NOT NULL,
+    recebida_em             TEXT NOT NULL,
+    confirmacao             TEXT NOT NULL CHECK (confirmacao IN ('aplicada', 'descartada')),
+    confirmada_em           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_preco_decisao_revisao ON preco_decisao(import_id, revisao);
+CREATE INDEX IF NOT EXISTS idx_preco_decisao_pendente ON preco_decisao(confirmada_em);
 """
 
 INDEXES_SQL = """

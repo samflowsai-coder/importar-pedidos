@@ -499,7 +499,12 @@ tem tela de gestão de preço: a decisão (aprovar/recusar) vem do Flow. Spec:
 - `app/erp/preco_trava.py` — o portão e os helpers compartilhados.
 - `app/persistence/precos_repo.py` — cópia local (`aplicar_pagina`, `reiniciar`, `estado_sync`, `resolver_rede`, `preco_vigente`, `ultima_sync_ok`).
 - `app/erp/preco_regra.py` — regra pura do §5 do contrato precos v1 (`normalizar_cnpj`, `cnpj_valido`, `resolver_preco`, `data_referencia`, `centavos`); vetores do pcp-app em `tests/fixtures/flow_precos_v1/`.
-- `app/persistence/preco_aprovacao_repo.py` — aprovações por linha do pedido.
+- `app/persistence/preco_revisao_repo.py` — revisão do pedido e decisões do Flow
+  (`garantir_revisao`, `vigente`, `decisoes_da_vigente`, `gravar_decisao`, `retirar` e as
+  filas que a thread do Flow consome: `pendentes_envio`, `confirmacoes_pendentes`,
+  `retiradas_pendentes`).
+- `app/integrations/flowpcp/precos_schema.py` — porta pydantic do zod do contrato:
+  `validar_envio` (`aprovacaoEnvioV1` com os `superRefine`), `DecisaoPrecoV1`, `DecisoesPaginaV1`.
 
 ### Ordem das regras do avaliador
 1. `cliente_sem_cnpj` — sem CNPJ de rede → todos `nao_avaliado`. `cnpj_da_rede`: o do cliente
@@ -539,37 +544,52 @@ chama `aplicar_precos(order, precos_aplicar)` antes de exportar e `registrar_apl
 (audit `preco_aplicado`) **só depois do sucesso**.
 - Puros e compartilhados com o preview: `avaliar_entry`, `preview_preco`,
   `classificar_itens` (estado final por item) e `bloqueio_do_pedido`. Paridade preview↔envio testada.
-- `ligado`: a cada avaliação chama `substituir_obsoletas` (mapa completo de assinaturas) →
-  `registrar_pendencias` (itens `fila`) → `decisoes_validas`. **Sem check utilizável**
-  (Fire fora e sem check salvo) bloqueia `preco_nao_avaliado` **antes** de tocar em
-  `preco_aprovacao`: decisões já dadas sobrevivem à queda do Fire.
+- `ligado` (contrato precos v1 §1 passo 6): pedido com item `nao_avaliado` ou bloqueio de
+  pedido (`empresa_sem_cnpj`, `cliente_sem_cnpj`, `copia_desatualizada`, sem check,
+  `bloqueio_do_pedido`) bloqueia **antes** de calcular hash ou tocar em revisão/decisão.
+  Senão calcula corpo e `conteudo_hash` **sempre** (`montar_corpo`) e compara com a vigente
+  (`_acao_revisao`): com fila, hash novo (ou vigente `recusada_flow`) → corpo validado
+  (`precos_schema.validar_envio`; inválido = bloqueio local, nada gravado) e
+  `garantir_revisao`; sem fila, vigente obsoleta → `retirar` e segue pela regra local; sem
+  fila e sem vigente → segue sem falar com o Flow, preço intocado. Com revisão vigente, todo
+  item precisa da decisão da sua `itemChave` (`f"{import_id}:{i}"`), inclusive os `ok`.
 - `registrar_aplicados` roda depois da transição `SEND_TO_FIRE_SUCCEEDED` / do push do
   XLSX, em try/except: falha no audit nunca derruba um envio que deu certo.
 - **Intercompany** (`fora_intercompany`) roda **a regra de hoje** (`_regra_de_hoje`) e audita
   `preco_intercompany_fora_da_trava`; pode bloquear com `price_check_failed`.
 
-### Aprovações (`preco_aprovacao`)
-- Presas à **assinatura** `sha256(SEQ|centavos|quantidade|rede)` (`assinatura()`): rede =
-  `rede:<id>` da rede resolvida quando há (um CNPJ completo pode apontar para outra rede
-  que a da raiz), senão a raiz (8 dígitos). Fonte única: `assinaturas_da_avaliacao`.
-  Mudou preço, quantidade, produto ou o cliente passou a outra rede → decisão antiga não vale.
-- `substituir_obsoletas` cancela (motivo `substituido`) linhas ativas cuja assinatura não é a atual.
-  **Reativação A→B→A:** assinatura que volta a valer reativa a linha como pendente nova
-  (mesmo `id`), **sem** ressuscitar a decisão antiga. O envio ao Flow (Task 7) precisa de
-  chave de idempotência versionada (id + criado/reativado_em).
-- Preço aprovado: vai o **do pedido**; o aprovador só define o preço quando o pedido veio
-  sem preço (`aplicar_precos`). Vale para Fire e XLSX.
-- `decisao` recusada → bloqueia com o motivo da recusa.
+### Revisão e decisões (`preco_revisao`, `preco_decisao`)
+- `conteudoHash` = `"sha256:" + hex` de JSON canônico de `{cliente_cnpj, empresa_cnpj,
+  itens:[{linha, erpProdutoId, unidadeErp, quantidade (texto a 2 casas), precoPedidoCentavos}]}`
+  (`conteudo_hash`). Descrição não entra. Mudou preço, quantidade, produto, unidade ou
+  cliente → revisão nova `max(maior, piso) + 1`; A→B→A = 3 revisões.
+- Decisão só conta se é da revisão vigente **e** o hash da vigente é o atual. Decisão de
+  outra revisão grava `descartada`. Duas para a mesma chave: vence o maior `decidido_em`.
+- `classificar_itens(order, av, revisao, decisoes)`: sem revisão, `ok`→ok e fila→aguardando;
+  com revisão, `recusado`→recusado, outra decisão→aprovado com `precoAprovadoCentavos/100`
+  (vai a **todo** item, Fire e XLSX, via `precos_aplicar`; `aplicados[].flow_id` =
+  `decisaoId`), sem decisão→aguardando; revisão `recusada_flow`→todos recusados. No portão,
+  a vigente `recusada_flow` dá lugar à revisão seguinte com o mesmo corpo (novo envio).
+- `retirar` (cancel, reimport do mesmo arquivo, fila zerada depois do envio): ativas viram
+  `retirada`; a retirada vai ao Flow só para a última revisão que ele conhece (`enviada_em`).
+  `marcar_enviada` grava `enviada_em` mesmo em revisão já substituída, mas só muda a situação
+  de `pendente_envio` (o 201 de uma revisão em voo não a ressuscita).
+- Corpo: `externalId` = `import_id`; `empresaFaturadoraCnpj` = `environments.cnpj`
+  normalizado; `cliente` = {nome do override/cabeçalho/razão do Fire, CNPJ que resolveu a
+  rede}; `codigo` cai no `erpProdutoId`, `descricao` na do Fire; `emitidoEm` = `issue_date`
+  00:00 em São Paulo em UTC (`.000Z`); `recebidoEm` = `imported_at` (hora de São Paulo).
 
 ### Razões de 409 (envio ao Fire / export)
 `preco_nao_avaliado` (item `nao_avaliado`, ou falha ao avaliar), `preco_recusado`,
-`preco_aguardando` (item na fila sem decisão válida). Em `desligado`/`observando` e em
+`preco_aguardando` (item sem decisão da revisão vigente). Em `desligado`/`observando` e em
 intercompany continuam as razões de hoje (`price_check_failed`, etc.).
 
 ### Preview
 `GET` do preview ganha `payload["preco"]` (`modo`, `itens[]` com `situacao/motivo/preco_pedido/
-preco_tabela/decisao/estado`, `resumo`, `bloqueio_pedido`); ausente em `desligado` e em qualquer falha.
+preco_tabela/decisao/estado`, `resumo`, `bloqueio_pedido`, `revisao` = `{numero, situacao,
+erro_flow}` ou null); ausente em `desligado` e em qualquer falha. Só leitura: nunca cria nem
+retira revisão; em `ligado` lê a revisão como o portão (hash atual, mesma `_acao_revisao`).
 
 ### Testes
 `tests/test_preco_avaliacao.py`, `tests/test_preco_trava.py`, `tests/test_precos_repo.py`,
-`tests/test_preco_aprovacao_repo.py`, `tests/test_preco_trava_modo.py`.
+`tests/test_preco_revisao_repo.py`, `tests/test_flowpcp_precos_schema.py`, `tests/test_preco_trava_modo.py`.
