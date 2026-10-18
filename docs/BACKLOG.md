@@ -444,3 +444,14 @@ portal já lê pedido da TS. **O que falta é dado do cliente:** um segundo pedi
 preferência de outra filial. Até lá, a nota de release manda a operação conferir o nome
 do cliente na tela — o `check_order` resolve a razão social do Fire pelo CNPJ
 (`app/erp/product_check.py:143`), então filial errada é visível para quem olha.
+
+### 5.5 `PORTAL_RECONCILE_PERIODICO=0` não desligou o loop de reconciliação ao subir localmente
+
+Observado em 2026-10-17, subindo o portal local para a tela de lotes: com
+`PORTAL_RECONCILE_PERIODICO=0`, o loop de reconciliação com o Fire subiu mesmo assim.
+**Não investigado.** O guard (`_periodico_habilitado`) mora em
+`reconciliar_todos_os_ambientes` (`app/reconcile/runner.py`), não no start da thread;
+não se sabe se o que se viu foi só a thread de pé ou uma reconciliação de verdade.
+
+**Próximo passo:** reproduzir com o log do `reconcile.runner` e decidir se o guard
+também deve impedir a thread de subir.

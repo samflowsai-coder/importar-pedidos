@@ -104,7 +104,7 @@ Cada linha aponta pro doc que tem o detalhe. Este mapa é roteamento, não refer
 | `app/observability/` | métricas Prometheus (`/metrics`) + `trace_id` | `modules/observability.md` |
 | `app/models/` | `Order`, `OrderHeader`, `OrderItem`, `ERPRow` | `modules/models.md` |
 | `app/pipeline.py` | orquestrador stateless do fluxo de arquivo | `modules/pipeline.md` |
-| `app/consolidators/` | vazio — reservado para merge de pedidos (v2) | — |
+| `app/consolidators/` | lote semanal intercompany Nasmar → MM: perna de origem, fechamento, pedido espelho | `modules/consolidators.md` |
 | `tools/` | scripts operacionais (build, usuários, exploração do Firebird, syncs) | — |
 | `samples/` | arquivos reais de pedido usados como fixture | — |
 
@@ -174,6 +174,9 @@ PORTAL_RECONCILE_PERIODICO=      # 0 desliga os gatilhos automáticos (periódic
 
 # SP1 — pedidos do ERP para o Flow (config por ambiente em /admin/ambientes)
 PORTAL_ERP_VIGIA=                # 0 desliga a vigia/envio; ausente = ligado (só age em base ativa)
+
+# Lote semanal intercompany (config, fator e ligar/desligar na tela /lotes)
+PORTAL_LOTES=                    # 0 desliga a thread de fechamento dos lotes; ausente = ligada (só age com lote_config)
 
 # FlowPCP — fila do /recebimento e decisões, numa thread do processo web
 PORTAL_FLOWPCP_ENVIO=            # 0 desliga a thread que entrega a fila do Flow; ausente = ligado
