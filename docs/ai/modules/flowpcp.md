@@ -364,6 +364,29 @@ o SEQ só é zerado com `True`), `liberar_comprovado` (`em_andamento` → `liber
 | `orfao_fechado` | final: `orfao` fechado por uma pessoa (`nota_operador`). Não vira `superado` para não apagar a prova de que o produto existe | nada |
 | `incerto` | sem prova do que aconteceu; nem grava nem responde | `adotar` ou `liberar` pela ferramenta do operador |
 
+### Caminhos manuais (o que a recuperação e a ferramenta não decidem sozinhas)
+
+Nos três casos a linha está segura: nada grava de novo e a 9b segura o produto. O item do Flow é
+pulado em todo ciclo até alguém agir.
+
+- **`em_andamento` em motor ≥ 4.0** (só o DEV, Firebird 5; a produção é 2.5). A recuperação não roda
+  (ERROR uma vez, `{"parado": "motor_sem_bloqueio"}`) e `liberar` recusa: sem a leitura bloqueante não
+  há prova de ausência. A ferramenta **não tem porta** para `em_andamento`, de propósito. O que fazer:
+  conferir o SEQ reservado com `tools/produto_no_fire.py <slug> --seq N` (sem SEQ, a janela por
+  `DATA_CAD`) e levar ao Samuel; destravar a linha no DEV é decisão dele, fora do código.
+- **`incerto` "DATA_CAD ilegível"** (log da recuperação: o SEQ reservado existe no ERP com
+  `DATA_CAD` nulo ou ilegível, ou seja, a linha foi mexida à mão). `adotar` e `liberar` recusam, porque
+  os dois dependem dessa data para provar se o produto é ou não é o nosso. O que fazer: conferir o
+  produto com `tools/produto_no_fire.py <slug> --seq N` e com quem mexeu no Fire. Com a data de
+  cadastro legível de novo (correção feita na tela do Fire por quem cuida do cadastro), `adotar` (é o
+  nosso) ou `liberar` (cadastrado antes da reserva) decidem pela prova de sempre.
+- **`incerto` com alerta `nome_do_proprio_produto`** (o nome do item já está no ERP num SEQ que o livro
+  liga a este mesmo produto do Flow, por outra versão). Nada foi enviado ao ERP nesta versão, e
+  `adotar` recusa porque o SEQ é de outra linha. O que fazer: no log (ou em `listar`) está a outra
+  linha (`cadastroId vN`, estado) e o SEQ X. A área de cadastro do Flow vincula o produto ao código X,
+  como num órfão. Depois, `liberar` esta linha (sem SEQ: conferir a janela): a reentrega sai como
+  `atualizar` com o código X (contrato §4) e é processada.
+
 ### Conexões com o Fire (`app/erp/connection.py`)
 
 - `connect_escrita_cadastro`: READ COMMITTED + REC_VERSION, WAIT com `isc_tpb_lock_timeout` de **10 s** (sem isso um SEQ aberto na tela do Fire travaria o gravador sem limite). A saída é **sempre rollback**, nunca commit (`default_action = "rollback"`): o gravador comita cada cadastro; o que sobra pendente não prova nada.

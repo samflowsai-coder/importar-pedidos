@@ -325,7 +325,9 @@ def motor_sem_bloqueio(slug: str, fire) -> bool:
         _motor_avisado.add(slug)
         logger.error(f"flowpcp.cadastro_volta env={slug}: recuperação desligada "
                      f"(motor_sem_bloqueio: {detalhe}): sem a leitura bloqueante, INSERT "
-                     "pendente de outro processo pareceria ausência; as linhas ficam para a operação")
+                     "pendente de outro processo pareceria ausência. As linhas em_andamento ficam "
+                     "paradas (nada grava de novo); conferir o SEQ com tools/produto_no_fire.py e "
+                     "seguir 'Caminhos manuais' em docs/ai/modules/flowpcp.md")
     return True
 
 
