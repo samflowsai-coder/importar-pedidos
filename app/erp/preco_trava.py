@@ -21,7 +21,6 @@ from typing import Any
 
 import app.erp.product_check as pc
 from app.erp import preco_regra
-from app.erp.cnpj import cnpj_digits
 from app.erp.preco_avaliacao import (
     Avaliacao,
     ItemAvaliado,
@@ -29,6 +28,7 @@ from app.erp.preco_avaliacao import (
     Situacao,
     avaliar,
     cnpj_da_rede,
+    data_ref_do_pedido,
 )
 from app.models.order import Order
 from app.persistence import db, environments_repo, precos_repo, repo
@@ -39,6 +39,9 @@ _APROVADAS = frozenset({"acordo", "regra", "preco_inicial", "auto_tabela"})
 _MOTIVO_LEGIVEL: dict[str, str] = {
     "produto_nao_identificado": "produto não identificado no Fire",
     "cliente_sem_cnpj": "cliente sem CNPJ",
+    "cliente_sem_rede": "cliente sem rede na tabela de preço do Flow",
+    "unidade_divergente": "unidade do produto no Fire diferente da tabela de preço",
+    "preco_invalido": "preço da tabela fora do contrato",
     "copia_desatualizada": "tabela de preço sem sincronizar com o Flow há mais de 24 h",
     "empresa_sem_cnpj": "CNPJ da empresa não cadastrado no ambiente",
 }
@@ -69,13 +72,14 @@ def trava_ativa(env: dict | None) -> bool:
 
 
 def cnpjs_grupo() -> set[str]:
-    """Raízes (8 dígitos) de `cnpj` e `intercompany_cnpj` de TODOS os ambientes."""
+    """Raízes (8 caracteres, texto) de `cnpj` e `intercompany_cnpj` de TODOS os
+    ambientes, pelo `preco_regra.normalizar_cnpj` (CNPJ fora do contrato não entra)."""
     raizes: set[str] = set()
     for env in environments_repo.list_all():
         for campo in ("cnpj", "intercompany_cnpj"):
-            d = cnpj_digits(env.get(campo))
-            if len(d) >= 8:
-                raizes.add(d[:8])
+            cnpj = preco_regra.normalizar_cnpj(env.get(campo))
+            if cnpj is not None:
+                raizes.add(cnpj[:8])
     return raizes
 
 
@@ -92,12 +96,15 @@ def _com_vinculos(check: dict | None, produtos_por_item: dict[int, int] | None) 
     """Check com o SEQ do vínculo de-para nos itens vinculados: o Fire recebe
     esse SEQ (`FirebirdExporter(produtos_por_item=...)`) e o XLSX o código
     dele, então é ele que a trava avalia, mesmo quando o item também casa
-    direto por EAN/código com outro produto."""
+    direto por EAN/código com outro produto. Nesse caso a `fire_unidade` do
+    check é a do OUTRO produto: sai (unidade desconhecida bloqueia)."""
     if check is None or not produtos_por_item:
         return check
     itens = [dict(it) for it in check.get("items") or []]
     for i, seq in produtos_por_item.items():
         if 0 <= i < len(itens):
+            if str(itens[i].get("fire_product_id")) != str(seq):
+                itens[i]["fire_unidade"] = None
             itens[i]["fire_product_id"] = seq
     return {**check, "items": itens}
 
@@ -113,7 +120,7 @@ def _todos(order: Order, check: dict | None, situacao: Situacao, motivo: Motivo)
                 None if bruto is None else str(bruto),
                 situacao,
                 motivo,
-                pc._to_cents(it.unit_price),
+                preco_regra.centavos(it.unit_price),
                 None,
             )
         )
@@ -124,8 +131,7 @@ def _cnpj_cliente(order: Order, entry: dict) -> str | None:
     """CNPJ do cliente: o do override quando há override (None se ele não tem
     CNPJ válido), senão o do cabeçalho."""
     if entry.get("cliente_override_codigo") is not None:
-        cnpj = cnpj_digits(entry.get("cliente_override_cnpj"))
-        return cnpj if len(cnpj) in (8, 14) else None
+        return preco_regra.normalizar_cnpj(entry.get("cliente_override_cnpj"))
     return order.header.customer_cnpj
 
 
@@ -158,11 +164,10 @@ def _avaliar_local(
             normalizado = preco_regra.normalizar_cnpj(cnpj_rede)
             return precos_repo.resolver_rede(conn, normalizado) if normalizado else None
 
-        def _preco(rede_id: str, produto: str, data: date) -> int | None:
-            linha = precos_repo.preco_vigente(
+        def _preco(rede_id: str | None, produto: str, data: date) -> preco_regra.PrecoLinha | None:
+            return precos_repo.preco_vigente(
                 conn, empresa_cnpj=empresa, rede_id=rede_id, erp_produto_id=produto, data=data
             )
-            return linha.preco_centavos if linha else None
 
         return avaliar(
             order,
@@ -173,6 +178,7 @@ def _avaliar_local(
             cnpjs_grupo=grupo,
             ultima_sync=precos_repo.ultima_sync_ok(conn),
             agora=agora,
+            data_ref=data_ref_do_pedido(order, entry.get("imported_at"), agora),
         )
 
 
@@ -454,10 +460,7 @@ def _decidir_ligado(
         partes.append(f"Preço recusado no Flow: {motivos}.")
         reason = reason or "preco_recusado"
     if aguardando:
-        partes.append(
-            f"Pedido aguardando preço: {len(aguardando)} item(ns) na fila de aprovação "
-            "do Flow (Rafael/Erica)."
-        )
+        partes.append(f"Pedido aguardando aprovação de preço no Flow: {len(aguardando)} item(ns).")
         reason = reason or "preco_aguardando"
     if reason is not None:
         return _bloqueio_trava(reason, " ".join(partes), av, decisoes)

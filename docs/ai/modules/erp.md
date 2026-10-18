@@ -120,6 +120,8 @@ SQL e a integração com o exporter.
 
 `product_check.check_order` agora popula por item:
 - `unit_price_order`, `fire_preco_venda` (já existente), `price_diff`
+- `fire_unidade` — `PRODUTOS.UNIDADE` (strip; vazio → `None`), última coluna das 3 queries
+  batch (`find_products_by_eans_sql`/`_codes_sql`/`_seqs_sql`). Usada pela trava de preço.
 - `price_status ∈ {match, mismatch, no_price_in_fire, no_order_price, no_product_match}` — comparação em centavos.
 
 E `summary.price_summary` agrega contagens.
@@ -488,27 +490,36 @@ tem tela de gestão de preço: a decisão (aprovar/recusar) vem do Flow. Spec:
 
 ### Arquivos
 - `app/erp/preco_avaliacao.py` — `avaliar(...)`: **puro** (sem I/O; recebe `resolver_rede`,
-  `preco_vigente`, `cnpjs_grupo`, `ultima_sync`, `agora`). Devolve `Avaliacao` de
-  `ItemAvaliado` (`situacao`: `ok | fila | nao_avaliado | fora_intercompany`; `motivo`).
+  `preco_vigente(rede_id, erp_produto_id, data) -> PrecoLinha | None` (empresa fixada pelo
+  chamador; pode levantar `PrecoInvalido`), `cnpjs_grupo`, `ultima_sync`, `agora` (só frescor)
+  e `data_ref` (vigência; `data_ref_do_pedido`: `issue_date`, senão a data civil em São Paulo
+  de `imported_at`, senão de `agora`). Devolve `Avaliacao` de `ItemAvaliado` (`situacao`:
+  `ok | fila | nao_avaliado | fora_intercompany`; `motivo`; `preco_tabela_id`; `unidade_erp`
+  = unidade do Fire normalizada).
 - `app/erp/preco_trava.py` — o portão e os helpers compartilhados.
 - `app/persistence/precos_repo.py` — cópia local (`aplicar_pagina`, `reiniciar`, `estado_sync`, `resolver_rede`, `preco_vigente`, `ultima_sync_ok`).
 - `app/erp/preco_regra.py` — regra pura do §5 do contrato precos v1 (`normalizar_cnpj`, `cnpj_valido`, `resolver_preco`, `data_referencia`, `centavos`); vetores do pcp-app em `tests/fixtures/flow_precos_v1/`.
 - `app/persistence/preco_aprovacao_repo.py` — aprovações por linha do pedido.
 
 ### Ordem das regras do avaliador
-1. `cliente_sem_cnpj` — sem CNPJ de rede (`cnpj_da_rede`: override de cliente vence) → todos `nao_avaliado`.
+1. `cliente_sem_cnpj` — sem CNPJ de rede → todos `nao_avaliado`. `cnpj_da_rede`: o do cliente
+   (override vence) normalizado (`preco_regra.normalizar_cnpj`, 14 caracteres); sem ele, se
+   **todas** as lojas de entrega têm CNPJ válido com a mesma raiz, o menor deles (ordem de texto).
 2. `intercompany` — raiz do cliente está em `cnpjs_grupo` (raízes de `environments.cnpj` e
    `intercompany_cnpj` de todos os ambientes) → `fora_intercompany`. Decidido **antes** da
    cópia velha: não depende da cópia.
 3. `copia_desatualizada` — sem sync OK ou há mais de **24 h** → todos `nao_avaliado`.
-4. Por item: sem SEQ no Fire → `produto_nao_identificado` (`nao_avaliado`); sem rede →
-   `rede_sem_tabela` (`fila`); rede travada → `rede_travada` (`fila`); preço de tabela 0/ausente →
-   `sem_preco_tabela`; pedido sem preço → `sem_preco_pedido`; igual → `ok` (`igual`);
-   maior → `acima`; menor → `abaixo` (todos `fila`).
+4. Por item, não avaliados (bloqueiam): sem SEQ no Fire → `produto_nao_identificado`; sem
+   rede → `cliente_sem_rede`; `PrecoInvalido` → `preco_invalido`; `fire_unidade` vazia, ou
+   preço achado com `unidadeErp` nula ou diferente (`strip().upper()`) → `unidade_divergente`.
+   Depois, na fila (precedência do contrato §4.1): `rede_travada` > `pedido_sem_preco` >
+   `sem_preco_tabela` > `preco_acima` | `preco_abaixo`; igual → `ok` (`ok`). Preço do pedido
+   em centavos meia para cima, 0 → sem preço (`preco_regra.centavos`).
 Rede (§5 do contrato): CNPJ completo (14) em `cnpjs` de rede ativa vence a raiz (8 primeiros caracteres) em `raizes`; CNPJ normalizado antes (`preco_regra.normalizar_cnpj`). Preço da empresa faturadora = `environments.cnpj` do ambiente.
 Chave do produto = `str(check["items"][i]["fire_product_id"])` (SEQ; o `check` guarda `int`).
 **Item com vínculo de-para:** o SEQ avaliado é o do vínculo, mesmo que o item case direto
-por EAN/código com outro produto. O chamador consulta o de-para **uma vez**
+por EAN/código com outro produto. Nesse caso a `fire_unidade` do check é a do outro produto
+e sai (`_com_vinculos`): o item fica `unidade_divergente`. O chamador consulta o de-para **uma vez**
 (`depara_apply.resolver`) antes do portão e passa `produtos_por_item` a `decidir_envio`
 (e a `preview_preco`), ao `FirebirdExporter` e a `depara_apply.aplicar` (códigos do XLSX).
 `desligado` ignora o mapa (regra de hoje).

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -55,6 +55,7 @@ def _check(n=1, *, available=True, status="match", ids=None):
                 "ean": f"789{i}",
                 "product_code": f"C{i}",
                 "fire_product_id": pid,
+                "fire_unidade": "KIT",
                 "price_status": status,
                 "unit_price_order": 54.0,
                 "fire_preco_venda": 50.0,
@@ -325,15 +326,13 @@ def test_ligado_item_na_fila_bloqueia(monkeypatch):
 
     assert d.bloqueado is True
     assert d.reason == "preco_aguardando"
-    assert d.detalhe == (
-        "Pedido aguardando preço: 1 item(ns) na fila de aprovação do Flow (Rafael/Erica)."
-    )
+    assert d.detalhe == "Pedido aguardando aprovação de preço no Flow: 1 item(ns)."
     assert d.metric_labels == ["preco_aguardando"]
     assert d.block_detail["reason"] == "preco_aguardando"
     linhas = _linhas(import_id)
     assert len(linhas) == 1
     assert linhas[0]["situacao"] == "pendente"
-    assert linhas[0]["motivo_fila"] == "acima"
+    assert linhas[0]["motivo_fila"] == "preco_acima"
 
 
 def test_ligado_preco_igual_a_tabela_libera_mesmo_com_regra_de_hoje_bloqueando(monkeypatch):
@@ -388,7 +387,7 @@ def test_ligado_sem_preco_no_pedido_aplica_preco_do_aprovador(monkeypatch):
     _live(monkeypatch, _check())
     first = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
     assert first.bloqueado
-    assert _linhas(import_id)[0]["motivo_fila"] == "sem_preco_pedido"
+    assert _linhas(import_id)[0]["motivo_fila"] == "pedido_sem_preco"
     _decidir(import_id, order, decisao="preco_inicial", preco=4800)
 
     d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
@@ -806,7 +805,8 @@ def _precos_por_produto(precos: dict[str, int]):
 @pytest.mark.parametrize("modo", ["ligado", "observando"])
 def test_vinculo_do_de_para_e_o_produto_avaliado(monkeypatch, modo):
     # Item casa direto no Fire (SEQ 123 = A) mas tem vínculo de-para para o SEQ 456 (B):
-    # o Fire recebe B, então o portão avalia B.
+    # o Fire recebe B, então o portão avalia B. A unidade do check é a de A:
+    # a de B é desconhecida, e unidade desconhecida bloqueia (contrato §3).
     _precos_por_produto({"123": 5400, "456": 5000})
     order = _order((54.0,))
     import_id, entry = _seed(order)
@@ -817,17 +817,32 @@ def test_vinculo_do_de_para_e_o_produto_avaliado(monkeypatch, modo):
     )
 
     assert d.avaliacao.itens[0].fire_produto_id == "456"
-    assert d.avaliacao.itens[0].motivo == "acima"
+    assert d.avaliacao.itens[0].motivo == "unidade_divergente"
     if modo == "ligado":
         assert d.bloqueado is True
-        assert d.reason == "preco_aguardando"
+        assert d.reason == "preco_nao_avaliado"
+
+
+def test_vinculo_com_o_mesmo_seq_do_check_avalia_com_a_unidade(monkeypatch):
+    # check_order resolveu o item pelo degrau de-para: mesmo SEQ, unidade dele.
+    _precos_por_produto({"456": 5000})
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check(ids=[456]))
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env("ligado"), agora=AGORA, produtos_por_item={0: 456}
+    )
+
+    assert d.avaliacao.itens[0].motivo == "preco_acima"
+    assert d.reason == "preco_aguardando"
 
 
 def test_vinculo_do_de_para_libera_pelo_preco_de_b(monkeypatch):
     _precos_por_produto({"123": 9999, "456": 5400})
     order = _order((54.0,))
     import_id, entry = _seed(order)
-    _live(monkeypatch, _check())
+    _live(monkeypatch, _check(ids=[456]))
 
     d = preco_trava.decidir_envio(
         import_id, order, entry, env=_env("ligado"), agora=AGORA, produtos_por_item={0: 456}
@@ -881,8 +896,9 @@ def test_preview_avalia_o_produto_do_vinculo():
         import_id, entry, order, env=_env("ligado"), agora=AGORA, produtos_por_item={0: 456}
     )
 
-    assert preco["itens"][0]["motivo"] == "acima"
-    assert preco["itens"][0]["estado"] == "aguardando"
+    # SEQ do vínculo (B) avaliado; a unidade do check é a de A → não avaliado.
+    assert preco["itens"][0]["motivo"] == "unidade_divergente"
+    assert preco["itens"][0]["estado"] == "nao_avaliado"
 
 
 # ── Revisão final: Fire fora sem check salvo não mexe nas aprovações ─────────
@@ -921,7 +937,7 @@ def test_assinatura_usa_a_rede_resolvida_e_nao_so_a_raiz():
     from app.persistence.precos_repo import Rede
 
     order = _order((54.0,))
-    item = ItemAvaliado(0, "123", "fila", "acima", 5400, 5000)
+    item = ItemAvaliado(0, "123", "fila", "preco_acima", 5400, 5000)
     r1 = Avaliacao(Rede("r1", "X", True, False), CNPJ_REDE, [item])
     r2 = Avaliacao(Rede("r2", "Y", True, False), CNPJ_REDE[:8] + "009999", [item])
     sem_rede = Avaliacao(None, CNPJ_REDE, [item])
@@ -973,3 +989,104 @@ def test_preco_de_outra_empresa_nao_libera(monkeypatch):
 
     assert d.bloqueado is True
     assert d.avaliacao.itens[0].preco_tabela_centavos is None
+
+
+# ── Task 7.2: avaliador no contrato ──────────────────────────────────────────
+
+
+def test_ligado_cliente_sem_rede_bloqueia_sem_fila(monkeypatch):
+    _copia(5400)
+    order = _order((54.0,), cnpj=OUTRO_CNPJ)
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.reason == "preco_nao_avaliado"
+    assert d.detalhe == (
+        "1 item(ns) sem avaliação de preço: cliente sem rede na tabela de preço do Flow."
+    )
+    assert _linhas(import_id) == []
+
+
+def test_ligado_unidade_divergente_bloqueia(monkeypatch):
+    _copia(5400)  # tabela em KIT
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    check = _check()
+    check["items"][0]["fire_unidade"] = "PACK"
+    _live(monkeypatch, check)
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.reason == "preco_nao_avaliado"
+    assert {i.motivo for i in d.avaliacao.itens} == {"unidade_divergente"}
+    assert _linhas(import_id) == []
+
+
+def test_riachuelo_sem_cnpj_casa_a_rede_pelo_menor_cnpj_das_lojas(monkeypatch):
+    _copia(5400)
+    order = _order((54.0, 54.0), cnpj=None)
+    order.items[0].delivery_cnpj = "11.222.333/0009-99"
+    order.items[1].delivery_cnpj = "11222333000144"
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check(2, ids=[123, 123]))
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.avaliacao.cnpj_rede == "11222333000144"
+    assert d.bloqueado is False
+
+
+def test_data_de_referencia_vem_da_emissao_e_nao_do_agora(monkeypatch):
+    vistas = []
+    original = precos_repo.preco_vigente
+
+    def _espia(conn, **kw):
+        vistas.append(kw["data"])
+        return original(conn, **kw)
+
+    monkeypatch.setattr(precos_repo, "preco_vigente", _espia)
+    _copia(5400)
+    order = _order((54.0,))
+    order.header.issue_date = "30/09/2026"
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())
+
+    preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert vistas == [date(2026, 9, 30)]
+
+
+def test_sem_emissao_data_de_referencia_e_o_recebimento_em_sao_paulo(monkeypatch):
+    vistas = []
+    original = precos_repo.preco_vigente
+
+    def _espia(conn, **kw):
+        vistas.append(kw["data"])
+        return original(conn, **kw)
+
+    monkeypatch.setattr(precos_repo, "preco_vigente", _espia)
+    _copia(5400)
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    entry["imported_at"] = "2026-10-15T23:50:00"  # naive = hora de São Paulo
+    _live(monkeypatch, _check())
+
+    preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert vistas == [date(2026, 10, 15)]
+
+
+def test_cnpjs_grupo_normaliza_pelo_contrato(monkeypatch):
+    monkeypatch.setattr(
+        environments_repo,
+        "list_all",
+        lambda: [
+            {"cnpj": "12.abc.345/01de-35", "intercompany_cnpj": None},
+            {"cnpj": "11.111.111/0001-91", "intercompany_cnpj": "123"},
+        ],
+    )
+    assert preco_trava.cnpjs_grupo() == {"12ABC345", "11111111"}

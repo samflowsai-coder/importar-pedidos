@@ -32,9 +32,10 @@ def _chunked(values: list, size: int = 200):
 
 
 def _fetch_map_by_key(cur, sql_builder, values: list) -> dict:
-    """Roda o SELECT batelado (chunk de 200) e devolve {key: (seq, desc, preco)}.
+    """Roda o SELECT batelado (chunk de 200) e devolve {key: (seq, desc, preco, unidade)}.
 
-    O SELECT tem a chave como 1ª coluna. Valores deduplicados pelo chamador.
+    O SELECT tem a chave como 1ª coluna e UNIDADE como a 5ª. Valores
+    deduplicados pelo chamador.
     """
     out: dict = {}
     for chunk in _chunked(values):
@@ -42,7 +43,7 @@ def _fetch_map_by_key(cur, sql_builder, values: list) -> dict:
         for row in cur.fetchall():
             key = row[0]
             # first-wins + ORDER BY SEQ replica o ROWS 1 determinístico do lookup antigo
-            out.setdefault(key, (row[1], row[2], row[3]))
+            out.setdefault(key, (row[1], row[2], row[3], row[4]))
     return out
 
 
@@ -114,6 +115,7 @@ def _empty_item_result(
         "fire_product_id": None,
         "fire_description": None,
         "fire_preco_venda": None,
+        "fire_unidade": None,
         "unit_price_order": unit_price_order,
         "price_status": "no_product_match",
         "price_diff": None,
@@ -224,13 +226,13 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
                         if str(v["fire_produto_id"]).isdigit()
                     }
                 )
-                # find_products_by_seqs_sql retorna (SEQ, DESCRICAO, PRECO_VENDA) — 3
-                # colunas, a chave É a 1ª coluna. Não dá pra reusar _fetch_map_by_key
-                # (que assume 4 colunas: chave + (seq, desc, preco) separados).
+                # find_products_by_seqs_sql retorna (SEQ, DESCRICAO, PRECO_VENDA, UNIDADE)
+                # — a chave É a 1ª coluna. Não dá pra reusar _fetch_map_by_key
+                # (que assume chave + (seq, desc, preco, unidade) separados).
                 for chunk in _chunked(seqs):
                     cur.execute(queries.find_products_by_seqs_sql(len(chunk)), tuple(chunk))
                     for row in cur.fetchall():
-                        seq_map[row[0]] = (row[0], row[1], row[2])
+                        seq_map[row[0]] = (row[0], row[1], row[2], row[3])
 
             items_report: list[dict] = []
             # Código que vai na coluna CODIGO_PRODUTO do XLSX, por item: o do
@@ -268,7 +270,7 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
                             codigo_xlsx = dv.get("fire_codigo") or it.product_code
 
                 if hit is not None:
-                    seq, desc, preco = hit
+                    seq, desc, preco, unidade = hit
                     entry.update(
                         {
                             "match": True,
@@ -276,6 +278,7 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
                             "fire_product_id": seq,
                             "fire_description": desc,
                             "fire_preco_venda": float(preco) if preco is not None else None,
+                            "fire_unidade": (unidade or "").strip() or None,
                         }
                     )
                     matched += 1

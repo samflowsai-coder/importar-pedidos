@@ -2103,13 +2103,15 @@ function escPath(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'")
 // ── Trava de preço (preview) ────────────────────────────────────────────────
 const PRECO_MSG_ADIADO = 'Planilha não gerada: com a trava de preço ativa, o pedido sai pela revisão (Exportar/Enviar).';
 const PRECO_MOTIVO = {
-  acima: 'Preço acima da tabela',
-  abaixo: 'Preço abaixo da tabela',
-  igual: 'Preço igual à tabela',
+  ok: 'Preço igual à tabela',
+  preco_acima: 'Preço acima da tabela',
+  preco_abaixo: 'Preço abaixo da tabela',
   sem_preco_tabela: 'Produto sem preço para esta rede',
-  sem_preco_pedido: 'Pedido sem preço no item',
+  pedido_sem_preco: 'Pedido sem preço no item',
   rede_travada: 'Cliente travado: tudo passa por aprovação',
-  rede_sem_tabela: 'Cliente sem tabela de preço',
+  cliente_sem_rede: 'Cliente sem rede na tabela de preço do Flow',
+  unidade_divergente: 'Unidade do produto no Fire diferente da tabela de preço',
+  preco_invalido: 'Preço da tabela fora do contrato',
   produto_nao_identificado: 'Produto não identificado no Fire',
   cliente_sem_cnpj: 'Cliente sem CNPJ',
   copia_desatualizada: 'Tabela de preço desatualizada (mais de 24 h sem sincronizar)',
@@ -2142,7 +2144,7 @@ function precoLinhasLigado(preco) {
   if (preco.bloqueio_pedido) return [{ t: preco.bloqueio_pedido, k: 'erro' }];
   const r = preco.resumo || {};
   const l = [];
-  if (r.fila > 0) l.push({ t: `Aguardando Rafael/Erica no Flow: ${r.fila} item(ns) na fila de aprovação.`, k: 'warn' });
+  if (r.fila > 0) l.push({ t: `Pedido aguardando aprovação de preço no Flow: ${r.fila} item(ns).`, k: 'warn' });
   if (r.recusados > 0) l.push({ t: `${r.recusados} item(ns) recusado(s) no Flow: corrija e envie de novo.`, k: 'erro' });
   if (r.nao_avaliados > 0) l.push({ t: `${r.nao_avaliados} item(ns) sem avaliação de preço: o envio fica bloqueado.`, k: 'erro' });
   return l;

@@ -2805,7 +2805,7 @@ def _seed_trava(entry_id, unit_price):
     )
 
 
-def _check_trava(monkeypatch):
+def _check_trava(monkeypatch, seq=123):
     from app.erp import product_check as pc_mod
 
     monkeypatch.setattr(
@@ -2817,7 +2817,8 @@ def _check_trava(monkeypatch):
                 {
                     "ean": "7891",
                     "product_code": "C1",
-                    "fire_product_id": 123,
+                    "fire_product_id": seq,
+                    "fire_unidade": "KIT",
                     "price_status": "mismatch",
                 }
             ],
@@ -2850,7 +2851,7 @@ def test_send_to_fire_bloqueado_pela_trava_ligada(monkeypatch, tmp_path):
 
     assert r.status_code == 409, r.text
     assert r.json()["detail"] == (
-        "Pedido aguardando preço: 1 item(ns) na fila de aprovação do Flow (Rafael/Erica)."
+        "Pedido aguardando aprovação de preço no Flow: 1 item(ns)."
     )
     bloqueios = [a for a in repo.list_audit(entry_id) if a["event_type"] == "send_to_fire_blocked"]
     assert bloqueios[0]["detail"]["reason"] == "preco_aguardando"
@@ -3123,6 +3124,7 @@ def _seed_preco_preview(entry_id, unit_price=54.0):
                                 "ean": "7891",
                                 "product_code": "C1",
                                 "fire_product_id": 123,
+                                "fire_unidade": "KIT",
                                 "price_status": "match",
                             }
                         ],
@@ -3163,7 +3165,7 @@ def test_detalhe_traz_avaliacao_de_preco_em_observando(tmp_path):
         {
             "item_index": 0,
             "situacao": "fila",
-            "motivo": "acima",
+            "motivo": "preco_acima",
             "preco_pedido": 54.0,
             "preco_tabela": 50.0,
             "decisao": None,
@@ -3214,7 +3216,7 @@ def test_detalhe_mostra_decisao_do_item(tmp_path):
         aprov.registrar_pendencias(
             conn,
             entry_id,
-            [(ItemAvaliado(0, "123", "fila", "acima", 5400, 5000), sig)],
+            [(ItemAvaliado(0, "123", "fila", "preco_acima", 5400, 5000), sig)],
             agora=agora,
         )
         assert aprov.aplicar_decisao(
@@ -3263,7 +3265,7 @@ def _decidir_web(entry_id, decisao, motivo=None):
     agora = _dt.now(UTC)
     with db.connect() as conn:
         aprov.registrar_pendencias(
-            conn, entry_id, [(ItemAvaliado(0, "123", "fila", "acima", 5400, 5000), sig)], agora=agora
+            conn, entry_id, [(ItemAvaliado(0, "123", "fila", "preco_acima", 5400, 5000), sig)], agora=agora
         )
         assert aprov.aplicar_decisao(
             conn, import_id=entry_id, item_index=0, assinatura=sig, decisao=decisao,
@@ -3368,7 +3370,8 @@ def _cfg_db(monkeypatch, tmp_path, modo="db"):
 @pytest.mark.parametrize("rota", ["send-to-fire", "export-xlsx"])
 def test_trava_avalia_o_produto_do_vinculo_e_bloqueia(monkeypatch, tmp_path, rota):
     """Item casa por EAN com o SEQ 123 (R$ 50 = preço do pedido), mas o vínculo
-    de-para leva ao SEQ 456 (R$ 60): o Fire/XLSX recebe 456, a trava avalia 456."""
+    de-para leva ao SEQ 456 (R$ 60): o Fire/XLSX recebe 456, a trava avalia 456.
+    A unidade do check é a do 123: a do 456 é desconhecida e bloqueia."""
     import uuid
 
     from app.exporters import firebird_exporter as fb_mod
@@ -3393,7 +3396,7 @@ def test_trava_avalia_o_produto_do_vinculo_e_bloqueia(monkeypatch, tmp_path, rot
         client.cookies.clear()
 
     assert r.status_code == 409, r.text
-    assert "aguardando preço" in r.json()["detail"]
+    assert "unidade do produto no Fire" in r.json()["detail"]
 
 
 def test_trava_libera_pelo_vinculo_e_o_exporter_recebe_o_mesmo_seq(monkeypatch, tmp_path):
@@ -3407,7 +3410,7 @@ def test_trava_libera_pelo_vinculo_e_o_exporter_recebe_o_mesmo_seq(monkeypatch, 
     _vinculo_de_para("456", "B456")
     entry_id = str(uuid.uuid4())
     _seed_trava(entry_id, 50.0)
-    _check_trava(monkeypatch)
+    _check_trava(monkeypatch, seq=456)  # check_order resolveu pelo degrau de-para
     _cfg_db(monkeypatch, tmp_path)
     recebidos: list = []
 

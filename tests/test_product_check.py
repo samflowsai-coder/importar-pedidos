@@ -20,10 +20,14 @@ def _make_fb_ctx_batched(*, client_row=None, ean_rows=None, code_rows=None, seq_
 
     ean_rows/code_rows/seq_rows: listas de tuplas já no formato SELECT
     (key primeiro). client_row: tupla (CODIGO, RAZAO) ou None.
-    Conta execute() em cur.execute.call_count.
+    Conta execute() em cur.execute.call_count. Linha sem a UNIDADE (última
+    coluna) ganha "PAR".
     """
     cur = MagicMock()
     next_fetchall = []
+    ean_rows = [r if len(r) == 5 else (*r, "PAR") for r in ean_rows or []]
+    code_rows = [r if len(r) == 5 else (*r, "PAR") for r in code_rows or []]
+    seq_rows = [r if len(r) == 4 else (*r, "PAR") for r in seq_rows or []]
 
     def execute_side_effect(sql, params=None):
         nonlocal next_fetchall
@@ -212,6 +216,37 @@ def test_summary_aggregates_price_counts(mock_fb):
 # ---------------------------------------------------------------------------
 
 
+def test_queries_batch_trazem_unidade_na_ultima_coluna():
+    for sql in (
+        queries.find_products_by_eans_sql(2),
+        queries.find_products_by_codes_sql(2),
+    ):
+        assert "PRECO_VENDA, UNIDADE FROM PRODUTOS" in sql
+    assert "SELECT SEQ, DESCRICAO, PRECO_VENDA, UNIDADE FROM" in queries.find_products_by_seqs_sql(
+        2
+    )
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_check_order_preenche_fire_unidade(mock_fb):
+    mock_fb.return_value.is_configured.return_value = True
+    ctx, _cur = _make_fb_ctx_batched(
+        client_row=(1, "ACME"),
+        ean_rows=[("7891", 10, "KIT A", 45.9, "KIT  ")],
+        code_rows=[("ABC", 12, "MEIA", 3.0, "PAR")],
+    )
+    mock_fb.return_value.connect.return_value = ctx
+    order = _order(
+        [
+            {"ean": "7891", "unit_price": 45.9},
+            {"product_code": "ABC", "unit_price": 3.0},
+            {"ean": "9999", "unit_price": 1.0},
+        ]
+    )
+    report = product_check.check_order(order)
+    assert [it["fire_unidade"] for it in report["items"]] == ["KIT", "PAR", None]
+
+
 def test_find_products_by_eans_sql_trims_and_orders():
     sql = queries.find_products_by_eans_sql(2)
     assert "TRIM(CODIGO_EAN13)" in sql
@@ -270,6 +305,7 @@ def test_check_order_terceiro_degrau_depara(mock_db, mock_fb, mock_depara):
     assert item["match_source"] == "depara"
     assert item["fire_product_id"] == 77
     assert item["price_status"] == "match"
+    assert item["fire_unidade"] == "PAR"
 
 
 @patch("app.erp.product_check.produto_depara_repo")
@@ -406,9 +442,9 @@ def _fire_fisico(produtos, *, client_row=(1, "ACME"), falha_previsao=False):
                 if any(cod.startswith(p) for p in params)
             ]
         elif "CODPROD_ALTERN" in sql and " IN " in sql:
-            estado["rows"] = [(c, s, d, p) for s, c, d, p in por_seq if c.strip() in params]
+            estado["rows"] = [(c, s, d, p, "PAR") for s, c, d, p in por_seq if c.strip() in params]
         elif "SEQ IN" in sql:
-            estado["rows"] = [(s, d, p) for s, c, d, p in por_seq if s in params]
+            estado["rows"] = [(s, d, p, "PAR") for s, c, d, p in por_seq if s in params]
         else:
             estado["rows"] = []
 
