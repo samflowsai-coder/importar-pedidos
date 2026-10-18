@@ -120,7 +120,9 @@ completo em [`modules/routing.md`](routing.md), aqui só o schema:
   `retomar_transitorio_com_seq`, `fechar_orfao`, `adotar_manual`, `liberar_manual`); `gravado`
   e o que pode ter comitado no ERP nunca voltam a estado reaproveitável. `listar` (alimenta a
   rota admin) não traz `corpo_json` (a rota trunca o `plano_json`); as listas de atenção da tela usam
-  `listar_por_estado`, só com colunas permitidas. `seqs_em_aberto` alimenta a ida do catálogo (`fora_do_envio_volta`).
+  `listar_por_estado`, só com colunas permitidas. `seqs_em_aberto` alimenta a ida do catálogo (`fora_do_envio_volta`)
+  e usa o mesmo predicado "pode ter gravado" da 9b (`criar_do_produto`). `duravel(conn)` liga
+  `synchronous=FULL` só na conexão do livro (volta e ferramenta do operador); o router segue `NORMAL`.
   Detalhe de estados, recuperação e métricas em `modules/flowpcp.md` §5.
 
 ## Testes
