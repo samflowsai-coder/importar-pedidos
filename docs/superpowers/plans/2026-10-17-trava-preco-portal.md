@@ -322,6 +322,7 @@ Comportamento por modo: `desligado` → só a regra de hoje (`check_order` + `is
 **Correções da revisão (Fable):**
 - **Hash sempre comparado.** Em `ligado`, o portão calcula o corpo e o hash atuais **sempre** que existe revisão vigente. Hash diferente da vigente: se há fila → nova revisão; se não há fila → vigente vira `substituida`, enfileira retirada dela (se já `enviada`) e libera pela regra local. Decisão só conta quando `decisao.revisao == vigente.revisao` **e** `vigente.conteudo_hash == hash atual`.
 - `recusada_flow` + novo envio → `revisao+1` com o mesmo corpo (decisão 7).
+- **Bloqueio de nível de pedido nunca toca revisão nem decisão** (`empresa_sem_cnpj`, `cliente_sem_cnpj`, `copia_desatualizada`, `check is None`, `bloqueio_do_pedido`): o portão devolve o bloqueio **antes** de calcular hash ou chamar `garantir_revisao`/`retirar`. Erro de configuração não pode invalidar decisão já dada. Teste: revisão `enviada` com decisões + ambiente com `cnpj=None` → bloqueia e a revisão e as decisões ficam intactas.
 - `marcar_enviada`/`marcar_recusa_flow` com `WHERE situacao='pendente_envio'`; `pendentes_envio` devolve só a vigente de cada pedido e exclui pedido retirado.
 - Cancel: descarta toda `pendente_envio` do pedido e enfileira retirada só da última `enviada`; retirada com 409 → reenviar com `details.revisaoVigente`; nunca enviada → nada vai ao Flow.
 - `decisoes_da_vigente`: duas decisões para a mesma `item_chave` → vence a de maior `decidido_em`.
