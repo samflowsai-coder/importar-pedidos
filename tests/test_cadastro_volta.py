@@ -783,3 +783,50 @@ def test_livro_da_volta_abre_com_synchronous_full_sem_mudar_o_router(tmp_path, m
     with router.env_connect("mm") as conn:
         assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1  # NORMAL
     router.reset_init_cache()
+
+
+# --- Task 16: camposAlterados (contrato P4a rev. 5 §2.3) ---------------------
+
+
+def _atualizar_2645(env_conn, **kw):
+    env_conn.execute(
+        "INSERT INTO catalogo_fire (fire_produto_id, codigo, nome, extraido_em) "
+        "VALUES ('2645', '2645', 'X', '2026-10-16')"
+    )
+    return dict(BOM, acao="atualizar", erpProdutoId="2645", **kw)
+
+
+def test_simular_plano_so_com_as_colunas_listadas(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    item = _atualizar_2645(env_conn, ean=None, camposAlterados=["nome", "ean"])
+    cv.processar_ambiente("mm", _client=_Client([item]), _fire_conn=_Fire(), _env_conn=env_conn)
+    linha = _livro(env_conn)[(BOM["cadastroId"], 1)]
+    plano = json.loads(linha["plano_json"])
+    assert linha["estado"] == "simulado"
+    assert plano["campos"] == {"DESCRICAO": BOM["nome"], "CODIGO_EAN13": None}
+    assert plano["componentes"] is None and plano["campos_alterados"] == ["nome", "ean"]
+    valido = validar_item(item)[0]
+    gravacao = cadastro_gravacao._plano(
+        valido, cadastro_gravacao._campos(valido, {17: "Kolosh"}),
+        cadastro_gravacao._componentes(valido))
+    assert plano == json.loads(json.dumps(gravacao))
+
+
+def test_simular_lista_vazia_e_sem_mudanca(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    item = _atualizar_2645(env_conn, marcaErp={"codigo": 99}, camposAlterados=[])
+    fire = _Fire()
+    cv.processar_ambiente("mm", _client=_Client([item]), _fire_conn=fire, _env_conn=env_conn)
+    linha = _livro(env_conn)[(BOM["cadastroId"], 1)]
+    assert linha["estado"] == "simulado"
+    assert json.loads(linha["plano_json"]) == {"acao": "atualizar", "sem_mudanca": True}
+    assert not any("BLOQUEADO" in sql for sql, _ in fire.executados)
+
+
+def test_simular_nome_listado_em_outro_seq_e_nome_existe(env_conn, monkeypatch):
+    _simular(monkeypatch)
+    item = _atualizar_2645(env_conn, camposAlterados=["nome"])
+    fire = _Fire(nomes={BOM["nome"].lower(): 3100})
+    cv.processar_ambiente("mm", _client=_Client([item]), _fire_conn=fire, _env_conn=env_conn)
+    linha = _livro(env_conn)[(BOM["cadastroId"], 1)]
+    assert (linha["estado"], linha["erro_codigo"]) == ("erro_definitivo", "nome_existe")

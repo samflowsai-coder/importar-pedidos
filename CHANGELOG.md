@@ -37,6 +37,7 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 12) **Produto que o portal acabou de cadastrar, ainda está conferindo ou cadastrou sem o Flow ter vinculado fica fora do envio do catálogo**, para o Flow não criar um segundo produto para o mesmo código. O relatório lista quais ficaram de fora. Um produto sem vínculo só volta ao envio depois de fechado na ferramenta, e só se fecha depois de resolvido no Flow.
 13) **O catálogo não manda mais a cor, e a "descrição interna" do Fire deixou de ser tratada como cor.** Isso precisa estar no pacote antes de ligar os dados fiscais do catálogo.
 14) **Ferramentas novas para a equipe técnica**: saneamento das marcas do Fire (simula por padrão e só grava com o ok do Samuel, depois de um backup), perfil das colunas de produto e rastro de um código de produto no Fire, as outras duas são só de leitura.
+15) **Numa correção de produto aprovada no Flow, o portal muda no Fire só o que a correção mudou.** Um campo que alguém alterou direto no Fire nesse meio-tempo não é desfeito, e uma correção que não muda nada do Fire (só a cor, por exemplo) é respondida ao Flow sem tocar no Fire.
 
 ---
 

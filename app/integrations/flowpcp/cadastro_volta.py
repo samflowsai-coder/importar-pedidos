@@ -28,6 +28,7 @@ from app.integrations.flowpcp import capacidades
 from app.integrations.flowpcp.cadastro_schema import (
     CadastroPendente,
     chaves_desconhecidas,
+    vai_ao_erp,
     validar_item,
 )
 from app.integrations.flowpcp.catalogo_sync import _build_client
@@ -236,17 +237,35 @@ def _marcas_do_fire(fire_conn) -> dict[int, str]:
     }
 
 
+def outro_seq_com_o_nome(nomes: dict, item: CadastroPendente):
+    """`atualizar` com `nome` em `camposAlterados` (rev. 5): SEQ de OUTRO produto do ERP
+    com o mesmo nome normalizado, ou None. Sem a chave (rev. 4) não confere, como antes."""
+    if item.acao != "atualizar" or "nome" not in (item.camposAlterados or ()):
+        return None
+    for seq in nomes.get(_normaliza_nome(item.nome)) or ():
+        if str(seq) != item.erpProdutoId:
+            return seq
+    return None
+
+
 def _contra_o_fire(
     fire_conn, item: CadastroPendente, nomes: dict, marcas: dict
 ) -> tuple[str, str] | None:
+    """Confere só o que vai ser escrito (`vai_ao_erp`): fora de `camposAlterados`, marca e
+    componentes do item são referência."""
     if item.acao == "criar":
         achou = nomes.get(_normaliza_nome(item.nome))
         if achou:
             return "nome_existe", f"já existe produto com esse nome no Fire (SEQ {achou[0]})"
-    if item.marcaErp is not None and item.marcaErp.codigo not in marcas:
+    outro = outro_seq_com_o_nome(nomes, item)
+    if outro is not None:
+        return "nome_existe", f"já existe outro produto com esse nome no Fire (SEQ {outro})"
+    marca = item.marcaErp if vai_ao_erp(item, "marcaErp") else None
+    if marca is not None and marca.codigo not in marcas:
         # Erro definitivo (contrato §7): a marca não existe no ERP, esperar não resolve.
-        return "marca_ausente_erp", f"marca código {item.marcaErp.codigo} não existe no ERP"
-    for i, comp in enumerate(item.componentes or []):
+        return "marca_ausente_erp", f"marca código {marca.codigo} não existe no ERP"
+    componentes = item.componentes if vai_ao_erp(item, "componentes") else None
+    for i, comp in enumerate(componentes or []):
         linhas = _select(fire_conn, _SQL_COMPONENTE, (int(comp.erpProdutoId),))
         if not linhas:
             return "componente_ausente", f"componentes[{i}] não existe no Fire"

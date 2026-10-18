@@ -1319,3 +1319,215 @@ def test_gauge_aguardando_some_fora_dos_modos_de_gravacao(modo, env_slug, env_co
     modo("simular")
     _rodar(env_slug, Flow([]), FireGravavel(), env_conn, _mais())
     assert _amostra_ou_none("portal_flowpcp_cadastro_volta_aguardando_modo") is None
+
+
+# --- Task 16: camposAlterados (contrato P4a rev. 5 §2.3) ---------------------
+
+
+def _fire_3170(extra=None):
+    return FireGravavel(produtos={
+        3170: {"DESCRICAO": "PAR BASE", "BLOQUEADO": "Nao", "UNIDADE": "PR", "MARCA": "Antiga",
+               "CODIGO_EAN13": "7891234567895", "CODPARANFE": "NFE-1", "GRUPO": 3,
+               "CLASSIF_FISCAL": "61159500", "CODITEMSPED": 4},
+        **(extra or {})})
+
+
+def _updates(fire):
+    return [(s, p) for s, p in fire.escritas if s.startswith("UPDATE PRODUTOS SET")]
+
+
+def test_lista_so_ean_null_limpa_so_o_ean(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3170")
+    modo("criar_e_atualizar")
+    fire = _fire_3170()
+    item = _atualizar("3170", ean=None, codigoNfe=None, marcaErp={"codigo": 17},
+                      camposAlterados=["ean"])
+    flow = Flow([item])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts[0][1]["resultado"] == "gravado"
+    assert _updates(fire) == [("UPDATE PRODUTOS SET CODIGO_EAN13 = ? WHERE SEQ = ?", (None, 3170))]
+    p = fire.produtos[3170]
+    assert p["CODPARANFE"] == "NFE-1" and p["MARCA"] == "Antiga" and p["DESCRICAO"] == "PAR BASE"
+
+
+def test_lista_so_nome_nao_toca_marca_nem_composicao(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3990")
+    modo("criar_e_atualizar")
+    fire = _fire_3170({3990: {"DESCRICAO": "KIT", "BLOQUEADO": "Nao", "MARCA": "Antiga"}})
+    fire.kit = [(1, 3990, 3100, 2.0)]
+    item = _atualizar("3990", tipo="kit", unidadeErp="KIT", nome="KIT NOVO",
+                      marcaErp={"codigo": 17}, camposAlterados=["nome"],
+                      componentes=[{"erpProdutoId": "3170", "quantidade": 3}])
+    flow = Flow([item])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts[0][1]["resultado"] == "gravado"
+    assert _updates(fire) == [("UPDATE PRODUTOS SET DESCRICAO = ? WHERE SEQ = ?", ("KIT NOVO", 3990))]
+    assert fire.kit == [(1, 3990, 3100, 2.0)] and fire.produtos[3990]["MARCA"] == "Antiga"
+    assert not any("PRODUTOS_KIT" in s for s, _ in fire.escritas)
+
+
+def test_lista_so_componentes_troca_so_a_composicao(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3990")
+    modo("criar_e_atualizar")
+    fire = _fire_3170({3990: {"DESCRICAO": "KIT", "BLOQUEADO": "Nao", "MARCA": "Antiga"}})
+    fire.kit = [(1, 3990, 3100, 2.0)]
+    item = _atualizar("3990", tipo="kit", unidadeErp="KIT", nome="KIT NOVO",
+                      marcaErp={"codigo": 17}, camposAlterados=["componentes"],
+                      componentes=[{"erpProdutoId": "3170", "quantidade": 3}])
+    flow = Flow([item])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts[0][1]["resultado"] == "gravado"
+    assert _updates(fire) == []
+    assert fire.kit == [(1, 3990, 3170, 3.0)]
+    assert fire.produtos[3990]["DESCRICAO"] == "KIT" and fire.produtos[3990]["MARCA"] == "Antiga"
+
+
+def test_fora_da_lista_nao_e_conferido_no_erp(modo, env_slug, env_conn):
+    """Marca e componente fora da lista são referência: não barram nem são escritos."""
+    _no_catalogo(env_conn, "3990")
+    modo("criar_e_atualizar")
+    fire = _fire_3170({3990: {"DESCRICAO": "KIT", "BLOQUEADO": "Nao"}})
+    item = _atualizar("3990", tipo="kit", unidadeErp="KIT", marcaErp={"codigo": 99},
+                      camposAlterados=["unidadeErp"],
+                      componentes=[{"erpProdutoId": "4999", "quantidade": 3}])
+    flow = Flow([item])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts[0][1]["resultado"] == "gravado"
+    assert _updates(fire) == [("UPDATE PRODUTOS SET UNIDADE = ? WHERE SEQ = ?", ("KIT", 3990))]
+    assert not any("BLOQUEADO FROM" in s for s, _ in fire.escritas)
+
+
+def test_marca_listada_que_nao_existe_e_marca_ausente(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3170")
+    modo("criar_e_atualizar")
+    fire = _fire_3170()
+    flow = Flow([_atualizar("3170", marcaErp={"codigo": 99}, camposAlterados=["marcaErp"])])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts[0][1]["erro"]["codigo"] == "marca_ausente_erp" and fire.escritas == []
+
+
+def test_marca_listada_grava_o_nome_da_marca(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3170")
+    modo("criar_e_atualizar")
+    fire = _fire_3170()
+    _rodar(env_slug, Flow([_atualizar("3170", marcaErp={"codigo": 17},
+                                      camposAlterados=["marcaErp"])]), fire, env_conn)
+    assert _updates(fire) == [("UPDATE PRODUTOS SET MARCA = ? WHERE SEQ = ?", ("Kolosh", 3170))]
+
+
+def test_nome_listado_que_existe_em_outro_seq_e_nome_existe(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3170")
+    modo("criar_e_atualizar")
+    fire = _fire_3170({3100: {"DESCRICAO": "Meia  soquete", "BLOQUEADO": "Nao"}})
+    flow = Flow([_atualizar("3170", nome="MEIA SOQUETE", camposAlterados=["nome"])])
+    _rodar(env_slug, flow, fire, env_conn)
+    erro = flow.posts[0][1]["erro"]
+    assert erro["tipo"] == "definitivo" and erro["codigo"] == "nome_existe"
+    assert "(código 3100)" in erro["mensagem"] and fire.escritas == []
+
+
+def test_nome_listado_igual_ao_do_proprio_seq_grava(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3170")
+    modo("criar_e_atualizar")
+    fire = _fire_3170()
+    flow = Flow([_atualizar("3170", nome="PAR BASE", camposAlterados=["nome"])])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts[0][1]["resultado"] == "gravado"
+
+
+def test_nome_fora_da_lista_nao_e_conferido(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3170")
+    modo("criar_e_atualizar")
+    fire = _fire_3170({3100: {"DESCRICAO": "MEIA SOQUETE", "BLOQUEADO": "Nao"}})
+    flow = Flow([_atualizar("3170", nome="MEIA SOQUETE", camposAlterados=["ean"])])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts[0][1]["resultado"] == "gravado"
+    assert fire.produtos[3170]["DESCRICAO"] == "PAR BASE"
+
+
+@pytest.mark.parametrize("m", ["criar", "criar_e_atualizar"])
+def test_lista_vazia_nao_abre_o_erp_e_responde_gravado(modo, env_slug, env_conn, monkeypatch, m):
+    _no_catalogo(env_conn, "3170")
+    modo(m)
+
+    def _nao_abre(slug):
+        raise AssertionError("a lista vazia não abre o ERP")
+
+    monkeypatch.setattr(cv, "_abrir_fire_escrita", _nao_abre)
+    antes = _amostra("portal_flowpcp_cadastro_volta_total", resultado="sem_mudanca")
+    item = _atualizar("3170", camposAlterados=[], marcaErp={"codigo": 99})
+    flow = Flow([item])
+    r = cv.processar_ambiente(env_slug, _client=flow, _fire_conn=None, _env_conn=env_conn,
+                              _relogio=Relogio())
+    ((cid, corpo),) = flow.posts
+    assert cid == item["cadastroId"]
+    assert corpo["resultado"] == "gravado" and corpo["erpProdutoId"] == "3170"
+    linha = repo.buscar(env_conn, item["cadastroId"], 2)
+    assert (linha["estado"], linha["erp_produto_id"], linha["acao"]) == (
+        "confirmado", "3170", "atualizar")
+    assert linha["seq_reservado"] is None
+    assert r["sem_mudanca"] == 1 and r["gravados"] == 0
+    # Mesmas portas de um atualizar gravado: a linha não volta a ser reservável.
+    assert not repo.reservar(env_conn, cadastro_id=item["cadastroId"], versao=2, produto_id=PROD,
+                             acao="atualizar", tipo="simples", modo=m, plano_json="{}")
+    assert _amostra("portal_flowpcp_cadastro_volta_total", resultado="sem_mudanca") == antes + 1
+
+
+def test_lista_vazia_fora_do_escopo_e_seq_fora_do_escopo(modo, env_slug, env_conn, monkeypatch):
+    modo("criar_e_atualizar")
+    monkeypatch.setattr(cv, "_abrir_fire_escrita", lambda s: (_ for _ in ()).throw(AssertionError))
+    flow = Flow([_atualizar("3170", camposAlterados=[])])
+    cv.processar_ambiente(env_slug, _client=flow, _fire_conn=None, _env_conn=env_conn,
+                          _relogio=Relogio())
+    assert flow.posts[0][1]["erro"]["codigo"] == "seq_fora_do_escopo"
+
+
+def test_lista_vazia_reentregue_confirmada_nao_responde_de_novo(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3170")
+    modo("criar_e_atualizar")
+    item = _atualizar("3170", camposAlterados=[])
+    _rodar(env_slug, Flow([item]), FireGravavel(), env_conn)
+    flow = Flow([item])
+    _rodar(env_slug, flow, FireGravavel(), env_conn, _mais())
+    assert flow.posts == []
+
+
+def test_atualizar_sem_a_chave_grava_tudo_como_na_rev4(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3170")
+    modo("criar_e_atualizar")
+    fire = _fire_3170()
+    item = _atualizar("3170", marcaErp={"codigo": 17})
+    assert "camposAlterados" not in item
+    _rodar(env_slug, Flow([item]), fire, env_conn)
+    ((sql, params),) = _updates(fire)
+    assert sql == ("UPDATE PRODUTOS SET DESCRICAO = ?, UNIDADE = ?, CODIGO_EAN13 = ?, "
+                   "CLASSIF_FISCAL = ?, CODITEMSPED = ?, CODPARANFE = ?, GRUPO = ?, MARCA = ? "
+                   "WHERE SEQ = ?")
+    assert params == ("MEIA SOQUETE", "PAR", None, "61159500", 3, None, 8, "Kolosh", 3170)
+
+
+@pytest.mark.parametrize("tipo", ["simples", "kit"])
+def test_criar_que_virou_atualizar_com_lista_completa_igual_a_rev4(modo, env_slug, tmp_path,
+                                                                    monkeypatch, tipo):
+    """Seção 4: a lista traz todos os campos preenchidos; o UPDATE é o mesmo da rev. 4."""
+    comps = [{"erpProdutoId": "3100", "quantidade": 3}] if tipo == "kit" else None
+    base = _atualizar("3170", tipo=tipo, marcaErp={"codigo": 17}, ean="7891234567895",
+                      codigoNfe="NFE-2", componentes=comps,
+                      unidadeErp="KIT" if tipo == "kit" else "PAR")
+    lista = ["nome", "unidadeErp", "ean", "ncm", "tipoItemSped", "grupoErp", "codigoNfe",
+             *(["componentes"] if tipo == "kit" else []), "marcaErp"]
+    escritas = []
+    for n, item in enumerate((base, {**base, "camposAlterados": lista})):
+        monkeypatch.setenv("APP_DATA_DIR", str(tmp_path / str(n)))
+        router.reset_init_cache()
+        with router.shared_connect():
+            pass
+        with router.env_connect("mm") as conn:
+            _no_catalogo(conn, "3170")
+            modo("criar_e_atualizar")
+            fire = _fire_3170({3100: {"DESCRICAO": "OUTRO", "BLOQUEADO": "Nao"}})
+            flow = Flow([item])
+            _rodar(env_slug, flow, fire, conn)
+            assert flow.posts[0][1]["resultado"] == "gravado"
+            escritas.append(fire.escritas)
+    assert escritas[0] == escritas[1] and escritas[0]

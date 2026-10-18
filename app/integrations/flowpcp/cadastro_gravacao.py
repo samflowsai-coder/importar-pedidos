@@ -37,7 +37,12 @@ from app.integrations.flowpcp.cadastro_resultado import (
     mensagem_nome_existe,
     mensagem_para_flow,
 )
-from app.integrations.flowpcp.cadastro_schema import CadastroPendente, validar_item
+from app.integrations.flowpcp.cadastro_schema import (
+    LIMPA_COM_NULL,
+    CadastroPendente,
+    vai_ao_erp,
+    validar_item,
+)
 from app.observability import metrics
 from app.persistence import cadastro_volta_repo as repo
 from app.utils.logger import logger
@@ -49,8 +54,6 @@ _PENDENTES = ("gravado_sem_volta", "erro_a_enviar")
 _PULA_NO_LIVRO = frozenset(
     {"incerto", "orfao", "orfao_fechado", "confirmado", "erro_registrado", "superado"}
 )
-# atualizar: `ean` e `codigoNfe` null = limpar no ERP; os demais null = não mexer (§2.1).
-_LIMPA_COM_NULL = frozenset({"ean", "codigoNfe"})
 _FECHA = {
     Desfecho.CONFIRMADO: "confirmado",
     Desfecho.ERRO_REGISTRADO: "erro_registrado",
@@ -379,7 +382,32 @@ def _triar(lote: _Lote, bruto: object, vistos: set) -> CadastroPendente | None:
         _responder_erro(lote, cid, versao, item, "definitivo", "seq_fora_do_escopo",
                         "erpProdutoId fora do catálogo e não criado pelo Portal")
         return None
+    if item.acao == "atualizar" and item.camposAlterados == []:
+        _sem_mudanca(lote, item)
+        return None
     return item
+
+
+def _sem_mudanca(lote: _Lote, item: CadastroPendente) -> None:
+    """`atualizar` com `camposAlterados: []` (rev. 5 §2.3): a correção não muda nada que
+    vá ao ERP. Não abre nem chama o ERP; reserva, guarda o `gravado` com o código do item
+    e responde, pelas mesmas portas do livro de um `atualizar` gravado."""
+    cid, versao, conn = str(item.cadastroId), item.versao, lote.env_conn
+    if not _reservar(lote, cid, versao, produto_id=str(item.produtoId), acao=item.acao,
+                     tipo=item.tipo, plano=_plano(item, {}, None)):
+        return
+    corpo = corpo_gravado(versao, item.erpProdutoId, lote.relogio())
+    if not repo.marcar_gravado(conn, cid, versao, erp_produto_id=item.erpProdutoId,
+                               corpo_json=json.dumps(corpo)):
+        conn.commit()
+        logger.error(lote.log(cid, versao, "sem mudança para o ERP, mas o livro não mudou; "
+                                           "fica para a recuperação"))
+        return
+    conn.commit()
+    lote.conta("sem_mudanca")
+    metrics.cadastro_volta_total.labels(env=lote.slug, resultado="sem_mudanca").inc()
+    if not lote.parar:
+        _enviar(lote, cid, versao, corpo, 0)
 
 
 # --- gravação (ERP aberto) ---------------------------------------------------
@@ -387,31 +415,38 @@ def _triar(lote: _Lote, bruto: object, vistos: set) -> CadastroPendente | None:
 
 def _campos(item: CadastroPendente, marcas: dict) -> dict:
     """Colunas do Fire. `criar`: só o que veio. `atualizar`: null = não mexer, salvo
-    `ean`/`codigoNfe` (limpar). `marcaErp` null = não mexer em MARCA."""
+    `ean`/`codigoNfe` (limpar). `marcaErp` null = não mexer em MARCA. `atualizar` com
+    `camposAlterados` (rev. 5): só as colunas dos campos listados (`vai_ao_erp`)."""
     if item.acao == "inativar":
         return {}
     campos: dict = {}
     for wire, coluna in cv.COLUNAS.items():
+        if not vai_ao_erp(item, wire):
+            continue
         valor = getattr(item, wire)
         if valor is not None:
             campos[coluna] = valor
-        elif item.acao == "atualizar" and wire in _LIMPA_COM_NULL:
+        elif item.acao == "atualizar" and wire in LIMPA_COM_NULL:
             campos[coluna] = None
-    campos["GRUPO"] = int(item.grupoErp.codigo)
-    if item.marcaErp is not None:
+    if vai_ao_erp(item, "grupoErp"):
+        campos["GRUPO"] = int(item.grupoErp.codigo)
+    if item.marcaErp is not None and vai_ao_erp(item, "marcaErp"):
         campos["MARCA"] = marcas[item.marcaErp.codigo]
     return campos
 
 
 def _componentes(item: CadastroPendente) -> list[tuple[int, float]] | None:
-    if item.acao == "inativar" or item.componentes is None:
+    if item.acao == "inativar" or item.componentes is None or not vai_ao_erp(item, "componentes"):
         return None
     return [(int(c.erpProdutoId), c.quantidade) for c in item.componentes]
 
 
 def _plano(item: CadastroPendente, campos: dict, componentes) -> dict:
-    """Exatamente o que vai ao gravador (a recuperação compara com o ERP)."""
-    return {
+    """Exatamente o que vai ao gravador (a recuperação compara com o ERP). Com
+    `camposAlterados`, o plano diz quais campos a correção muda; lista vazia não vai ao ERP."""
+    if item.camposAlterados == []:
+        return {"acao": item.acao, "sem_mudanca": True}
+    plano = {
         "acao": item.acao,
         "tabela": "PRODUTOS",
         "tipo": item.tipo,
@@ -421,6 +456,9 @@ def _plano(item: CadastroPendente, campos: dict, componentes) -> dict:
         if componentes is None
         else [{"erpProdutoId": str(f), "quantidade": q} for f, q in componentes],
     }
+    if item.camposAlterados is not None:
+        plano["campos_alterados"] = list(item.camposAlterados)
+    return plano
 
 
 def _conferir(lote: _Lote, fire, item: CadastroPendente):
@@ -436,6 +474,11 @@ def _conferir(lote: _Lote, fire, item: CadastroPendente):
             return ("erro", "definitivo", "nome_existe",
                     f"já existe produto com esse nome no ERP (SEQ {seqs[0]})",
                     mensagem_nome_existe(seqs[0]))
+    outro = cv.outro_seq_com_o_nome(lote.nomes, item)
+    if outro is not None:
+        return ("erro", "definitivo", "nome_existe",
+                f"atualizar: já existe outro produto com esse nome no ERP (SEQ {outro})",
+                mensagem_nome_existe(outro))
     try:
         falha = cv._contra_o_fire(fire, item, {}, lote.marcas)  # nome já conferido acima
     except Exception as exc:  # noqa: BLE001
