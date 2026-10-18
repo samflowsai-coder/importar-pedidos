@@ -121,8 +121,19 @@ def _sync_ok(slug):
     from app.persistence import precos_repo
 
     with router.env_connect(slug) as conn:
-        precos_repo.aplicar_lote(
-            conn, redes=[], cnpjs=[], precos=[], cursor="c1", agora=datetime.now(UTC)
+        precos_repo.aplicar_pagina(
+            conn,
+            {
+                "schema": "precos.tabela.v1",
+                "capacidades": ["precos.tabela.v1", "precos.aprovacao.v1"],
+                "geradoEm": datetime.now(UTC).isoformat(),
+                "empresaFaturadoraCnpj": None,
+                "reiniciar": False,
+                "mudancas": [],
+                "cursor": "c1",
+                "temMais": False,
+            },
+            empresa_cnpj="11111111000191",
         )
 
 

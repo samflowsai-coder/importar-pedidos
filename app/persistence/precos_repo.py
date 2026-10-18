@@ -1,8 +1,10 @@
-"""Cópia local da tabela de preço do Flow (`preco_*`, db do ambiente).
+"""Cópia local da tabela de preço do Flow (contrato precos v1, rota a; db do ambiente).
 
-O Portal nunca edita preço: só aplica lotes do Flow (`aplicar_lote`) e lê
-(`resolver_rede`, `preco_vigente`). Preço em centavos inteiros; datas ISO.
-Rede = raiz do CNPJ (8 dígitos); um CNPJ completo (14) cadastrado vence a raiz.
+O Portal nunca edita preço: só aplica páginas do Flow (`aplicar_pagina`,
+`reiniciar`) e lê (`resolver_rede`, `preco_vigente`, `estado_sync`). Rede é o
+estado inteiro da entidade; preço é append-only por `precoId`. Um cursor só.
+A resolução é a regra pura do §5 (`app.erp.preco_regra`); quem chama passa o
+CNPJ já normalizado (`preco_regra.normalizar_cnpj`).
 """
 
 from __future__ import annotations
@@ -11,168 +13,176 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
-from app.erp.cnpj import cnpj_digits
+from app.erp.preco_regra import PrecoLinha, cnpj_valido, resolver_preco
 
 if TYPE_CHECKING:
     import sqlite3
-
-RECURSO_PRECOS = "precos"
-RECURSO_REDES = "redes"
-# Frescor exige AMBOS: recurso esperado sem linha = nunca sincronizou (bloqueia).
-RECURSOS_ESPERADOS = (RECURSO_PRECOS, RECURSO_REDES)
 
 
 @dataclass(frozen=True)
 class Rede:
     id: str
     nome: str
+    ativa: bool
     travada: bool
-    travada_motivo: str | None
 
 
-def aplicar_lote(
-    conn: sqlite3.Connection,
-    *,
-    redes: list[dict[str, Any]],
-    cnpjs: list[dict[str, Any]],
-    precos: list[dict[str, Any]],
-    cursor: str,
-    agora: datetime,
-    recursos: tuple[str, ...] | None = None,
-) -> None:
-    """Upsert idempotente numa única transação (tudo ou nada).
+@dataclass(frozen=True)
+class EstadoSync:
+    empresa_cnpj: str | None
+    cursor: str | None
+    completo_em: datetime | None
 
-    `removido=True` apaga a linha. `agora` deve ter timezone. O cursor/hora é
-    gravado em `preco_sync` para cada recurso que o lote carrega (redes ou
-    cnpjs -> "redes"; preços -> "precos"); lote vazio conta como sync dos
-    dois. `recursos` força o conjunto explicitamente."""
-    if agora.tzinfo is None or agora.utcoffset() is None:
-        raise ValueError("agora deve ter timezone (datetime aware)")
-    if recursos is None:
-        marcados = []
-        if redes or cnpjs:
-            marcados.append(RECURSO_REDES)
-        if precos:
-            marcados.append(RECURSO_PRECOS)
-        recursos = tuple(marcados) or RECURSOS_ESPERADOS
-    agora_iso = agora.isoformat()
+
+def _instante(texto: str) -> datetime:
+    dt = datetime.fromisoformat(texto)
+    if dt.tzinfo is None or dt.utcoffset() is None:
+        raise ValueError(f"instante sem fuso: {texto!r}")
+    return dt
+
+
+def aplicar_pagina(conn: sqlite3.Connection, pagina: dict[str, Any], *, empresa_cnpj: str) -> None:
+    """Aplica uma página da rota (a) já validada pelo schema, numa transação:
+    upsert das redes (chaves substituídas inteiras) e dos preços, e só então o
+    `cursor`. `temMais: false` grava `completo_em = geradoEm`; com `true` o
+    `completo_em` anterior fica. `reiniciar` é do chamador (`reiniciar()`)."""
+    completo = None if pagina["temMais"] else _instante(pagina["geradoEm"]).isoformat()
     with conn:
-        for r in redes:
-            conn.execute(
-                "INSERT INTO preco_rede (id, nome, travada, travada_motivo, atualizado_em)"
-                " VALUES (?, ?, ?, ?, ?)"
-                " ON CONFLICT(id) DO UPDATE SET nome=excluded.nome,"
-                " travada=excluded.travada, travada_motivo=excluded.travada_motivo,"
-                " atualizado_em=excluded.atualizado_em",
-                (
-                    str(r["id"]),
-                    r["nome"],
-                    1 if r["travada"] else 0,
-                    r.get("travada_motivo"),
-                    agora_iso,
-                ),
-            )
-        for c in cnpjs:
-            digitos = cnpj_digits(c["cnpj"])
-            if c["removido"]:
-                conn.execute("DELETE FROM preco_rede_cnpj WHERE cnpj = ?", (digitos,))
-            else:
+        for m in pagina["mudancas"]:
+            if m["tipo"] == "rede":
+                rede_id = m["redeId"]
                 conn.execute(
-                    "INSERT INTO preco_rede_cnpj (cnpj, rede_id) VALUES (?, ?)"
-                    " ON CONFLICT(cnpj) DO UPDATE SET rede_id=excluded.rede_id",
-                    (digitos, str(c["rede_id"])),
+                    "INSERT INTO preco_rede_v1 (rede_id, nome, ativa, travada) VALUES (?, ?, ?, ?)"
+                    " ON CONFLICT(rede_id) DO UPDATE SET nome=excluded.nome,"
+                    " ativa=excluded.ativa, travada=excluded.travada",
+                    (rede_id, m["nome"], 1 if m["ativa"] else 0, 1 if m["travada"] else 0),
                 )
-        for p in precos:
-            chave = (
-                str(p["rede_id"]),
-                str(p["fire_produto_id"]),
-                p["vigente_desde"].isoformat(),
-            )
-            if p["removido"]:
-                conn.execute(
-                    "DELETE FROM preco_tabela WHERE rede_id = ? AND fire_produto_id = ?"
-                    " AND vigente_desde = ?",
-                    chave,
+                conn.execute("DELETE FROM preco_rede_chave_v1 WHERE rede_id = ?", (rede_id,))
+                chaves = [("raiz", r) for r in m["raizes"]] + [("cnpj", c) for c in m["cnpjs"]]
+                conn.executemany(
+                    "INSERT OR IGNORE INTO preco_rede_chave_v1 (rede_id, tipo, chave)"
+                    " VALUES (?, ?, ?)",
+                    [(rede_id, tipo, chave) for tipo, chave in chaves],
                 )
-            else:
-                ate = p["vigente_ate"]
+            elif m["tipo"] == "preco":
                 conn.execute(
-                    "INSERT INTO preco_tabela (rede_id, fire_produto_id, vigente_desde,"
-                    " preco_centavos, vigente_ate) VALUES (?, ?, ?, ?, ?)"
-                    " ON CONFLICT(rede_id, fire_produto_id, vigente_desde) DO UPDATE SET"
+                    "INSERT INTO preco_tabela_v1 (preco_id, rede_id, empresa_cnpj,"
+                    " erp_produto_id, unidade_erp, preco_centavos, vigencia_inicio,"
+                    " registrado_em, cancelado) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    " ON CONFLICT(preco_id) DO UPDATE SET rede_id=excluded.rede_id,"
+                    " empresa_cnpj=excluded.empresa_cnpj,"
+                    " erp_produto_id=excluded.erp_produto_id,"
+                    " unidade_erp=excluded.unidade_erp,"
                     " preco_centavos=excluded.preco_centavos,"
-                    " vigente_ate=excluded.vigente_ate",
-                    (*chave, int(p["preco_centavos"]), ate.isoformat() if ate else None),
+                    " vigencia_inicio=excluded.vigencia_inicio,"
+                    " registrado_em=excluded.registrado_em, cancelado=excluded.cancelado",
+                    (
+                        m["precoId"],
+                        m["redeId"],
+                        m["empresaFaturadoraCnpj"],
+                        m["erpProdutoId"],
+                        m["unidadeErp"],
+                        int(m["precoCentavos"]),
+                        m["vigenciaInicio"],
+                        m["registradoEm"],
+                        1 if m["cancelado"] else 0,
+                    ),
                 )
-        for recurso in recursos:
-            conn.execute(
-                "INSERT INTO preco_sync (recurso, cursor, ultima_ok_em) VALUES (?, ?, ?)"
-                " ON CONFLICT(recurso) DO UPDATE SET cursor=excluded.cursor,"
-                " ultima_ok_em=excluded.ultima_ok_em",
-                (recurso, cursor, agora_iso),
-            )
+            else:
+                raise ValueError(f"mudança de tipo desconhecido: {m.get('tipo')!r}")
+        conn.execute(
+            "INSERT INTO preco_sync_v1 (id, empresa_cnpj, cursor, completo_em)"
+            " VALUES (1, ?, ?, ?)"
+            " ON CONFLICT(id) DO UPDATE SET empresa_cnpj=excluded.empresa_cnpj,"
+            " cursor=excluded.cursor,"
+            " completo_em=COALESCE(excluded.completo_em, preco_sync_v1.completo_em)",
+            (empresa_cnpj, pagina["cursor"], completo),
+        )
 
 
-def _rede(conn: sqlite3.Connection, rede_id: str) -> Rede | None:
+def reiniciar(conn: sqlite3.Connection, *, empresa_cnpj: str) -> None:
+    """Descarta a cópia inteira (redes, chaves, preços) e o cursor."""
+    with conn:
+        conn.execute("DELETE FROM preco_rede_v1")
+        conn.execute("DELETE FROM preco_rede_chave_v1")
+        conn.execute("DELETE FROM preco_tabela_v1")
+        conn.execute(
+            "INSERT INTO preco_sync_v1 (id, empresa_cnpj, cursor, completo_em)"
+            " VALUES (1, ?, NULL, NULL)"
+            " ON CONFLICT(id) DO UPDATE SET empresa_cnpj=excluded.empresa_cnpj,"
+            " cursor=NULL, completo_em=NULL",
+            (empresa_cnpj,),
+        )
+
+
+def estado_sync(conn: sqlite3.Connection) -> EstadoSync:
+    """Empresa, cursor e `completo_em` da cópia. Cursor de outra empresa que
+    não a do ambiente: o chamador trata como sem cursor e reinicia."""
     row = conn.execute(
-        "SELECT id, nome, travada, travada_motivo FROM preco_rede WHERE id = ?",
-        (rede_id,),
+        "SELECT empresa_cnpj, cursor, completo_em FROM preco_sync_v1 WHERE id = 1"
     ).fetchone()
     if row is None:
-        return None
-    return Rede(row[0], row[1], bool(row[2]), row[3])
+        return EstadoSync(None, None, None)
+    return EstadoSync(row[0], row[1], _instante(row[2]) if row[2] else None)
 
 
-def resolver_rede(conn: sqlite3.Connection, cnpj: str) -> Rede | None:
-    """CNPJ de 14 dígitos: linha exata primeiro, depois a raiz. 8 dígitos: raiz.
-    Qualquer outro tamanho (após normalizar) → None."""
-    d = cnpj_digits(cnpj)
-    if len(d) not in (8, 14):
+def ultima_sync_ok(conn: sqlite3.Connection) -> datetime | None:
+    """`completo_em`: `geradoEm` da última página com `temMais: false`."""
+    return estado_sync(conn).completo_em
+
+
+def resolver_rede(conn: sqlite3.Connection, cnpj_normalizado: str) -> Rede | None:
+    """§5: CNPJ completo em rede ativa → raiz `[:8]` em rede ativa → None.
+    Entrada fora do formato do contrato → None (sem normalizar)."""
+    if not cnpj_valido(cnpj_normalizado):
         return None
-    candidatos = [d, d[:8]] if len(d) == 14 else [d]
-    for chave in candidatos:
+    for tipo, chave in (("cnpj", cnpj_normalizado), ("raiz", cnpj_normalizado[:8])):
         row = conn.execute(
-            "SELECT rede_id FROM preco_rede_cnpj WHERE cnpj = ?", (chave,)
+            "SELECT r.rede_id, r.nome, r.ativa, r.travada FROM preco_rede_chave_v1 k"
+            " JOIN preco_rede_v1 r ON r.rede_id = k.rede_id"
+            " WHERE k.tipo = ? AND k.chave = ? AND r.ativa = 1"
+            " ORDER BY r.rede_id LIMIT 1",
+            (tipo, chave),
         ).fetchone()
         if row is not None:
-            return _rede(conn, row[0])
+            return Rede(row[0], row[1], bool(row[2]), bool(row[3]))
     return None
 
 
 def preco_vigente(
-    conn: sqlite3.Connection, rede_id: str, fire_produto_id: str, data: date
-) -> int | None:
-    """Preço em centavos. Só conta a linha com maior `vigente_desde <= data`;
-    se ela já expirou (`vigente_ate <= data`) → None (nunca cai numa linha
-    mais antiga: preço velho é fail-open)."""
-    iso = data.isoformat()
-    row = conn.execute(
-        "SELECT preco_centavos, vigente_ate FROM preco_tabela"
-        " WHERE rede_id = ? AND fire_produto_id = ? AND vigente_desde <= ?"
-        " ORDER BY vigente_desde DESC LIMIT 1",
-        (str(rede_id), str(fire_produto_id), iso),
-    ).fetchone()
-    if row is None or (row[1] is not None and row[1] <= iso):
-        return None
-    return int(row[0])
-
-
-def estado_sync(conn: sqlite3.Connection, recurso: str) -> tuple[str | None, datetime | None]:
-    row = conn.execute(
-        "SELECT cursor, ultima_ok_em FROM preco_sync WHERE recurso = ?", (recurso,)
-    ).fetchone()
-    if row is None:
-        return (None, None)
-    return (row[0], datetime.fromisoformat(row[1]) if row[1] else None)
-
-
-def ultima_sync_ok(
-    conn: sqlite3.Connection, recursos: tuple[str, ...] | None = None
-) -> datetime | None:
-    """A `ultima_ok_em` MAIS ANTIGA entre os recursos esperados (decide as 24 h).
-
-    Default `RECURSOS_ESPERADOS`: se algum nunca sincronizou → None."""
-    datas = [estado_sync(conn, r)[1] for r in (recursos or RECURSOS_ESPERADOS)]
-    if any(d is None for d in datas):
-        return None
-    return min(d for d in datas if d is not None)
+    conn: sqlite3.Connection,
+    *,
+    empresa_cnpj: str,
+    rede_id: str | None,
+    erp_produto_id: str,
+    data: date,
+) -> PrecoLinha | None:
+    """Preço vigente pela regra do §5 (`preco_regra.resolver_preco`) sobre os
+    preços da cópia daquela empresa e produto."""
+    rows = conn.execute(
+        "SELECT preco_id, rede_id, empresa_cnpj, erp_produto_id, unidade_erp,"
+        " preco_centavos, vigencia_inicio, registrado_em, cancelado"
+        " FROM preco_tabela_v1 WHERE empresa_cnpj = ? AND erp_produto_id = ?",
+        (empresa_cnpj, erp_produto_id),
+    ).fetchall()
+    candidatos = [
+        PrecoLinha(
+            preco_id=r[0],
+            rede_id=r[1],
+            empresa_cnpj=r[2],
+            erp_produto_id=r[3],
+            unidade_erp=r[4],
+            preco_centavos=int(r[5]),
+            vigencia_inicio=date.fromisoformat(r[6]),
+            registrado_em=r[7],
+            cancelado=bool(r[8]),
+        )
+        for r in rows
+    ]
+    return resolver_preco(
+        candidatos,
+        empresa_cnpj=empresa_cnpj,
+        rede_id=rede_id,
+        erp_produto_id=erp_produto_id,
+        data=data,
+    )

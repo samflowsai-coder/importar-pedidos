@@ -1,0 +1,324 @@
+{
+  "_sobre": "Exemplos canônicos do contrato precos v1 (docs/integrations/portal-pedidos-preco-contrato-v1.md). Validados contra src/lib/services/portal-pedidos/contract-preco.ts em src/lib/services/portal-pedidos/__tests__/contract-preco.test.ts. Nomes e CNPJs são fictícios. Cópia literal de pcp-app docs/integrations/portal-pedidos-preco-exemplos-v1.json no commit e26dcacc (branch feat/tabela-preco-por-rede); só esta nota foi acrescentada.",
+  "tabelaPagina": {
+    "schema": "precos.tabela.v1",
+    "capacidades": [
+      "precos.tabela.v1",
+      "precos.aprovacao.v1"
+    ],
+    "geradoEm": "2026-10-20T11:00:00.000Z",
+    "empresaFaturadoraCnpj": "11111111000191",
+    "reiniciar": false,
+    "mudancas": [
+      {
+        "tipo": "rede",
+        "redeId": "a1a1a1a1-0000-4000-8000-000000000001",
+        "nome": "Rede Exemplo Esportes",
+        "ativa": true,
+        "travada": false,
+        "raizes": [
+          "11222333"
+        ],
+        "cnpjs": []
+      },
+      {
+        "tipo": "rede",
+        "redeId": "a1a1a1a1-0000-4000-8000-000000000002",
+        "nome": "Bandeira Exemplo Outlet",
+        "ativa": true,
+        "travada": true,
+        "raizes": [],
+        "cnpjs": [
+          "11222333000999"
+        ]
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000001",
+        "redeId": "a1a1a1a1-0000-4000-8000-000000000001",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "48213",
+        "unidadeErp": "KIT",
+        "precoCentavos": 4590,
+        "vigenciaInicio": "2026-10-19",
+        "registradoEm": "2026-10-20T10:42:13.000Z",
+        "cancelado": false
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000002",
+        "redeId": "a1a1a1a1-0000-4000-8000-000000000001",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "48213",
+        "unidadeErp": "KIT",
+        "precoCentavos": 4820,
+        "vigenciaInicio": "2027-01-01",
+        "registradoEm": "2026-10-20T10:55:01.000Z",
+        "cancelado": false
+      }
+    ],
+    "cursor": "v1.0000000000000a3f.0000000000000004",
+    "temMais": false
+  },
+  "aprovacaoPedido": {
+    "schema": "precos.aprovacao.v1",
+    "tipo": "pedido",
+    "externalId": "portal-mm-000917",
+    "revisao": 1,
+    "conteudoHash": "sha256:5f2c9e0b7a1d4c3e8f6a",
+    "empresaFaturadoraCnpj": "11111111000191",
+    "pedidoNumero": "4500123987",
+    "emitidoEm": "2026-10-20T13:10:00.000Z",
+    "recebidoEm": "2026-10-20T13:25:41.000Z",
+    "cliente": {
+      "nome": "Rede Exemplo Esportes Loja 12",
+      "cnpj": "11222333001288"
+    },
+    "redeId": "a1a1a1a1-0000-4000-8000-000000000001",
+    "tabelaCursor": "v1.0000000000000a3f.0000000000000004",
+    "itens": [
+      {
+        "itemChave": "portal-mm-000917:0",
+        "linha": 0,
+        "erpProdutoId": "48213",
+        "codigo": "KT-3P-SOQ-BR",
+        "descricao": "KIT 3 PARES SOQUETE BRANCO",
+        "unidadeErp": "KIT",
+        "quantidade": 120,
+        "precoPedidoCentavos": 4590,
+        "precoTabelaCentavos": 4590,
+        "precoTabelaId": "b2b2b2b2-0000-4000-8000-000000000001",
+        "situacao": "ok",
+        "motivo": null
+      },
+      {
+        "itemChave": "portal-mm-000917:1",
+        "linha": 1,
+        "erpProdutoId": "48214",
+        "codigo": "KT-3P-SOQ-PR",
+        "descricao": "KIT 3 PARES SOQUETE PRETO",
+        "unidadeErp": "KIT",
+        "quantidade": 80,
+        "precoPedidoCentavos": 4990,
+        "precoTabelaCentavos": 4590,
+        "precoTabelaId": "b2b2b2b2-0000-4000-8000-000000000003",
+        "situacao": "na_fila",
+        "motivo": "preco_acima"
+      },
+      {
+        "itemChave": "portal-mm-000917:2",
+        "linha": 2,
+        "erpProdutoId": "50110",
+        "codigo": "KT-6P-CANO-MIX",
+        "descricao": "KIT 6 PARES CANO MEDIO SORTIDO",
+        "unidadeErp": "KIT",
+        "quantidade": 40,
+        "precoPedidoCentavos": null,
+        "precoTabelaCentavos": 8900,
+        "precoTabelaId": "b2b2b2b2-0000-4000-8000-000000000004",
+        "situacao": "na_fila",
+        "motivo": "pedido_sem_preco"
+      }
+    ]
+  },
+  "aprovacaoRetirada": {
+    "schema": "precos.aprovacao.v1",
+    "tipo": "retirada",
+    "externalId": "portal-mm-000917",
+    "empresaFaturadoraCnpj": "11111111000191",
+    "revisao": 1,
+    "motivo": "pedido cancelado pelo cliente no Portal"
+  },
+  "aprovacaoResposta": {
+    "aprovacaoId": "c3c3c3c3-0000-4000-8000-000000000001",
+    "externalId": "portal-mm-000917",
+    "empresaFaturadoraCnpj": "11111111000191",
+    "revisao": 1,
+    "situacao": "pendente",
+    "jaRecebido": false,
+    "itens": [
+      {
+        "itemChave": "portal-mm-000917:0",
+        "situacao": "conforme_tabela"
+      },
+      {
+        "itemChave": "portal-mm-000917:1",
+        "situacao": "pendente"
+      },
+      {
+        "itemChave": "portal-mm-000917:2",
+        "situacao": "pendente"
+      }
+    ]
+  },
+  "decisoesPagina": {
+    "schema": "precos.decisoes.v1",
+    "empresaFaturadoraCnpj": "11111111000191",
+    "decisoes": [
+      {
+        "decisaoId": "d4d4d4d4-0000-4000-8000-000000000001",
+        "externalId": "portal-mm-000917",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "revisao": 1,
+        "itemChave": "portal-mm-000917:0",
+        "erpProdutoId": "48213",
+        "resultado": "conforme_tabela",
+        "precoAprovadoCentavos": 4590,
+        "precoTabelaNoMomentoCentavos": 4590,
+        "precoIdCriado": null,
+        "motivoRecusa": null,
+        "observacao": null,
+        "decisor": "automatico",
+        "decididoEm": "2026-10-20T13:25:42.000Z"
+      },
+      {
+        "decisaoId": "d4d4d4d4-0000-4000-8000-000000000002",
+        "externalId": "portal-mm-000917",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "revisao": 1,
+        "itemChave": "portal-mm-000917:1",
+        "erpProdutoId": "48214",
+        "resultado": "virar_regra",
+        "precoAprovadoCentavos": 4990,
+        "precoTabelaNoMomentoCentavos": 4590,
+        "precoIdCriado": "b2b2b2b2-0000-4000-8000-000000000009",
+        "motivoRecusa": null,
+        "observacao": "novo acordo de 2027 antecipado",
+        "decisor": "aprovador",
+        "decididoEm": "2026-10-20T15:02:10.000Z"
+      },
+      {
+        "decisaoId": "d4d4d4d4-0000-4000-8000-000000000003",
+        "externalId": "portal-mm-000917",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "revisao": 1,
+        "itemChave": "portal-mm-000917:2",
+        "erpProdutoId": "50110",
+        "resultado": "acordo_comercial",
+        "precoAprovadoCentavos": 8900,
+        "precoTabelaNoMomentoCentavos": 8900,
+        "precoIdCriado": null,
+        "motivoRecusa": null,
+        "observacao": "pedido sem preço; vale o da tabela",
+        "decisor": "aprovador",
+        "decididoEm": "2026-10-20T15:03:44.000Z"
+      }
+    ],
+    "cursor": "v1.000000000000001c",
+    "temMais": false
+  },
+  "decisaoRecusada": {
+    "decisaoId": "d4d4d4d4-0000-4000-8000-000000000004",
+    "externalId": "portal-mm-000921",
+    "empresaFaturadoraCnpj": "11111111000191",
+    "revisao": 2,
+    "itemChave": "portal-mm-000921:0",
+    "erpProdutoId": "48213",
+    "resultado": "recusado",
+    "precoAprovadoCentavos": null,
+    "precoTabelaNoMomentoCentavos": 4590,
+    "precoIdCriado": null,
+    "motivoRecusa": "preço abaixo do acordo vigente; corrigir para 45,90",
+    "observacao": null,
+    "decisor": "aprovador",
+    "decididoEm": "2026-10-21T09:12:00.000Z"
+  },
+  "confirmacao": {
+    "schema": "precos.decisoes.confirmacao.v1",
+    "confirmacoes": [
+      {
+        "decisaoId": "d4d4d4d4-0000-4000-8000-000000000001",
+        "resultado": "aplicada"
+      },
+      {
+        "decisaoId": "d4d4d4d4-0000-4000-8000-000000000002",
+        "resultado": "aplicada"
+      },
+      {
+        "decisaoId": "d4d4d4d4-0000-4000-8000-000000000003",
+        "resultado": "aplicada"
+      }
+    ]
+  },
+  "confirmacaoResposta": {
+    "resultados": [
+      {
+        "decisaoId": "d4d4d4d4-0000-4000-8000-000000000001",
+        "situacao": "confirmada"
+      },
+      {
+        "decisaoId": "d4d4d4d4-0000-4000-8000-000000000002",
+        "situacao": "confirmada"
+      },
+      {
+        "decisaoId": "d4d4d4d4-0000-4000-8000-000000000003",
+        "situacao": "ja_confirmada"
+      }
+    ]
+  },
+  "_empresas": {
+    "MM (fictício)": "11111111000191",
+    "Nasmar (fictício)": "22222222000182"
+  },
+  "aprovacaoPedidoNasmar": {
+    "schema": "precos.aprovacao.v1",
+    "tipo": "pedido",
+    "externalId": "portal-nasmar-000311",
+    "revisao": 1,
+    "conteudoHash": "sha256:5f2c9e0b7a1d4c3e8f6a",
+    "empresaFaturadoraCnpj": "22222222000182",
+    "pedidoNumero": "4500123987",
+    "emitidoEm": "2026-10-20T13:10:00.000Z",
+    "recebidoEm": "2026-10-20T13:25:41.000Z",
+    "cliente": {
+      "nome": "Rede Exemplo Esportes Loja 12",
+      "cnpj": "11222333001288"
+    },
+    "redeId": "a1a1a1a1-0000-4000-8000-000000000001",
+    "tabelaCursor": "v1.0000000000000a3f.0000000000000004",
+    "itens": [
+      {
+        "itemChave": "portal-nasmar-000311:0",
+        "linha": 0,
+        "erpProdutoId": "48213",
+        "codigo": "KT-3P-SOQ-BR",
+        "descricao": "KIT 3 PARES SOQUETE BRANCO",
+        "unidadeErp": "KIT",
+        "quantidade": 120,
+        "precoPedidoCentavos": 4590,
+        "precoTabelaCentavos": 4590,
+        "precoTabelaId": "b2b2b2b2-0000-4000-8000-000000000001",
+        "situacao": "ok",
+        "motivo": null
+      },
+      {
+        "itemChave": "portal-nasmar-000311:1",
+        "linha": 1,
+        "erpProdutoId": "48214",
+        "codigo": "KT-3P-SOQ-PR",
+        "descricao": "KIT 3 PARES SOQUETE PRETO",
+        "unidadeErp": "KIT",
+        "quantidade": 80,
+        "precoPedidoCentavos": 4990,
+        "precoTabelaCentavos": 4590,
+        "precoTabelaId": "b2b2b2b2-0000-4000-8000-000000000003",
+        "situacao": "na_fila",
+        "motivo": "preco_acima"
+      },
+      {
+        "itemChave": "portal-nasmar-000311:2",
+        "linha": 2,
+        "erpProdutoId": "50110",
+        "codigo": "KT-6P-CANO-MIX",
+        "descricao": "KIT 6 PARES CANO MEDIO SORTIDO",
+        "unidadeErp": "KIT",
+        "quantidade": 40,
+        "precoPedidoCentavos": null,
+        "precoTabelaCentavos": 8900,
+        "precoTabelaId": "b2b2b2b2-0000-4000-8000-000000000004",
+        "situacao": "na_fila",
+        "motivo": "pedido_sem_preco"
+      }
+    ]
+  }
+}

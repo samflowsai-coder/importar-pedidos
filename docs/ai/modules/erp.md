@@ -491,7 +491,8 @@ tem tela de gestão de preço: a decisão (aprovar/recusar) vem do Flow. Spec:
   `preco_vigente`, `cnpjs_grupo`, `ultima_sync`, `agora`). Devolve `Avaliacao` de
   `ItemAvaliado` (`situacao`: `ok | fila | nao_avaliado | fora_intercompany`; `motivo`).
 - `app/erp/preco_trava.py` — o portão e os helpers compartilhados.
-- `app/persistence/precos_repo.py` — cópia local (`aplicar_lote`, `resolver_rede`, `preco_vigente`, `ultima_sync_ok`).
+- `app/persistence/precos_repo.py` — cópia local (`aplicar_pagina`, `reiniciar`, `estado_sync`, `resolver_rede`, `preco_vigente`, `ultima_sync_ok`).
+- `app/erp/preco_regra.py` — regra pura do §5 do contrato precos v1 (`normalizar_cnpj`, `cnpj_valido`, `resolver_preco`, `data_referencia`, `centavos`); vetores do pcp-app em `tests/fixtures/flow_precos_v1/`.
 - `app/persistence/preco_aprovacao_repo.py` — aprovações por linha do pedido.
 
 ### Ordem das regras do avaliador
@@ -504,7 +505,7 @@ tem tela de gestão de preço: a decisão (aprovar/recusar) vem do Flow. Spec:
    `rede_sem_tabela` (`fila`); rede travada → `rede_travada` (`fila`); preço de tabela 0/ausente →
    `sem_preco_tabela`; pedido sem preço → `sem_preco_pedido`; igual → `ok` (`igual`);
    maior → `acima`; menor → `abaixo` (todos `fila`).
-Rede = raiz do CNPJ (8 dígitos); um CNPJ completo (14) cadastrado em `preco_rede_cnpj` vence a raiz.
+Rede (§5 do contrato): CNPJ completo (14) em `cnpjs` de rede ativa vence a raiz (8 primeiros caracteres) em `raizes`; CNPJ normalizado antes (`preco_regra.normalizar_cnpj`). Preço da empresa faturadora = `environments.cnpj` do ambiente.
 Chave do produto = `str(check["items"][i]["fire_product_id"])` (SEQ; o `check` guarda `int`).
 **Item com vínculo de-para:** o SEQ avaliado é o do vínculo, mesmo que o item case direto
 por EAN/código com outro produto. O chamador consulta o de-para **uma vez**

@@ -2713,13 +2713,59 @@ def test_cancel_marca_pendencias_de_preco_como_canceladas():
 # ── Trava de preço (preco_trava.decidir_envio) nos dois caminhos de envio ─────
 
 
+_EMPRESA_TRAVA = "11111111000191"  # CNPJ do ambiente "test" = empresa faturadora
+
+
+def _pagina_trava(seq: str, centavos: int, cursor: str) -> None:
+    """Página do contrato precos v1: rede r1 (raiz 11222333) com o produto `seq`."""
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from app.persistence import precos_repo
+
+    with db.connect() as conn:
+        precos_repo.aplicar_pagina(
+            conn,
+            {
+                "schema": "precos.tabela.v1",
+                "capacidades": ["precos.tabela.v1", "precos.aprovacao.v1"],
+                "geradoEm": _dt.now(UTC).isoformat(),
+                "empresaFaturadoraCnpj": _EMPRESA_TRAVA,
+                "reiniciar": False,
+                "mudancas": [
+                    {
+                        "tipo": "rede",
+                        "redeId": "r1",
+                        "nome": "Rede X",
+                        "ativa": True,
+                        "travada": False,
+                        "raizes": ["11222333"],
+                        "cnpjs": [],
+                    },
+                    {
+                        "tipo": "preco",
+                        "precoId": f"p-r1-{seq}",
+                        "redeId": "r1",
+                        "empresaFaturadoraCnpj": _EMPRESA_TRAVA,
+                        "erpProdutoId": seq,
+                        "unidadeErp": "KIT",
+                        "precoCentavos": centavos,
+                        "vigenciaInicio": "2026-01-01",
+                        "registradoEm": "2026-01-01T00:00:00.000Z",
+                        "cancelado": False,
+                    },
+                ],
+                "cursor": cursor,
+                "temMais": False,
+            },
+            empresa_cnpj=_EMPRESA_TRAVA,
+        )
+
+
 def _env_trava_ligada(tmp_path):
     """Ambiente com slug "test" (mesmo SQLite do ambiente ativo dos testes),
     trava `ligado` e a cópia da tabela da rede 11222333 com o produto 123 a R$ 50,00."""
-    from datetime import UTC, date
-    from datetime import datetime as _dt
-
-    from app.persistence import environments_repo, precos_repo
+    from app.persistence import environments_repo
 
     env = environments_repo.create(
         slug="test",
@@ -2727,27 +2773,10 @@ def _env_trava_ligada(tmp_path):
         watch_dir=str(tmp_path / "in"),
         output_dir=str(tmp_path / "out"),
         fb_path=str(tmp_path / "x.fdb"),
+        cnpj=_EMPRESA_TRAVA,
     )
     environments_repo.set_preco_trava_modo(env["id"], "ligado", por="teste")
-    with db.connect() as conn:
-        precos_repo.aplicar_lote(
-            conn,
-            redes=[{"id": "r1", "nome": "Rede X", "travada": False}],
-            cnpjs=[{"cnpj": "11222333", "rede_id": "r1", "removido": False}],
-            precos=[
-                {
-                    "rede_id": "r1",
-                    "fire_produto_id": "123",
-                    "vigente_desde": date(2026, 1, 1),
-                    "vigente_ate": None,
-                    "preco_centavos": 5000,
-                    "removido": False,
-                }
-            ],
-            cursor="c1",
-            agora=_dt.now(UTC),
-            recursos=("precos", "redes"),
-        )
+    _pagina_trava("123", 5000, "c1")
     return env
 
 
@@ -3323,30 +3352,7 @@ def _vinculo_de_para(seq: str, codigo: str):
 
 
 def _preco_na_tabela(seq: str, centavos: int):
-    from datetime import UTC, date
-    from datetime import datetime as _dt
-
-    from app.persistence import precos_repo
-
-    with db.connect() as conn:
-        precos_repo.aplicar_lote(
-            conn,
-            redes=[{"id": "r1", "nome": "Rede X", "travada": False}],
-            cnpjs=[],
-            precos=[
-                {
-                    "rede_id": "r1",
-                    "fire_produto_id": seq,
-                    "vigente_desde": date(2026, 1, 1),
-                    "vigente_ate": None,
-                    "preco_centavos": centavos,
-                    "removido": False,
-                }
-            ],
-            cursor="c2",
-            agora=_dt.now(UTC),
-            recursos=("precos", "redes"),
-        )
+    _pagina_trava(seq, centavos, "c2")
 
 
 def _cfg_db(monkeypatch, tmp_path, modo="db"):

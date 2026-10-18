@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -17,6 +17,7 @@ from app.persistence import preco_aprovacao_repo as aprov
 AGORA = datetime(2026, 10, 17, 12, 0, tzinfo=UTC)
 CNPJ_REDE = "11222333000144"
 OUTRO_CNPJ = "99888777000166"
+EMPRESA = "11111111000191"  # CNPJ do ambiente = empresa faturadora
 
 
 @pytest.fixture(autouse=True)
@@ -82,31 +83,62 @@ def _seed(order, **extra):
     return import_id, entry
 
 
+def _pagina_v1(conn, redes, precos, *, gerado, cursor="c1"):
+    """Página da rota (a) do contrato precos v1 com as redes e preços dados."""
+    mudancas = [
+        {
+            "tipo": "rede",
+            "redeId": rede_id,
+            "nome": nome,
+            "ativa": True,
+            "travada": False,
+            "raizes": [raiz],
+            "cnpjs": [],
+        }
+        for rede_id, nome, raiz in redes
+    ] + [
+        {
+            "tipo": "preco",
+            "precoId": f"p-{rede_id}-{pid}",
+            "redeId": rede_id,
+            "empresaFaturadoraCnpj": EMPRESA,
+            "erpProdutoId": pid,
+            "unidadeErp": "KIT",
+            "precoCentavos": c,
+            "vigenciaInicio": "2026-01-01",
+            "registradoEm": "2026-01-01T00:00:00.000Z",
+            "cancelado": False,
+        }
+        for rede_id, pid, c in precos
+    ]
+    precos_repo.aplicar_pagina(
+        conn,
+        {
+            "schema": "precos.tabela.v1",
+            "capacidades": ["precos.tabela.v1", "precos.aprovacao.v1"],
+            "geradoEm": gerado.isoformat(),
+            "empresaFaturadoraCnpj": EMPRESA,
+            "reiniciar": False,
+            "mudancas": mudancas,
+            "cursor": cursor,
+            "temMais": False,
+        },
+        empresa_cnpj=EMPRESA,
+    )
+
+
 def _copia(preco_centavos=5000, *, sync=AGORA - timedelta(hours=1), produtos=("123",)):
     with db.connect() as conn:
-        precos_repo.aplicar_lote(
+        _pagina_v1(
             conn,
-            redes=[{"id": "r1", "nome": "Rede X", "travada": False}],
-            cnpjs=[{"cnpj": CNPJ_REDE[:8], "rede_id": "r1", "removido": False}],
-            precos=[
-                {
-                    "rede_id": "r1",
-                    "fire_produto_id": p,
-                    "vigente_desde": date(2026, 1, 1),
-                    "vigente_ate": None,
-                    "preco_centavos": preco_centavos,
-                    "removido": False,
-                }
-                for p in produtos
-            ],
-            cursor="c1",
-            agora=sync,
-            recursos=("precos", "redes"),
+            [("r1", "Rede X", CNPJ_REDE[:8])],
+            [("r1", p, preco_centavos) for p in produtos],
+            gerado=sync,
         )
 
 
 def _env(modo):
-    return {"id": "test-env-id", "slug": "test", "preco_trava_modo": modo}
+    return {"id": "test-env-id", "slug": "test", "preco_trava_modo": modo, "cnpj": EMPRESA}
 
 
 def _live(monkeypatch, check):
@@ -547,23 +579,12 @@ def test_intercompany_com_fire_fora_e_sem_check_salvo_bloqueia_com_mensagem_prop
 def test_aprovacao_de_uma_rede_nao_vale_depois_do_override_para_outra(monkeypatch):
     _copia(5000)
     with db.connect() as conn:
-        precos_repo.aplicar_lote(
+        _pagina_v1(
             conn,
-            redes=[{"id": "r2", "nome": "Rede Y", "travada": False}],
-            cnpjs=[{"cnpj": "55666777", "rede_id": "r2", "removido": False}],
-            precos=[
-                {
-                    "rede_id": "r2",
-                    "fire_produto_id": "123",
-                    "vigente_desde": date(2026, 1, 1),
-                    "vigente_ate": None,
-                    "preco_centavos": 5000,
-                    "removido": False,
-                }
-            ],
+            [("r2", "Rede Y", "55666777")],
+            [("r2", "123", 5000)],
+            gerado=AGORA - timedelta(hours=1),
             cursor="c2",
-            agora=AGORA - timedelta(hours=1),
-            recursos=("precos", "redes"),
         )
     order = _order((54.0,))
     import_id, entry = _seed(order)
@@ -774,24 +795,11 @@ def test_preview_concorda_com_o_portao(monkeypatch, cenario):
 
 def _precos_por_produto(precos: dict[str, int]):
     with db.connect() as conn:
-        precos_repo.aplicar_lote(
+        _pagina_v1(
             conn,
-            redes=[{"id": "r1", "nome": "Rede X", "travada": False}],
-            cnpjs=[{"cnpj": CNPJ_REDE[:8], "rede_id": "r1", "removido": False}],
-            precos=[
-                {
-                    "rede_id": "r1",
-                    "fire_produto_id": pid,
-                    "vigente_desde": date(2026, 1, 1),
-                    "vigente_ate": None,
-                    "preco_centavos": c,
-                    "removido": False,
-                }
-                for pid, c in precos.items()
-            ],
-            cursor="c1",
-            agora=AGORA - timedelta(hours=1),
-            recursos=("precos", "redes"),
+            [("r1", "Rede X", CNPJ_REDE[:8])],
+            [("r1", pid, c) for pid, c in precos.items()],
+            gerado=AGORA - timedelta(hours=1),
         )
 
 
@@ -914,8 +922,8 @@ def test_assinatura_usa_a_rede_resolvida_e_nao_so_a_raiz():
 
     order = _order((54.0,))
     item = ItemAvaliado(0, "123", "fila", "acima", 5400, 5000)
-    r1 = Avaliacao(Rede("r1", "X", False, None), CNPJ_REDE, [item])
-    r2 = Avaliacao(Rede("r2", "Y", False, None), CNPJ_REDE[:8] + "009999", [item])
+    r1 = Avaliacao(Rede("r1", "X", True, False), CNPJ_REDE, [item])
+    r2 = Avaliacao(Rede("r2", "Y", True, False), CNPJ_REDE[:8] + "009999", [item])
     sem_rede = Avaliacao(None, CNPJ_REDE, [item])
 
     a1 = preco_trava.assinaturas_da_avaliacao(order, r1)[0]

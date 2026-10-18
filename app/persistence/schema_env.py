@@ -331,37 +331,57 @@ CREATE TABLE IF NOT EXISTS erp_lote_perna (
     PRIMARY KEY (base_origem, erp_item_codigo_origem)
 );
 
--- Cópia local da tabela de preço do Flow (trava de preço por rede). O Portal
--- nunca edita: só aplica lotes vindos do Flow (precos_repo.aplicar_lote).
-CREATE TABLE IF NOT EXISTS preco_rede (
-    id             TEXT PRIMARY KEY,
-    nome           TEXT NOT NULL,
-    travada        INTEGER NOT NULL DEFAULT 0,
-    travada_motivo TEXT,
-    atualizado_em  TEXT NOT NULL
+-- Cópia local da tabela de preço do Flow no formato do contrato precos v1
+-- (rota a). O Portal nunca edita: só aplica páginas (precos_repo.aplicar_pagina).
+-- As tabelas do modelo anterior nunca saíram da branch: dbs de dev com o shape
+-- velho perdem a cópia (o próximo ciclo reinicia do zero).
+DROP TABLE IF EXISTS preco_rede;
+DROP TABLE IF EXISTS preco_rede_cnpj;
+DROP TABLE IF EXISTS preco_tabela;
+DROP TABLE IF EXISTS preco_sync;
+
+-- Rede = estado inteiro vindo do Flow (upsert por rede_id).
+CREATE TABLE IF NOT EXISTS preco_rede_v1 (
+    rede_id TEXT PRIMARY KEY,
+    nome    TEXT NOT NULL,
+    ativa   INTEGER NOT NULL,
+    travada INTEGER NOT NULL
 );
 
--- cnpj = 8 dígitos (raiz) ou 14 (completo; vence a raiz).
-CREATE TABLE IF NOT EXISTS preco_rede_cnpj (
-    cnpj    TEXT PRIMARY KEY,
-    rede_id TEXT NOT NULL
+-- Chaves da rede: tipo 'raiz' (8 caracteres) ou 'cnpj' (14; vence a raiz).
+-- Substituídas inteiras a cada reaparição da rede.
+CREATE TABLE IF NOT EXISTS preco_rede_chave_v1 (
+    rede_id TEXT NOT NULL,
+    tipo    TEXT NOT NULL CHECK (tipo IN ('raiz', 'cnpj')),
+    chave   TEXT NOT NULL,
+    PRIMARY KEY (rede_id, tipo, chave)
 );
+CREATE INDEX IF NOT EXISTS idx_preco_rede_chave_v1 ON preco_rede_chave_v1(tipo, chave);
 
--- Datas ISO (YYYY-MM-DD); vigente_ate exclusivo; preço em centavos.
-CREATE TABLE IF NOT EXISTS preco_tabela (
-    rede_id         TEXT NOT NULL,
-    fire_produto_id TEXT NOT NULL,
-    vigente_desde   TEXT NOT NULL,
+-- Preço append-only por preco_id (nunca apagado; cancelado volta pelo mesmo id).
+-- rede_id NULL = preço base. Centavos inteiros; vigencia_inicio YYYY-MM-DD;
+-- registrado_em é o texto do Flow (comparado como instante na regra).
+CREATE TABLE IF NOT EXISTS preco_tabela_v1 (
+    preco_id        TEXT PRIMARY KEY,
+    rede_id         TEXT,
+    empresa_cnpj    TEXT NOT NULL,
+    erp_produto_id  TEXT NOT NULL,
+    unidade_erp     TEXT,
     preco_centavos  INTEGER NOT NULL,
-    vigente_ate     TEXT,
-    PRIMARY KEY (rede_id, fire_produto_id, vigente_desde)
+    vigencia_inicio TEXT NOT NULL,
+    registrado_em   TEXT NOT NULL,
+    cancelado       INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_preco_tabela_v1_produto
+    ON preco_tabela_v1(empresa_cnpj, erp_produto_id);
 
--- Um cursor por recurso do contrato (redes e preços podem andar separados).
-CREATE TABLE IF NOT EXISTS preco_sync (
-    recurso     TEXT PRIMARY KEY,
-    cursor      TEXT,
-    ultima_ok_em TEXT
+-- Um cursor só (linha única). completo_em = geradoEm da última página com
+-- temMais=false (frescor de 24 h conta daqui).
+CREATE TABLE IF NOT EXISTS preco_sync_v1 (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    empresa_cnpj TEXT,
+    cursor       TEXT,
+    completo_em  TEXT
 );
 
 -- Aprovação de preço por linha do pedido (trava de preço). A decisão vem do

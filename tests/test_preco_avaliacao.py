@@ -7,7 +7,7 @@ from app.persistence.precos_repo import Rede
 AGORA = datetime(2026, 10, 17, 12, 0, tzinfo=UTC)
 SYNC_OK = AGORA - timedelta(hours=1)
 CNPJ = "12345678000199"
-REDE = Rede(id="r1", nome="Rede X", travada=False, travada_motivo=None)
+REDE = Rede(id="r1", nome="Rede X", ativa=True, travada=False)
 
 
 def _order(precos, *, cnpj=CNPJ, issue_date=None, delivery_cnpjs=None):
@@ -78,7 +78,7 @@ def test_abaixo_vai_para_fila():
 
 
 def test_rede_travada_manda_tudo_para_fila_mesmo_igual():
-    r = Rede(id="r1", nome="X", travada=True, travada_motivo="negociando")
+    r = Rede(id="r1", nome="X", ativa=True, travada=True)
     a = _run(_order([52.00]), _check(1), tabela={"1000": 5200}, rede=r)
     assert (a.itens[0].situacao, a.itens[0].motivo) == ("fila", "rede_travada")
 

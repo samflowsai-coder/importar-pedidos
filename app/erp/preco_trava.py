@@ -16,11 +16,11 @@ de hoje (`check_order` + `is_blocking` + ack) e, em `ligado`, o avaliador puro
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
-from functools import partial
+from datetime import date, datetime
 from typing import Any
 
 import app.erp.product_check as pc
+from app.erp import preco_regra
 from app.erp.cnpj import cnpj_digits
 from app.erp.preco_avaliacao import (
     Avaliacao,
@@ -135,8 +135,11 @@ def _eh_intercompany(order: Order, entry: dict) -> bool:
     return rede is not None and rede[:8] in cnpjs_grupo()
 
 
-def _avaliar_local(order: Order, check: dict | None, entry: dict, agora: datetime) -> Avaliacao:
-    """Avalia contra a cópia local (db do ambiente ativo). Sem Fire, sem audit."""
+def _avaliar_local(
+    order: Order, check: dict | None, entry: dict, agora: datetime, env: dict | None
+) -> Avaliacao:
+    """Avalia contra a cópia local (db do ambiente ativo). Sem Fire, sem audit.
+    A empresa faturadora é o CNPJ do ambiente; sem ele, nenhum preço casa."""
     if check is None:
         return _todos(order, None, "nao_avaliado", "produto_nao_identificado")
     cnpj = _cnpj_cliente(order, entry)
@@ -144,13 +147,27 @@ def _avaliar_local(order: Order, check: dict | None, entry: dict, agora: datetim
         # Sem curto-circuito o avaliador cairia na raiz das lojas de entrega.
         return _todos(order, check, "nao_avaliado", "cliente_sem_cnpj")
     grupo = cnpjs_grupo()
+    empresa = preco_regra.normalizar_cnpj((env or {}).get("cnpj"))
     with db.connect() as conn:
+
+        def _rede(cnpj_rede: str):
+            normalizado = preco_regra.normalizar_cnpj(cnpj_rede)
+            return precos_repo.resolver_rede(conn, normalizado) if normalizado else None
+
+        def _preco(rede_id: str, produto: str, data: date) -> int | None:
+            if empresa is None:
+                return None
+            linha = precos_repo.preco_vigente(
+                conn, empresa_cnpj=empresa, rede_id=rede_id, erp_produto_id=produto, data=data
+            )
+            return linha.preco_centavos if linha else None
+
         return avaliar(
             order,
             check,
             cnpj_cliente=cnpj,
-            resolver_rede=partial(precos_repo.resolver_rede, conn),
-            preco_vigente=partial(precos_repo.preco_vigente, conn),
+            resolver_rede=_rede,
+            preco_vigente=_preco,
             cnpjs_grupo=grupo,
             ultima_sync=precos_repo.ultima_sync_ok(conn),
             agora=agora,
@@ -171,7 +188,7 @@ def avaliar_entry(
     if _modo(env) == "desligado":
         return None
     check = _com_vinculos(_check_utilizavel(entry.get("check"), order), produtos_por_item)
-    return _avaliar_local(order, check, entry, agora)
+    return _avaliar_local(order, check, entry, agora, env)
 
 
 def bloqueio_do_pedido(order: Order, entry: dict, check: dict | None) -> str | None:
@@ -363,6 +380,7 @@ def _decidir_ligado(
     ack_items: list,
     agora: datetime,
     produtos_por_item: dict[int, int] | None,
+    env: dict | None,
 ) -> DecisaoEnvio:
     check = _com_vinculos(
         _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order),
@@ -385,7 +403,7 @@ def _decidir_ligado(
                 av,
                 {},
             )
-        av = _avaliar_local(order, check, entry, agora)
+        av = _avaliar_local(order, check, entry, agora, env)
         assinaturas = assinaturas_da_avaliacao(order, av)
         with db.connect() as conn:
             aprov.substituir_obsoletas(conn, import_id, assinaturas, em=agora)
@@ -468,7 +486,9 @@ def decidir_envio(
     ack_items = entry.get("sem_preco_ack_items") or []
 
     if modo == "ligado":
-        return _decidir_ligado(import_id, order, entry, live, ack_items, agora, produtos_por_item)
+        return _decidir_ligado(
+            import_id, order, entry, live, ack_items, agora, produtos_por_item, env
+        )
 
     hoje = _regra_de_hoje(live, ack_items)
     if modo == "observando":
@@ -477,7 +497,7 @@ def decidir_envio(
                 _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order),
                 produtos_por_item,
             )
-            av = _avaliar_local(order, check, entry, agora)
+            av = _avaliar_local(order, check, entry, agora, env)
             repo.append_audit(
                 import_id,
                 "preco_observado",

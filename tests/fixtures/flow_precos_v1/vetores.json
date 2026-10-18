@@ -1,0 +1,443 @@
+{
+  "_sobre": "Vetores de teste da regra de resolução do contrato precos v1 (§5 do documento). Portal e Flow rodam os MESMOS casos: os dois lados precisam chegar à mesma rede e ao mesmo preço vigente. Datas de referência já são data civil em America/Sao_Paulo, exceto no bloco dataReferencia. Cópia literal de pcp-app docs/integrations/portal-pedidos-preco-vetores-v1.json no commit e26dcacc (branch feat/tabela-preco-por-rede); só esta nota foi acrescentada.",
+  "tabela": {
+    "redes": [
+      {
+        "tipo": "rede",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+        "nome": "Rede A",
+        "ativa": true,
+        "travada": false,
+        "raizes": [
+          "11222333"
+        ],
+        "cnpjs": []
+      },
+      {
+        "tipo": "rede",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000b",
+        "nome": "Bandeira B (sob a raiz da A)",
+        "ativa": true,
+        "travada": true,
+        "raizes": [],
+        "cnpjs": [
+          "11222333000999"
+        ]
+      },
+      {
+        "tipo": "rede",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000c",
+        "nome": "Rede C",
+        "ativa": true,
+        "travada": false,
+        "raizes": [
+          "44555666"
+        ],
+        "cnpjs": []
+      },
+      {
+        "tipo": "rede",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000d",
+        "nome": "Rede D (inativa)",
+        "ativa": false,
+        "travada": false,
+        "raizes": [
+          "77888999"
+        ],
+        "cnpjs": []
+      },
+      {
+        "tipo": "rede",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000e",
+        "nome": "Rede E (raiz alfanumérica)",
+        "ativa": true,
+        "travada": false,
+        "raizes": [
+          "12ABC345"
+        ],
+        "cnpjs": []
+      }
+    ],
+    "precos": [
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000001",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "48213",
+        "unidadeErp": "KIT",
+        "precoCentavos": 4590,
+        "vigenciaInicio": "2026-10-19",
+        "registradoEm": "2026-10-20T10:00:00.000Z",
+        "cancelado": false
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000002",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "48213",
+        "unidadeErp": "KIT",
+        "precoCentavos": 4820,
+        "vigenciaInicio": "2027-01-01",
+        "registradoEm": "2026-10-20T10:05:00.000Z",
+        "cancelado": false
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000003",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "48213",
+        "unidadeErp": "KIT",
+        "precoCentavos": 4700,
+        "vigenciaInicio": "2026-11-01",
+        "registradoEm": "2026-10-20T10:06:00.000Z",
+        "cancelado": true
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000011",
+        "redeId": null,
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "60001",
+        "unidadeErp": "KIT",
+        "precoCentavos": 3000,
+        "vigenciaInicio": "2026-10-01",
+        "registradoEm": "2026-10-01T12:00:00.000Z",
+        "cancelado": false
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000012",
+        "redeId": null,
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "60001",
+        "unidadeErp": "KIT",
+        "precoCentavos": 3100,
+        "vigenciaInicio": "2026-10-15",
+        "registradoEm": "2026-10-15T12:00:00.000Z",
+        "cancelado": false
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000013",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "60001",
+        "unidadeErp": "KIT",
+        "precoCentavos": 2900,
+        "vigenciaInicio": "2026-09-01",
+        "registradoEm": "2026-09-01T12:00:00.000Z",
+        "cancelado": false
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000021",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "70001",
+        "unidadeErp": "PACK",
+        "precoCentavos": 1990,
+        "vigenciaInicio": "2026-10-19",
+        "registradoEm": "2026-10-19T09:00:00.000Z",
+        "cancelado": false
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000022",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "70001",
+        "unidadeErp": "PACK",
+        "precoCentavos": 2050,
+        "vigenciaInicio": "2026-10-19",
+        "registradoEm": "2026-10-19T09:30:00.000Z",
+        "cancelado": false
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000031",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+        "empresaFaturadoraCnpj": "22222222000182",
+        "erpProdutoId": "48213",
+        "unidadeErp": "KIT",
+        "precoCentavos": 4390,
+        "vigenciaInicio": "2026-10-19",
+        "registradoEm": "2026-10-20T10:00:00.000Z",
+        "cancelado": false
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000041",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "80001",
+        "unidadeErp": "KIT",
+        "precoCentavos": 1100,
+        "vigenciaInicio": "2026-10-19",
+        "registradoEm": "2026-10-19T10:00:00.500Z",
+        "cancelado": false
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000042",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "80001",
+        "unidadeErp": "KIT",
+        "precoCentavos": 1000,
+        "vigenciaInicio": "2026-10-19",
+        "registradoEm": "2026-10-19T10:00:00Z",
+        "cancelado": false
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000051",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "90001",
+        "unidadeErp": "KIT",
+        "precoCentavos": 5100,
+        "vigenciaInicio": "2026-10-19",
+        "registradoEm": "2026-10-19T11:00:00.000Z",
+        "cancelado": false
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000052",
+        "redeId": null,
+        "empresaFaturadoraCnpj": "22222222000182",
+        "erpProdutoId": "90001",
+        "unidadeErp": "KIT",
+        "precoCentavos": 5200,
+        "vigenciaInicio": "2026-10-19",
+        "registradoEm": "2026-10-19T11:00:00.000Z",
+        "cancelado": false
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000061",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "90002",
+        "unidadeErp": "KIT",
+        "precoCentavos": 6100,
+        "vigenciaInicio": "2026-10-19",
+        "registradoEm": "2026-10-19T11:00:00.000Z",
+        "cancelado": false
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000063",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "90002",
+        "unidadeErp": "KIT",
+        "precoCentavos": 6300,
+        "vigenciaInicio": "2026-10-19",
+        "registradoEm": "2026-10-19T11:00:00.000Z",
+        "cancelado": false
+      },
+      {
+        "tipo": "preco",
+        "precoId": "b2b2b2b2-0000-4000-8000-000000000062",
+        "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "erpProdutoId": "90002",
+        "unidadeErp": "KIT",
+        "precoCentavos": 6200,
+        "vigenciaInicio": "2026-10-19",
+        "registradoEm": "2026-10-19T11:00:00.000Z",
+        "cancelado": false
+      }
+    ]
+  },
+  "rede": [
+    {
+      "caso": "raiz da rede A",
+      "cnpj": "11222333001288",
+      "esperadoRedeId": "a1a1a1a1-0000-4000-8000-00000000000a"
+    },
+    {
+      "caso": "CNPJ completo na bandeira B vence a raiz da A",
+      "cnpj": "11222333000999",
+      "esperadoRedeId": "a1a1a1a1-0000-4000-8000-00000000000b"
+    },
+    {
+      "caso": "raiz sem rede",
+      "cnpj": "99000111000100",
+      "esperadoRedeId": null
+    },
+    {
+      "caso": "raiz de rede inativa não casa",
+      "cnpj": "77888999000155",
+      "esperadoRedeId": null
+    },
+    {
+      "caso": "CNPJ sem exatamente 14 dígitos não tem rede, mesmo com a raiz cadastrada",
+      "cnpj": "1122233300128",
+      "esperadoRedeId": null
+    },
+    {
+      "caso": "CNPJ com máscara não é normalizado: não casa a raiz cadastrada",
+      "cnpj": "11.222.333/0012-88",
+      "esperadoRedeId": null
+    },
+    {
+      "caso": "CNPJ alfanumérico (IN RFB 2.229/2024) casa a raiz alfanumérica da rede E",
+      "cnpj": "12ABC34501DE35",
+      "esperadoRedeId": "a1a1a1a1-0000-4000-8000-00000000000e"
+    },
+    {
+      "caso": "CNPJ alfanumérico em minúsculas não é normalizado: não casa a raiz cadastrada",
+      "cnpj": "12abc34501de35",
+      "esperadoRedeId": null
+    },
+    {
+      "caso": "letra nos 2 dígitos verificadores não é CNPJ: sem rede, mesmo com a raiz cadastrada",
+      "cnpj": "12ABC34501DEA5",
+      "esperadoRedeId": null
+    }
+  ],
+  "preco": [
+    {
+      "caso": "vigente desde 19/10",
+      "empresaFaturadoraCnpj": "11111111000191",
+      "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+      "erpProdutoId": "48213",
+      "dataReferencia": "2026-10-20",
+      "esperadoPrecoId": "b2b2b2b2-0000-4000-8000-000000000001"
+    },
+    {
+      "caso": "cancelado é ignorado",
+      "empresaFaturadoraCnpj": "11111111000191",
+      "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+      "erpProdutoId": "48213",
+      "dataReferencia": "2026-11-05",
+      "esperadoPrecoId": "b2b2b2b2-0000-4000-8000-000000000001"
+    },
+    {
+      "caso": "reajuste com data futura passa a valer na data",
+      "empresaFaturadoraCnpj": "11111111000191",
+      "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+      "erpProdutoId": "48213",
+      "dataReferencia": "2027-01-01",
+      "esperadoPrecoId": "b2b2b2b2-0000-4000-8000-000000000002"
+    },
+    {
+      "caso": "antes da primeira vigência não há preço",
+      "empresaFaturadoraCnpj": "11111111000191",
+      "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+      "erpProdutoId": "48213",
+      "dataReferencia": "2026-10-18",
+      "esperadoPrecoId": null
+    },
+    {
+      "caso": "preço da rede vence o base, mesmo com o base mais novo",
+      "empresaFaturadoraCnpj": "11111111000191",
+      "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+      "erpProdutoId": "60001",
+      "dataReferencia": "2026-10-20",
+      "esperadoPrecoId": "b2b2b2b2-0000-4000-8000-000000000013"
+    },
+    {
+      "caso": "rede sem preço próprio usa o base vigente",
+      "empresaFaturadoraCnpj": "11111111000191",
+      "redeId": "a1a1a1a1-0000-4000-8000-00000000000c",
+      "erpProdutoId": "60001",
+      "dataReferencia": "2026-10-20",
+      "esperadoPrecoId": "b2b2b2b2-0000-4000-8000-000000000012"
+    },
+    {
+      "caso": "base anterior ao reajuste do base",
+      "empresaFaturadoraCnpj": "11111111000191",
+      "redeId": "a1a1a1a1-0000-4000-8000-00000000000c",
+      "erpProdutoId": "60001",
+      "dataReferencia": "2026-10-10",
+      "esperadoPrecoId": "b2b2b2b2-0000-4000-8000-000000000011"
+    },
+    {
+      "caso": "mesma vigência: o registrado por último vence",
+      "empresaFaturadoraCnpj": "11111111000191",
+      "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+      "erpProdutoId": "70001",
+      "dataReferencia": "2026-10-20",
+      "esperadoPrecoId": "b2b2b2b2-0000-4000-8000-000000000022"
+    },
+    {
+      "caso": "produto sem preço em lugar nenhum",
+      "empresaFaturadoraCnpj": "11111111000191",
+      "redeId": "a1a1a1a1-0000-4000-8000-00000000000c",
+      "erpProdutoId": "99999",
+      "dataReferencia": "2026-10-20",
+      "esperadoPrecoId": null
+    },
+    {
+      "caso": "cada empresa tem o seu preço para a mesma rede e produto",
+      "empresaFaturadoraCnpj": "22222222000182",
+      "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+      "erpProdutoId": "48213",
+      "dataReferencia": "2026-10-20",
+      "esperadoPrecoId": "b2b2b2b2-0000-4000-8000-000000000031"
+    },
+    {
+      "caso": "sem herança entre empresas: Nasmar sem preço não usa o da MM nem o base da MM",
+      "empresaFaturadoraCnpj": "22222222000182",
+      "redeId": "a1a1a1a1-0000-4000-8000-00000000000c",
+      "erpProdutoId": "60001",
+      "dataReferencia": "2026-10-20",
+      "esperadoPrecoId": null
+    },
+    {
+      "caso": "mesma vigência e registradoEm de milissegundos diferentes: compara como instante, não como texto",
+      "empresaFaturadoraCnpj": "11111111000191",
+      "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+      "erpProdutoId": "80001",
+      "dataReferencia": "2026-10-20",
+      "esperadoPrecoId": "b2b2b2b2-0000-4000-8000-000000000041"
+    },
+    {
+      "caso": "o filtro de empresa vem antes de rede-vence-base: a Nasmar usa o próprio base, não fica sem preço porque a rede tem preço na MM",
+      "empresaFaturadoraCnpj": "22222222000182",
+      "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+      "erpProdutoId": "90001",
+      "dataReferencia": "2026-10-20",
+      "esperadoPrecoId": "b2b2b2b2-0000-4000-8000-000000000052"
+    },
+    {
+      "caso": "preço da rede na MM e base só da Nasmar: rede C na MM não herda o base da Nasmar",
+      "empresaFaturadoraCnpj": "11111111000191",
+      "redeId": "a1a1a1a1-0000-4000-8000-00000000000c",
+      "erpProdutoId": "90001",
+      "dataReferencia": "2026-10-20",
+      "esperadoPrecoId": null
+    },
+    {
+      "caso": "empate total de vigência e registradoEm: maior precoId vence, mesmo no meio da lista",
+      "empresaFaturadoraCnpj": "11111111000191",
+      "redeId": "a1a1a1a1-0000-4000-8000-00000000000a",
+      "erpProdutoId": "90002",
+      "dataReferencia": "2026-10-20",
+      "esperadoPrecoId": "b2b2b2b2-0000-4000-8000-000000000063"
+    }
+  ],
+  "dataReferencia": [
+    {
+      "caso": "emissão vale, em horário de São Paulo",
+      "emitidoEm": "2026-10-20T01:30:00.000Z",
+      "recebidoEm": "2026-10-20T12:00:00.000Z",
+      "esperado": "2026-10-19"
+    },
+    {
+      "caso": "sem emissão, vale o recebimento",
+      "emitidoEm": null,
+      "recebidoEm": "2026-10-20T12:00:00.000Z",
+      "esperado": "2026-10-20"
+    }
+  ],
+  "_empresas": {
+    "MM (fictício)": "11111111000191",
+    "Nasmar (fictício)": "22222222000182"
+  }
+}
