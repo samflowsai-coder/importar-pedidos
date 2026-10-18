@@ -159,6 +159,7 @@ def _check_para_preco(
     live: dict | None,
     env: dict | None,
     produtos_por_item: dict[int, int] | None = None,
+    grupo: set[str] | None = None,
 ) -> dict | None:
     """Check cujo `fire_product_id`/`fire_unidade` a trava avalia e manda no corpo.
     Sem fonte (ou fonte = o próprio) ou pedido intercompany (fora da trava, não
@@ -166,7 +167,7 @@ def _check_para_preco(
     Com fonte: o check do Fire da fonte, sem fallback para check salvo (fonte
     fora → bloqueia) e SEM os vínculos do ambiente, que são SEQs do Fire dele."""
     fonte = _fonte(env)
-    if fonte is None or _eh_intercompany(order, entry):
+    if fonte is None or _eh_intercompany(order, entry, grupo):
         return _com_vinculos(
             _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order),
             produtos_por_item,
@@ -175,13 +176,17 @@ def _check_para_preco(
 
 
 def _check_salvo_para_preco(
-    entry: dict, order: Order, env: dict | None, produtos_por_item: dict[int, int] | None
+    entry: dict,
+    order: Order,
+    env: dict | None,
+    produtos_por_item: dict[int, int] | None,
+    grupo: set[str] | None = None,
 ) -> dict | None:
     """O mesmo do `_check_para_preco` para o preview, só com o que está salvo:
     com fonte, `entry["check_preco"]` (gravado no commit e no vínculo) — e só
     se foi gerado por essa mesma fonte; de outra fonte = sem avaliação."""
     fonte = _fonte(env)
-    if fonte is None or _eh_intercompany(order, entry):
+    if fonte is None or _eh_intercompany(order, entry, grupo):
         return _com_vinculos(_check_utilizavel(entry.get("check"), order), produtos_por_item)
     salvo = entry.get("check_preco")
     if not salvo or salvo.get("preco_fonte_slug") != fonte:
@@ -242,15 +247,21 @@ def _cnpj_cliente(order: Order, entry: dict) -> str | None:
     return order.header.customer_cnpj
 
 
-def _eh_intercompany(order: Order, entry: dict) -> bool:
+def _eh_intercompany(order: Order, entry: dict, grupo: set[str] | None = None) -> bool:
+    """`grupo`: o `cnpjs_grupo()` já calculado nesta chamada do portão (None = calcula)."""
     if entry.get("cliente_override_codigo") is not None and _cnpj_cliente(order, entry) is None:
         return False
     rede = cnpj_da_rede(order, _cnpj_cliente(order, entry))
-    return rede is not None and rede[:8] in cnpjs_grupo()
+    return rede is not None and rede[:8] in (cnpjs_grupo() if grupo is None else grupo)
 
 
 def _avaliar_local(
-    order: Order, check: dict | None, entry: dict, agora: datetime, env: dict | None
+    order: Order,
+    check: dict | None,
+    entry: dict,
+    agora: datetime,
+    env: dict | None,
+    grupo: set[str] | None = None,
 ) -> Avaliacao:
     """Avalia contra a cópia local (db do ambiente ativo). Sem Fire, sem audit.
     A empresa faturadora é o CNPJ do ambiente; sem ele, tudo `nao_avaliado`."""
@@ -264,7 +275,8 @@ def _avaliar_local(
     if empresa is None:
         # Sem empresa faturadora nenhum preço é da empresa: bloqueia, sem fila.
         return _todos(order, check, "nao_avaliado", "empresa_sem_cnpj")
-    grupo = cnpjs_grupo()
+    if grupo is None:
+        grupo = cnpjs_grupo()
     with db.connect() as conn:
 
         def _rede(cnpj_rede: str):
@@ -296,21 +308,24 @@ def avaliar_entry(
     env: dict | None,
     agora: datetime,
     produtos_por_item: dict[int, int] | None = None,
+    grupo: set[str] | None = None,
 ) -> Avaliacao | None:
     """Avaliação para o preview: só `entry["check"]` e a cópia local; sem I/O
     no Fire, sem audit e sem pendência. `desligado` → None.
     `produtos_por_item`: SEQ do vínculo de-para por item (o mesmo do envio)."""
     if _modo(env) == "desligado":
         return None
-    check = _check_salvo_para_preco(entry, order, env, produtos_por_item)
-    return _avaliar_local(order, check, entry, agora, env)
+    check = _check_salvo_para_preco(entry, order, env, produtos_por_item, grupo)
+    return _avaliar_local(order, check, entry, agora, env, grupo)
 
 
-def bloqueio_do_pedido(order: Order, entry: dict, check: dict | None) -> str | None:
+def bloqueio_do_pedido(
+    order: Order, entry: dict, check: dict | None, grupo: set[str] | None = None
+) -> str | None:
     """Bloqueio de nível de pedido (antes de olhar item): texto do portão ou None."""
     if not order.items:
         return "Pedido sem itens: nada para avaliar."
-    if check is None and _eh_intercompany(order, entry):
+    if check is None and _eh_intercompany(order, entry, grupo):
         return "Pedido intercompany: não foi possível checar no Fire agora; tente de novo."
     return None
 
@@ -584,11 +599,16 @@ def preview_preco(
     """Bloco `preco` do preview: estado por item, igual ao que o portão decidiria
     (mesmo `classificar_itens` e a mesma leitura da revisão). Só leitura: sem
     Fire, sem audit, nunca cria nem retira revisão. `desligado` → None."""
+    if _modo(env) == "desligado":
+        return None
+    grupo = cnpjs_grupo()  # uma vez por chamada
     check = _check_utilizavel(entry.get("check"), order)
-    av = avaliar_entry(entry, order, env=env, agora=agora, produtos_por_item=produtos_por_item)
+    av = avaliar_entry(
+        entry, order, env=env, agora=agora, produtos_por_item=produtos_por_item, grupo=grupo
+    )
     if av is None:
         return None
-    bloqueio = bloqueio_do_pedido(order, entry, check)
+    bloqueio = bloqueio_do_pedido(order, entry, check, grupo)
     revisao, decisoes = None, {}
     if _modo(env) == "ligado" and bloqueio is None and _vai_ao_flow(av):
         with db.connect() as conn:
@@ -816,12 +836,13 @@ def _decidir_ligado(
     decisoes: dict[str, dict[str, Any]] = {}
     erro_anterior: str | None = None
     try:
+        grupo = cnpjs_grupo()  # uma vez por chamada do portão
         # Bloqueio de nível de pedido nunca toca revisão nem decisão: erro de
         # configuração ou Fire fora não pode invalidar decisão já dada.
-        bloqueio = bloqueio_do_pedido(order, entry, check_hoje)
+        bloqueio = bloqueio_do_pedido(order, entry, check_hoje, grupo)
         if bloqueio is not None:
             return _bloqueio_trava("preco_nao_avaliado", bloqueio, vazio, {})
-        check = _check_para_preco(order, entry, live, env, produtos_por_item)
+        check = _check_para_preco(order, entry, live, env, produtos_por_item, grupo)
         if check is None:
             av = _todos(order, None, "nao_avaliado", "produto_nao_identificado")
             return _bloqueio_trava(
@@ -831,7 +852,7 @@ def _decidir_ligado(
                 av,
                 {},
             )
-        av = _avaliar_local(order, check, entry, agora, env)
+        av = _avaliar_local(order, check, entry, agora, env, grupo)
         if any(it.situacao == "fora_intercompany" for it in av.itens):
             # Fora da trava agora (override para empresa do grupo): sai da fila do Flow.
             with db.connect() as conn:
@@ -941,8 +962,9 @@ def decidir_envio(
     hoje = _regra_de_hoje(live, ack_items)
     if modo == "observando":
         try:
-            check = _check_para_preco(order, entry, live, env, produtos_por_item)
-            av = _avaliar_local(order, check, entry, agora, env)
+            grupo = cnpjs_grupo()  # uma vez por chamada do portão
+            check = _check_para_preco(order, entry, live, env, produtos_por_item, grupo)
+            av = _avaliar_local(order, check, entry, agora, env, grupo)
             repo.append_audit(
                 import_id,
                 "preco_observado",

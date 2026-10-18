@@ -365,3 +365,60 @@ def test_contagem_por_situacao(conn):
         "bloqueada_local": 1,
         "recusada_flow": 1,
     }
+
+
+def test_pendentes_envio_quem_ja_tentou_vai_para_o_fim(conn):
+    rev.garantir_revisao(conn, "imp-a", _corpo(), "sha256:a", agora=AGORA)
+    rev.garantir_revisao(conn, "imp-b", _corpo(), "sha256:b", agora=AGORA + timedelta(seconds=1))
+    assert [p["import_id"] for p in rev.pendentes_envio(conn, 10)] == ["imp-a", "imp-b"]
+    rev.marcar_tentada(conn, "imp-a", 1, em=AGORA + timedelta(seconds=2))
+    assert [p["import_id"] for p in rev.pendentes_envio(conn, 1)] == ["imp-b"]
+
+
+def test_marcar_tentada_atualiza_a_hora_a_cada_tentativa(conn):
+    rev.garantir_revisao(conn, "imp-a", _corpo(), "sha256:a", agora=AGORA)
+    rev.garantir_revisao(conn, "imp-b", _corpo(), "sha256:b", agora=AGORA)
+    rev.marcar_tentada(conn, "imp-a", 1, em=AGORA)
+    rev.marcar_tentada(conn, "imp-b", 1, em=AGORA + timedelta(seconds=1))
+    rev.marcar_tentada(conn, "imp-a", 1, em=AGORA + timedelta(seconds=2))
+    assert [p["import_id"] for p in rev.pendentes_envio(conn, 10)] == ["imp-b", "imp-a"]
+
+
+def test_retiradas_pendentes_as_presas_vao_para_o_fim(conn):
+    for imp in ("imp-a", "imp-b"):
+        rev.garantir_revisao(conn, imp, _corpo(), "sha256:a", agora=AGORA)
+        rev.marcar_tentada(conn, imp, 1, em=AGORA)
+        rev.retirar(conn, imp, "cancelado", em=AGORA)
+    assert [p["import_id"] for p in rev.retiradas_pendentes(conn, 1)] == ["imp-a"]
+    assert [
+        p["import_id"] for p in rev.retiradas_pendentes(conn, 1, por_ultimo={("imp-a", 1)})
+    ] == ["imp-b"]
+    assert [
+        p["import_id"] for p in rev.retiradas_pendentes(conn, 10, por_ultimo={("imp-a", 1)})
+    ] == ["imp-b", "imp-a"]
+
+
+@pytest.fixture
+def avisos():
+    from app.utils.logger import logger
+
+    msgs: list[str] = []
+    sink = logger.add(lambda m: msgs.append(str(m)), level="WARNING")
+    yield msgs
+    logger.remove(sink)
+
+
+def test_decisao_de_revisao_acima_da_local_avisa_uma_vez(conn, avisos):
+    rev.garantir_revisao(conn, IMP, _corpo(), "sha256:a", agora=AGORA)
+    assert rev.gravar_decisao(conn, _decisao("d3", 3), agora=AGORA) == "descartada"
+    assert rev.gravar_decisao(conn, _decisao("d3", 3), agora=DEPOIS) == "descartada"
+    linhas = [m for m in avisos if "backup" in m]
+    assert len(linhas) == 1
+    assert IMP in linhas[0] and "3" in linhas[0] and "1" in linhas[0]
+
+
+def test_decisao_de_revisao_velha_nao_avisa_restore(conn, avisos):
+    rev.garantir_revisao(conn, IMP, _corpo("a"), "sha256:a", agora=AGORA)
+    rev.garantir_revisao(conn, IMP, _corpo("b"), "sha256:b", agora=AGORA)
+    assert rev.gravar_decisao(conn, _decisao("d1", 1), agora=AGORA) == "descartada"
+    assert [m for m in avisos if "backup" in m] == []

@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     import sqlite3
+    from collections.abc import Collection
 
 _ATIVAS = ("pendente_envio", "enviada", "recusada_flow")
 _ATIVAS_SQL = "('pendente_envio', 'enviada', 'recusada_flow')"
@@ -146,14 +147,15 @@ def subir_piso(
 
 def pendentes_envio(conn: sqlite3.Connection, limite: int) -> list[dict[str, Any]]:
     """Só a vigente de cada pedido, em `pendente_envio` (pedido retirado não
-    tem vigente). Mais antigas primeiro."""
+    tem vigente). Em rotação: pela última tentativa (`tentada_em`) ou, nunca
+    tentada, pela criação; quem acabou de falhar vai para o fim."""
     rows = conn.execute(
         """
         SELECT r.* FROM preco_revisao r
          WHERE r.situacao = 'pendente_envio' AND r.bloqueio_local IS NULL
            AND r.revisao = (SELECT MAX(r2.revisao) FROM preco_revisao r2
                              WHERE r2.import_id = r.import_id)
-         ORDER BY r.criado_em, r.import_id
+         ORDER BY COALESCE(r.tentada_em, r.criado_em), r.import_id
          LIMIT ?
         """,
         (limite,),
@@ -163,11 +165,12 @@ def pendentes_envio(conn: sqlite3.Connection, limite: int) -> list[dict[str, Any
 
 def marcar_tentada(conn: sqlite3.Connection, import_id: str, revisao: int, *, em: datetime) -> bool:
     """Chamar logo ANTES do POST da rota (b). Marca a revisão como possivelmente
-    conhecida pelo Flow (resposta perdida, timeout). False = ela não está mais
-    em `pendente_envio` (substituída ou retirada): não enviar."""
+    conhecida pelo Flow (resposta perdida, timeout) e guarda a hora da última
+    tentativa (rotação da fila). False = ela não está mais em `pendente_envio`
+    (substituída ou retirada): não enviar."""
     with conn:
         cur = conn.execute(
-            "UPDATE preco_revisao SET tentada_em = COALESCE(tentada_em, ?)"
+            "UPDATE preco_revisao SET tentada_em = ?"
             " WHERE import_id = ? AND revisao = ? AND situacao = 'pendente_envio'",
             (em.isoformat(), import_id, revisao),
         )
@@ -291,6 +294,16 @@ def gravar_decisao(
         if row is not None:
             return row[0]
         atual = vigente(conn, d["externalId"])
+        maior = _maior(conn, d["externalId"])
+        if int(d["revisao"]) > maior:
+            from app.utils.logger import logger
+
+            # O Portal nunca criou essa revisão: sinal de restore de backup do SQLite.
+            logger.warning(
+                f"decisão de preço {d['decisaoId']} da revisão {d['revisao']} acima da maior "
+                f"revisão local ({maior}) de {d['externalId']}: descartada; o banco do "
+                "ambiente pode ter voltado de um backup"
+            )
         confirmacao: Literal["aplicada", "descartada"] = (
             "aplicada"
             if atual is not None and int(atual["revisao"]) == int(d["revisao"])
@@ -410,12 +423,21 @@ def retirar(conn: sqlite3.Connection, import_id: str, motivo: str, *, em: dateti
         )
 
 
-def retiradas_pendentes(conn: sqlite3.Connection, limite: int) -> list[dict[str, Any]]:
+def retiradas_pendentes(
+    conn: sqlite3.Connection, limite: int, por_ultimo: Collection[tuple[str, int]] = ()
+) -> list[dict[str, Any]]:
     """Retiradas a enviar: a última revisão que o Flow pode conhecer, `retirada` e
     ainda não avisada, sem revisão ativa mais nova (pedido reaberto: a revisão
     nova já substitui a velha no Flow). A retirada mira a última revisão
     conhecida pelo Flow; na 7.4, 409 `revisao_obsoleta` → reenviar com
-    `details.revisaoVigente`; 200 com `aprovacaoId` nulo → feita."""
+    `details.revisaoVigente`; 200 com `aprovacaoId` nulo → feita.
+    `por_ultimo`: (import_id, revisao) presas, que vão para o fim da fila."""
+    presas = list(por_ultimo)
+    fim = (
+        f"(r.import_id, r.revisao) IN (VALUES {', '.join(['(?, ?)'] * len(presas))}), "
+        if presas
+        else ""
+    )
     rows = conn.execute(
         f"""
         SELECT r.* FROM preco_revisao r
@@ -428,10 +450,10 @@ def retiradas_pendentes(conn: sqlite3.Connection, limite: int) -> list[dict[str,
            AND NOT EXISTS (SELECT 1 FROM preco_revisao r3
                             WHERE r3.import_id = r.import_id AND r3.revisao > r.revisao
                               AND r3.situacao IN {_ATIVAS_SQL})
-         ORDER BY r.retirada_em, r.import_id
+         ORDER BY {fim}r.retirada_em, r.import_id
          LIMIT ?
-        """,  # noqa: S608 — constante
-        (limite,),
+        """,  # noqa: S608 — constante e marcadores
+        (*(v for p in presas for v in p), limite),
     ).fetchall()
     return [_linha(r) for r in rows]
 

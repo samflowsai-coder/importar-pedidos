@@ -559,6 +559,79 @@ def test_503_continua_pendente_e_tenta_de_novo_no_proximo_ciclo(mm, flow):
     assert _situacoes() == [(1, "enviada")]
 
 
+def _preso(*presos, status=500):
+    """Resposta da rota (b): `status` para os externalIds presos, 201 para os outros."""
+
+    def _r(c):
+        if c["externalId"] in presos:
+            return _erro(status, "erro_interno")
+        return _resposta(c["revisao"], external=c["externalId"])
+
+    return [_r] * 100
+
+
+def test_500_num_pedido_nao_para_os_outros_nem_retiradas_nem_decisoes(mm, flow):
+    _revisao(external="imp-velho")
+    precos.rodar(AGORA)
+    with router.env_connect("mm") as conn:
+        revs.retirar(conn, "imp-velho", "pedido cancelado no Portal", em=AGORA)
+    _revisao(external="imp-a")
+    _revisao(external="imp-b")
+    flow.aprovacao = _preso("imp-a")
+    n_dec = flow.rotas().count("decisoes")
+    precos.rodar(AGORA + timedelta(seconds=31))
+    pedidos = [c["externalId"] for c in flow.de("aprovacao") if c["tipo"] == "pedido"]
+    assert pedidos[-2:] == ["imp-a", "imp-b"]
+    assert _situacoes(external="imp-a") == [(1, "pendente_envio")]
+    assert _situacoes(external="imp-b") == [(1, "enviada")]
+    assert [c["tipo"] for c in flow.de("aprovacao")][-1] == "retirada"
+    assert flow.rotas().count("decisoes") == n_dec + 1
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_429_e_503_param_o_envio_desta_volta(mm, flow, status):
+    _revisao(external="imp-a")
+    _revisao(external="imp-b")
+    flow.aprovacao = _preso("imp-a", status=status)
+    precos.rodar(AGORA)
+    assert [c["externalId"] for c in flow.de("aprovacao")] == ["imp-a"]
+    assert flow.rotas().count("decisoes") == 1
+
+
+def test_pedido_preso_vai_para_o_fim_da_fila(mm, flow, monkeypatch):
+    monkeypatch.setattr(precos, "LOTE_ENVIO", 1)
+    _revisao(external="imp-a")
+    _revisao(external="imp-b")
+    flow.aprovacao = _preso("imp-a")
+    for i in range(3):
+        precos.rodar(AGORA + timedelta(seconds=31 * i))
+    assert _situacoes(external="imp-b") == [(1, "enviada")]
+
+
+def test_retirada_presa_nao_impede_a_seguinte(mm, flow, monkeypatch):
+    for imp in ("imp-a", "imp-b"):
+        _revisao(external=imp)
+    precos.rodar(AGORA)
+    with router.env_connect("mm") as conn:
+        for imp in ("imp-a", "imp-b"):
+            revs.retirar(conn, imp, "pedido cancelado no Portal", em=AGORA)
+    monkeypatch.setattr(precos, "LOTE_ENVIO", 1)
+    flow.aprovacao = _preso("imp-a")
+    for i in range(1, 4):
+        precos.rodar(AGORA + timedelta(seconds=31 * i))
+    assert _linha(1, external="imp-a")["retirada_enviada_em"] is None
+    assert _linha(1, external="imp-b")["retirada_enviada_em"] is not None
+
+
+def test_revisao_com_mais_de_5_tentativas_avisa_uma_vez(mm, flow, logs):
+    _revisao(external="imp-a")
+    flow.aprovacao = _preso("imp-a")
+    for i in range(8):
+        precos.rodar(AGORA + timedelta(seconds=31 * i))
+    avisos = [m for m in logs if "imp-a/1" in m and "tentativas" in m]
+    assert len(avisos) == 1
+
+
 def test_erro_de_rede_e_transitorio(mm, flow):
     _revisao()
     flow.aprovacao = [FlowPCPClientError("conexão recusada", status_code=None)]
