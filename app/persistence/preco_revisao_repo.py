@@ -224,11 +224,13 @@ def marcar_enviada(
 def marcar_recusa_flow(
     conn: sqlite3.Connection, import_id: str, revisao: int, erro: str, *, em: datetime
 ) -> None:
-    """422 da rota (b): recusa definitiva daquela revisão (só de `pendente_envio`)."""
+    """422 da rota (b): recusa definitiva daquela revisão (só de `pendente_envio`).
+    O Flow não guardou essa revisão: `tentada_em` é limpo, para a retirada
+    mirar a última revisão que ele de fato tem."""
     with conn:
         conn.execute(
             "UPDATE preco_revisao SET situacao = 'recusada_flow', erro_definitivo = ?,"
-            " resposta_json = ?"
+            " resposta_json = ?, tentada_em = NULL"
             " WHERE import_id = ? AND revisao = ? AND situacao = 'pendente_envio'",
             (
                 erro,
@@ -351,7 +353,9 @@ def retirar(conn: sqlite3.Connection, import_id: str, motivo: str, *, em: dateti
     Flow só para a última revisão que ele pode conhecer (`enviada_em` ou
     `tentada_em`), mesmo que ela já estivesse substituída aqui. Nunca tentada
     → nada vai ao Flow.
-    Idempotente."""
+    Idempotente. A retirada mira a última revisão conhecida pelo Flow; na 7.4,
+    409 `revisao_obsoleta` na retirada → reenviar com `details.revisaoVigente`,
+    e 200 com `aprovacaoId` nulo (externalId desconhecido) → dar como feita."""
     with conn:
         conn.execute(
             f"UPDATE preco_revisao SET situacao = 'retirada', retirada_em = ?,"  # noqa: S608
@@ -372,7 +376,9 @@ def retirar(conn: sqlite3.Connection, import_id: str, motivo: str, *, em: dateti
 def retiradas_pendentes(conn: sqlite3.Connection, limite: int) -> list[dict[str, Any]]:
     """Retiradas a enviar: a última revisão que o Flow pode conhecer, `retirada` e
     ainda não avisada, sem revisão ativa mais nova (pedido reaberto: a revisão
-    nova já substitui a velha no Flow)."""
+    nova já substitui a velha no Flow). A retirada mira a última revisão
+    conhecida pelo Flow; na 7.4, 409 `revisao_obsoleta` → reenviar com
+    `details.revisaoVigente`; 200 com `aprovacaoId` nulo → feita."""
     rows = conn.execute(
         f"""
         SELECT r.* FROM preco_revisao r

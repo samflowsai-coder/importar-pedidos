@@ -571,12 +571,16 @@ chama `aplicar_precos(order, precos_aplicar)` antes de exportar e `registrar_apl
   (vai a **todo** item, Fire e XLSX, via `precos_aplicar`; `aplicados[].flow_id` =
   `decisaoId`), sem decisão→aguardando; revisão `recusada_flow`→todos recusados. No portão,
   a vigente `recusada_flow` dá lugar à revisão seguinte com o mesmo corpo (novo envio).
-- `retirar` (cancel, reimport dos mesmos bytes por `imports.file_sha256`, fila zerada,
-  intercompany): ativas viram `retirada`; a retirada vai ao Flow só para a última revisão que
+- `retirar` (cancel, reimport dos mesmos bytes por `imports.file_sha256` — ou, para a
+  entrada de um reimport anterior, que não grava sha, `file_sha256 IS NULL` + o mesmo nome —,
+  fila zerada, intercompany): ativas viram `retirada`; a retirada vai ao Flow só para a última revisão que
   ele pode conhecer (`enviada_em` ou `tentada_em`; `marcar_tentada` roda logo antes do POST e
   devolve False se a revisão não está mais `pendente_envio`). `marcar_enviada` grava
   `enviada_em` mesmo em revisão já substituída, mas só muda a situação de `pendente_envio`;
   se o pedido já foi retirado, a revisão que chegou vira a retirada pendente.
+  `marcar_recusa_flow` (422) limpa `tentada_em`: o Flow não guardou a revisão. Na 7.4, 409
+  `revisao_obsoleta` na retirada → reenviar com `details.revisaoVigente`; 200 com
+  `aprovacaoId` nulo → retirada feita.
 - `gravar_decisao` descarta (com log) decisão cujo `erpProdutoId`/`itemChave` ou
   `empresaFaturadoraCnpj` não bate com o corpo da revisão vigente.
 - Corpo: `externalId` = `import_id`; `empresaFaturadoraCnpj` = `environments.cnpj`

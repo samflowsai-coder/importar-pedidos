@@ -2767,6 +2767,49 @@ def test_reimport_retira_a_revisao_do_pedido_antigo(monkeypatch, tmp_path):
     ]
 
 
+def test_reimport_em_cadeia_retira_o_reimport_anterior(monkeypatch, tmp_path):
+    import hashlib
+    import shutil
+    import uuid
+
+    from app import config as app_config
+    from app.persistence import preco_revisao_repo as revs
+
+    pdf = SAMPLES / "2600009562-2026-02-25.pdf"
+    if not pdf.exists():
+        pytest.skip("Sample PDF not available")
+    env = _env_trava_ligada(tmp_path)
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx"},
+    )
+    imp = tmp_path / "in" / "Pedidos importados"
+    imp.mkdir(parents=True)
+    shutil.copy(pdf, imp / pdf.name)
+    original = str(uuid.uuid4())
+    sha = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    _import_parsed(original, source_filename=f"20261017-1015_{pdf.name}", file_sha256=sha)
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r1 = client.post("/api/reimport", json={"filename": pdf.name})
+        assert r1.status_code == 200, r1.text
+        reimport_1 = r1.json()["entry_id"]
+        _revisao_enviada(reimport_1)  # sem file_sha256: casa pelo nome guardado
+        r2 = client.post("/api/reimport", json={"filename": pdf.name})
+    finally:
+        client.cookies.clear()
+
+    assert r2.status_code == 200, r2.text
+    reimport_2 = r2.json()["entry_id"]
+    with db.connect() as conn:
+        assert revs.vigente(conn, reimport_1) is None
+        pend = revs.retiradas_pendentes(conn, 10)
+    assert [p["import_id"] for p in pend] == [reimport_1]
+    assert reimport_2 not in {p["import_id"] for p in pend}
+
+
 # ── Trava de preço (preco_trava.decidir_envio) nos dois caminhos de envio ─────
 
 

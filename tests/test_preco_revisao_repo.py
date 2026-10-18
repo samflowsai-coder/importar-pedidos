@@ -305,3 +305,19 @@ def test_empate_de_decidido_em_vence_o_maior_decisao_id(conn):
     rev.gravar_decisao(conn, _decisao("d-b", 1, preco=5500), agora=AGORA)
     rev.gravar_decisao(conn, _decisao("d-0", 1, preco=5300), agora=AGORA)
     assert rev.decisoes_da_vigente(conn, IMP)[f"{IMP}:0"]["decisao_id"] == "d-b"
+
+
+# ── Fix round 2 ──────────────────────────────────────────────────────────────
+
+
+def test_422_limpa_tentada_e_cancel_retira_a_que_o_flow_guarda(conn):
+    rev.garantir_revisao(conn, IMP, _corpo("a"), "sha256:a", agora=AGORA)
+    rev.marcar_tentada(conn, IMP, 1, em=AGORA)
+    rev.marcar_enviada(conn, IMP, 1, {}, em=AGORA)
+    rev.garantir_revisao(conn, IMP, _corpo("b"), "sha256:b", agora=AGORA)
+    rev.marcar_tentada(conn, IMP, 2, em=AGORA)
+    rev.marcar_recusa_flow(conn, IMP, 2, "produto_desconhecido", em=AGORA)
+
+    rev.retirar(conn, IMP, "cancelado", em=DEPOIS)
+
+    assert [p["revisao"] for p in rev.retiradas_pendentes(conn, 10)] == [1]

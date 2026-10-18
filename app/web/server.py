@@ -1690,8 +1690,10 @@ def _retirar_preco_do_reimportado(src: Path, novo_id: str) -> None:
     """O reimport cria `import_id` novo: as importações anteriores dos MESMOS
     bytes (`imports.file_sha256`; o nome não serve, homônimo é outro arquivo e
     o nome muda com o carimbo), ainda fora do Fire, saem da fila de aprovação
-    de preço do Flow (contrato precos v1 §4.3). Sem sha, nada é retirado.
-    Sem revisão é no-op. Nunca derruba o reimport."""
+    de preço do Flow (contrato precos v1 §4.3). A entrada de um reimport não
+    grava sha (o sinal de duplicata de `leituras` depende disso): ela casa por
+    `file_sha256 IS NULL` + o nome do arquivo reimportado. Sem sha do
+    arquivo, nada é retirado. Sem revisão é no-op. Nunca derruba o reimport."""
     from app.utils.logger import logger
 
     try:
@@ -1710,9 +1712,11 @@ def _retirar_preco_do_reimportado(src: Path, novo_id: str) -> None:
             antigos = [
                 r[0]
                 for r in conn.execute(
-                    "SELECT id FROM imports WHERE file_sha256 = ? AND id != ?"
+                    "SELECT id FROM imports"
+                    " WHERE (file_sha256 = ? OR (file_sha256 IS NULL AND source_filename = ?))"
+                    " AND id != ?"
                     " AND COALESCE(portal_status, '') NOT IN ('sent_to_fire', 'found_in_fire')",
-                    (sha, novo_id),
+                    (sha, src.name, novo_id),
                 )
             ]
             for antigo in antigos:
