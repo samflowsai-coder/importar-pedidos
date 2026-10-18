@@ -599,3 +599,12 @@ def test_listar_por_estado_limite_e_so_com_seq(conn):
         _forcar(conn, f"c{i}", "transitorio", seq=100 + i if i else None)
     assert len(repo.listar_por_estado(conn, "transitorio", limite=2)) == 2
     assert {x["cadastro_id"] for x in repo.listar_por_estado(conn, "transitorio", so_com_seq=True)} == {"c1", "c2"}
+
+
+def test_contar_e_recentes_de_transitorios_com_seq(conn):
+    for i, ini in enumerate(["2026-10-17 12:00:00", "2026-10-17 12:50:00", "2026-10-17 12:55:00"]):
+        _reservar(conn, f"c{i}", produto=f"p{i}")
+        _forcar(conn, f"c{i}", "transitorio", seq=100 + i if i != 2 else None)
+        conn.execute("UPDATE cadastro_volta SET iniciado_em = ? WHERE cadastro_id = ?", (ini, f"c{i}"))
+    assert repo.contar_transitorios_com_seq(conn) == 2
+    assert repo.transitorios_com_seq_recentes(conn, "2026-10-17 12:30:00") == {("c1", 1)}

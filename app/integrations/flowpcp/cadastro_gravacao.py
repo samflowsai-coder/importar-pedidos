@@ -619,11 +619,12 @@ def atualizar_sem_volta(slug: str, env_conn) -> None:
 def _aguardando_modo(slug: str, m: str, client) -> int | None:
     """Itens aprovados que este modo não grava, lidos sem reservar (Emenda 1, I9).
     Aproximado: em `criar` entra o `atualizar` derivado de `criar`, que este modo grava.
-    `None` quando o Flow não respondeu; o ciclo segue."""
+    `None` quando não há contagem: o Flow não respondeu ou o portão de inativar está ligado
+    em `criar_e_atualizar` (este modo consome tudo e nada fica aguardando); o ciclo segue."""
     consumidas = cv._acoes(slug, m)
     nao_consumidas = tuple(a for a in ("criar", "atualizar", "inativar") if a not in consumidas)
     if not nao_consumidas:
-        return 0
+        return None
     try:
         resp = client.list_cadastros_pendentes(
             limite=cv.LIMITE_FILA, acoes=nao_consumidas, simular=True
@@ -655,16 +656,20 @@ def _processar_gravacao(slug: str, m: str, client, env_conn, fire_conn, *,
                         relogio: Callable[[], datetime]) -> dict:
     inicio = relogio()
     recuperacao = _recuperar(slug, env_conn, fire_conn, inicio)
+    # Antes do GET que reserva: é só uma contagem e não pode comer a janela da reserva.
+    aguardando = _aguardando_modo(slug, m, client)
+    cv.publicar_aguardando_modo(slug, aguardando)
     try:
         resp = client.list_cadastros_pendentes(limite=cv.LIMITE_GRAVACAO, acoes=cv._acoes(slug, m))
     except ValueError as exc:  # JSON ou envelope inválido
         logger.error(f"flowpcp.cadastro_volta env={slug}: resposta da fila inválida: "
                      f"{type(exc).__name__}")
-        return {"modo": m, "erro_transitorio": "resposta_invalida"}
+        return {"modo": m, "erro_transitorio": "resposta_invalida", "aguardando_modo": aguardando}
     except Exception as exc:  # noqa: BLE001 — Flow fora não derruba o ciclo
         logger.error(f"flowpcp.cadastro_volta env={slug}: leitura da fila falhou: "
                      f"{type(exc).__name__}")
-        return {"modo": m, "erro_transitorio": f"fila do Flow: {type(exc).__name__}"}
+        return {"modo": m, "erro_transitorio": f"fila do Flow: {type(exc).__name__}",
+                "aguardando_modo": aguardando}
     brutos = list(resp.cadastros)
     cv._avisa_chaves(slug, brutos)
     resumo = {
@@ -675,6 +680,7 @@ def _processar_gravacao(slug: str, m: str, client, env_conn, fire_conn, *,
         "erros": 0,
         "ja_no_livro": 0,
         "pulados": 0,
+        "aguardando_modo": aguardando,
     }
     if recuperacao is not None:
         resumo["recuperacao"] = recuperacao
@@ -685,15 +691,6 @@ def _processar_gravacao(slug: str, m: str, client, env_conn, fire_conn, *,
             logger.error(f"flowpcp.cadastro_volta env={slug}: fila sem {capacidades.CADASTROS}; "
                          f"{len(brutos)} item(ns) não processados")
         return resumo
-    resumo["aguardando_modo"] = _aguardando_modo(slug, m, client)
-    aguardando = resumo["aguardando_modo"]
-    if aguardando is None:
-        try:
-            metrics.cadastro_volta_aguardando_modo.remove(slug)
-        except KeyError:
-            pass
-    else:
-        metrics.cadastro_volta_aguardando_modo.labels(env=slug).set(aguardando)
     lote = _Lote(slug, m, env_conn, client, relogio, resumo)
     vistos: set = set()
     a_gravar = []

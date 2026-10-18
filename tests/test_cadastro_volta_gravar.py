@@ -282,6 +282,11 @@ def _rodar(env_slug, flow, fire, env_conn, relogio=None):
                                  _relogio=relogio or Relogio())
 
 
+def _reserva(flow):
+    """O GET que reserva (sem `simular`); a contagem de "aguardando modo" vem antes dele."""
+    return next(g for g in flow.gets if not g.get("simular"))
+
+
 def _mais(horas=2):
     r = Relogio()
     r.agora += timedelta(hours=horas)
@@ -323,8 +328,7 @@ def test_criar_grava_e_confirma(modo, env_slug, env_conn):
     modo("criar")
     flow, fire = Flow([PAR]), FireGravavel()
     _rodar(env_slug, flow, fire, env_conn)
-    assert flow.gets[0]["acoes"] == ("criar",) and flow.gets[0]["limite"] == cv.LIMITE_GRAVACAO
-    assert "simular" not in flow.gets[0]
+    assert _reserva(flow)["acoes"] == ("criar",) and _reserva(flow)["limite"] == cv.LIMITE_GRAVACAO
     assert 3171 in fire.produtos
     assert fire.produtos[3171]["MARCA"] == "Kolosh" and fire.produtos[3171]["GRUPO"] == 8
     assert "DESCRICAO2" not in fire.produtos[3171]
@@ -464,11 +468,11 @@ def test_inativar_so_com_portao(modo, env_slug, env_conn):
     modo("criar_e_atualizar")
     flow = Flow([])
     _rodar(env_slug, flow, FireGravavel(), env_conn)
-    assert flow.gets[0]["acoes"] == ("criar", "atualizar")
+    assert _reserva(flow)["acoes"] == ("criar", "atualizar")
     modo("criar_e_atualizar", inativar=True)
     flow = Flow([])
     _rodar(env_slug, flow, FireGravavel(), env_conn)
-    assert flow.gets[0]["acoes"] == ("criar", "atualizar", "inativar")
+    assert _reserva(flow)["acoes"] == ("criar", "atualizar", "inativar")
 
 
 def test_prazo_do_lote_para_de_iniciar_itens(modo, env_slug, env_conn):
@@ -719,7 +723,7 @@ def test_atualizar_no_modo_criar_e_processado(modo, env_slug, env_conn):
     fire = FireGravavel()
     flow = Flow([_atualizar("3170", marcaErp={"codigo": 17})])
     _rodar(env_slug, flow, fire, env_conn)
-    assert flow.gets[0]["acoes"] == ("criar",)
+    assert _reserva(flow)["acoes"] == ("criar",)
     assert flow.posts[0][1]["resultado"] == "gravado"
     assert fire.produtos[3170]["DESCRICAO"] == "MEIA SOQUETE"
     assert fire.produtos[3170]["MARCA"] == "Kolosh"
@@ -1156,6 +1160,12 @@ def test_reenvio_da_v1_pela_9b_sem_espaco_nas_pendencias(modo, env_slug, env_con
 # --- Task 12: métricas e "aguardando modo" ------------------------------------
 
 
+def _amostra_ou_none(nome, **rotulos):
+    from prometheus_client import REGISTRY
+
+    return REGISTRY.get_sample_value(nome, {"env": "mm", **rotulos})
+
+
 def _amostra(nome, **rotulos):
     from prometheus_client import REGISTRY
 
@@ -1182,7 +1192,8 @@ def test_aguardando_modo_em_criar_conta_o_que_o_modo_nao_grava(modo, env_slug, e
     modo("criar")
     flow = FlowAguarda([], n=3)
     _rodar(env_slug, flow, FireGravavel(), env_conn)
-    assert flow.gets[1] == {"limite": 50, "acoes": ("atualizar", "inativar"), "simular": True}
+    assert flow.gets[0] == {"limite": 50, "acoes": ("atualizar", "inativar"), "simular": True}
+    assert not flow.gets[1].get("simular")  # a ordem: contagem sem reserva, depois o GET que reserva
     assert cv.ultimo_ciclo(env_slug)["resumo"]["aguardando_modo"] == 3
     assert _amostra("portal_flowpcp_cadastro_volta_aguardando_modo") == 3
 
@@ -1191,7 +1202,7 @@ def test_aguardando_modo_sem_portao_de_inativar_pede_so_inativar(modo, env_slug,
     modo("criar_e_atualizar")
     flow = FlowAguarda([], n=2)
     _rodar(env_slug, flow, FireGravavel(), env_conn)
-    assert flow.gets[1]["acoes"] == ("inativar",) and flow.gets[1]["simular"] is True
+    assert flow.gets[0]["acoes"] == ("inativar",) and flow.gets[0]["simular"] is True
     assert cv.ultimo_ciclo(env_slug)["resumo"]["aguardando_modo"] == 2
 
 
@@ -1200,7 +1211,8 @@ def test_aguardando_modo_com_portao_nao_consulta(modo, env_slug, env_conn):
     flow = FlowAguarda([], n=2)
     _rodar(env_slug, flow, FireGravavel(), env_conn)
     assert len(flow.gets) == 1
-    assert cv.ultimo_ciclo(env_slug)["resumo"]["aguardando_modo"] == 0
+    assert cv.ultimo_ciclo(env_slug)["resumo"]["aguardando_modo"] is None
+    assert _amostra_ou_none("portal_flowpcp_cadastro_volta_aguardando_modo") is None
 
 
 def test_aguardando_modo_400_vira_none_sem_derrubar_o_ciclo(modo, env_slug, env_conn, avisos):
@@ -1211,7 +1223,9 @@ def test_aguardando_modo_400_vira_none_sem_derrubar_o_ciclo(modo, env_slug, env_
     flow = FlowAguarda([PAR], erro=erro)
     r = _rodar(env_slug, flow, FireGravavel(), env_conn)
     assert r["aguardando_modo"] is None and r["gravados"] == 1
-    assert cv.ultimo_ciclo(env_slug)["resumo"]["aguardando_modo"] is None
+    resumo = cv.ultimo_ciclo(env_slug)["resumo"]
+    assert resumo["aguardando_modo"] is None and resumo["erro"] is None  # 400 não é erro do ciclo
+    assert _amostra_ou_none("portal_flowpcp_cadastro_volta_aguardando_modo") is None
     _rodar(env_slug, FlowAguarda([], erro=erro), FireGravavel(), env_conn, _mais())
     assert sum("aguardando" in a for a in avisos) == 1  # WARNING uma vez
     assert not any("VALOR-DO-FLOW" in a for a in avisos)
@@ -1248,3 +1262,12 @@ def test_gauge_sem_volta_conta_gravado_sem_volta_e_erro_a_enviar(modo, env_slug,
     assert _amostra("portal_flowpcp_cadastro_volta_sem_volta") == 1
     _rodar(env_slug, Flow([]), FireGravavel(), env_conn, _mais())
     assert _amostra("portal_flowpcp_cadastro_volta_sem_volta") == 0
+
+
+def test_gauge_aguardando_some_fora_dos_modos_de_gravacao(modo, env_slug, env_conn):
+    modo("criar")
+    _rodar(env_slug, FlowAguarda([], n=4), FireGravavel(), env_conn)
+    assert _amostra_ou_none("portal_flowpcp_cadastro_volta_aguardando_modo") == 4
+    modo("simular")
+    _rodar(env_slug, Flow([]), FireGravavel(), env_conn, _mais())
+    assert _amostra_ou_none("portal_flowpcp_cadastro_volta_aguardando_modo") is None

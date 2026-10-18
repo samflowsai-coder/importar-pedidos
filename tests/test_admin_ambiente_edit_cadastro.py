@@ -60,6 +60,11 @@ def _bloco_js() -> str:
         "Itens aprovados no Flow que este modo da volta não grava.",
         "Nenhum item pede atenção.",
         "volta-retry",
+        "Aguardando recuperação",
+        "Resposta inesperada do Flow",
+        "Cadastro interrompido",
+        "Nome já existe no ERP neste produto",
+        "mostrando ",
         "Não foi possível carregar a volta do Flow agora.",
     ],
 )
@@ -79,12 +84,26 @@ def test_blocos_novos_usam_textcontent_e_nunca_innerhtml():
     assert "innerHTML" not in js
 
 
-def test_bloco_da_volta_tem_tabular_nums_foco_e_nao_cria_cor():
-    css = _HTML[_HTML.index("/* Volta de cadastro:") : _HTML.index(".file-row { font-size: 13px; }")]
+def _css_da_volta() -> str:
+    return _HTML[_HTML.index("/* Volta de cadastro:") : _HTML.index(".file-row { font-size: 13px; }")]
+
+
+def test_bloco_da_volta_tem_tabular_nums_foco_e_rola_sem_estourar():
+    css = _css_da_volta()
     assert "font-variant-numeric: tabular-nums" in css
     assert ".volta-tabela-wrap:focus-visible" in css
-    assert "minmax(min(100%, 14rem), 1fr)" in css  # 320 px sem estourar
-    # só tokens que a página já usa; nenhum hex novo além dos fallbacks existentes
+    assert "overflow-x: auto" in css  # a tabela rola dentro do bloco, a página não
+    assert ".volta-retry { min-width: 44px; min-height: 44px; }" in css
+
+
+def test_bloco_da_volta_so_usa_tokens_que_existem_e_nenhum_hex():
     import re
 
-    assert set(re.findall(r"#[0-9a-fA-F]{3,6}", css)) <= {"#ef4444", "#B45309", "#3b82f6"}
+    css = _css_da_volta()
+    raiz = Path(__file__).resolve().parent.parent / "app" / "web" / "static" / "css"
+    definidos = set()
+    for nome in ("tokens.css", "shell.css"):
+        definidos |= set(re.findall(r"(--[a-z0-9-]+)\s*:", (raiz / nome).read_text(encoding="utf-8")))
+    usados = set(re.findall(r"var\((--[a-z0-9-]+)", css))
+    assert usados and usados <= definidos, usados - definidos
+    assert not re.findall(r"#[0-9a-fA-F]{3,6}\b", css)

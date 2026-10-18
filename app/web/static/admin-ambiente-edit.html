@@ -116,26 +116,32 @@
     }
     .hint strong { color: var(--text); font-weight: 600; }
     /* Volta de cadastro: contadores de atenção e tabela de itens. */
+    /* fieldset não encolhe abaixo do conteúdo: sem isto a tabela larga estoura a página a 320 px. */
+    #flowpcp-fieldset { min-width: 0; }
     .volta-portoes { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; margin-bottom: .6rem; }
     .volta-contadores { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: .6rem; margin: .6rem 0; }
-    .volta-card { padding: .65rem .8rem; background: var(--bg-elev); border: 1px solid var(--border); border-left-width: 3px; border-radius: 8px; }
-    .volta-card[data-tom="err"] { border-left-color: var(--danger, #ef4444); }
-    .volta-card[data-tom="aviso"] { border-left-color: var(--warn-strong, #B45309); }
+    .volta-card { padding: .65rem .8rem; background: var(--surface); border: 1px solid var(--border); border-left-width: 3px; border-radius: 8px; }
+    .volta-card[data-tom="err"] { border-left-color: var(--error); }
+    .volta-card[data-tom="aviso"] { border-left-color: var(--warn); }
     .volta-card-rot { font-weight: 600; }
     .volta-card-n { display: inline-block; margin-left: .4rem; font-size: 1.25em; font-variant-numeric: tabular-nums; }
-    .volta-card[data-tom="err"] .volta-card-n { color: var(--danger, #ef4444); }
-    .volta-card[data-tom="aviso"] .volta-card-n { color: var(--warn-strong, #B45309); }
+    .volta-card[data-tom="err"] .volta-card-n { color: var(--error-strong); }
+    .volta-card[data-tom="aviso"] .volta-card-n { color: var(--warn-ink); }
     .volta-card-txt { margin: .25rem 0 0; font-size: .85em; line-height: 1.5; color: var(--text-muted); }
+    .volta-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     .volta-aguardando { margin: .4rem 0; font-variant-numeric: tabular-nums; }
     .volta-tabela-wrap { overflow-x: auto; margin-top: .4rem; border: 1px solid var(--border); border-radius: 8px; }
-    .volta-tabela-wrap:focus-visible { outline: 2px solid var(--accent, #3b82f6); outline-offset: 2px; }
+    .volta-tabela-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .volta-tabela { width: 100%; border-collapse: collapse; font-size: .85em; font-variant-numeric: tabular-nums; }
     .volta-tabela caption { text-align: left; padding: .5rem .6rem; font-weight: 600; }
     .volta-tabela th, .volta-tabela td { padding: .35rem .6rem; text-align: left; white-space: nowrap; border-top: 1px solid var(--border); }
     .volta-tabela th { font-weight: 500; color: var(--text-muted); }
-    .volta-tabela td.volta-id { font-family: var(--font-mono, monospace); white-space: normal; overflow-wrap: anywhere; min-width: 9rem; }
+    .volta-tabela td.volta-id { font-family: var(--font-mono); white-space: normal; overflow-wrap: anywhere; min-width: 9rem; }
+    .volta-mais { margin: .3rem .1rem 0; color: var(--text-muted); font-variant-numeric: tabular-nums; }
     .volta-vazio { margin: .4rem 0; color: var(--text-muted); }
-    .volta-retry { margin-top: .4rem; }
+    .volta-retry { display: block; margin-top: .4rem; }
+    .volta-retry[hidden] { display: none; }
+    @media (max-width: 768px) { .volta-retry { min-width: 44px; min-height: 44px; } }
     .file-row { font-size: 13px; }
     .file-row.selected { background: color-mix(in srgb, var(--accent, #3b82f6) 18%, transparent); }
 
@@ -442,15 +448,15 @@
           <div id="volta-portoes" class="volta-portoes"></div>
           <div class="volta-contadores" role="group" aria-label="Itens que pedem atenção">
             <div class="volta-card" id="volta-card-orfaos">
-              <div class="volta-card-rot">Órfãos<strong id="volta-n-orfaos" class="volta-card-n">0</strong></div>
+              <div class="volta-card-rot">Órfãos<span class="volta-sr">: </span><strong id="volta-n-orfaos" class="volta-card-n">0</strong></div>
               <p class="volta-card-txt">Órfãos: produto gravado no Fire que o Flow não vinculou. Avise a área de cadastro com o código.</p>
             </div>
             <div class="volta-card" id="volta-card-incertos">
-              <div class="volta-card-rot">Incertos<strong id="volta-n-incertos" class="volta-card-n">0</strong></div>
+              <div class="volta-card-rot">Incertos<span class="volta-sr">: </span><strong id="volta-n-incertos" class="volta-card-n">0</strong></div>
               <p class="volta-card-txt">Incertos: cadastro interrompido sem prova do que aconteceu. Confira no Fire antes de qualquer ação.</p>
             </div>
             <div class="volta-card" id="volta-card-sem-volta">
-              <div class="volta-card-rot">Sem volta<strong id="volta-n-sem-volta" class="volta-card-n">0</strong></div>
+              <div class="volta-card-rot">Sem volta<span class="volta-sr">: </span><strong id="volta-n-sem-volta" class="volta-card-n">0</strong></div>
               <p class="volta-card-txt">Sem volta: gravado no Fire, resultado ainda não aceito pelo Flow. O Portal reenvia sozinho.</p>
             </div>
           </div>
@@ -459,6 +465,7 @@
             <div class="volta-card-txt">Itens aprovados no Flow que este modo da volta não grava.</div>
           </div>
           <div id="volta-vazio" class="volta-vazio" hidden>Nenhum item pede atenção.</div>
+          <div id="volta-mais" class="volta-mais" hidden></div>
           <div id="volta-tabela-wrap" class="volta-tabela-wrap" tabindex="0" role="region" aria-label="Itens que pedem atenção" hidden>
             <table class="volta-tabela">
               <caption>Itens que pedem atenção</caption>
@@ -1380,6 +1387,19 @@
       td.textContent = (valor === undefined || valor === null || valor === '') ? '—' : String(valor);
       tr.appendChild(td);
     }
+    const VOLTA_ALERTAS = {
+      bug_corpo: 'Resposta inesperada do Flow',
+      recuperacao: 'Cadastro interrompido',
+      nome_do_proprio_produto: 'Nome já existe no ERP neste produto',
+    };
+    // O livro grava UTC sem fuso ("AAAA-MM-DD HH:MM:SS"); a tela mostra dd/mm/aaaa hh:mm no fuso do navegador.
+    function voltaData(v) {
+      if (typeof v !== 'string' || !v) return '';
+      const t = new Date(v.replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(v) ? '' : 'Z'));
+      if (isNaN(t)) return v;
+      const p = (n) => String(n).padStart(2, '0');
+      return p(t.getDate()) + '/' + p(t.getMonth() + 1) + '/' + t.getFullYear() + ' ' + p(t.getHours()) + ':' + p(t.getMinutes());
+    }
     function voltaAtencao(d) {
       const box = document.getElementById('volta-atencao');
       const modo = d && typeof d.modo === 'string' ? d.modo : '';
@@ -1395,30 +1415,34 @@
       voltaCartao('sem-volta', nSem, 'aviso');
       const ag = document.getElementById('volta-aguardando');
       const resumo = d && d.ultimo_ciclo && d.ultimo_ciclo.resumo;
-      const temAg = !!resumo && Object.prototype.hasOwnProperty.call(resumo, 'aguardando_modo');
-      ag.hidden = !temAg;
-      if (temAg) {
-        const n = resumo.aguardando_modo;
-        document.getElementById('volta-n-aguardando').textContent = typeof n === 'number' ? String(n) : '— (o Flow não respondeu)';
-      }
+      // Sem contagem (null: Flow não respondeu, portão ligado ou modo sem gravação) a linha some.
+      const nAg = resumo ? resumo.aguardando_modo : null;
+      ag.hidden = typeof nAg !== 'number';
+      if (typeof nAg === 'number') document.getElementById('volta-n-aguardando').textContent = String(nAg);
       const corpo = document.getElementById('volta-tabela-corpo');
       corpo.replaceChildren();
-      const grupos = [['Órfão', d && d.orfaos], ['Incerto', d && d.incertos], ['Sem volta', d && d.sem_volta_itens]];
+      const grupos = [['Órfão', d && d.orfaos, nOrf], ['Incerto', d && d.incertos, nInc], ['Sem volta', d && d.sem_volta_itens, nSem]];
       let total = 0;
-      grupos.forEach(([rot, lista]) => {
-        (Array.isArray(lista) ? lista : []).forEach((x) => {
+      const mais = [];
+      grupos.forEach(([rot, lista, n]) => {
+        const itens = Array.isArray(lista) ? lista : [];
+        if (itens.length >= 50 && n > itens.length) mais.push(rot + ': mostrando ' + itens.length + ' de ' + n);
+        itens.forEach((x) => {
           total += 1;
           const tr = document.createElement('tr');
-          voltaCelula(tr, rot);
+          voltaCelula(tr, x.aguardando_recuperacao === true ? 'Aguardando recuperação' : rot);
           voltaCelula(tr, (x.cadastro_id ?? '—') + ' v' + (x.versao ?? '—'), 'volta-id');
           voltaCelula(tr, x.acao);
           voltaCelula(tr, x.erp_produto_id ?? x.seq_reservado);
           voltaCelula(tr, x.tentativas);
-          voltaCelula(tr, x.alerta);
-          voltaCelula(tr, x.atualizado_em);
+          voltaCelula(tr, x.alerta ? (VOLTA_ALERTAS[x.alerta] || x.alerta) : '');
+          voltaCelula(tr, voltaData(x.atualizado_em));
           corpo.appendChild(tr);
         });
       });
+      const maisEl = document.getElementById('volta-mais');
+      maisEl.textContent = mais.join(' · ');
+      maisEl.hidden = !mais.length;
       document.getElementById('volta-tabela-wrap').hidden = total === 0;
       document.getElementById('volta-vazio').hidden = total !== 0 || nOrf + nInc + nSem > 0;
     }

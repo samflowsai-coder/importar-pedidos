@@ -79,15 +79,15 @@ def test_ultimo_ciclo_e_thread_desligada(setup, monkeypatch):
     assert body["thread_desligada"] is True
 
 
-def _linha(conn, cid, estado, seq=None):
+def _linha(conn, cid, estado, seq=None, iniciado="2026-01-01 00:00:00"):
     assert cadastro_volta_repo.reservar(
         conn, cadastro_id=cid, versao=1, produto_id=f"p-{cid}", acao="criar", tipo="simples",
         modo="criar", plano_json="{}",
     )
     conn.execute(
-        "UPDATE cadastro_volta SET estado = ?, seq_reservado = ?, corpo_json = 'SEGREDO-CORPO', "
-        "nota_operador = 'SEGREDO-NOTA' WHERE cadastro_id = ?",
-        (estado, seq, cid),
+        "UPDATE cadastro_volta SET estado = ?, seq_reservado = ?, iniciado_em = ?, "
+        "corpo_json = 'SEGREDO-CORPO', nota_operador = 'SEGREDO-NOTA' WHERE cadastro_id = ?",
+        (estado, seq, iniciado, cid),
     )
 
 
@@ -112,9 +112,25 @@ def test_listas_de_atencao_e_portoes(setup, monkeypatch):
     assert {x["cadastro_id"] for x in body["sem_volta_itens"]} == {"s1", "s2"}
     for lista in ("orfaos", "incertos", "sem_volta_itens"):
         for x in body[lista]:
-            assert set(x) == {"cadastro_id", "versao", "acao", "erp_produto_id",
+            assert set(x) - {"aguardando_recuperacao"} == {"cadastro_id", "versao", "acao", "erp_produto_id",
                               "seq_reservado", "tentativas", "alerta", "atualizado_em"}
     assert "SEGREDO" not in r.text
+
+
+def test_transitorio_recente_aguarda_recuperacao_e_nao_conta_como_incerto(setup):
+    from datetime import UTC, datetime, timedelta
+
+    agora = datetime.now(UTC)
+    fmt = "%Y-%m-%d %H:%M:%S"
+    env = _env(setup)
+    with router.env_connect("mm") as conn:
+        _linha(conn, "novo", "transitorio", 3993, iniciado=(agora - timedelta(minutes=2)).strftime(fmt))
+        _linha(conn, "velho", "transitorio", 3994, iniciado=(agora - timedelta(minutes=30)).strftime(fmt))
+    body = _get(env["id"]).json()
+    assert body["n_incertos"] == 1
+    por_id = {x["cadastro_id"]: x for x in body["incertos"]}
+    assert por_id["novo"]["aguardando_recuperacao"] is True
+    assert por_id["velho"]["aguardando_recuperacao"] is False
 
 
 def test_listas_de_atencao_nao_vazam_corpo_nem_nota(setup):

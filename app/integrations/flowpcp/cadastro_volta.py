@@ -158,6 +158,18 @@ def reenviar_pendencias(slug: str, env_conn, client, *, agora: datetime) -> dict
     return cadastro_gravacao.reenviar_pendencias(slug, env_conn, client, agora=agora)
 
 
+def publicar_aguardando_modo(slug: str, valor: int | None) -> None:
+    """Gauge `aguardando_modo`: sem valor (None) não há série, em vez de um 0 enganoso.
+    Vale também fora dos modos de gravação e nos retornos antecipados do ciclo."""
+    if valor is None:
+        try:
+            metrics.cadastro_volta_aguardando_modo.remove(slug)
+        except KeyError:
+            pass
+    else:
+        metrics.cadastro_volta_aguardando_modo.labels(env=slug).set(valor)
+
+
 def _atualizar_sem_volta(slug, env_conn) -> None:
     from app.integrations.flowpcp import cadastro_gravacao
 
@@ -385,6 +397,8 @@ def processar_ambiente(
 
 def _processar_ambiente(slug: str, *, _client, _fire_conn, _env_conn, _relogio) -> dict:
     m = modo(slug)
+    if m in ("desligado", "simular"):
+        publicar_aguardando_modo(slug, None)
     pendencia = False
     if m in ("desligado", "simular"):
         with _env(slug, _env_conn) as env_conn:
@@ -405,12 +419,14 @@ def _processar_ambiente(slug: str, *, _client, _fire_conn, _env_conn, _relogio) 
                 reenvio = reenviar_pendencias(slug, env_conn, client, agora=_relogio())
                 _atualizar_sem_volta(slug, env_conn)
                 if not p0_ok(slug):
+                    publicar_aguardando_modo(slug, None)
                     _avisa_uma_vez(
                         f"recusa-p0:{slug}",
                         f"flowpcp.cadastro_volta env={slug}: modo {m!r} recusado: {_RECUSA_P0}",
                     )
                     return {"modo": m, "recusado": _RECUSA_P0, "reenvio": reenvio}
                 if "credencial" in reenvio:
+                    publicar_aguardando_modo(slug, None)
                     return {"modo": m, "erro": "credencial", "reenvio": reenvio}
                 r = _processar_gravacao(slug, m, client, env_conn, _fire_conn, relogio=_relogio)
                 return {**r, "reenvio": reenvio}

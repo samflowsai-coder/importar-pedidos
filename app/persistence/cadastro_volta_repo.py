@@ -129,6 +129,26 @@ def listar_por_estado(
     return [dict(zip(_COLS_TELA, r, strict=True)) for r in rows]
 
 
+def contar_transitorios_com_seq(conn: sqlite3.Connection) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) FROM cadastro_volta WHERE estado = 'transitorio' "
+        "AND seq_reservado IS NOT NULL"
+    ).fetchone()[0]
+
+
+def transitorios_com_seq_recentes(
+    conn: sqlite3.Connection, iniciado_apos: str
+) -> set[tuple[str, int]]:
+    """(cadastro_id, versao) dos transitórios com SEQ iniciados depois do instante
+    (`YYYY-MM-DD HH:MM:SS`, UTC): ainda dentro da espera da recuperação."""
+    rows = conn.execute(
+        "SELECT cadastro_id, versao FROM cadastro_volta WHERE estado = 'transitorio' "
+        "AND seq_reservado IS NOT NULL AND iniciado_em > ?",
+        (iniciado_apos,),
+    ).fetchall()
+    return {(r[0], r[1]) for r in rows}
+
+
 def contar_por_estado(conn: sqlite3.Connection) -> dict[str, int]:
     rows = conn.execute("SELECT estado, COUNT(*) FROM cadastro_volta GROUP BY estado").fetchall()
     return {r[0]: r[1] for r in rows}
