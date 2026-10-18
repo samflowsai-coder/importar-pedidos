@@ -3574,6 +3574,22 @@ def rehydrate_preview(
     payload["fire_codigo"] = entry.get("fire_codigo")
     payload["fire_status_last_seen"] = entry.get("fire_status_last_seen")
     payload["arquivo_original"] = _arquivo_original_info(entry)
+    # Situação de preço por item (trava). Só leitura; ausente em `desligado` e
+    # em qualquer falha — o preview sempre renderiza.
+    try:
+        from datetime import UTC, datetime
+
+        from app.erp import preco_trava
+
+        preco = preco_trava.preview_preco(
+            import_id, entry, order, env=_request_environment(request), agora=datetime.now(UTC)
+        )
+        if preco is not None:
+            payload["preco"] = preco
+    except Exception as exc:  # noqa: BLE001
+        from app.utils.logger import logger
+
+        logger.warning(f"preview: avaliação de preço indisponível ({type(exc).__name__}): {exc}")
     # Só existe quando a empresa foi RESOLVIDA pelo pedido (roteamento
     # 'ligado', via `env_do_pedido`) — fora dali nada muda: o selo já existe
     # na linha da caixa somada, mas some ao abrir o modal, que é a tela onde

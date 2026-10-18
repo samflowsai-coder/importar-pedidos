@@ -3070,3 +3070,148 @@ def test_override_cliente_grava_o_cnpj_do_fire(monkeypatch):
 
     assert r.status_code == 200, r.text
     assert repo.get_import(entry_id)["cliente_override_cnpj"] == "11222333000144"
+
+
+# ── Preview: situação de preço por item ──────────────────────────────────────
+
+
+def _seed_preco_preview(entry_id, unit_price=54.0):
+    import json
+    from datetime import datetime as _dt
+
+    from app.persistence import repo
+
+    _seed_trava(entry_id, unit_price)
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE imports SET check_json = ? WHERE id = ?",
+            (
+                json.dumps(
+                    {
+                        "available": True,
+                        "items": [
+                            {
+                                "ean": "7891",
+                                "product_code": "C1",
+                                "fire_product_id": 123,
+                                "price_status": "match",
+                            }
+                        ],
+                        "summary": {},
+                    }
+                ),
+                entry_id,
+            ),
+        )
+    assert repo.get_import(entry_id)["check"]["items"], "check não gravado"
+    return _dt.now()
+
+
+def _preview_com_modo(entry_id, env, modo):
+    from app.persistence import environments_repo
+
+    environments_repo.set_preco_trava_modo(env["id"], modo, por="teste")
+    client.cookies.set("portal_env", env["id"])
+    try:
+        return client.get(f"/api/imported/{entry_id}/preview")
+    finally:
+        client.cookies.clear()
+
+
+def test_detalhe_traz_avaliacao_de_preco_em_observando(tmp_path):
+    import uuid
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_preco_preview(entry_id, 54.0)  # 54 ≠ 50 → fila
+
+    r = _preview_com_modo(entry_id, env, "observando")
+
+    assert r.status_code == 200, r.text
+    preco = r.json()["preco"]
+    assert preco["modo"] == "observando"
+    assert preco["itens"] == [
+        {
+            "item_index": 0,
+            "situacao": "fila",
+            "motivo": "acima",
+            "preco_pedido": 54.0,
+            "preco_tabela": 50.0,
+            "decisao": None,
+        }
+    ]
+    assert preco["resumo"] == {
+        "ok": 0,
+        "fila": 1,
+        "aprovados": 0,
+        "recusados": 0,
+        "nao_avaliados": 0,
+        "intercompany": 0,
+    }
+
+
+def test_detalhe_sem_bloco_preco_em_desligado(tmp_path):
+    import uuid
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_preco_preview(entry_id, 54.0)
+
+    r = _preview_com_modo(entry_id, env, "desligado")
+
+    assert r.status_code == 200, r.text
+    assert "preco" not in r.json()
+
+
+def test_detalhe_mostra_decisao_do_item(tmp_path):
+    import uuid
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from app.erp.preco_avaliacao import ItemAvaliado
+    from app.models.order import Order
+    from app.persistence import preco_aprovacao_repo as aprov
+    from app.persistence import repo
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_preco_preview(entry_id, 54.0)
+    order = Order.model_validate(repo.get_import(entry_id)["snapshot"])
+    sig = aprov.assinatura(order.items[0], "123", "11222333000144")
+    agora = _dt.now(UTC)
+    with db.connect() as conn:
+        aprov.registrar_pendencias(
+            conn,
+            entry_id,
+            [(ItemAvaliado(0, "123", "fila", "acima", 5400, 5000), sig)],
+            agora=agora,
+        )
+        assert aprov.aplicar_decisao(
+            conn, import_id=entry_id, item_index=0, assinatura=sig, decisao="acordo",
+            preco_final_centavos=None, por="rafael", em=agora, motivo=None, flow_id="f1",
+        )
+
+    r = _preview_com_modo(entry_id, env, "observando")
+
+    preco = r.json()["preco"]
+    assert preco["itens"][0]["decisao"] == "acordo"
+    assert preco["resumo"]["aprovados"] == 1
+    assert preco["resumo"]["fila"] == 0
+
+
+def test_detalhe_sem_preco_quando_avaliacao_falha(tmp_path, monkeypatch):
+    import uuid
+
+    from app.erp import preco_trava
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_preco_preview(entry_id, 54.0)
+    monkeypatch.setattr(
+        preco_trava, "avaliar_entry", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+
+    r = _preview_com_modo(entry_id, env, "observando")
+
+    assert r.status_code == 200, r.text
+    assert "preco" not in r.json()

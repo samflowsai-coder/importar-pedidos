@@ -153,6 +153,61 @@ def avaliar_entry(
     return _avaliar_local(order, _check_utilizavel(entry.get("check"), order), entry, agora)
 
 
+def assinaturas_da_avaliacao(order: Order, av: Avaliacao) -> dict[int, str]:
+    """Assinatura atual de cada item avaliado (chave das decisões do Flow)."""
+    return {
+        it.item_index: aprov.assinatura(
+            order.items[it.item_index], it.fire_produto_id, av.cnpj_rede
+        )
+        for it in av.itens
+    }
+
+
+def _reais(centavos: int | None) -> float | None:
+    return None if centavos is None else round(centavos / 100, 2)
+
+
+def preview_preco(
+    import_id: str, entry: dict, order: Order, *, env: dict | None, agora: datetime
+) -> dict | None:
+    """Bloco `preco` do preview: situação por item + decisão do Flow. Só leitura
+    (sem Fire, sem audit, sem pendência). `desligado` → None."""
+    av = avaliar_entry(entry, order, env=env, agora=agora)
+    if av is None:
+        return None
+    with db.connect() as conn:
+        decisoes = aprov.decisoes_validas(conn, import_id, assinaturas_da_avaliacao(order, av))
+    itens = []
+    resumo = dict.fromkeys(
+        ("ok", "fila", "aprovados", "recusados", "nao_avaliados", "intercompany"), 0
+    )
+    for it in av.itens:
+        decisao = (decisoes.get(it.item_index) or {}).get("decisao")
+        itens.append(
+            {
+                "item_index": it.item_index,
+                "situacao": it.situacao,
+                "motivo": it.motivo,
+                "preco_pedido": _reais(it.preco_pedido_centavos),
+                "preco_tabela": _reais(it.preco_tabela_centavos),
+                "decisao": decisao,
+            }
+        )
+        if it.situacao == "ok":
+            resumo["ok"] += 1
+        elif it.situacao == "nao_avaliado":
+            resumo["nao_avaliados"] += 1
+        elif it.situacao == "fora_intercompany":
+            resumo["intercompany"] += 1
+        elif decisao == "recusado":
+            resumo["recusados"] += 1
+        elif decisao in _APROVADAS:
+            resumo["aprovados"] += 1
+        else:
+            resumo["fila"] += 1
+    return {"modo": _modo(env), "itens": itens, "resumo": resumo}
+
+
 def aplicar_precos(order: Order, precos: dict[int, float]) -> None:
     """Preço do aprovador nos itens sem preço (transiente, como o depara_apply)."""
     for i, preco in precos.items():
@@ -235,12 +290,7 @@ def _decidir_ligado(
                 {},
             )
         av = _avaliar_local(order, check, entry, agora)
-        assinaturas = {
-            it.item_index: aprov.assinatura(
-                order.items[it.item_index], it.fire_produto_id, av.cnpj_rede
-            )
-            for it in av.itens
-        }
+        assinaturas = assinaturas_da_avaliacao(order, av)
         with db.connect() as conn:
             aprov.substituir_obsoletas(conn, import_id, assinaturas, em=agora)
             fila = [(it, assinaturas[it.item_index]) for it in av.pendentes]
