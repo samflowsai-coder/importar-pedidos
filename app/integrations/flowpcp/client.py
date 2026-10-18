@@ -47,6 +47,8 @@ _PRECOS_APROVACOES_PATH = "/api/portal-pedidos/precos/aprovacoes"
 _PRECOS_DECISOES_PATH = "/api/portal-pedidos/precos/decisoes"
 _PRECOS_CONFIRMAR_PATH = "/api/portal-pedidos/precos/decisoes/confirmar"
 DEFAULT_TIMEOUT_SECONDS = 30.0
+# Teto do corpo bruto guardado quando um 2xx vem fora do contrato de preço.
+_TETO_BRUTO = 64 * 1024
 # Apply do catálogo: o Flow tem maxDuration 300 s e um apply por vez (409).
 APPLY_TIMEOUT_SECONDS = 300.0
 
@@ -359,12 +361,24 @@ class FlowPCPClient:
                 details=detalhes,
             )
         try:
-            return modelo.model_validate(resp.json())
+            dados = resp.json()
+        except ValueError:
+            dados = None
+        if not isinstance(dados, dict):
+            # Proxy, página de manutenção, captive portal: o Flow não recebeu nada.
+            raise FlowPCPClientError(
+                f"{metodo} {path}: 2xx sem objeto JSON",
+                status_code=resp.status_code,
+                body=(resp.text or "")[:500],
+                error="resposta_sem_json",
+            )
+        try:
+            return modelo.model_validate(dados)
         except ValueError as exc:
             raise FlowPCPClientError(
                 f"{metodo} {path}: resposta fora do contrato: {str(exc)[:300]}",
                 status_code=resp.status_code,
-                body=resp.text or "",  # inteiro: 2xx fora do contrato é guardado bruto
+                body=(resp.text or "")[:_TETO_BRUTO],  # 2xx fora do contrato é guardado bruto
                 error="resposta_fora_do_contrato",
             ) from exc
 

@@ -127,11 +127,17 @@ def _transitorio(slug: str, rota: str, exc: FlowPCPClientError) -> None:
 
 
 def _eh_transitorio(exc: FlowPCPClientError) -> bool:
-    return exc.status_code is None or exc.status_code in _TRANSITORIOS
+    """Rede, 429/5xx, e 2xx sem objeto JSON (proxy, manutenção: o Flow não recebeu)."""
+    return (
+        exc.status_code is None
+        or exc.status_code in _TRANSITORIOS
+        or exc.error == "resposta_sem_json"
+    )
 
 
 def _fora_do_contrato_2xx(exc: FlowPCPClientError) -> bool:
-    """2xx cujo corpo não bate com o schema: o Flow aceitou o pedido."""
+    """2xx com objeto JSON que não bate com o schema: o Flow aceitou o pedido.
+    2xx sem objeto JSON é `resposta_sem_json` (transitório), nunca este caminho."""
     return exc.error == "resposta_fora_do_contrato" and 200 <= (exc.status_code or 0) < 300
 
 

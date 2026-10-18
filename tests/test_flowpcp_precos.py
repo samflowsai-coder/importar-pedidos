@@ -889,3 +889,89 @@ def test_cliente_resposta_fora_do_contrato_vira_erro():
     with pytest.raises(FlowPCPClientError) as exc:
         _cliente_http(handler).get_precos_tabela(MM, None, 500)
     assert exc.value.error == "resposta_fora_do_contrato"
+
+
+# ─── 2xx sem JSON (proxy, manutenção, captive portal): o Flow não recebeu nada ──
+
+
+def _flow_http(monkeypatch, quebrada: str):
+    """Flow de verdade pelo cliente HTTP (MockTransport); a rota `quebrada`
+    responde 200 com HTML. As outras respondem como o contrato."""
+    vistos: list[str] = []
+
+    def handler(req):
+        rota = req.url.path.rsplit("/precos/", 1)[1]
+        vistos.append(rota)
+        if rota == quebrada:
+            return httpx.Response(200, text="<html>manutenção</html>")
+        if rota == "tabela":
+            return httpx.Response(200, json=EXEMPLOS["tabelaPagina"])
+        if rota == "aprovacoes":
+            corpo = json.loads(req.content)
+            r = _resposta(corpo["revisao"], external=corpo["externalId"])
+            return httpx.Response(201, json=r.model_dump(mode="json"))
+        if rota == "decisoes":
+            return httpx.Response(200, json=EXEMPLOS["decisoesPagina"])
+        return httpx.Response(200, json=EXEMPLOS["confirmacaoResposta"])
+
+    monkeypatch.setattr(precos, "_cliente", lambda cfg: _cliente_http(handler))
+    return vistos
+
+
+def test_aprovacao_200_html_fica_pendente_sem_pausar(mm, monkeypatch):
+    _revisao()
+    vistos = _flow_http(monkeypatch, "aprovacoes")
+    precos.rodar(AGORA)
+    assert _situacoes() == [(1, "pendente_envio")]
+    assert _linha(1)["resposta_json"] is None
+    precos.rodar(AGORA + timedelta(seconds=61))
+    assert vistos.count("aprovacoes") == 2  # tentou de novo: sem pausa
+    assert vistos.count("tabela") == 2
+
+
+def test_retirada_200_html_fica_pendente_sem_pausar(mm, monkeypatch):
+    _revisao()
+    _flow_http(monkeypatch, "nenhuma")
+    precos.rodar(AGORA)
+    with router.env_connect("mm") as conn:
+        revs.retirar(conn, IMP, "pedido cancelado no Portal", em=AGORA)
+    vistos = _flow_http(monkeypatch, "aprovacoes")
+    precos.rodar(AGORA + timedelta(seconds=61))
+    assert _linha(1)["retirada_enviada_em"] is None
+    precos.rodar(AGORA + timedelta(seconds=122))
+    assert vistos.count("aprovacoes") == 2
+    assert vistos.count("tabela") == 2
+
+
+def test_confirmar_200_html_fica_pendente_sem_pausar(mm, monkeypatch):
+    _revisao()
+    vistos = _flow_http(monkeypatch, "decisoes/confirmar")
+    precos.rodar(AGORA)
+    with router.env_connect("mm") as conn:
+        assert len(revs.confirmacoes_pendentes(conn, 10)) == 3
+    precos.rodar(AGORA + timedelta(seconds=61))
+    assert vistos.count("decisoes/confirmar") == 2
+    assert vistos.count("tabela") == 2
+
+
+@pytest.mark.parametrize("corpo", ["<html>manutenção</html>", "[1, 2]", '"ok"', ""])
+def test_cliente_2xx_sem_objeto_json_e_resposta_sem_json(corpo):
+    def handler(req):
+        return httpx.Response(200, text=corpo)
+
+    with pytest.raises(FlowPCPClientError) as exc:
+        _cliente_http(handler).post_precos_aprovacao(EXEMPLOS["aprovacaoPedido"])
+    assert exc.value.error == "resposta_sem_json"
+    assert exc.value.status_code == 200
+
+
+def test_cliente_2xx_fora_do_contrato_guarda_o_bruto_com_teto():
+    grande = {"x": "a" * 200_000}
+
+    def handler(req):
+        return httpx.Response(200, json=grande)
+
+    with pytest.raises(FlowPCPClientError) as exc:
+        _cliente_http(handler).post_precos_aprovacao(EXEMPLOS["aprovacaoPedido"])
+    assert exc.value.error == "resposta_fora_do_contrato"
+    assert len(exc.value.body) == 64 * 1024
