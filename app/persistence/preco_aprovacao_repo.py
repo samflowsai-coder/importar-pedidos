@@ -25,13 +25,24 @@ MotivoCancelamento = Literal["pedido_cancelado", "substituido"]
 _DECISOES = frozenset({"acordo", "regra", "preco_inicial", "recusado", "auto_tabela"})
 
 
-def assinatura(item: OrderItem, fire_produto_id: str | None, cnpj_rede: str | None = None) -> str:
-    """produto|preço|quantidade|raiz do CNPJ da rede: trocar o cliente para
-    outra rede (override) invalida a decisão dada para a rede anterior."""
+def assinatura(
+    item: OrderItem,
+    fire_produto_id: str | None,
+    cnpj_rede: str | None = None,
+    *,
+    rede_id: str | None = None,
+) -> str:
+    """produto|preço|quantidade|rede: trocar o cliente para outra rede
+    (override) invalida a decisão dada para a rede anterior.
+
+    A rede é o id da rede resolvida quando há (`rede_id`: um CNPJ completo
+    cadastrado pode apontar para outra rede que a da raiz); sem rede, a raiz
+    (8 dígitos) do CNPJ. Registro e consulta passam pelo mesmo
+    `preco_trava.assinaturas_da_avaliacao`."""
     cents = _to_cents(item.unit_price)
     qtd = f"{float(item.quantity):g}" if item.quantity is not None else ""
-    raiz = cnpj_digits(cnpj_rede)[:8]
-    base = f"{fire_produto_id or ''}|{'' if cents is None else cents}|{qtd}|{raiz}"
+    rede = f"rede:{rede_id}" if rede_id is not None else cnpj_digits(cnpj_rede)[:8]
+    base = f"{fire_produto_id or ''}|{'' if cents is None else cents}|{qtd}|{rede}"
     return hashlib.sha256(base.encode("utf-8")).hexdigest()
 
 

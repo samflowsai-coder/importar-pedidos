@@ -74,6 +74,16 @@ def test_assinatura_muda_com_a_rede_e_usa_so_a_raiz():
     assert base != repo.assinatura(_item(), "123")
 
 
+def test_assinatura_com_rede_resolvida_usa_o_id_da_rede():
+    r1 = repo.assinatura(_item(), "123", "11222333000144", rede_id="r1")
+    # Mesma rede por outro CNPJ da mesma raiz → mesma assinatura.
+    assert r1 == repo.assinatura(_item(), "123", "11222333009999", rede_id="r1")
+    # Mesma raiz, rede diferente (CNPJ completo cadastrado) → assinatura diferente.
+    assert r1 != repo.assinatura(_item(), "123", "11222333009999", rede_id="r2")
+    # Com rede, a raiz sozinha não é a chave.
+    assert r1 != repo.assinatura(_item(), "123", "11222333000144")
+
+
 def test_decisao_com_assinatura_antiga_e_descartada(conn):
     ass_antiga, _ = _pendencia(conn, preco=54.0)
     ass_nova = repo.assinatura(_item(55.0), "123")

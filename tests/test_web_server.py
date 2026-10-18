@@ -2852,7 +2852,7 @@ def test_export_xlsx_leva_preco_aprovado(monkeypatch, tmp_path):
                 conn,
                 import_id=entry_id,
                 item_index=0,
-                assinatura=aprov.assinatura(item, "123", "11222333000144"),
+                assinatura=aprov.assinatura(item, "123", "11222333000144", rede_id="r1"),
                 decisao="preco_inicial",
                 preco_final_centavos=4800,
                 por="rafael",
@@ -2888,7 +2888,7 @@ def _aprovar_preco_inicial(entry_id, centavos):
             conn,
             import_id=entry_id,
             item_index=0,
-            assinatura=aprov.assinatura(item, "123", "11222333000144"),
+            assinatura=aprov.assinatura(item, "123", "11222333000144", rede_id="r1"),
             decisao="preco_inicial",
             preco_final_centavos=centavos,
             por="rafael",
@@ -3179,7 +3179,7 @@ def test_detalhe_mostra_decisao_do_item(tmp_path):
     entry_id = str(uuid.uuid4())
     _seed_preco_preview(entry_id, 54.0)
     order = Order.model_validate(repo.get_import(entry_id)["snapshot"])
-    sig = aprov.assinatura(order.items[0], "123", "11222333000144")
+    sig = aprov.assinatura(order.items[0], "123", "11222333000144", rede_id="r1")
     agora = _dt.now(UTC)
     with db.connect() as conn:
         aprov.registrar_pendencias(
@@ -3230,7 +3230,7 @@ def _decidir_web(entry_id, decisao, motivo=None):
     from app.persistence import repo
 
     order = Order.model_validate(repo.get_import(entry_id)["snapshot"])
-    sig = aprov.assinatura(order.items[0], "123", "11222333000144")
+    sig = aprov.assinatura(order.items[0], "123", "11222333000144", rede_id="r1")
     agora = _dt.now(UTC)
     with db.connect() as conn:
         aprov.registrar_pendencias(
@@ -3298,3 +3298,127 @@ def test_detalhe_ligado_item_intercompany(tmp_path):
 
     assert preco["itens"][0]["estado"] == "intercompany"
     assert preco["resumo"]["intercompany"] == 1
+
+
+# ── Revisão final da trava de preço ──────────────────────────────────────────
+
+
+def _vinculo_de_para(seq: str, codigo: str):
+    """Vínculo de-para do EAN 7891 do cliente 11222333000144 para o SEQ `seq`."""
+    from app.persistence import produto_depara_repo
+
+    with db.connect() as conn:
+        produto_depara_repo.upsert(
+            conn,
+            client_key="11222333000144",
+            chave_tipo="ean",
+            chave_valor="7891",
+            fire_produto_id=seq,
+            fire_codigo=codigo,
+            fire_ean=None,
+            fire_nome="Produto B",
+            criado_em="2026-10-18T10:00:00",
+            criado_por="teste",
+        )
+
+
+def _preco_na_tabela(seq: str, centavos: int):
+    from datetime import UTC, date
+    from datetime import datetime as _dt
+
+    from app.persistence import precos_repo
+
+    with db.connect() as conn:
+        precos_repo.aplicar_lote(
+            conn,
+            redes=[{"id": "r1", "nome": "Rede X", "travada": False}],
+            cnpjs=[],
+            precos=[
+                {
+                    "rede_id": "r1",
+                    "fire_produto_id": seq,
+                    "vigente_desde": date(2026, 1, 1),
+                    "vigente_ate": None,
+                    "preco_centavos": centavos,
+                    "removido": False,
+                }
+            ],
+            cursor="c2",
+            agora=_dt.now(UTC),
+            recursos=("precos", "redes"),
+        )
+
+
+def _cfg_db(monkeypatch, tmp_path, modo="db"):
+    from app import config as app_config
+
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": modo},
+    )
+
+
+@pytest.mark.parametrize("rota", ["send-to-fire", "export-xlsx"])
+def test_trava_avalia_o_produto_do_vinculo_e_bloqueia(monkeypatch, tmp_path, rota):
+    """Item casa por EAN com o SEQ 123 (R$ 50 = preço do pedido), mas o vínculo
+    de-para leva ao SEQ 456 (R$ 60): o Fire/XLSX recebe 456, a trava avalia 456."""
+    import uuid
+
+    from app.exporters import firebird_exporter as fb_mod
+
+    env = _env_trava_ligada(tmp_path)
+    _preco_na_tabela("456", 6000)
+    _vinculo_de_para("456", "B456")
+    entry_id = str(uuid.uuid4())
+    _seed_trava(entry_id, 50.0)
+    _check_trava(monkeypatch)
+    _cfg_db(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        fb_mod.FirebirdExporter,
+        "export",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("não pode chamar o Fire")),
+    )
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post(f"/api/imported/{entry_id}/{rota}")
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 409, r.text
+    assert "aguardando preço" in r.json()["detail"]
+
+
+def test_trava_libera_pelo_vinculo_e_o_exporter_recebe_o_mesmo_seq(monkeypatch, tmp_path):
+    import uuid
+
+    from app.exporters import firebird_exporter as fb_mod
+
+    env = _env_trava_ligada(tmp_path)
+    _preco_na_tabela("123", 9999)  # A: preço diferente do pedido
+    _preco_na_tabela("456", 5000)  # B: igual ao pedido
+    _vinculo_de_para("456", "B456")
+    entry_id = str(uuid.uuid4())
+    _seed_trava(entry_id, 50.0)
+    _check_trava(monkeypatch)
+    _cfg_db(monkeypatch, tmp_path)
+    recebidos: list = []
+
+    def _export(self, order, **kw):
+        recebidos.append(kw.get("produtos_por_item"))
+        return fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number, items_inserted=1, fire_codigo=777
+        )
+
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _export)
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 200, r.text
+    assert recebidos == [{0: 456}]
+

@@ -87,6 +87,20 @@ def _check_utilizavel(check: dict | None, order: Order) -> dict | None:
     return check
 
 
+def _com_vinculos(check: dict | None, produtos_por_item: dict[int, int] | None) -> dict | None:
+    """Check com o SEQ do vínculo de-para nos itens vinculados: o Fire recebe
+    esse SEQ (`FirebirdExporter(produtos_por_item=...)`) e o XLSX o código
+    dele, então é ele que a trava avalia, mesmo quando o item também casa
+    direto por EAN/código com outro produto."""
+    if check is None or not produtos_por_item:
+        return check
+    itens = [dict(it) for it in check.get("items") or []]
+    for i, seq in produtos_por_item.items():
+        if 0 <= i < len(itens):
+            itens[i]["fire_product_id"] = seq
+    return {**check, "items": itens}
+
+
 def _todos(order: Order, check: dict | None, situacao: Situacao, motivo: Motivo) -> Avaliacao:
     itens = (check or {}).get("items") or []
     itens_av = []
@@ -144,13 +158,20 @@ def _avaliar_local(order: Order, check: dict | None, entry: dict, agora: datetim
 
 
 def avaliar_entry(
-    entry: dict, order: Order, *, env: dict | None, agora: datetime
+    entry: dict,
+    order: Order,
+    *,
+    env: dict | None,
+    agora: datetime,
+    produtos_por_item: dict[int, int] | None = None,
 ) -> Avaliacao | None:
     """Avaliação para o preview: só `entry["check"]` e a cópia local; sem I/O
-    no Fire, sem audit e sem pendência. `desligado` → None."""
+    no Fire, sem audit e sem pendência. `desligado` → None.
+    `produtos_por_item`: SEQ do vínculo de-para por item (o mesmo do envio)."""
     if _modo(env) == "desligado":
         return None
-    return _avaliar_local(order, _check_utilizavel(entry.get("check"), order), entry, agora)
+    check = _com_vinculos(_check_utilizavel(entry.get("check"), order), produtos_por_item)
+    return _avaliar_local(order, check, entry, agora)
 
 
 def bloqueio_do_pedido(order: Order, entry: dict, check: dict | None) -> str | None:
@@ -199,10 +220,12 @@ def classificar_itens(
 
 
 def assinaturas_da_avaliacao(order: Order, av: Avaliacao) -> dict[int, str]:
-    """Assinatura atual de cada item avaliado (chave das decisões do Flow)."""
+    """Assinatura atual de cada item avaliado (chave das decisões do Flow):
+    a rede resolvida quando há, senão a raiz do CNPJ."""
+    rede_id = av.rede.id if av.rede is not None else None
     return {
         it.item_index: aprov.assinatura(
-            order.items[it.item_index], it.fire_produto_id, av.cnpj_rede
+            order.items[it.item_index], it.fire_produto_id, av.cnpj_rede, rede_id=rede_id
         )
         for it in av.itens
     }
@@ -213,13 +236,19 @@ def _reais(centavos: int | None) -> float | None:
 
 
 def preview_preco(
-    import_id: str, entry: dict, order: Order, *, env: dict | None, agora: datetime
+    import_id: str,
+    entry: dict,
+    order: Order,
+    *,
+    env: dict | None,
+    agora: datetime,
+    produtos_por_item: dict[int, int] | None = None,
 ) -> dict | None:
     """Bloco `preco` do preview: estado por item, igual ao que o portão decidiria
     (mesmo `classificar_itens`). Só leitura (sem Fire, sem audit, sem pendência).
     `desligado` → None."""
     check = _check_utilizavel(entry.get("check"), order)
-    av = avaliar_entry(entry, order, env=env, agora=agora)
+    av = avaliar_entry(entry, order, env=env, agora=agora, produtos_por_item=produtos_por_item)
     if av is None:
         return None
     with db.connect() as conn:
@@ -327,14 +356,35 @@ def _bloqueio_trava(
 
 
 def _decidir_ligado(
-    import_id: str, order: Order, entry: dict, live: dict, ack_items: list, agora: datetime
+    import_id: str,
+    order: Order,
+    entry: dict,
+    live: dict,
+    ack_items: list,
+    agora: datetime,
+    produtos_por_item: dict[int, int] | None,
 ) -> DecisaoEnvio:
-    check = _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order)
+    check = _com_vinculos(
+        _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order),
+        produtos_por_item,
+    )
     vazio = Avaliacao(rede=None, cnpj_rede=None)
     try:
         bloqueio = bloqueio_do_pedido(order, entry, check)
         if bloqueio is not None:
             return _bloqueio_trava("preco_nao_avaliado", bloqueio, vazio, {})
+        if check is None:
+            # Fire fora e sem check salvo: sem produto não há assinatura. Bloqueia
+            # ANTES de tocar em preco_aprovacao — senão substituir_obsoletas
+            # cancelaria toda decisão já dada e ela se perderia na volta do Fire.
+            av = _todos(order, None, "nao_avaliado", "produto_nao_identificado")
+            return _bloqueio_trava(
+                "preco_nao_avaliado",
+                f"{len(order.items)} item(ns) sem avaliação de preço: "
+                f"{_MOTIVO_LEGIVEL['produto_nao_identificado']}.",
+                av,
+                {},
+            )
         av = _avaliar_local(order, check, entry, agora)
         assinaturas = assinaturas_da_avaliacao(order, av)
         with db.connect() as conn:
@@ -397,23 +447,36 @@ def _decidir_ligado(
 
 
 def decidir_envio(
-    import_id: str, order: Order, entry: dict, *, env: dict | None, agora: datetime
+    import_id: str,
+    order: Order,
+    entry: dict,
+    *,
+    env: dict | None,
+    agora: datetime,
+    produtos_por_item: dict[int, int] | None = None,
 ) -> DecisaoEnvio:
     """Decide se o pedido pode ir ao Fire/XLSX. O chamador grava o audit de
     bloqueio (nome do seu caminho) com `block_detail` e conta `metric_labels`;
     ao liberar, chama `aplicar_precos(order, precos_aplicar)` antes de exportar.
-    `agora` deve ter timezone."""
+    `agora` deve ter timezone.
+
+    `produtos_por_item`: {posição: SEQ} dos vínculos de-para, o MESMO mapa que
+    vai ao `FirebirdExporter` (e cujos códigos vão ao XLSX). Em `observando` e
+    `ligado` a avaliação usa esse SEQ; `desligado` não olha (regra de hoje)."""
     modo = _modo(env)
     live = pc.check_order(order, env=env)
     ack_items = entry.get("sem_preco_ack_items") or []
 
     if modo == "ligado":
-        return _decidir_ligado(import_id, order, entry, live, ack_items, agora)
+        return _decidir_ligado(import_id, order, entry, live, ack_items, agora, produtos_por_item)
 
     hoje = _regra_de_hoje(live, ack_items)
     if modo == "observando":
         try:
-            check = _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order)
+            check = _com_vinculos(
+                _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order),
+                produtos_por_item,
+            )
             av = _avaliar_local(order, check, entry, agora)
             repo.append_audit(
                 import_id,

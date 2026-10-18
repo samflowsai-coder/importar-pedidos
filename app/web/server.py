@@ -2328,6 +2328,27 @@ class _FireSendOutcome:
         self.detail = detail
 
 
+def _vinculos_de_para(order, caminho: str) -> tuple[list[dict], dict[int, int]]:
+    """Vínculos de-para do pedido, consultados UMA vez antes do portão de preço.
+
+    O portão avalia o SEQ do vínculo (`produtos_por_item`), o exporter grava
+    esse mesmo SEQ e o XLSX leva o código dele (`depara_apply.aplicar`). Falha
+    aqui não derruba o envio: sem vínculo, portão e exporter caem juntos na
+    busca normal por EAN/código (e, sem match, o exporter recusa o pedido)."""
+    from app.erp import depara_apply
+    from app.persistence import db
+
+    try:
+        with db.connect() as sconn:
+            vinculos = depara_apply.resolver(order, conn=sconn)
+        return vinculos, depara_apply.produtos_por_item(vinculos)
+    except Exception as exc:  # noqa: BLE001
+        from app.utils.logger import logger
+
+        logger.warning(f"de-para pulado no {caminho}: {type(exc).__name__}: {exc}")
+        return [], {}
+
+
 def _send_one_to_fire(
     import_id: str, cfg: dict, *, request_env: dict | None = None
 ) -> _FireSendOutcome:
@@ -2378,8 +2399,14 @@ def _send_one_to_fire(
     from app.erp import preco_trava
     from app.observability import metrics
 
+    vinculos, produtos_por_item = _vinculos_de_para(order, "envio")
     decisao = preco_trava.decidir_envio(
-        import_id, order, entry, env=request_env, agora=datetime.now(UTC)
+        import_id,
+        order,
+        entry,
+        env=request_env,
+        agora=datetime.now(UTC),
+        produtos_por_item=produtos_por_item,
     )
     if decisao.bloqueado:
         repo.append_audit(import_id, "send_to_fire_blocked", decisao.block_detail)
@@ -2393,27 +2420,15 @@ def _send_one_to_fire(
     # Reuse the trace_id minted on commit so logs across commit→send-to-fire
     # are correlated for the same pedido.
     with with_trace_id(entry.get("trace_id")):
-        # De-para antes do XLS (modo both) e do insert. Item vinculado entra no
-        # Fire pelo SEQ do vínculo: o `fire_codigo` é str(SEQ) e relido como
-        # CODPROD_ALTERN casaria outro produto (BACKLOG §2.1). Falha aqui não
-        # derruba o envio — o item sem SEQ cai na busca normal e, sem match,
-        # o exporter recusa o pedido (PRODUCT_NOT_FOUND).
+        # De-para antes do XLS (modo both) e do insert, com os MESMOS vínculos
+        # que o portão avaliou. Item vinculado entra no Fire pelo SEQ do vínculo:
+        # o `fire_codigo` é str(SEQ) e relido como CODPROD_ALTERN casaria outro
+        # produto (BACKLOG §2.1).
         from app.erp import depara_apply
-        from app.persistence import db
 
-        produtos_por_item: dict[int, int] = {}
-        try:
-            with db.connect() as sconn:
-                dep_changed = depara_apply.apply(order, conn=sconn)
-            if dep_changed:
-                produtos_por_item = {
-                    c["item_index"]: int(c["fire_produto_id"]) for c in dep_changed
-                }
-                repo.append_audit(import_id, "depara_aplicado_no_fire", {"itens": dep_changed})
-        except Exception as exc:  # noqa: BLE001
-            from app.utils.logger import logger
-
-            logger.warning(f"de-para apply pulado no envio: {type(exc).__name__}: {exc}")
+        dep_changed = depara_apply.aplicar(order, vinculos)
+        if dep_changed:
+            repo.append_audit(import_id, "depara_aplicado_no_fire", {"itens": dep_changed})
 
         output_path = Path(cfg["output_dir"]).expanduser().resolve()
         output_path.mkdir(parents=True, exist_ok=True)
@@ -2618,8 +2633,14 @@ def _export_one_xlsx(
     from app.erp import preco_trava
     from app.observability import metrics
 
+    vinculos, produtos_por_item = _vinculos_de_para(order, "export")
     decisao = preco_trava.decidir_envio(
-        import_id, order, entry, env=request_env, agora=datetime.now(UTC)
+        import_id,
+        order,
+        entry,
+        env=request_env,
+        agora=datetime.now(UTC),
+        produtos_por_item=produtos_por_item,
     )
     if decisao.bloqueado:
         repo.append_audit(import_id, "xlsx_export_blocked", decisao.block_detail)
@@ -2631,19 +2652,13 @@ def _export_one_xlsx(
     preco_trava.aplicar_precos(order, decisao.precos_aplicar)
 
     with with_trace_id(entry.get("trace_id")):
-        # Enriquecer com a identidade do Fire onde há vínculo de-para (SQLite local).
+        # Identidade do Fire onde há vínculo de-para: os MESMOS vínculos que o
+        # portão avaliou (o XLSX leva o código do SEQ avaliado).
         from app.erp import depara_apply
-        from app.persistence import db
 
-        try:
-            with db.connect() as sconn:
-                dep_changed = depara_apply.apply(order, conn=sconn)
-            if dep_changed:
-                repo.append_audit(import_id, "depara_aplicado_no_xls", {"itens": dep_changed})
-        except Exception as exc:  # noqa: BLE001 — enriquecimento é best-effort; XLS não pode falhar por isso
-            from app.utils.logger import logger
-
-            logger.warning(f"de-para apply pulado no export: {type(exc).__name__}: {exc}")
+        dep_changed = depara_apply.aplicar(order, vinculos)
+        if dep_changed:
+            repo.append_audit(import_id, "depara_aplicado_no_xls", {"itens": dep_changed})
 
         output_path = Path(cfg["output_dir"]).expanduser().resolve()
         output_path.mkdir(parents=True, exist_ok=True)
@@ -3581,8 +3596,14 @@ def rehydrate_preview(
 
         from app.erp import preco_trava
 
+        _, produtos_por_item = _vinculos_de_para(order, "preview")
         preco = preco_trava.preview_preco(
-            import_id, entry, order, env=_request_environment(request), agora=datetime.now(UTC)
+            import_id,
+            entry,
+            order,
+            env=_request_environment(request),
+            agora=datetime.now(UTC),
+            produtos_por_item=produtos_por_item,
         )
         if preco is not None:
             payload["preco"] = preco

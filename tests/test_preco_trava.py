@@ -119,14 +119,22 @@ def _audits(import_id, tipo=None):
 
 
 def _decidir(
-    import_id, order, item_index=0, *, decisao="acordo", preco=None, motivo=None, rede=CNPJ_REDE
+    import_id,
+    order,
+    item_index=0,
+    *,
+    decisao="acordo",
+    preco=None,
+    motivo=None,
+    rede=CNPJ_REDE,
+    rede_id="r1",
 ):
     with db.connect() as conn:
         ok = aprov.aplicar_decisao(
             conn,
             import_id=import_id,
             item_index=item_index,
-            assinatura=aprov.assinatura(order.items[item_index], "123", rede),
+            assinatura=aprov.assinatura(order.items[item_index], "123", rede, rede_id=rede_id),
             decisao=decisao,
             preco_final_centavos=preco,
             por="rafael",
@@ -595,8 +603,8 @@ def test_ligado_substitui_obsoletas_com_o_mapa_completo(monkeypatch):
 
     assert len(chamadas) == 1
     assert chamadas[0] == {
-        0: aprov.assinatura(order.items[0], "123", CNPJ_REDE),
-        1: aprov.assinatura(order.items[1], "124", CNPJ_REDE),
+        0: aprov.assinatura(order.items[0], "123", CNPJ_REDE, rede_id="r1"),
+        1: aprov.assinatura(order.items[1], "124", CNPJ_REDE, rede_id="r1"),
     }
 
 
@@ -759,3 +767,160 @@ def test_preview_concorda_com_o_portao(monkeypatch, cenario):
     assert _liberado_no_preview(preco) is (not d.bloqueado), (cenario, preco)
     if cenario == "sem_itens":
         assert preco["bloqueio_pedido"] == d.detalhe
+
+
+# ── Revisão final: produto do portão = produto gravado (de-para) ──────────────
+
+
+def _precos_por_produto(precos: dict[str, int]):
+    with db.connect() as conn:
+        precos_repo.aplicar_lote(
+            conn,
+            redes=[{"id": "r1", "nome": "Rede X", "travada": False}],
+            cnpjs=[{"cnpj": CNPJ_REDE[:8], "rede_id": "r1", "removido": False}],
+            precos=[
+                {
+                    "rede_id": "r1",
+                    "fire_produto_id": pid,
+                    "vigente_desde": date(2026, 1, 1),
+                    "vigente_ate": None,
+                    "preco_centavos": c,
+                    "removido": False,
+                }
+                for pid, c in precos.items()
+            ],
+            cursor="c1",
+            agora=AGORA - timedelta(hours=1),
+            recursos=("precos", "redes"),
+        )
+
+
+@pytest.mark.parametrize("modo", ["ligado", "observando"])
+def test_vinculo_do_de_para_e_o_produto_avaliado(monkeypatch, modo):
+    # Item casa direto no Fire (SEQ 123 = A) mas tem vínculo de-para para o SEQ 456 (B):
+    # o Fire recebe B, então o portão avalia B.
+    _precos_por_produto({"123": 5400, "456": 5000})
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env(modo), agora=AGORA, produtos_por_item={0: 456}
+    )
+
+    assert d.avaliacao.itens[0].fire_produto_id == "456"
+    assert d.avaliacao.itens[0].motivo == "acima"
+    if modo == "ligado":
+        assert d.bloqueado is True
+        assert d.reason == "preco_aguardando"
+
+
+def test_vinculo_do_de_para_libera_pelo_preco_de_b(monkeypatch):
+    _precos_por_produto({"123": 9999, "456": 5400})
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env("ligado"), agora=AGORA, produtos_por_item={0: 456}
+    )
+
+    assert d.bloqueado is False
+    assert d.avaliacao.itens[0].fire_produto_id == "456"
+
+
+def test_vinculo_do_de_para_vale_no_check_salvo(monkeypatch):
+    _precos_por_produto({"123": 5400, "456": 5000})
+    order = _order((54.0,))
+    import_id, entry = _seed(order, check=_check())
+    _live(monkeypatch, _check(available=False, ids=[None]))
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env("ligado"), agora=AGORA, produtos_por_item={0: 456}
+    )
+
+    assert d.bloqueado is True
+    assert d.avaliacao.itens[0].fire_produto_id == "456"
+
+
+@pytest.mark.parametrize("nome", list(CENARIOS_HOJE))
+def test_desligado_ignora_o_vinculo(monkeypatch, nome):
+    check = CENARIOS_HOJE[nome]
+    order = _order((54.0,) * len(check["items"]))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, check)
+
+    sem = preco_trava.decidir_envio(import_id, order, entry, env=_env("desligado"), agora=AGORA)
+    com = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env("desligado"), agora=AGORA, produtos_por_item={0: 456}
+    )
+
+    assert (com.bloqueado, com.reason, com.detalhe, com.block_detail) == (
+        sem.bloqueado,
+        sem.reason,
+        sem.detalhe,
+        sem.block_detail,
+    )
+    assert com.avaliacao is None
+
+
+def test_preview_avalia_o_produto_do_vinculo():
+    _precos_por_produto({"123": 5400, "456": 5000})
+    order = _order((54.0,))
+    import_id, entry = _seed(order, check=_check())
+
+    preco = preco_trava.preview_preco(
+        import_id, entry, order, env=_env("ligado"), agora=AGORA, produtos_por_item={0: 456}
+    )
+
+    assert preco["itens"][0]["motivo"] == "acima"
+    assert preco["itens"][0]["estado"] == "aguardando"
+
+
+# ── Revisão final: Fire fora sem check salvo não mexe nas aprovações ─────────
+
+
+def test_fire_fora_sem_check_salvo_preserva_a_decisao(monkeypatch):
+    _copia(5000)
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())
+    preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+    _decidir(import_id, order, decisao="acordo", preco=5400)
+    antes = _linhas(import_id)
+
+    _live(monkeypatch, _check(available=False, ids=[None]))
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.reason == "preco_nao_avaliado"
+    assert _linhas(import_id) == antes
+    assert antes[0]["decisao"] == "acordo" and antes[0]["cancelada_em"] is None
+
+    _live(monkeypatch, _check())
+    assert not preco_trava.decidir_envio(
+        import_id, order, entry, env=_env("ligado"), agora=AGORA
+    ).bloqueado
+
+
+# ── Revisão final: assinatura pela rede resolvida ────────────────────────────
+
+
+def test_assinatura_usa_a_rede_resolvida_e_nao_so_a_raiz():
+    # Mesma raiz, mas o CNPJ completo aponta para outra rede: a decisão da rede r1
+    # não pode valer para a rede r2.
+    from app.erp.preco_avaliacao import Avaliacao, ItemAvaliado
+    from app.persistence.precos_repo import Rede
+
+    order = _order((54.0,))
+    item = ItemAvaliado(0, "123", "fila", "acima", 5400, 5000)
+    r1 = Avaliacao(Rede("r1", "X", False, None), CNPJ_REDE, [item])
+    r2 = Avaliacao(Rede("r2", "Y", False, None), CNPJ_REDE[:8] + "009999", [item])
+    sem_rede = Avaliacao(None, CNPJ_REDE, [item])
+
+    a1 = preco_trava.assinaturas_da_avaliacao(order, r1)[0]
+    a2 = preco_trava.assinaturas_da_avaliacao(order, r2)[0]
+    a0 = preco_trava.assinaturas_da_avaliacao(order, sem_rede)[0]
+    assert a1 != a2
+    assert a0 == aprov.assinatura(order.items[0], "123", CNPJ_REDE)
+    assert a1 == aprov.assinatura(order.items[0], "123", CNPJ_REDE, rede_id="r1")
