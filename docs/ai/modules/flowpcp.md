@@ -282,12 +282,17 @@ cópia no db do próprio ambiente):
 - **Só em `ligado`**, a cada 30 s e só com `precos.aprovacao.v1` declarado: revisões
   `pendente_envio` (`marcar_tentada` antes do POST; False = não envia), retiradas, e
   decisões (lê sem cursor → `gravar_decisao` → confirma com `empresaFaturadoraCnpj`, até vir vazia).
-- Rota (b): 201/200 → `enviada`; 409 da vigente → `subir_piso` e reenvio na mesma volta; 409 de
-  revisão já substituída → não reenvia; 422 de conteúdo e 413 → `recusada_flow` com texto
-  legível; 403 → pausa da aprovação (15 min); 400/401/404/outros → pausa do ambiente (15 min),
-  sem tocar a revisão; 429/5xx/rede → próximo ciclo. Retirada: 409 → reenvia com
-  `revisaoVigente`; 200 com `aprovacaoId` nulo = feita.
-- Estado (`gerado_em`, último erro, `pendente_envio`/`recusada_flow`) no log
+- Tabela: 400 `cursor_invalido` com cursor salvo → reinicia a cópia (no máximo 2 reinícios
+  por volta; depois pausa).
+- Rota (b): 201/200 → `enviada` (2xx fora do contrato também, com o bruto guardado); 409 da
+  vigente → `subir_piso` e reenvio na mesma volta; 409 de revisão já substituída → não reenvia;
+  422 de conteúdo → `recusada_flow` com texto legível; 413, 400 `payload_invalido` e corpo
+  inválido aqui → `bloqueio_local` (revisão fora da fila; o portão bloqueia com o motivo e só
+  conteúdo novo cria outra revisão); 403/400/401/404/outros → pausa SÓ da aprovação (15 min),
+  sem tocar a revisão; 429/5xx/rede → encerra o envio da volta (retiradas e decisões seguem).
+  Retirada: 409 → reenvia com `revisaoVigente`; 200 com `aprovacaoId` nulo = feita; sem saída
+  → loga uma vez. Decisão de outra empresa → confirmada `descartada`.
+- Estado (`gerado_em`, último erro, `pendente_envio`/`bloqueada_local`/`recusada_flow`) no log
   `flowpcp.precos estado env=…`, só quando muda. Pausas e intervalos vivem na memória do processo.
 
 Cliente: `get_precos_tabela`, `post_precos_aprovacao`, `get_precos_decisoes`,

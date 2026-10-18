@@ -542,6 +542,36 @@ def test_recusada_flow_e_novo_envio_cria_revisao_seguinte(monkeypatch):
     assert linhas[0]["conteudo_hash"] == linhas[1]["conteudo_hash"]
 
 
+def test_bloqueio_local_bloqueia_sem_recriar_revisao_e_conteudo_novo_libera_o_envio(monkeypatch):
+    _copia(5000)
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())
+    preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+    with db.connect() as conn:
+        revs.marcar_bloqueio_local(
+            conn, import_id, 1, "corpo fora do contrato, não enviado ao Flow", em=AGORA
+        )
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.reason == "preco_nao_avaliado"
+    assert "corpo fora do contrato, não enviado ao Flow" in d.detalhe
+    assert "recusad" not in d.detalhe
+    assert [(r["revisao"], r["situacao"]) for r in _revisoes(import_id)] == [(1, "pendente_envio")]
+
+    editado = _order((55.0,))
+    d = preco_trava.decidir_envio(import_id, editado, entry, env=_env("ligado"), agora=AGORA)
+    assert d.reason == "preco_aguardando"
+    linhas = _revisoes(import_id)
+    assert [(r["revisao"], r["situacao"]) for r in linhas] == [
+        (1, "substituida"),
+        (2, "pendente_envio"),
+    ]
+    assert linhas[1]["bloqueio_local"] is None
+
+
 def test_recusa_do_flow_e_edicao_que_zera_a_fila_libera_e_enfileira_retirada(monkeypatch):
     _copia(5000)
     order = _order((54.0,))
@@ -1103,6 +1133,7 @@ def _liberado_no_preview(preco):
         "copia_velha",
         "editado_depois_da_decisao",
         "recusada_flow",
+        "bloqueada_local",
         "fila_zerada_depois_do_envio",
     ],
 )
@@ -1134,6 +1165,11 @@ def test_preview_concorda_com_o_portao(monkeypatch, cenario):
     if cenario == "recusada_flow":
         with db.connect() as conn:
             revs.marcar_recusa_flow(conn, import_id, 1, "produto_desconhecido", em=AGORA)
+    if cenario == "bloqueada_local":
+        with db.connect() as conn:
+            revs.marcar_bloqueio_local(
+                conn, import_id, 1, "pedido grande demais para o Flow", em=AGORA
+            )
     if cenario == "editado_depois_da_decisao":
         order = _order((55.0,))
     if cenario == "fila_zerada_depois_do_envio":
@@ -1154,6 +1190,10 @@ def test_preview_concorda_com_o_portao(monkeypatch, cenario):
             "erro_flow": "produto_desconhecido",
         }
         assert preco["itens"][0]["estado"] == "recusado"
+    if cenario == "bloqueada_local":
+        assert preco["bloqueio_pedido"] == d.detalhe
+        assert "pedido grande demais para o Flow" in d.detalhe
+        assert preco["itens"][0]["estado"] == "nao_avaliado"
 
 
 # ── Revisão final: produto do portão = produto gravado (de-para) ──────────────

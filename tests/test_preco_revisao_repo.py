@@ -321,3 +321,47 @@ def test_422_limpa_tentada_e_cancel_retira_a_que_o_flow_guarda(conn):
     rev.retirar(conn, IMP, "cancelado", em=DEPOIS)
 
     assert [p["revisao"] for p in rev.retiradas_pendentes(conn, 10)] == [1]
+
+
+# ─── bloqueio local (corpo fora do contrato, 413, 400 payload_invalido) ──────
+
+
+def test_bloqueio_local_sai_da_fila_e_limpa_a_tentativa(conn):
+    rev.garantir_revisao(conn, IMP, _corpo(), "sha256:a", agora=AGORA)
+    assert rev.marcar_tentada(conn, IMP, 1, em=AGORA)
+    rev.marcar_bloqueio_local(conn, IMP, 1, "pedido grande demais para o Flow", em=DEPOIS)
+    v = rev.vigente(conn, IMP)
+    assert v["situacao"] == "pendente_envio"
+    assert v["bloqueio_local"] == "pedido grande demais para o Flow"
+    assert v["tentada_em"] is None
+    assert rev.pendentes_envio(conn, 10) == []
+
+
+def test_bloqueio_local_com_o_mesmo_conteudo_nao_recria_revisao(conn):
+    rev.garantir_revisao(conn, IMP, _corpo(), "sha256:a", agora=AGORA)
+    rev.marcar_bloqueio_local(conn, IMP, 1, "x", em=AGORA)
+    assert rev.garantir_revisao(conn, IMP, _corpo(), "sha256:a", agora=DEPOIS) == 1
+    assert _situacoes(conn) == [(1, "pendente_envio")]
+    assert rev.garantir_revisao(conn, IMP, _corpo("b"), "sha256:b", agora=DEPOIS) == 2
+    assert _situacoes(conn) == [(1, "substituida"), (2, "pendente_envio")]
+    assert rev.vigente(conn, IMP)["bloqueio_local"] is None
+
+
+def test_bloqueio_local_so_vale_para_pendente_envio(conn):
+    rev.garantir_revisao(conn, IMP, _corpo(), "sha256:a", agora=AGORA)
+    rev.marcar_enviada(conn, IMP, 1, {}, em=AGORA)
+    rev.marcar_bloqueio_local(conn, IMP, 1, "x", em=AGORA)
+    assert rev.vigente(conn, IMP)["bloqueio_local"] is None
+
+
+def test_contagem_por_situacao(conn):
+    rev.garantir_revisao(conn, IMP, _corpo(), "sha256:a", agora=AGORA)
+    rev.garantir_revisao(conn, "imp-2", _corpo(), "sha256:a", agora=AGORA)
+    rev.garantir_revisao(conn, "imp-3", _corpo(), "sha256:a", agora=AGORA)
+    rev.marcar_bloqueio_local(conn, "imp-2", 1, "x", em=AGORA)
+    rev.marcar_recusa_flow(conn, "imp-3", 1, "rede_desconhecida", em=AGORA)
+    assert rev.contagem_por_situacao(conn) == {
+        "pendente_envio": 1,
+        "bloqueada_local": 1,
+        "recusada_flow": 1,
+    }

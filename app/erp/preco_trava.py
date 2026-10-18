@@ -445,7 +445,8 @@ def classificar_itens(
     Sem revisão vigente: item `ok` local fica `ok`, fila fica `aguardando`.
     Com revisão: cada item usa a decisão da sua `itemChave` (`recusado` →
     recusado; outra → aprovado com `precoAprovadoCentavos/100`; sem decisão
-    → aguardando); revisão `recusada_flow` → todos recusados.
+    → aguardando); revisão `recusada_flow` → todos recusados; revisão com
+    `bloqueio_local` → todos não avaliados.
     Devolve também o preço a aplicar e o `decisaoId` de cada item aprovado."""
     estados: dict[int, str] = {}
     precos: dict[int, float] = {}
@@ -458,6 +459,8 @@ def classificar_itens(
             estados[i] = "nao_avaliado"
         elif revisao is None:
             estados[i] = "ok" if it.situacao == "ok" else "aguardando"
+        elif revisao.get("bloqueio_local"):
+            estados[i] = "nao_avaliado"
         elif revisao.get("situacao") == "recusada_flow":
             estados[i] = "recusado"
         else:
@@ -503,7 +506,12 @@ def preview_preco(
             empresa = preco_regra.normalizar_cnpj((env or {}).get("cnpj")) or ""
             h = conteudo_hash(order, av, cliente_cnpj=av.cnpj_rede, empresa_cnpj=empresa)
             acao = _acao_revisao(vig, h, bool(av.pendentes))
-            if acao == "vigente":
+            if acao == "vigente" and vig.get("bloqueio_local"):
+                revisao = vig
+                bloqueio = (
+                    f"Pedido não pode ir ao Flow para aprovação de preço: {vig['bloqueio_local']}."
+                )
+            elif acao == "vigente":
                 revisao, decisoes = vig, revs.decisoes_da_vigente(conn, import_id)
             elif (
                 acao == "nova"
@@ -679,6 +687,9 @@ def _revisao_do_envio(
                 erro_anterior = vig.get("erro_definitivo")
             revs.garantir_revisao(conn, import_id, corpo, h, agora=agora)
             vig = revs.vigente(conn, import_id)
+        if vig is not None and vig.get("bloqueio_local"):
+            # Corpo que não pode ir ao Flow: bloqueia até o conteúdo mudar.
+            return None, {}, vig["bloqueio_local"], None
         return vig, revs.decisoes_da_vigente(conn, import_id), None, erro_anterior
 
 

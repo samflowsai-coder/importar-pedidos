@@ -14,14 +14,18 @@ Flow da MM e manda o CNPJ dela como `empresaFaturadora`):
    pendentes e as retiradas (rota b), lê as decisões da empresa, grava e
    confirma (rota c).
 
-Respostas da rota (b): 201/200 → `enviada`; 409 da vigente → piso e reenvio na
-mesma volta; 409 de revisão que já não é a vigente → fica `substituida`; 422 de
-conteúdo e 413 → `recusada_flow` (o portão bloqueia com o texto); 403 → pausa
-longa do ambiente; 400/401/404 e outros → pausa do ambiente; 429/5xx/rede →
-próximo ciclo. 403 e erro de configuração nunca tocam a revisão.
+Respostas da rota (b): 201/200 → `enviada` (2xx fora do contrato também: o Flow
+gravou); 409 da vigente → piso e reenvio na mesma volta; 409 de revisão que já
+não é a vigente → fica `substituida`; 422 de conteúdo → `recusada_flow`; 413 e
+400 `payload_invalido` (e corpo inválido aqui) → bloqueio local daquela revisão;
+403, 400/401/404 e outros → pausa só da aprovação (a tabela segue); 429/5xx/rede
+→ para o envio desta volta (retiradas e decisões seguem). Pausa e transitório
+nunca tocam a revisão. Na tabela, 400 `cursor_invalido` com cursor salvo
+reinicia a cópia como o `reiniciar`.
 
 Estado por ambiente (`geradoEm` da cópia completa, último erro, contagem de
-`pendente_envio`/`recusada_flow`) vai ao log quando muda (`flowpcp.precos estado`).
+`pendente_envio`/`bloqueada_local`/`recusada_flow`) vai ao log quando muda
+(`flowpcp.precos estado`).
 `PORTAL_FLOWPCP_PRECOS=0` desliga tudo (ausente = ligado).
 """
 
@@ -51,6 +55,9 @@ MAX_VOLTAS_DECISOES = 20
 MAX_REENVIOS = 3
 CAPACIDADE_APROVACAO = "precos.aprovacao.v1"
 MOTIVO_RETIRADA_PADRAO = "pedido retirado no Portal"
+BLOQUEIO_CORPO_LOCAL = "corpo fora do contrato, não enviado ao Flow"
+BLOQUEIO_CORPO_FLOW = "corpo fora do contrato (o Flow não aceitou o formato)"
+BLOQUEIO_GRANDE = "pedido grande demais para o Flow (corpo acima de 2 MB)"
 _TRANSITORIOS = frozenset({429, 500, 502, 503, 504})
 _RECUSAS_422 = frozenset(
     {"rede_desconhecida", "produto_desconhecido", "empresa_faturadora_desconhecida"}
@@ -123,15 +130,22 @@ def _eh_transitorio(exc: FlowPCPClientError) -> bool:
     return exc.status_code is None or exc.status_code in _TRANSITORIOS
 
 
-def _falha_aprovacao(slug: str, rota: str, exc: FlowPCPClientError, agora: datetime) -> None:
-    """Falha nas rotas (b)/(c) que não é do conteúdo: 403 = ordem de ligar (pausa
-    a aprovação); o resto (400/401/404, tenant inativo...) = configuração ou bug
-    (pausa o ambiente). Transitório só espera o próximo ciclo."""
+def _fora_do_contrato_2xx(exc: FlowPCPClientError) -> bool:
+    """2xx cujo corpo não bate com o schema: o Flow aceitou o pedido."""
+    return exc.error == "resposta_fora_do_contrato" and 200 <= (exc.status_code or 0) < 300
+
+
+def _falha_aprovacao(slug: str, rota: str, exc: FlowPCPClientError, agora: datetime) -> bool:
+    """Falha nas rotas (b)/(c) que não é do conteúdo: 403 = ordem de ligar; o resto
+    (400/401/404, tenant inativo...) = configuração ou bug. Pausa SÓ a aprovação:
+    a tabela tem tratamento e pausa próprios. Transitório só espera o próximo
+    ciclo. Devolve True se pausou."""
     if _eh_transitorio(exc):
         _transitorio(slug, rota, exc)
-        return
+        return False
     motivo = f"{rota}: {exc.status_code} {exc.error or 'sem código'}"
-    _pausar(slug, agora, tudo=exc.status_code != 403, motivo=motivo)
+    _pausar(slug, agora, tudo=False, motivo=motivo)
+    return True
 
 
 def rodar(agora: datetime) -> None:
@@ -204,6 +218,15 @@ def _sincronizar_tabela(conn, client, slug: str, empresa: str, agora: datetime) 
         try:
             pagina = client.get_precos_tabela(empresa, cursor, LIMITE_TABELA)
         except FlowPCPClientError as exc:
+            if exc.status_code == 400 and exc.error == "cursor_invalido" and cursor is not None:
+                reinicios += 1
+                if reinicios > MAX_REINICIOS:
+                    _pausar(slug, agora, tudo=True, motivo="tabela: cursor inválido em laço")
+                    return
+                logger.warning(f"flowpcp.precos env={slug}: cursor recusado pelo Flow, reiniciando")
+                precos_repo.reiniciar(conn, empresa_cnpj=empresa)
+                cursor = None
+                continue
             if _eh_transitorio(exc):
                 _transitorio(slug, "tabela", exc)
             else:
@@ -254,8 +277,6 @@ def _aprovacao(conn, client, slug: str, empresa: str, agora: datetime) -> None:
 
 def _texto_recusa(exc: FlowPCPClientError) -> str:
     detalhes = exc.details or {}
-    if exc.status_code == 413:
-        return "pedido grande demais para o Flow (corpo acima de 2 MB)"
     if exc.error == "produto_desconhecido":
         ids = detalhes.get("erpProdutoIds")
         lista = ", ".join(str(i) for i in ids) if isinstance(ids, list) and ids else "?"
@@ -271,8 +292,9 @@ def _revisao_vigente_flow(exc: FlowPCPClientError) -> int | None:
 
 
 def _enviar_revisoes(conn, client, slug: str, agora: datetime) -> bool:
-    """Revisões `pendente_envio` (só a vigente de cada pedido). False = parar a
-    volta (transitório ou pausa)."""
+    """Revisões `pendente_envio` (só a vigente de cada pedido, fora as bloqueadas
+    localmente). Um pedido ruim não para os outros. Transitório encerra o envio
+    desta volta (retiradas e decisões seguem). False = pausou: parar a volta."""
     fila = revs.pendentes_envio(conn, LOTE_ENVIO)
     reenvios: dict[str, int] = {}
     while fila:
@@ -282,9 +304,7 @@ def _enviar_revisoes(conn, client, slug: str, agora: datetime) -> bool:
             precos_schema.validar_envio(corpo)
         except ValueError as exc:  # o portão valida antes de gravar: defesa
             logger.error(f"flowpcp.precos env={slug} {imp}/{n}: corpo fora do contrato: {exc}")
-            revs.marcar_recusa_flow(
-                conn, imp, n, "corpo fora do contrato no Portal (não foi ao Flow)", em=agora
-            )
+            revs.marcar_bloqueio_local(conn, imp, n, BLOQUEIO_CORPO_LOCAL, em=agora)
             continue
         if not revs.marcar_tentada(conn, imp, n, em=agora):
             continue
@@ -294,6 +314,8 @@ def _enviar_revisoes(conn, client, slug: str, agora: datetime) -> bool:
             acao = _erro_do_pedido(conn, slug, imp, n, exc, agora)
             if acao == "parar":
                 return False
+            if acao == "transitorio":
+                return True
             if acao == "reenviar" and reenvios.get(imp, 0) < MAX_REENVIOS:
                 reenvios[imp] = reenvios.get(imp, 0) + 1
                 nova = revs.vigente(conn, imp)
@@ -307,7 +329,11 @@ def _enviar_revisoes(conn, client, slug: str, agora: datetime) -> bool:
 def _erro_do_pedido(
     conn, slug: str, imp: str, n: int, exc: FlowPCPClientError, agora: datetime
 ) -> str:
-    """Devolve "parar" | "seguir" | "reenviar" (decisão 7 do adendo)."""
+    """Devolve "parar" | "transitorio" | "seguir" | "reenviar" (decisão 7 do adendo)."""
+    if _fora_do_contrato_2xx(exc):
+        revs.marcar_enviada(conn, imp, n, {"bruto": exc.body}, em=agora)
+        _avisar_uma_vez(slug, "resposta_b", "resposta 2xx da aprovação fora do contrato; aceita")
+        return "seguir"
     if exc.status_code == 409 and exc.error in ("revisao_obsoleta", "conteudo_divergente"):
         atual = revs.vigente(conn, imp)
         if atual is None or int(atual["revisao"]) != n:
@@ -323,13 +349,17 @@ def _erro_do_pedido(
         nova = revs.subir_piso(conn, imp, piso, agora=agora)
         logger.info(f"flowpcp.precos env={slug} {imp}: {exc.error}, reenvia como revisão {nova}")
         return "reenviar"
-    if exc.status_code == 413 or (exc.status_code == 422 and exc.error in _RECUSAS_422):
+    if exc.status_code == 413 or (exc.status_code == 400 and exc.error == "payload_invalido"):
+        texto = BLOQUEIO_GRANDE if exc.status_code == 413 else BLOQUEIO_CORPO_FLOW
+        revs.marcar_bloqueio_local(conn, imp, n, texto, em=agora)
+        logger.warning(f"flowpcp.precos env={slug} {imp}/{n} bloqueada aqui: {texto}")
+        return "seguir"
+    if exc.status_code == 422 and exc.error in _RECUSAS_422:
         texto = _texto_recusa(exc)
         revs.marcar_recusa_flow(conn, imp, n, texto, em=agora)
         logger.warning(f"flowpcp.precos env={slug} {imp}/{n} recusada pelo Flow: {texto}")
         return "seguir"
-    _falha_aprovacao(slug, "aprovação", exc, agora)
-    return "parar"
+    return "parar" if _falha_aprovacao(slug, "aprovação", exc, agora) else "transitorio"
 
 
 def _motivo_retirada(texto: str | None) -> str:
@@ -341,7 +371,9 @@ def _motivo_retirada(texto: str | None) -> str:
 
 def _enviar_retiradas(conn, client, slug: str, empresa: str, agora: datetime) -> bool:
     """Retiradas pendentes. 409 `revisao_obsoleta` → reenvia com a `revisaoVigente`
-    do Flow (nunca pausa por isso); 200 com `aprovacaoId` nulo = feito."""
+    do Flow (nunca pausa por isso); 200 com `aprovacaoId` nulo = feito. Retirada
+    sem saída (inválida, 409 sem revisão nova) loga uma vez e fica para depois.
+    Transitório encerra as retiradas desta volta. False = pausou."""
     for r in revs.retiradas_pendentes(conn, LOTE_ENVIO):
         imp, n = r["import_id"], int(r["revisao"])
         base = {
@@ -357,7 +389,11 @@ def _enviar_retiradas(conn, client, slug: str, empresa: str, agora: datetime) ->
             try:
                 precos_schema.validar_envio(corpo)
             except ValueError as exc:
-                logger.error(f"flowpcp.precos env={slug} retirada {imp}/{alvo} inválida: {exc}")
+                _avisar_uma_vez(
+                    slug,
+                    f"retirada_invalida:{imp}:{alvo}",
+                    f"retirada {imp}/{alvo} inválida: {exc}",
+                )
                 break
             try:
                 client.post_precos_aprovacao(corpo)
@@ -367,13 +403,19 @@ def _enviar_retiradas(conn, client, slug: str, empresa: str, agora: datetime) ->
                     if vigente_flow is not None and vigente_flow != alvo:
                         alvo = vigente_flow
                         continue
-                    logger.warning(
-                        f"flowpcp.precos env={slug} retirada {imp}/{alvo}: 409 sem revisão "
-                        "nova; tenta no próximo ciclo"
+                    _avisar_uma_vez(
+                        slug,
+                        f"retirada_409:{imp}:{alvo}",
+                        f"retirada {imp}/{alvo}: 409 sem revisão nova; tenta no próximo ciclo",
                     )
                     break
-                _falha_aprovacao(slug, "retirada", exc, agora)
-                return False
+                if _fora_do_contrato_2xx(exc):
+                    _avisar_uma_vez(
+                        slug, "resposta_b", "resposta 2xx da aprovação fora do contrato; aceita"
+                    )
+                    revs.marcar_retirada_enviada(conn, imp, n, em=agora)
+                    break
+                return not _falha_aprovacao(slug, "retirada", exc, agora)
             revs.marcar_retirada_enviada(conn, imp, n, em=agora)
             break
     return True
@@ -396,10 +438,11 @@ def _ler_decisoes(conn, client, slug: str, empresa: str, agora: datetime) -> Non
         for d in novas:
             vistas.add(d.decisaoId.lower())
             if d.empresaFaturadoraCnpj != empresa:
-                logger.error(
+                logger.warning(
                     f"flowpcp.precos env={slug}: decisão {d.decisaoId} de outra empresa "
-                    "faturadora; não grava nem confirma"
+                    "faturadora; não grava, confirma descartada"
                 )
+                confirmacoes.append({"decisaoId": d.decisaoId, "resultado": "descartada"})
                 continue
             resultado = revs.gravar_decisao(conn, d.model_dump(mode="json"), agora=agora)
             confirmacoes.append({"decisaoId": d.decisaoId, "resultado": resultado})
@@ -411,8 +454,18 @@ def _ler_decisoes(conn, client, slug: str, empresa: str, agora: datetime) -> Non
             "confirmacoes": confirmacoes,
         }
         try:
+            precos_schema.ConfirmacaoDecisoesV1.model_validate(corpo)
+        except ValueError as exc:
+            logger.error(f"flowpcp.precos env={slug}: confirmação fora do contrato: {exc}")
+            return
+        try:
             resposta = client.post_precos_confirmar(corpo)
         except FlowPCPClientError as exc:
+            if _fora_do_contrato_2xx(exc):
+                # O Flow confirmou; se não, a decisão volta na leitura e é reconfirmada.
+                _avisar_uma_vez(slug, "resposta_c", "resposta 2xx do confirmar fora do contrato")
+                revs.marcar_confirmada(conn, [c["decisaoId"] for c in confirmacoes], em=agora)
+                continue
             _falha_aprovacao(slug, "confirmação", exc, agora)
             return
         situacoes = {x.decisaoId.lower(): x.situacao for x in resposta.resultados}
@@ -436,22 +489,18 @@ def _ler_decisoes(conn, client, slug: str, empresa: str, agora: datetime) -> Non
 
 def _logar_estado(conn, slug: str) -> None:
     completo = precos_repo.estado_sync(conn).completo_em
-    conta = dict(
-        conn.execute(
-            "SELECT situacao, COUNT(*) FROM preco_revisao"
-            " WHERE situacao IN ('pendente_envio', 'recusada_flow') GROUP BY situacao"
-        ).fetchall()
-    )
+    conta = revs.contagem_por_situacao(conn)
     estado = (
         completo.isoformat() if completo else None,
         _ultimo_erro.get(slug),
         conta.get("pendente_envio", 0),
         conta.get("recusada_flow", 0),
+        conta.get("bloqueada_local", 0),
     )
     if _estado_logado.get(slug) == estado:
         return
     _estado_logado[slug] = estado
     logger.info(
         f"flowpcp.precos estado env={slug} gerado_em={estado[0]} ultimo_erro={estado[1]} "
-        f"pendente_envio={estado[2]} recusada_flow={estado[3]}"
+        f"pendente_envio={estado[2]} recusada_flow={estado[3]} bloqueada_local={estado[4]}"
     )

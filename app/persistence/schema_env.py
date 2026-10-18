@@ -391,6 +391,8 @@ DROP TABLE IF EXISTS preco_aprovacao;
 -- Revisão do pedido enviada ao Flow (rota b): número monotônico por pedido +
 -- hash do conteúdo que muda a avaliação. corpo_json = aprovacaoEnvioV1 com a
 -- revisão. situacao: pendente_envio | enviada | recusada_flow | substituida | retirada.
+-- bloqueio_local: corpo que não pode ir ao Flow (fora do contrato, 413, 400
+-- payload_invalido); a revisão fica pendente_envio, fora da fila, até o conteúdo mudar.
 CREATE TABLE IF NOT EXISTS preco_revisao (
     import_id           TEXT NOT NULL,
     revisao             INTEGER NOT NULL,
@@ -406,6 +408,7 @@ CREATE TABLE IF NOT EXISTS preco_revisao (
     retirada_em         TEXT,
     retirada_motivo     TEXT,
     retirada_enviada_em TEXT,
+    bloqueio_local      TEXT,
     criado_em           TEXT NOT NULL,
     PRIMARY KEY (import_id, revisao)
 );
@@ -491,4 +494,6 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("flowpcp_decisoes_mapping", "aplicada_em", "ALTER TABLE flowpcp_decisoes_mapping ADD COLUMN aplicada_em TEXT"),
     # Trava de preço: revisão cujo POST saiu (o Flow pode conhecê-la sem 201).
     ("preco_revisao", "tentada_em", "ALTER TABLE preco_revisao ADD COLUMN tentada_em TEXT"),
+    # Trava de preço: corpo que não pode ir ao Flow (bloqueio local, não recusa do Flow).
+    ("preco_revisao", "bloqueio_local", "ALTER TABLE preco_revisao ADD COLUMN bloqueio_local TEXT"),
 )

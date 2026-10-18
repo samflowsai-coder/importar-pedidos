@@ -50,9 +50,9 @@ def _resposta(revisao=1, *, ja=False, aprovacao_id=None, situacao="pendente", ex
     return ps.AprovacaoRespostaV1.model_validate(r)
 
 
-def _erro(status, error=None, details=None):
+def _erro(status, error=None, details=None, body=None):
     return FlowPCPClientError(
-        f"status {status}", status_code=status, error=error, details=details or {}
+        f"status {status}", status_code=status, error=error, details=details or {}, body=body
     )
 
 
@@ -316,6 +316,39 @@ def test_403_tabela_desligada_nao_apaga_a_copia_e_pausa(mm, flow):
     assert len(flow.chamadas) > n
 
 
+def test_cursor_invalido_reinicia_a_copia_e_recomeca_sem_cursor(mm, flow):
+    flow.tabela = [_pagina(cursor="c1")]
+    precos.rodar(AGORA)
+    nova_rede = {
+        "tipo": "rede",
+        "redeId": "a1a1a1a1-0000-4000-8000-0000000000ee",
+        "nome": "Outra",
+        "ativa": True,
+        "travada": False,
+        "raizes": ["55443322"],
+        "cnpjs": [],
+    }
+    flow.tabela = [_erro(400, "cursor_invalido"), _pagina(mudancas=[nova_rede], cursor="c2")]
+    precos.rodar(AGORA + timedelta(seconds=61))
+    assert [a["cursor"] for a in flow.de("tabela")][-2:] == ["c1", None]
+    assert _redes() == ["a1a1a1a1-0000-4000-8000-0000000000ee"]
+    assert _estado().cursor == "c2"
+
+
+def test_cursor_invalido_em_laco_para_em_max_reinicios_e_pausa(mm, flow):
+    def responde(a):
+        if a["cursor"] is not None:
+            return _erro(400, "cursor_invalido")
+        return _pagina(mudancas=[], temMais=True, cursor="cx")
+
+    flow.tabela = [responde] * 50
+    precos.rodar(AGORA)
+    chamadas = len(flow.de("tabela"))
+    assert chamadas == 2 * (precos.MAX_REINICIOS + 1)
+    precos.rodar(AGORA + timedelta(seconds=61))
+    assert len(flow.de("tabela")) == chamadas  # pausado
+
+
 def test_pagina_de_outra_empresa_nao_e_aplicada(mm, flow):
     flow.tabela = [_pagina(empresaFaturadoraCnpj=NASMAR)]
     precos.rodar(AGORA)
@@ -442,14 +475,77 @@ def test_422_produto_desconhecido_recusa_a_revisao_e_nao_reenvia(mm, flow):
     assert len(flow.de("aprovacao")) == 1
 
 
-def test_413_payload_grande_bloqueia_local_e_nao_reenvia_o_mesmo_corpo(mm, flow):
+@pytest.mark.parametrize(
+    ("status", "error", "texto"),
+    [
+        (413, "payload_grande", "pedido grande demais para o Flow"),
+        (400, "payload_invalido", "corpo fora do contrato"),
+    ],
+)
+def test_corpo_definitivamente_recusado_bloqueia_local_e_nao_reenvia(
+    mm, flow, status, error, texto
+):
     _revisao()
-    flow.aprovacao = [_erro(413, "payload_grande")]
+    flow.aprovacao = [_erro(status, error)]
     precos.rodar(AGORA)
-    assert _situacoes() == [(1, "recusada_flow")]
-    assert "2 MB" in _linha(1)["erro_definitivo"]
+    linha = _linha(1)
+    assert linha["situacao"] == "pendente_envio"
+    assert texto in linha["bloqueio_local"]
+    assert linha["erro_definitivo"] is None
+    assert linha["tentada_em"] is None
     precos.rodar(AGORA + timedelta(seconds=31))
     assert len(flow.de("aprovacao")) == 1
+    assert flow.rotas().count("decisoes") == 2  # não pausou
+
+
+def test_corpo_invalido_local_bloqueia_sem_ir_ao_flow(mm, flow):
+    _revisao()
+    with router.env_connect("mm") as conn:
+        conn.execute("UPDATE preco_revisao SET corpo_json = ?", (json.dumps({"tipo": "pedido"}),))
+    precos.rodar(AGORA)
+    assert flow.de("aprovacao") == []
+    linha = _linha(1)
+    assert "corpo fora do contrato" in linha["bloqueio_local"]
+    assert linha["erro_definitivo"] is None
+
+
+def test_pedido_envenenado_nao_bloqueia_os_outros_nem_a_tabela(mm, flow):
+    _revisao(external="imp-a")
+    _revisao(external="imp-b")
+    flow.aprovacao = [_erro(400, "payload_invalido")]
+    precos.rodar(AGORA)
+    assert [c["externalId"] for c in flow.de("aprovacao")] == ["imp-a", "imp-b"]
+    assert _linha(1, external="imp-a")["bloqueio_local"] is not None
+    assert _situacoes(external="imp-b") == [(1, "enviada")]
+    precos.rodar(AGORA + timedelta(seconds=61))
+    assert flow.rotas().count("tabela") == 2
+
+
+def test_resposta_2xx_fora_do_contrato_na_aprovacao_conta_como_enviada(mm, flow):
+    _revisao()
+    flow.aprovacao = [_erro(201, "resposta_fora_do_contrato", body='{"novo": 1}')]
+    precos.rodar(AGORA)
+    assert _situacoes() == [(1, "enviada")]
+    assert "novo" in _linha(1)["resposta_json"]
+    assert flow.rotas().count("decisoes") >= 1  # sem pausa
+    precos.rodar(AGORA + timedelta(seconds=61))
+    assert flow.rotas().count("tabela") == 2
+
+
+def test_transitorio_num_pedido_nao_para_retiradas_nem_decisoes(mm, flow):
+    _revisao(external="imp-velho")
+    precos.rodar(AGORA)
+    with router.env_connect("mm") as conn:
+        revs.retirar(conn, "imp-velho", "pedido cancelado no Portal", em=AGORA)
+    _revisao(external="imp-a")
+    _revisao(external="imp-b")
+    flow.aprovacao = [_erro(503, "erro_db")]
+    n_dec = flow.rotas().count("decisoes")
+    precos.rodar(AGORA + timedelta(seconds=31))
+    pedidos = [c for c in flow.de("aprovacao") if c["tipo"] == "pedido"]
+    assert [c["externalId"] for c in pedidos][-1] == "imp-a"  # parou o laço de envio
+    assert [c["tipo"] for c in flow.de("aprovacao")][-1] == "retirada"
+    assert flow.rotas().count("decisoes") == n_dec + 1
 
 
 def test_503_continua_pendente_e_tenta_de_novo_no_proximo_ciclo(mm, flow):
@@ -475,7 +571,7 @@ def test_erro_de_rede_e_transitorio(mm, flow):
     [
         (403, "aprovacao_preco_desligada"),
         (401, "unauthorized"),
-        (400, "payload_invalido"),
+        (400, "json_invalido"),
         (404, "tenant_nao_encontrado"),
         (422, "tenant_inativo"),
     ],
@@ -488,6 +584,7 @@ def test_config_ou_ordem_de_ligar_pausa_e_nunca_toca_a_revisao(mm, flow, status,
     assert _linha(1)["erro_definitivo"] is None
     precos.rodar(AGORA + timedelta(minutes=5))
     assert len(flow.de("aprovacao")) == 1
+    assert flow.rotas().count("tabela") == 2  # a pausa é só da aprovação
     precos.rodar(AGORA + timedelta(minutes=16))
     assert len(flow.de("aprovacao")) == 2
 
@@ -510,6 +607,42 @@ def test_retirada_409_reenvia_com_a_revisao_vigente_do_flow(mm, flow):
     assert _linha(1)["retirada_enviada_em"] is not None
     with router.env_connect("mm") as conn:
         assert revs.retiradas_pendentes(conn, 10) == []
+
+
+@pytest.fixture
+def logs():
+    from app.utils.logger import logger
+
+    msgs: list[str] = []
+    sink = logger.add(lambda m: msgs.append(str(m)), level="WARNING")
+    yield msgs
+    logger.remove(sink)
+
+
+def test_retirada_409_sem_revisao_nova_loga_uma_vez(mm, flow, logs):
+    _revisao()
+    precos.rodar(AGORA)
+    with router.env_connect("mm") as conn:
+        revs.retirar(conn, IMP, "pedido cancelado no Portal", em=AGORA)
+    obsoleta = _erro(409, "revisao_obsoleta", {"revisaoVigente": 1})
+    flow.aprovacao = [obsoleta, obsoleta, obsoleta]
+    precos.rodar(AGORA + timedelta(seconds=31))
+    precos.rodar(AGORA + timedelta(seconds=62))
+    assert len([m for m in logs if "retirada" in m and "409" in m]) == 1
+    assert _linha(1)["retirada_enviada_em"] is None
+
+
+def test_retirada_invalida_loga_uma_vez(mm, flow, logs):
+    _revisao()
+    precos.rodar(AGORA)
+    with router.env_connect("mm") as conn:
+        revs.retirar(conn, IMP, "pedido cancelado no Portal", em=AGORA)
+        # externalId acima de 128 caracteres: a retirada nunca passa no schema
+        conn.execute("UPDATE preco_revisao SET import_id = ?", ("x" * 200,))
+    precos.rodar(AGORA + timedelta(seconds=31))
+    precos.rodar(AGORA + timedelta(seconds=62))
+    assert [c for c in flow.de("aprovacao") if c["tipo"] == "retirada"] == []
+    assert len([m for m in logs if "retirada" in m and "inválida" in m]) == 1
 
 
 def test_retirada_200_com_aprovacao_nula_esta_feita(mm, flow):
@@ -564,6 +697,32 @@ def test_decisao_de_revisao_velha_e_confirmada_descartada(mm, flow):
     ]
 
 
+def test_decisao_de_outra_empresa_e_confirmada_descartada_sem_gravar(mm, flow):
+    _revisao()
+    d = _ex("decisoesPagina")["decisoes"][0]
+    d["empresaFaturadoraCnpj"] = NASMAR
+    flow.decisoes = [_decisoes(d)]
+    precos.rodar(AGORA)
+    assert flow.de("confirmar")[0]["confirmacoes"] == [
+        {"decisaoId": d["decisaoId"], "resultado": "descartada"}
+    ]
+    with router.env_connect("mm") as conn:
+        assert revs.decisoes_da_vigente(conn, IMP) == {}
+
+
+def test_confirmar_2xx_fora_do_contrato_nao_pausa_e_nao_reenvia(mm, flow):
+    _revisao()
+    d = _ex("decisoesPagina")["decisoes"][0]
+    flow.decisoes = [_decisoes(d)]
+    flow.confirmar = [_erro(200, "resposta_fora_do_contrato", body="{}")]
+    precos.rodar(AGORA)
+    with router.env_connect("mm") as conn:
+        assert revs.confirmacoes_pendentes(conn, 10) == []
+    precos.rodar(AGORA + timedelta(seconds=61))
+    assert flow.rotas().count("tabela") == 2
+    assert flow.rotas().count("decisoes") >= 2
+
+
 def test_confirmacao_conflito_ou_nao_encontrada_so_loga_e_nao_reenvia(mm, flow):
     _revisao()
     ds = _ex("decisoesPagina")["decisoes"][:2]
@@ -590,7 +749,7 @@ def test_decisao_que_volta_sem_progresso_nao_prende_o_ciclo(mm, flow):
     d = _ex("decisoesPagina")["decisoes"][0]
     flow.decisoes = [_decisoes(d)] * 50
     precos.rodar(AGORA)
-    assert len(flow.de("decisoes")) <= 3
+    assert len(flow.de("decisoes")) == 2
 
 
 def test_falha_no_confirmar_deixa_para_o_proximo_ciclo(mm, flow):

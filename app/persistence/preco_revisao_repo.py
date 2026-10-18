@@ -6,6 +6,9 @@ as `pendente_envio`, grava a resposta, lê as decisões e confirma.
 
 Situações da revisão: `pendente_envio` → `enviada` | `recusada_flow` (422);
 `substituida` quando nasce outra; `retirada` quando o pedido sai da fila.
+Bloqueio local (`bloqueio_local`, corpo que não pode ir ao Flow: fora do
+contrato, 413, 400 `payload_invalido`): a revisão segue `pendente_envio` e
+vigente, mas sai da fila de envio; só conteúdo novo cria a revisão seguinte.
 A vigente é a de maior número, se ela não estiver `substituida`/`retirada`.
 
 Decisão (`preco_decisao`) é gravada para toda decisão recebida, com a
@@ -147,7 +150,7 @@ def pendentes_envio(conn: sqlite3.Connection, limite: int) -> list[dict[str, Any
     rows = conn.execute(
         """
         SELECT r.* FROM preco_revisao r
-         WHERE r.situacao = 'pendente_envio'
+         WHERE r.situacao = 'pendente_envio' AND r.bloqueio_local IS NULL
            AND r.revisao = (SELECT MAX(r2.revisao) FROM preco_revisao r2
                              WHERE r2.import_id = r.import_id)
          ORDER BY r.criado_em, r.import_id
@@ -239,6 +242,40 @@ def marcar_recusa_flow(
                 revisao,
             ),
         )
+
+
+def marcar_bloqueio_local(
+    conn: sqlite3.Connection, import_id: str, revisao: int, motivo: str, *, em: datetime
+) -> None:
+    """O corpo desta revisão não pode ir ao Flow (fora do contrato no Portal,
+    413 `payload_grande`, 400 `payload_invalido`): sai da fila de envio, o portão
+    bloqueia com `motivo` e `garantir_revisao` só cria outra se o conteúdo mudar.
+    O Flow não guardou o corpo: `tentada_em` é limpo (só de `pendente_envio`)."""
+    with conn:
+        conn.execute(
+            "UPDATE preco_revisao SET bloqueio_local = ?, resposta_json = ?, tentada_em = NULL"
+            " WHERE import_id = ? AND revisao = ? AND situacao = 'pendente_envio'",
+            (
+                motivo,
+                json.dumps({"bloqueio_local": motivo, "em": em.isoformat()}, ensure_ascii=False),
+                import_id,
+                revisao,
+            ),
+        )
+
+
+def contagem_por_situacao(conn: sqlite3.Connection) -> dict[str, int]:
+    """Revisões `pendente_envio` (na fila), `bloqueada_local` e `recusada_flow`."""
+    rows = conn.execute(
+        """
+        SELECT CASE WHEN bloqueio_local IS NOT NULL THEN 'bloqueada_local'
+                    ELSE situacao END, COUNT(*)
+          FROM preco_revisao
+         WHERE situacao IN ('pendente_envio', 'recusada_flow')
+         GROUP BY 1
+        """
+    ).fetchall()
+    return {r[0]: int(r[1]) for r in rows}
 
 
 def gravar_decisao(

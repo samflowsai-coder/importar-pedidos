@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, Literal, TypeVar
 
 import httpx
+from pydantic import BaseModel
 
 from app.http.client import HttpError, OutboundClient
 from app.http.policies import apply_post_policy, idempotent_post_policy, read_only_policy
@@ -30,6 +31,8 @@ from app.integrations.flowpcp.schema import (
     RecebimentoRequest,
 )
 from app.utils.logger import logger
+
+_M = TypeVar("_M", bound=BaseModel)
 
 FLOWPCP_TARGET_NAME = "flowpcp"  # outbox.target identifier
 RECEBIMENTO_PATH = "/api/portal-pedidos/recebimento"
@@ -320,7 +323,16 @@ class FlowPCPClient:
             idem=f"precos-confirmar-{digest}",
         )
 
-    def _precos(self, metodo, path, modelo, *, params=None, corpo=None, idem=None):
+    def _precos(
+        self,
+        metodo: Literal["GET", "POST"],
+        path: str,
+        modelo: type[_M],
+        *,
+        params: dict[str, Any] | None = None,
+        corpo: dict[str, Any] | None = None,
+        idem: str | None = None,
+    ) -> _M:
         """GET com `read_only_policy` (429 e 5xx); POST com `idempotent_post_policy`.
         Falha → `FlowPCPClientError` com `status_code`, `error` e `details`
         (rede: `status_code` None; resposta fora do schema: `resposta_fora_do_contrato`)."""
@@ -352,7 +364,7 @@ class FlowPCPClient:
             raise FlowPCPClientError(
                 f"{metodo} {path}: resposta fora do contrato: {str(exc)[:300]}",
                 status_code=resp.status_code,
-                body=(resp.text or "")[:500],
+                body=resp.text or "",  # inteiro: 2xx fora do contrato é guardado bruto
                 error="resposta_fora_do_contrato",
             ) from exc
 
