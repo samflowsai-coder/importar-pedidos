@@ -472,9 +472,11 @@ tem tela de gestão de preço: a decisão (aprovar/recusar) vem do Flow. Spec:
 
 > **Task 7 PENDENTE: aguarda o contrato do pcp-app.** Sync da tabela, envio de
 > pendências e recebimento de decisões com o Flow **não existem ainda**. Consequência:
-> em `ligado` a cópia local nunca é preenchida, então **todo item sai
+> em `ligado` a cópia local nunca é preenchida, então **todo pedido de rede externa sai
 > `copia_desatualizada` e bloqueia** (fail-closed). **Não ligue `ligado` antes da
-> Task 7.** `observando` é seguro (não bloqueia nada, só audita).
+> Task 7.** O `PATCH /api/admin/environments/{id}/preco-trava` recusa `ligado` (409)
+> enquanto `precos_repo.ultima_sync_ok` do db da empresa for `None`. `observando` é
+> seguro para o envio (não bloqueia nada, só audita), mas adia o XLSX da importação.
 
 ### Interruptor por ambiente (`environments.preco_trava_modo`)
 - `desligado` (nasce assim) — **bit a bit o comportamento de hoje** (`check_order` +
@@ -504,6 +506,16 @@ tem tela de gestão de preço: a decisão (aprovar/recusar) vem do Flow. Spec:
    maior → `acima`; menor → `abaixo` (todos `fila`).
 Rede = raiz do CNPJ (8 dígitos); um CNPJ completo (14) cadastrado em `preco_rede_cnpj` vence a raiz.
 Chave do produto = `str(check["items"][i]["fire_product_id"])` (SEQ; o `check` guarda `int`).
+**Item com vínculo de-para:** o SEQ avaliado é o do vínculo, mesmo que o item case direto
+por EAN/código com outro produto. O chamador consulta o de-para **uma vez**
+(`depara_apply.resolver`) antes do portão e passa `produtos_por_item` a `decidir_envio`
+(e a `preview_preco`), ao `FirebirdExporter` e a `depara_apply.aplicar` (códigos do XLSX).
+`desligado` ignora o mapa (regra de hoje).
+
+**Override anterior à migração:** linha com `cliente_override_codigo` e
+`cliente_override_cnpj` NULL (override feito antes da coluna existir) sai
+`cliente_sem_cnpj` e bloqueia em `ligado`. O operador refaz a escolha do cliente no
+preview (o override novo grava o CNPJ).
 
 ### Ponto único de decisão: `decidir_envio`
 `preco_trava.decidir_envio(import_id, order, entry, env=, agora=)` é o **único** portão
@@ -516,12 +528,18 @@ chama `aplicar_precos(order, precos_aplicar)` antes de exportar e `registrar_apl
 - Puros e compartilhados com o preview: `avaliar_entry`, `preview_preco`,
   `classificar_itens` (estado final por item) e `bloqueio_do_pedido`. Paridade preview↔envio testada.
 - `ligado`: a cada avaliação chama `substituir_obsoletas` (mapa completo de assinaturas) →
-  `registrar_pendencias` (itens `fila`) → `decisoes_validas`.
+  `registrar_pendencias` (itens `fila`) → `decisoes_validas`. **Sem check utilizável**
+  (Fire fora e sem check salvo) bloqueia `preco_nao_avaliado` **antes** de tocar em
+  `preco_aprovacao`: decisões já dadas sobrevivem à queda do Fire.
+- `registrar_aplicados` roda depois da transição `SEND_TO_FIRE_SUCCEEDED` / do push do
+  XLSX, em try/except: falha no audit nunca derruba um envio que deu certo.
 - **Intercompany** (`fora_intercompany`) roda **a regra de hoje** (`_regra_de_hoje`) e audita
   `preco_intercompany_fora_da_trava`; pode bloquear com `price_check_failed`.
 
 ### Aprovações (`preco_aprovacao`)
-- Presas à **assinatura** `sha256(SEQ|centavos|quantidade|raiz da rede)` (`assinatura()`).
+- Presas à **assinatura** `sha256(SEQ|centavos|quantidade|rede)` (`assinatura()`): rede =
+  `rede:<id>` da rede resolvida quando há (um CNPJ completo pode apontar para outra rede
+  que a da raiz), senão a raiz (8 dígitos). Fonte única: `assinaturas_da_avaliacao`.
   Mudou preço, quantidade, produto ou o cliente passou a outra rede → decisão antiga não vale.
 - `substituir_obsoletas` cancela (motivo `substituido`) linhas ativas cuja assinatura não é a atual.
   **Reativação A→B→A:** assinatura que volta a valer reativa a linha como pendente nova

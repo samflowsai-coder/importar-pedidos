@@ -44,7 +44,7 @@ API pública para páginas-filho:
 - `GET /api/firebird/config` → `{path, host, port, user, charset, configured, passwordSet}` — **nunca** retorna senha (`require_user`).
 - `POST /api/firebird/config` → salva config + chama `apply_to_env` (`require_admin`). Body: `{path, host, port, user, charset, password?}`. Senha omitida = mantém atual; vazia = limpa.
 - `POST /api/firebird/test` → testa conexão com config salva ou payload ad-hoc (`require_admin`). Retorna `{ok: bool, error?, traceId}` (`current_trace_id()` injetado).
-- `POST /api/process` → upload + parse + cache de preview.
+- `POST /api/process` → upload + parse + cache de preview. Legado, gera XLSX sem o portão de preço: com a trava de preço ativa (`observando`/`ligado`) no ambiente da request responde **409** ("Com a trava de preço ativa, use a revisão do pedido para exportar.").
 - `POST /api/imported/{id}/export-xlsx` → gera XLSX do pedido `parsed` **sem** tocar Firebird (`require_user`). Mantém `portal_status='parsed'`. Retorna `{entry_id, output_files, portal_status}`. Usado quando `EXPORT_MODE='xlsx'`. **Também dispara `push_new_order` pro FlowPCP** (gated por `flowpcp_enabled` do ambiente; best-effort; o Flow deduplica por `externalId` — re-export não duplica; audita `flowpcp_push {ok}`).
 - `POST /api/batch/export-xlsx` → versão lote do anterior (mesmo limite 1..100).
 - `GET /api/download?path=` → download xlsx (`require_user`). Só sufixo `.xlsx`
@@ -54,6 +54,7 @@ API pública para páginas-filho:
   parse (`require_user`). Serve só de dentro de `<APP_DATA_DIR>/recebidos/` (403 fora);
   404 amigável em pedido anterior à guarda. Nome do download = `source_filename`.
 - `POST /api/admin/environments/{env_id}/flowpcp/sync-materiais?apply=` → carga de material Fire → Flow (`require_admin`). Padrão dryRun; `apply=true` exige `materiais.v1` do Flow (422 antes de enviar se faltar; 422 também com `PORTAL_FLOWPCP_MATERIAIS` desligado; 409 se o FlowPCP não está habilitado no ambiente ou se o Flow já está gravando; 502 em falha). Sem o interruptor e sem apply, devolve `{local_only, itens, extraido_em}`. Ver `modules/flowpcp.md` §4.
+- `PATCH /api/admin/environments/{env_id}/preco-trava` → troca o interruptor da trava de preço (`require_admin`). Body `{modo: desligado|observando|ligado}` (422 fora disso; 404 ambiente inexistente). `ligado` responde **409** enquanto a tabela de preço da empresa nunca sincronizou com o Flow (`precos_repo.ultima_sync_ok` do db do ambiente = `None`); `observando`/`desligado` sempre passam. Ver `modules/erp.md` §Trava de preço por rede.
 - `GET /api/admin/environments/{env_id}/flowpcp/cadastro-volta` → livro da volta Flow → Fire (`require_admin`, só leitura do SQLite do ambiente): `{modo, por_estado, ultimos, ultimo_ciclo, thread_desligada}` (50 últimos, `plano_json` truncado em 2 KB com `plano_truncado`; `ultimo_ciclo` = `{em, resumo}` do último ciclo deste processo ou `null`; `thread_desligada` = `PORTAL_FLOWPCP_ENVIO=0`). Ver `modules/flowpcp.md` §5.
 - `GET /api/fs?path=` → listagem de pastas (usado pelo browser de `/configuracoes/diretorios`).
 - `GET /api/clientes/search?q=&limit=` → busca em `CADASTRO` (razão social ou
