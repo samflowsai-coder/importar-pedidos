@@ -900,6 +900,8 @@
       <!-- Product check banner -->
       <div id="pvCheckBanner" class="hidden" style="padding:10px 20px;border-bottom:1px solid var(--border-subtle);font-size:12px;display:flex;align-items:center;gap:12px;background:var(--surface)"></div>
 
+      <div id="pvPrecoBanner" class="hidden" style="padding:10px 20px;border-bottom:1px solid var(--border-subtle);font-size:12px;display:flex;flex-direction:column;gap:6px;background:var(--surface)"></div>
+
       <div class="preview-body">
         <table class="preview-table">
           <thead>
@@ -2106,33 +2108,43 @@ const PRECO_MOTIVO = {
   copia_desatualizada: 'Tabela de preço desatualizada (mais de 24 h sem sincronizar)',
   intercompany: 'Pedido entre empresas do grupo: fora da trava',
 };
-// Pílula por item: o texto carrega o sentido; a cor só reforça.
-function precoPillHtml(p) {
+// Pílula por item: o texto carrega o sentido; a cor só reforça. `estado` vem do
+// backend (mesma regra do portão de envio). Em 'observando' nada vai ao Flow.
+function precoPillHtml(p, modo) {
   if (!p) return '<span style="color:var(--text-muted)">—</span>';
-  let label, cls;
-  if (p.situacao === 'ok') { label = 'Entra'; cls = 'badge-ok'; }
-  else if (p.situacao === 'nao_avaliado') { label = 'Sem avaliação'; cls = 'badge-warn'; }
-  else if (p.situacao === 'fora_intercompany') { label = 'Intercompany'; cls = 'badge-muted'; }
-  else if (p.decisao === 'recusado') { label = 'Recusado'; cls = 'badge-error'; }
-  else if (p.decisao) { label = 'Aprovado'; cls = 'badge-ok'; }
-  else { label = 'Na fila do Flow'; cls = 'badge-warn'; }
+  const obs = modo === 'observando';
+  const [label, cls] = ({
+    ok: ['Entra', 'badge-ok'],
+    nao_avaliado: ['Sem avaliação', 'badge-warn'],
+    intercompany: ['Intercompany', 'badge-muted'],
+    recusado: ['Recusado', 'badge-error'],
+    aprovado: ['Aprovado', 'badge-ok'],
+    aguardando: [obs ? 'Iria para a fila' : 'Na fila do Flow', 'badge-warn'],
+  })[p.estado] || ['Sem avaliação', 'badge-warn'];
   const motivo = PRECO_MOTIVO[p.motivo] || p.motivo || '';
   const precos = (p.preco_pedido != null || p.preco_tabela != null)
     ? ` · pedido ${p.preco_pedido != null ? fmtBRL(p.preco_pedido) : '—'} · tabela ${p.preco_tabela != null ? fmtBRL(p.preco_tabela) : '—'}`
     : '';
-  return `<span class="badge ${cls} preco-pill" tabindex="0" title="${esc(motivo + precos)}">${label}</span>`;
+  const texto = esc(label + ': ' + motivo + precos);
+  return `<span class="badge ${cls} preco-pill" tabindex="0" title="${texto}" aria-label="${texto}">${label}</span>`;
 }
 function precoBannerHtml(preco) {
   if (!preco) return '';
-  const fila = (preco.resumo && preco.resumo.fila) || 0;
-  const partes = [];
-  if (fila > 0) {
-    partes.push(`<div style="color:var(--warn);font-weight:600">Aguardando Rafael/Erica no Flow: ${fila} item(ns) na fila de aprovação.</div>`);
-  }
+  const r = preco.resumo || {};
+  const linhas = [];
+  const warn = t => `<div style="color:var(--warn);font-weight:600">${esc(t)}</div>`;
+  const erro = t => `<div style="color:var(--error);font-weight:600">${esc(t)}</div>`;
   if (preco.modo === 'observando') {
-    partes.push('<div style="color:var(--text-muted);font-size:11px">Trava em observação: o pedido não é bloqueado.</div>');
+    if (r.fila > 0) linhas.push(`<div style="color:var(--warn);font-weight:600">Trava em observação: ${r.fila} item(ns) iriam para a fila de aprovação. Nada é bloqueado nem enviado ao Flow.</div>`);
+    else linhas.push('<div style="color:var(--text-muted)">Trava em observação: o pedido não é bloqueado.</div>');
+  } else if (preco.bloqueio_pedido) {
+    linhas.push(erro(preco.bloqueio_pedido));
+  } else {
+    if (r.fila > 0) linhas.push(warn(`Aguardando Rafael/Erica no Flow: ${r.fila} item(ns) na fila de aprovação.`));
+    if (r.recusados > 0) linhas.push(erro(`${r.recusados} item(ns) recusado(s) no Flow: corrija e envie de novo.`));
+    if (r.nao_avaliados > 0) linhas.push(erro(`${r.nao_avaliados} item(ns) sem avaliação de preço: o envio fica bloqueado.`));
   }
-  return partes.join('');
+  return linhas.join('');
 }
 
 function fmtSize(b) {
@@ -2494,12 +2506,17 @@ function renderPreview(data) {
         <div>${clientBit}</div>
         ${priceBit ? `<div>${priceBit}</div>` : ''}
         ${trocaBit}
-        ${precoBannerHtml(data.preco)}
       </div>`;
     banner.classList.remove('hidden');
   } else if (banner) {
     banner.classList.add('hidden');
   }
+
+  // Banner da trava de preço: independe do check (sem check o envio também bloqueia).
+  const precoBanner = document.getElementById('pvPrecoBanner');
+  const precoHtml = precoBannerHtml(data.preco);
+  precoBanner.innerHTML = precoHtml;
+  precoBanner.classList.toggle('hidden', !precoHtml);
 
   const tbody = document.getElementById('pvItemsBody');
   const items = data.items || [];
@@ -2614,7 +2631,7 @@ function renderPreview(data) {
             <td class="num">${it.total_price != null ? fmtBRL(it.total_price) : '—'}</td>
             <td>${esc(deliv || '—')}</td>
             <td style="text-align:center">${cell}</td>
-            ${temPreco ? `<td style="text-align:center">${precoPillHtml(precoPorItem.get(idx))}</td>` : ''}
+            ${temPreco ? `<td style="text-align:center">${precoPillHtml(precoPorItem.get(idx), data.preco.modo)}</td>` : ''}
           </tr>`);
       }
     }

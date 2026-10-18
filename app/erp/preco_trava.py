@@ -153,6 +153,51 @@ def avaliar_entry(
     return _avaliar_local(order, _check_utilizavel(entry.get("check"), order), entry, agora)
 
 
+def bloqueio_do_pedido(order: Order, entry: dict, check: dict | None) -> str | None:
+    """Bloqueio de nível de pedido (antes de olhar item): texto do portão ou None."""
+    if not order.items:
+        return "Pedido sem itens: nada para avaliar."
+    if check is None and _eh_intercompany(order, entry):
+        return "Pedido intercompany: não foi possível checar no Fire agora; tente de novo."
+    return None
+
+
+def classificar_itens(
+    order: Order, av: Avaliacao, decisoes: dict[int, dict[str, Any]]
+) -> tuple[dict[int, str], dict[int, float], dict[int, Any]]:
+    """Estado final de cada item — a ÚNICA fonte do portão e do preview.
+
+    Estados: ok | aguardando | aprovado | recusado | nao_avaliado | intercompany.
+    Também devolve os preços do aprovador a aplicar (item sem preço no pedido)
+    e o flow_id de cada um."""
+    estados: dict[int, str] = {}
+    precos: dict[int, float] = {}
+    flow_ids: dict[int, Any] = {}
+    for it in av.itens:
+        i = it.item_index
+        d = decisoes.get(i)
+        if it.situacao == "fora_intercompany":
+            estados[i] = "intercompany"
+        elif it.situacao == "nao_avaliado":
+            estados[i] = "nao_avaliado"
+        elif d is not None and d.get("decisao") == "recusado":
+            estados[i] = "recusado"
+        elif it.situacao == "ok":
+            estados[i] = "ok"
+        elif d is None or d.get("decisao") not in _APROVADAS:
+            estados[i] = "aguardando"
+        elif order.items[i].unit_price is None:
+            if d.get("preco_final_centavos") is None:
+                estados[i] = "aguardando"
+            else:
+                estados[i] = "aprovado"
+                precos[i] = int(d["preco_final_centavos"]) / 100
+                flow_ids[i] = d.get("flow_id")
+        else:
+            estados[i] = "aprovado"
+    return estados, precos, flow_ids
+
+
 def assinaturas_da_avaliacao(order: Order, av: Avaliacao) -> dict[int, str]:
     """Assinatura atual de cada item avaliado (chave das decisões do Flow)."""
     return {
@@ -170,19 +215,39 @@ def _reais(centavos: int | None) -> float | None:
 def preview_preco(
     import_id: str, entry: dict, order: Order, *, env: dict | None, agora: datetime
 ) -> dict | None:
-    """Bloco `preco` do preview: situação por item + decisão do Flow. Só leitura
-    (sem Fire, sem audit, sem pendência). `desligado` → None."""
+    """Bloco `preco` do preview: estado por item, igual ao que o portão decidiria
+    (mesmo `classificar_itens`). Só leitura (sem Fire, sem audit, sem pendência).
+    `desligado` → None."""
+    check = _check_utilizavel(entry.get("check"), order)
     av = avaliar_entry(entry, order, env=env, agora=agora)
     if av is None:
         return None
     with db.connect() as conn:
         decisoes = aprov.decisoes_validas(conn, import_id, assinaturas_da_avaliacao(order, av))
+    estados, _, _ = classificar_itens(order, av, decisoes)
+    bloqueio = bloqueio_do_pedido(order, entry, check)
+    if bloqueio is not None:
+        estados = dict.fromkeys(estados, "nao_avaliado")
+    resumo = {
+        "ok": 0,
+        "fila": 0,
+        "aprovados": 0,
+        "recusados": 0,
+        "nao_avaliados": 0,
+        "intercompany": 0,
+    }
+    chave = {
+        "ok": "ok",
+        "aguardando": "fila",
+        "aprovado": "aprovados",
+        "recusado": "recusados",
+        "nao_avaliado": "nao_avaliados",
+        "intercompany": "intercompany",
+    }
     itens = []
-    resumo = dict.fromkeys(
-        ("ok", "fila", "aprovados", "recusados", "nao_avaliados", "intercompany"), 0
-    )
     for it in av.itens:
-        decisao = (decisoes.get(it.item_index) or {}).get("decisao")
+        estado = estados[it.item_index]
+        resumo[chave[estado]] += 1
         itens.append(
             {
                 "item_index": it.item_index,
@@ -190,22 +255,11 @@ def preview_preco(
                 "motivo": it.motivo,
                 "preco_pedido": _reais(it.preco_pedido_centavos),
                 "preco_tabela": _reais(it.preco_tabela_centavos),
-                "decisao": decisao,
+                "decisao": (decisoes.get(it.item_index) or {}).get("decisao"),
+                "estado": estado,
             }
         )
-        if it.situacao == "ok":
-            resumo["ok"] += 1
-        elif it.situacao == "nao_avaliado":
-            resumo["nao_avaliados"] += 1
-        elif it.situacao == "fora_intercompany":
-            resumo["intercompany"] += 1
-        elif decisao == "recusado":
-            resumo["recusados"] += 1
-        elif decisao in _APROVADAS:
-            resumo["aprovados"] += 1
-        else:
-            resumo["fila"] += 1
-    return {"modo": _modo(env), "itens": itens, "resumo": resumo}
+    return {"modo": _modo(env), "itens": itens, "resumo": resumo, "bloqueio_pedido": bloqueio}
 
 
 def aplicar_precos(order: Order, precos: dict[int, float]) -> None:
@@ -278,17 +332,9 @@ def _decidir_ligado(
     check = _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order)
     vazio = Avaliacao(rede=None, cnpj_rede=None)
     try:
-        if not order.items:
-            return _bloqueio_trava(
-                "preco_nao_avaliado", "Pedido sem itens: nada para avaliar.", vazio, {}
-            )
-        if check is None and _eh_intercompany(order, entry):
-            return _bloqueio_trava(
-                "preco_nao_avaliado",
-                "Pedido intercompany: não foi possível checar no Fire agora; tente de novo.",
-                vazio,
-                {},
-            )
+        bloqueio = bloqueio_do_pedido(order, entry, check)
+        if bloqueio is not None:
+            return _bloqueio_trava("preco_nao_avaliado", bloqueio, vazio, {})
         av = _avaliar_local(order, check, entry, agora)
         assinaturas = assinaturas_da_avaliacao(order, av)
         with db.connect() as conn:
@@ -318,23 +364,10 @@ def _decidir_ligado(
         hoje.avaliacao = av
         return hoje
 
-    bloqueados = av.bloqueados
-    recusados = [d for d in decisoes.values() if d.get("decisao") == "recusado"]
-    aguardando: list[ItemAvaliado] = []
-    precos: dict[int, float] = {}
-    flow_ids: dict[int, Any] = {}
-    for it in av.pendentes:
-        d = decisoes.get(it.item_index)
-        if d is None or d.get("decisao") not in _APROVADAS:
-            if d is None or d.get("decisao") != "recusado":
-                aguardando.append(it)
-            continue
-        if order.items[it.item_index].unit_price is None:
-            if d.get("preco_final_centavos") is None:
-                aguardando.append(it)
-                continue
-            precos[it.item_index] = int(d["preco_final_centavos"]) / 100
-            flow_ids[it.item_index] = d.get("flow_id")
+    estados, precos, flow_ids = classificar_itens(order, av, decisoes)
+    bloqueados = [it for it in av.itens if estados[it.item_index] == "nao_avaliado"]
+    recusados = [decisoes[i] for i, e in estados.items() if e == "recusado"]
+    aguardando = [it for it in av.itens if estados[it.item_index] == "aguardando"]
 
     partes: list[str] = []
     reason: str | None = None

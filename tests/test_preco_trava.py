@@ -704,3 +704,58 @@ def test_desligado_grava_mesmo_audit_e_metrica(monkeypatch, rota, evento):
         "missing_order_price": 1,
         "no_price_unacked": 1,
     }
+
+
+# ── Paridade preview × portão ────────────────────────────────────────────────
+
+
+def _liberado_no_preview(preco):
+    return preco["bloqueio_pedido"] is None and all(
+        i["estado"] in ("ok", "aprovado", "intercompany") for i in preco["itens"]
+    )
+
+
+@pytest.mark.parametrize(
+    "cenario",
+    [
+        "igual",
+        "acima",
+        "aprovado",
+        "aprovado_sem_preco_final",
+        "aprovado_com_preco_final",
+        "recusado",
+        "intercompany",
+        "sem_itens",
+        "copia_velha",
+    ],
+)
+def test_preview_concorda_com_o_portao(monkeypatch, cenario):
+    sem_preco = cenario.startswith("aprovado_") and cenario != "aprovado"
+    precos = {"igual": (50.0,), "sem_itens": ()}.get(cenario, (None,) if sem_preco else (54.0,))
+    _copia(5400 if cenario == "intercompany" else 5000)
+    if cenario == "copia_velha":
+        _copia(5000, sync=AGORA - timedelta(hours=25))
+    if cenario == "intercompany":
+        _env_grupo("nasmar", intercompany=CNPJ_REDE)
+    order = _order(precos)
+    check = _check(len(precos))
+    import_id, entry = _seed(order, check=check)
+    _live(monkeypatch, check)
+    env = _env("ligado")
+
+    preco_trava.decidir_envio(import_id, order, entry, env=env, agora=AGORA)  # abre a fila
+    decisao = {
+        "aprovado": ("acordo", None),
+        "aprovado_sem_preco_final": ("acordo", None),
+        "aprovado_com_preco_final": ("acordo", 5400),
+        "recusado": ("recusado", None),
+    }.get(cenario)
+    if decisao:
+        _decidir(import_id, order, decisao=decisao[0], preco=decisao[1], motivo="x")
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=env, agora=AGORA)
+    preco = preco_trava.preview_preco(import_id, entry, order, env=env, agora=AGORA)
+
+    assert _liberado_no_preview(preco) is (not d.bloqueado), (cenario, preco)
+    if cenario == "sem_itens":
+        assert preco["bloqueio_pedido"] == d.detalhe

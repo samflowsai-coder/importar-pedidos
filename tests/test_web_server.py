@@ -3138,8 +3138,10 @@ def test_detalhe_traz_avaliacao_de_preco_em_observando(tmp_path):
             "preco_pedido": 54.0,
             "preco_tabela": 50.0,
             "decisao": None,
+            "estado": "aguardando",
         }
     ]
+    assert preco["bloqueio_pedido"] is None
     assert preco["resumo"] == {
         "ok": 0,
         "fila": 1,
@@ -3215,3 +3217,84 @@ def test_detalhe_sem_preco_quando_avaliacao_falha(tmp_path, monkeypatch):
 
     assert r.status_code == 200, r.text
     assert "preco" not in r.json()
+
+
+def _decidir_web(entry_id, decisao, motivo=None):
+    import uuid  # noqa: F401
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from app.erp.preco_avaliacao import ItemAvaliado
+    from app.models.order import Order
+    from app.persistence import preco_aprovacao_repo as aprov
+    from app.persistence import repo
+
+    order = Order.model_validate(repo.get_import(entry_id)["snapshot"])
+    sig = aprov.assinatura(order.items[0], "123", "11222333000144")
+    agora = _dt.now(UTC)
+    with db.connect() as conn:
+        aprov.registrar_pendencias(
+            conn, entry_id, [(ItemAvaliado(0, "123", "fila", "acima", 5400, 5000), sig)], agora=agora
+        )
+        assert aprov.aplicar_decisao(
+            conn, import_id=entry_id, item_index=0, assinatura=sig, decisao=decisao,
+            preco_final_centavos=None, por="rafael", em=agora, motivo=motivo, flow_id="f1",
+        )
+
+
+def test_detalhe_ligado_item_recusado(tmp_path):
+    import uuid
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_preco_preview(entry_id, 54.0)
+    _decidir_web(entry_id, "recusado", "preço fora")
+
+    preco = _preview_com_modo(entry_id, env, "ligado").json()["preco"]
+
+    assert preco["itens"][0]["estado"] == "recusado"
+    assert preco["itens"][0]["decisao"] == "recusado"
+    assert preco["resumo"]["recusados"] == 1 and preco["resumo"]["fila"] == 0
+
+
+def test_detalhe_ligado_item_nao_avaliado(tmp_path):
+    import json
+    import uuid
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_preco_preview(entry_id, 54.0)
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE imports SET check_json = ? WHERE id = ?",
+            (json.dumps({"available": False, "reason": "fb", "items": []}), entry_id),
+        )
+
+    preco = _preview_com_modo(entry_id, env, "ligado").json()["preco"]
+
+    assert preco["itens"][0]["estado"] == "nao_avaliado"
+    assert preco["itens"][0]["motivo"] == "produto_nao_identificado"
+    assert preco["resumo"]["nao_avaliados"] == 1
+
+
+def test_detalhe_ligado_item_intercompany(tmp_path):
+    import uuid
+
+    from app.persistence import environments_repo
+
+    env = _env_trava_ligada(tmp_path)
+    outro = environments_repo.create(
+        slug="grupo",
+        name="Grupo",
+        watch_dir=str(tmp_path / "gi"),
+        output_dir=str(tmp_path / "go"),
+        fb_path="",
+    )
+    environments_repo.set_intercompany_config(outro["id"], cnpj="11.222.333/0001-44", revenda_slug="grupo")
+    entry_id = str(uuid.uuid4())
+    _seed_preco_preview(entry_id, 54.0)
+
+    preco = _preview_com_modo(entry_id, env, "ligado").json()["preco"]
+
+    assert preco["itens"][0]["estado"] == "intercompany"
+    assert preco["resumo"]["intercompany"] == 1
