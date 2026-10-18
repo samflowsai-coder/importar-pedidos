@@ -160,9 +160,10 @@ FIND_PRODUCT_BY_CODE = """
     ROWS 1
 """
 
-# Product lookup by SEQ (usado na resolução de de-para).
+# Product lookup by SEQ — item casado por vínculo de-para no insert direto.
+# Mesmas 4 colunas de FIND_PRODUCT_BY_EAN/CODE (UNIDADE em col[3]).
 FIND_PRODUCT_BY_SEQ = """
-    SELECT SEQ, DESCRICAO, PRECO_VENDA FROM PRODUTOS
+    SELECT SEQ, DESCRICAO, PRECO_VENDA, UNIDADE FROM PRODUTOS
     WHERE SEQ = ?
     ROWS 1
 """

@@ -90,3 +90,23 @@ def test_apply_riachuelo_sem_cnpj_usa_nome_como_chave(env_conn):
     assert order.items[0].ean is None  # fire_ean ausente: não sobrescreve
     assert "15968243002" in (order.items[0].obs or "")
     assert len(changed) == 1
+
+
+def test_apply_devolve_o_seq_do_vinculo(env_conn):
+    """O insert direto no Fire usa o SEQ do vínculo (BACKLOG §2.1)."""
+    produto_depara_repo.upsert(
+        env_conn,
+        client_key=produto_depara_repo.client_key("11111111000100", None),
+        chave_tipo="codigo",
+        chave_valor="REF-X",
+        fire_produto_id="77",
+        fire_codigo="77",
+        fire_ean=None,
+        fire_nome="TENIS",
+        criado_em="t",
+        criado_por="grazi",
+    )
+    changed = depara_apply.apply(_order(), conn=env_conn)
+    assert changed == [
+        {"item_index": 0, "fire_produto_id": "77", "fire_codigo": "77", "orig": "REF-X"}
+    ]

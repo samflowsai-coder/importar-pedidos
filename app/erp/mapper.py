@@ -11,7 +11,7 @@ Key design decisions (data-driven):
 - CLINAOCAD path abandoned — production has zero rows using it; every CAB_VENDAS
   has a CLIENTE FK. If client CNPJ can't be resolved in CADASTRO we skip and
   surface an error rather than insert an orphan record.
-- CODPRODUTO may be NULL when product not found; item still inserted with description.
+- CODPRODUTO aceita NULL aqui, mas o FirebirdExporter recusa item sem produto (PRODUCT_NOT_FOUND).
 - Dates parsed from DD/MM/YYYY (already normalized by OrderNormalizer).
 """
 

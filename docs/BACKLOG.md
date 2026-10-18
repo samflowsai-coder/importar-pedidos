@@ -47,11 +47,11 @@ ou hash do arquivo), ou a idempotência sai do Fire e fica no portal.
 
 ## 2. Dívida e melhorias
 
-### 2.1 De-para de produto não vale no caminho de inserção direta ("I1")
-`app/erp/depara_apply.py` está ligado só em `_export_one_xlsx` (modo `xlsx`), **não** em
-`_send_one_to_fire` (modo `db`/`both`). Um item casado só por vínculo de-para entra no
-Fire sem FK de produto. Só importa se ligar o insert direto — é pré-requisito daquela
-decisão (ver §4.1).
+### 2.1 ~~De-para de produto não vale no caminho de inserção direta ("I1")~~ — RESOLVIDO 2026-10-17
+Branch `fix/depara-fire-direto`. O insert direto aplica o de-para e busca o item vinculado
+pelo SEQ (o `fire_codigo` é `str(SEQ)`; relido como `CODPROD_ALTERN` casaria outro produto).
+Item sem produto no Fire passou a recusar o pedido (`PRODUCT_NOT_FOUND`) em vez de entrar
+com `CODPRODUTO` NULL. Detalhe em `docs/ai/modules/erp.md`.
 
 ### 2.2 Undo total do vínculo na UI
 "Revincular" cobre o dia a dia (upsert last-write-wins). Remover um vínculo de vez
