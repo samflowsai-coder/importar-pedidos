@@ -293,6 +293,23 @@ def test_padroes_p0_validos():
             cf._valida_padroes(ruim)
 
 
+def test_padroes_p0_sao_os_que_a_tela_grava():
+    # P0 parte B (18/10): diff tela x Portal numa cópia da MM, igual ao perfil da parte A.
+    assert cf.PADROES_P0 == {
+        "EST_MINIMO_GERENCIA": "Nao", "PRODUZIDO": "Nao", "CODORIG_MERC": 0, "PRE_CADASTRO": "Nao",
+    }
+
+
+def test_criar_grava_os_padroes_p0_junto_dos_campos_do_flow():
+    fire = _Fire()
+    cf.criar(fire, campos=CAMPOS, componentes=None, hoje=date(2026, 10, 17), ao_reservar=lambda s: None)
+    sql, valores = [s for s in fire.sqls if s[0].startswith("INSERT INTO PRODUTOS ")][0]
+    colunas = sql[sql.index("(") + 1:sql.index(")")].split(", ")
+    linha = dict(zip(colunas, valores, strict=True))
+    assert {k: linha[k] for k in cf.PADROES_P0} == cf.PADROES_P0
+    assert linha["DESCRICAO"] == "MEIA SOQUETE" and linha["BLOQUEADO"] == "Nao"
+
+
 def test_numeros_do_driver_sem_mapa_nao_caem_no_texto():
     for valor in ("DEADLOCK", "violation of PRIMARY or UNIQUE KEY constraint"):
         exc = _DbError(f'conversion error from string "{valor}"', -413, 335544334)

@@ -6,8 +6,9 @@ Uma transação por cadastro, SQL sempre parametrizado, nunca DELETE em PRODUTOS
 Fire tenta de novo em transação nova (spec 2026-10-16 §6.3).
 
 `PADROES_P0` são as colunas que a tela do Fire grava num cadastro novo e que o
-Flow não manda. Fica vazio até a P0 (diff numa cópia do .fdb); até lá os modos
-de gravação só rodam em ambiente liberado por `PORTAL_FLOWPCP_CADASTRO_P0`.
+Flow não manda (P0 parte B, 18/10/2026: diff tela x Portal numa cópia da MM,
+igual ao perfil da parte A na MM de produção). Os modos de gravação só rodam em
+ambiente liberado por `PORTAL_FLOWPCP_CADASTRO_P0`.
 """
 
 from __future__ import annotations
@@ -27,7 +28,15 @@ COLUNAS_PERMITIDAS = frozenset(
     {"DESCRICAO", "UNIDADE", "CODIGO_EAN13", "CLASSIF_FISCAL", "CODITEMSPED",
      "CODPARANFE", "CODPROD_ALTERN", "GRUPO", "MARCA"}
 )
-PADROES_P0: dict[str, object] = {}
+# Par 3566 e kit 3382 da tela contra par 3567 e kit 3568 do Portal (cópia de abril);
+# perfil da parte A: 30/30 kits e 11/11 pares nas duas primeiras. CODSUBGRUPO=1 não
+# entrou: as amostras da tela vieram nulas.
+PADROES_P0: dict[str, object] = {
+    "EST_MINIMO_GERENCIA": "Nao",
+    "PRODUZIDO": "Nao",
+    "CODORIG_MERC": 0,
+    "PRE_CADASTRO": "Nao",
+}
 TENTATIVAS_SEQ = 3
 _lock = threading.Lock()
 
