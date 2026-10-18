@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from typing import Any
 
+from app.erp.cnpj import cnpj_digits
 from app.erp.fire_reconcile import Candidato
 from app.observability.trace import current_trace_id
 from app.persistence import context as env_context
@@ -143,6 +144,7 @@ def _row_to_entry(row) -> dict:
         "cliente_override_razao": _get("cliente_override_razao"),
         "cliente_override_at": _get("cliente_override_at"),
         "cliente_override_by": _get("cliente_override_by"),
+        "cliente_override_cnpj": _get("cliente_override_cnpj"),
         "sem_preco_ack_by": _get("sem_preco_ack_by"),
         "sem_preco_ack_at": _get("sem_preco_ack_at"),
         "sem_preco_ack_items": (
@@ -304,7 +306,7 @@ def get_import(import_id: str) -> dict | None:
                    production_status, released_at, released_by,
                    trace_id, state_version, gestor_order_id, apontae_order_id,
                    cliente_override_codigo, cliente_override_razao,
-                   cliente_override_at, cliente_override_by,
+                   cliente_override_at, cliente_override_by, cliente_override_cnpj,
                    file_sha256, original_path,
                    sem_preco_ack_by, sem_preco_ack_at, sem_preco_ack_items,
                    fire_status_last_seen, fire_status_polled_at
@@ -411,6 +413,7 @@ def set_client_override(
     codigo: int,
     razao: str,
     user: str | None = None,
+    cnpj: str | None = None,
 ) -> None:
     """Persist a manual cliente selection for a parsed pedido.
 
@@ -418,6 +421,7 @@ def set_client_override(
     `_send_one_to_fire` and passed as `override_client_id` to the
     FirebirdExporter. Last-write-wins; `audit_log` keeps every attempt.
     `user` is None until auth (v5) lands.
+    `cnpj` (CPF_CNPJ do Fire) define a rede da trava de preço; sem ele, None.
     """
     with db.connect() as conn:
         conn.execute(
@@ -426,7 +430,8 @@ def set_client_override(
             SET cliente_override_codigo = ?,
                 cliente_override_razao  = ?,
                 cliente_override_at     = ?,
-                cliente_override_by     = ?
+                cliente_override_by     = ?,
+                cliente_override_cnpj   = ?
             WHERE id = ?
             """,
             (
@@ -434,6 +439,7 @@ def set_client_override(
                 razao,
                 datetime.now().isoformat(timespec="seconds"),
                 user,
+                cnpj_digits(cnpj) or None,
                 import_id,
             ),
         )

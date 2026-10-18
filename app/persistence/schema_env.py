@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS imports (
     cliente_override_razao   TEXT,
     cliente_override_at      TEXT,
     cliente_override_by      TEXT,
+    cliente_override_cnpj    TEXT,
     fire_status_last_seen    TEXT,
     fire_status_polled_at    TEXT,
     reconciled_at            TEXT,
@@ -432,6 +433,8 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # Sem ela, a janela usava `fire_status_polled_at` (que o próprio poll
     # renova a cada tick) e nunca expirava — ver `list_pending_for_fire_poll`.
     ("imports", "reconciled_at", "ALTER TABLE imports ADD COLUMN reconciled_at TEXT"),
+    # Trava de preço: CNPJ do cliente escolhido no override (define a rede da tabela).
+    ("imports", "cliente_override_cnpj", "ALTER TABLE imports ADD COLUMN cliente_override_cnpj TEXT"),
     # SP1 — eco: o que a decisão do Flow mudou no ERP. `erp_codigos_json` porque
     # o UPDATE por PEDIDO_CLIENTE + CLIENTE pode tocar mais de um pedido
     # (BACKLOG 1.5); `erp_codigo` só quando tocou exatamente um.

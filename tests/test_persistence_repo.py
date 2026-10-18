@@ -425,3 +425,12 @@ def test_column_migration_is_idempotent(tmp_path):
     cols_final = {row[1] for row in conn_final.execute("PRAGMA table_info(imports)").fetchall()}
     conn_final.close()
     assert {"sem_preco_ack_by", "sem_preco_ack_at", "sem_preco_ack_items"} <= cols_final
+
+
+def test_set_client_override_grava_cnpj_e_sobrescreve(sqlite_tmp):
+    e = _entry()
+    repo.insert_import(e)
+    repo.set_client_override(e["id"], codigo=1, razao="A", cnpj="11.222.333/0001-44")
+    assert repo.get_import(e["id"])["cliente_override_cnpj"] == "11222333000144"
+    repo.set_client_override(e["id"], codigo=2, razao="B")
+    assert repo.get_import(e["id"])["cliente_override_cnpj"] is None
