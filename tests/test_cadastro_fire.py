@@ -379,3 +379,22 @@ def test_inserir_marcas_parametrizado_e_sem_commit():
     ]
     assert fire.commits == 0 and fire.rollbacks == 0
 
+
+
+def test_candidatos_por_data_filtra_grupo_e_janela_parametrizados():
+    """Recuperação sem SEQ: o nome é comparado em Python, o SQL só recorta grupo e datas."""
+
+    class _FireCandidatos(_Fire):
+        def responder(self, sql, params):
+            return [(4001, "MEIA SOQUETE", "PAR", 8, None, "61159500", date(2026, 10, 17))], 1
+
+    fire = _FireCandidatos()
+    linhas = cf.candidatos_por_data(fire, grupo=8, de=date(2026, 10, 16), ate=date(2026, 10, 18))
+    (sql, params), = fire.sqls
+    assert sql == ("SELECT SEQ, DESCRICAO, UNIDADE, GRUPO, CODIGO_EAN13, CLASSIF_FISCAL, DATA_CAD "
+                   "FROM PRODUTOS WHERE GRUPO = ? AND DATA_CAD BETWEEN ? AND ?")
+    assert params == (8, date(2026, 10, 16), date(2026, 10, 18))
+    assert linhas == [{"SEQ": 4001, "DESCRICAO": "MEIA SOQUETE", "UNIDADE": "PAR", "GRUPO": 8,
+                       "CODIGO_EAN13": None, "CLASSIF_FISCAL": "61159500",
+                       "DATA_CAD": date(2026, 10, 17)}]
+    assert fire.commits == 0

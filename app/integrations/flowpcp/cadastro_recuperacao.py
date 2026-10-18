@@ -4,17 +4,22 @@ Uma linha `em_andamento` antiga é um processo que caiu no meio da gravação da
 item (a reserva acontece no início da gravação). Para cada uma, o ERP é LIDO e a
 linha sai por uma das portas do livro:
 
-- adotar (`marcar_gravado`): o produto do plano está no ERP; o envio fica para
-  `reenviar_pendencias`;
+- adotar (`marcar_gravado`): o produto do plano está no ERP, com todos os campos
+  conferidos batendo; o envio fica para `reenviar_pendencias`;
 - liberar (`liberar_comprovado`): está comprovado que o nosso produto não está lá;
   o item volta pela fila do Flow;
-- `incerto`: não dá para saber; uma pessoa resolve.
+- `incerto`: qualquer outro caso; uma pessoa resolve.
 
 Nunca grava no ERP e nunca adota no chute. Liberar um produto que existe faz ele ser
-gravado de novo, então "é outro produto" exige prova forte (descrição diferente ou
-cadastro anterior à reserva); qualquer outra divergência é `incerto`. A leitura
-corre em `connect_leitura_bloqueante`: um INSERT pendente de outro processo vira
-conflito de lock, a recuperação para e nada é marcado. Todo SQL passa por `_SoSelect`.
+gravado de novo, então a liberação só vale com prova: o SEQ não existe, ou o produto
+no SEQ foi cadastrado com folga antes da reserva, ou (sem SEQ) nenhum nome parecido
+foi cadastrado no grupo na janela da reserva. Descrição diferente não prova nada
+(renomeado na tela, trigger).
+
+A leitura corre em `connect_leitura_bloqueante` (NO_REC_VERSION): um INSERT pendente
+de outro processo vira conflito de lock, a recuperação para e nada é marcado. Por
+isso ela só roda em motor < 4.0 (no 4.0+, ReadConsistency faz o read committed
+ignorar o NO_REC_VERSION). Todo SQL passa por `_SoSelect`.
 
 `transitorio` com SEQ (erro que saiu sem prova de rollback) passa pelas mesmas
 regras; a retomada e a porta vão no mesmo commit do SQLite.
@@ -23,6 +28,8 @@ regras; a retomada e a porta vão no mesmo commit do SQLite.
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -38,10 +45,18 @@ from app.utils.logger import logger
 # bloqueante que impede de ler a ausência dele como prova (trava entre processos: backlog).
 IDADE_MINIMA_RECUPERACAO = cv.PRAZO_LOTE + timedelta(minutes=7)
 # `DATA_CAD` é a data local do INSERT, segundos depois da reserva (`iniciado_em`, UTC).
-# Reserva até esta folga antes da meia-noite local procura também no dia seguinte.
+# Reserva até esta folga antes da meia-noite local conta também o dia seguinte.
 _VIRADA_DO_DIA = timedelta(minutes=10)
+# O processo que gravou pode estar noutro fuso que o que recupera: um dia de folga
+# em volta dos dias locais, tanto na prova de "cadastrado antes" quanto na busca.
+_FOLGA_FUSO = timedelta(days=1)
 _CONFERIDAS = ("DESCRICAO", "UNIDADE", "GRUPO", "CODIGO_EAN13", "CLASSIF_FISCAL")
 _CONTAGENS = ("adotado", "liberado", "incerto", "reaplicar")
+_SQL_VERSAO = "SELECT RDB$GET_CONTEXT('SYSTEM', 'ENGINE_VERSION') FROM RDB$DATABASE"
+_SO_SELECT = "cadastro_recuperacao: só SELECT é permitido no Fire"
+# SELECT que trava ou escreve: `WITH LOCK` bloqueia a linha, `GEN_ID` avança gerador.
+_SELECT_PROIBIDO = re.compile(r"\bWITH\s+LOCK\b|\bGEN_ID\s*\(", re.IGNORECASE)
+_motor_avisado: set[tuple[str, str]] = set()
 
 
 class _SoSelect:
@@ -54,7 +69,7 @@ class _SoSelect:
         return _CursorSoSelect(self._conn.cursor())
 
     def commit(self):
-        raise RuntimeError("cadastro_recuperacao: só SELECT é permitido no Fire")
+        raise RuntimeError(_SO_SELECT)
 
 
 class _CursorSoSelect:
@@ -62,8 +77,8 @@ class _CursorSoSelect:
         self._cur = cur
 
     def execute(self, sql: str, params: tuple = ()):
-        if not sql.lstrip().upper().startswith("SELECT"):
-            raise RuntimeError("cadastro_recuperacao: só SELECT é permitido no Fire")
+        if not sql.lstrip().upper().startswith("SELECT") or _SELECT_PROIBIDO.search(sql):
+            raise RuntimeError(_SO_SELECT)
         return self._cur.execute(sql, params)
 
     def fetchone(self):
@@ -100,8 +115,25 @@ def _int(valor: object) -> int | None:
         return None
 
 
+def _data(valor: object) -> date | None:
+    if isinstance(valor, datetime):
+        return valor.date()
+    return valor if isinstance(valor, date) else None
+
+
+def _parecido(nome: str) -> str:
+    """Caixa, acentos (NFKD) e espaços fora: o que um renomear na tela costuma mudar."""
+    sem_acento = "".join(c for c in unicodedata.normalize("NFKD", nome)
+                         if not unicodedata.combining(c))
+    return " ".join(sem_acento.casefold().split())
+
+
 def _bate(lido: dict, plano: dict) -> bool:
-    """As cinco colunas conferidas, aparadas (`None` = vazio); `GRUPO` como inteiro."""
+    """As cinco colunas conferidas, aparadas (`None` = vazio); `GRUPO` como inteiro;
+    `DESCRICAO` só como texto não vazio."""
+    descricao = lido.get("DESCRICAO")
+    if not isinstance(descricao, str) or not descricao.strip():
+        return False
     for coluna in _CONFERIDAS:
         if coluna == "GRUPO":
             grupo = _int(lido.get(coluna))
@@ -110,21 +142,6 @@ def _bate(lido: dict, plano: dict) -> bool:
         elif _txt(lido.get(coluna)) != _txt(plano.get(coluna)):
             return False
     return True
-
-
-def _outro_produto(lido: dict, plano: dict, iniciado: datetime) -> str | None:
-    """Prova forte de que o produto no SEQ não é o nosso, ou None."""
-    descricao = lido.get("DESCRICAO")
-    if descricao is not None and _txt(descricao).casefold() != _txt(
-        plano.get("DESCRICAO")
-    ).casefold():
-        return "descrição diferente"
-    data_cad = lido.get("DATA_CAD")
-    if isinstance(data_cad, datetime):
-        data_cad = data_cad.date()
-    if isinstance(data_cad, date) and data_cad < _dias_locais(iniciado)[0]:
-        return "cadastrado antes da reserva"
-    return None
 
 
 def _composicao_do_plano(plano: dict) -> list[tuple[int, float]] | None:
@@ -151,24 +168,27 @@ def _dias_locais(iniciado: datetime) -> list[date]:
     return sorted({iniciado.astimezone().date(), (iniciado + _VIRADA_DO_DIA).astimezone().date()})
 
 
-def _confere_seq(fire, seq: int, plano: dict, iniciado: datetime) -> tuple:
-    """-> ("adotar", seq) | ("liberar", motivo, causa) | ("incerto", motivo, [seq])."""
-    lido = cadastro_fire.ler_produto(fire, seq)
-    if lido is None:
-        return ("liberar", f"SEQ {seq} não existe no ERP", "ausente")
-    campos = plano.get("campos") or {}
-    outro = _outro_produto(lido, campos, iniciado)
-    if outro is not None:
-        return ("liberar", f"SEQ {seq} tem outro produto no ERP ({outro})", "outro")
-    if not _bate(lido, campos):
-        return ("incerto", "mesma descrição no ERP com outro campo diferente ou ilegível", [seq])
+def _adota_se_bate(fire, seq: int, lido: dict, plano: dict, candidatos: list) -> tuple:
+    """-> ("adotar", seq) se os campos e a composição batem; senão ("incerto", ...)."""
+    if not _bate(lido, plano.get("campos") or {}):
+        return ("incerto", "produto no ERP com campo diferente ou ilegível", candidatos)
     esperada = _composicao_do_plano(plano)
     if esperada is None:
-        return ("incerto", "composição do plano ilegível", [seq])
+        return ("incerto", "composição do plano ilegível", candidatos)
     lida = sorted((f, round(q, 6)) for f, q in cadastro_fire.ler_composicao(fire, seq))
     if lida != esperada:
-        return ("incerto", "produto igual no ERP com composição diferente", [seq])
+        return ("incerto", "produto igual no ERP com composição diferente", candidatos)
     return ("adotar", seq)
+
+
+def _confere_seq(fire, seq: int, plano: dict, iniciado: datetime) -> tuple:
+    lido = cadastro_fire.ler_produto(fire, seq)
+    if lido is None:
+        return ("liberar", f"SEQ {seq} não existe no ERP")
+    data_cad = _data(lido.get("DATA_CAD"))
+    if data_cad is not None and data_cad < _dias_locais(iniciado)[0] - _FOLGA_FUSO:
+        return ("liberar", f"SEQ {seq} tem produto cadastrado antes da reserva")
+    return _adota_se_bate(fire, seq, lido, plano, [seq])
 
 
 def _ligado_a_outra_linha(env_conn, linha: dict, seq: int) -> bool:
@@ -181,31 +201,32 @@ def _ligado_a_outra_linha(env_conn, linha: dict, seq: int) -> bool:
 
 def _por_nome(fire, env_conn, linha: dict, plano: dict, iniciado: datetime) -> tuple:
     campos = plano["campos"]
-    nome, grupo, unidade = campos.get("DESCRICAO"), _int(campos.get("GRUPO")), campos.get("UNIDADE")
-    if not isinstance(nome, str) or grupo is None or not isinstance(unidade, str):
-        return ("incerto", "plano sem nome, grupo ou unidade para a busca", [])
-    candidatos = sorted({
-        s
-        for dia in _dias_locais(iniciado)
-        for s in cadastro_fire.buscar_por_nome(fire, nome=nome, grupo=grupo, unidade=unidade,
-                                               data_cad=dia)
-    })
-    if not candidatos:
-        return ("liberar", "nenhum produto com o nome no dia da reserva")
-    if len(candidatos) > 1:
-        return ("incerto", "mais de um produto com o nome no dia da reserva", candidatos)
-    if _ligado_a_outra_linha(env_conn, linha, candidatos[0]):
-        return ("incerto", "produto com o nome já ligado a outra linha do livro", candidatos)
-    decisao = _confere_seq(fire, candidatos[0], plano, iniciado)
-    if decisao[0] != "liberar":
-        return decisao
-    if decisao[2] == "ausente":
-        return ("incerto", "produto com o nome sumiu do ERP entre as consultas", candidatos)
-    return ("incerto", "produto com o nome difere do plano", candidatos)  # nunca libera
+    nome, grupo = campos.get("DESCRICAO"), _int(campos.get("GRUPO"))
+    if not isinstance(nome, str) or not nome.strip() or grupo is None:
+        return ("incerto", "plano sem nome ou grupo para a busca", [])
+    dias = _dias_locais(iniciado)
+    linhas = cadastro_fire.candidatos_por_data(
+        fire, grupo=grupo, de=dias[0] - _FOLGA_FUSO, ate=dias[-1] + _FOLGA_FUSO
+    )
+    if any(not isinstance(r["DESCRICAO"], str) for r in linhas):
+        seqs = sorted(r["SEQ"] for r in linhas if not isinstance(r["DESCRICAO"], str))
+        return ("incerto", "produto sem descrição legível na janela da reserva", seqs)
+    parecidos = [r for r in linhas if _parecido(r["DESCRICAO"]) == _parecido(nome)]
+    seqs = sorted(r["SEQ"] for r in parecidos)
+    if not parecidos:
+        return ("liberar", "nenhum produto com nome parecido na janela da reserva")
+    if len(parecidos) > 1:
+        return ("incerto", "mais de um produto com nome parecido na janela da reserva", seqs)
+    (lido,) = parecidos
+    if _txt(lido["DESCRICAO"]) != _txt(nome):
+        return ("incerto", "produto com nome parecido, mas não igual, na janela", seqs)
+    if _ligado_a_outra_linha(env_conn, linha, lido["SEQ"]):
+        return ("incerto", "produto com o nome já ligado a outra linha do livro", seqs)
+    return _adota_se_bate(fire, int(lido["SEQ"]), lido, plano, seqs)
 
 
 def _decidir(fire, env_conn, linha: dict, iniciado: datetime | None) -> tuple:
-    """-> ("adotar", seq) | ("liberar", motivo, ...) | ("reaplicar", motivo) |
+    """-> ("adotar", seq) | ("liberar", motivo) | ("reaplicar", motivo) |
     ("incerto", motivo, candidatos). Só lê o ERP."""
     acao, seq = linha["acao"], linha["seq_reservado"]
     seqs = [seq] if seq is not None else []
@@ -246,6 +267,27 @@ def ha_o_que_recuperar(env_conn, *, agora: datetime) -> bool:
     return bool(_a_recuperar(env_conn, agora))
 
 
+def _motor_sem_bloqueio(slug: str, fire) -> str | None:
+    """None se o motor respeita NO_REC_VERSION (< 4.0); senão o motivo para parar."""
+    cur = fire.cursor()
+    try:
+        cur.execute(_SQL_VERSAO)
+        linha = cur.fetchone()
+    finally:
+        cur.close()
+    versao = linha[0] if linha else None
+    principal = _int(versao.split(".", 1)[0]) if isinstance(versao, str) else None
+    if principal is not None and principal < 4:
+        return None
+    motivo = "motor_ilegivel" if principal is None else "motor_sem_bloqueio"
+    if (slug, motivo) not in _motor_avisado:
+        _motor_avisado.add((slug, motivo))
+        logger.error(f"flowpcp.cadastro_volta env={slug}: recuperação desligada ({motivo}): "
+                     "sem a leitura bloqueante, INSERT pendente de outro processo pareceria "
+                     "ausência; as linhas ficam para a operação")
+    return motivo
+
+
 def _aplicar(slug: str, env_conn, linha: dict, decisao: tuple, agora: datetime,
              contagem: dict, *, transitorio: bool) -> None:
     cid, versao = linha["cadastro_id"], linha["versao"]
@@ -255,24 +297,36 @@ def _aplicar(slug: str, env_conn, linha: dict, decisao: tuple, agora: datetime,
             corpo = corpo_gravado(versao, str(decisao[1]), agora)
         except ValueError:
             decisao = ("incerto", "código do ERP fora do formato", [decisao[1]])
-    # Transitório: a retomada só vale junto com a porta (um commit só).
-    ok = not transitorio or repo.retomar_transitorio_com_seq(env_conn, cid, versao)
     if decisao[0] == "adotar":
         chave, texto = "adotado", f"adotou o SEQ {decisao[1]}"
-        ok = ok and repo.marcar_gravado(env_conn, cid, versao, erp_produto_id=str(decisao[1]),
-                                        corpo_json=json.dumps(corpo))
     elif decisao[0] in ("liberar", "reaplicar"):
         chave = "liberado" if decisao[0] == "liberar" else "reaplicar"
         texto = f"liberou ({decisao[1]})"
-        ok = ok and repo.liberar_comprovado(env_conn, cid, versao)
     else:
         chave, texto = "incerto", f"incerto ({decisao[1]}; SEQs candidatos {decisao[2]})"
-        ok = ok and repo.marcar_desfecho(env_conn, cid, versao, "incerto", alerta="recuperacao")
+    try:
+        # Transitório: a retomada só vale junto com a porta (um commit só).
+        ok = not transitorio or repo.retomar_transitorio_com_seq(env_conn, cid, versao)
+        if chave == "adotado":
+            ok = ok and repo.marcar_gravado(env_conn, cid, versao,
+                                            erp_produto_id=str(decisao[1]),
+                                            corpo_json=json.dumps(corpo))
+        elif chave in ("liberado", "reaplicar"):
+            ok = ok and repo.liberar_comprovado(env_conn, cid, versao)
+        else:
+            ok = ok and repo.marcar_desfecho(env_conn, cid, versao, "incerto",
+                                             alerta="recuperacao")
+        if ok:
+            env_conn.commit()
+    except Exception as exc:  # noqa: BLE001 — a linha volta a como estava
+        env_conn.rollback()
+        logger.error(f"{prefixo}: erro no livro ao aplicar '{chave}' ({type(exc).__name__}); "
+                     "linha como estava")
+        return
     if not ok:
         env_conn.rollback()
         logger.error(f"{prefixo}: {texto} não aplicado no livro")
         return
-    env_conn.commit()
     contagem[chave] += 1
     if chave == "incerto":
         logger.error(f"{prefixo}: {texto}; nem grava nem responde, a operação resolve")
@@ -285,9 +339,17 @@ def recuperar(slug: str, env_conn, fire_conn, *, agora: datetime) -> dict:
     -> contagens `adotado`, `liberado`, `incerto`, `reaplicar`, e `parado` (tipo da
     exceção) quando uma falha de conexão ou de lock para a recuperação neste ciclo:
     as linhas que faltam ficam como estão. Outra falha de leitura vira `incerto` só
-    naquela linha."""
-    contagem: dict = dict.fromkeys(_CONTAGENS, 0)
+    naquela linha. Motor sem leitura bloqueante: `{"parado": motivo}`, nada lido."""
     fire = _SoSelect(fire_conn)
+    try:
+        motivo = _motor_sem_bloqueio(slug, fire)
+    except Exception as exc:  # noqa: BLE001 — sem a versão, não há leitura bloqueante provada
+        logger.error(f"flowpcp.cadastro_volta env={slug}: recuperação parada, leitura da versão "
+                     f"do motor falhou ({type(exc).__name__}); nada marcado")
+        return {"parado": type(exc).__name__}
+    if motivo is not None:
+        return {"parado": motivo}
+    contagem: dict = dict.fromkeys(_CONTAGENS, 0)
     for linha, iniciado, transitorio in _a_recuperar(env_conn, agora):
         cid, versao = linha["cadastro_id"], linha["versao"]
         try:

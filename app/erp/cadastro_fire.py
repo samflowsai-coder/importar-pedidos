@@ -270,17 +270,18 @@ def ler_composicao(conn, seq: int) -> list[tuple[int, float]]:
         cur.close()
 
 
-def buscar_por_nome(conn, *, nome: str, grupo: int, unidade: str, data_cad: date) -> list[int]:
-    """Candidatos exatos para a recuperação sem `seq_reservado`. O filtro de nome
-    é em Python (o UPPER do Firebird não é confiável em WIN1252)."""
+def candidatos_por_data(conn, *, grupo: int, de: date, ate: date) -> list[dict]:
+    """Produtos do grupo cadastrados entre `de` e `ate` (inclusive), com as colunas de
+    `ler_produto`. Recuperação sem `seq_reservado`: o nome é comparado em Python (o
+    UPPER do Firebird não é confiável em WIN1252, e um nome renomeado tem que aparecer)."""
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT SEQ, DESCRICAO FROM PRODUTOS WHERE GRUPO = ? AND UNIDADE = ? AND DATA_CAD = ?",
-            (grupo, unidade, data_cad),
+            f"SELECT {', '.join(_CONFERENCIA)} FROM PRODUTOS "
+            "WHERE GRUPO = ? AND DATA_CAD BETWEEN ? AND ?",
+            (grupo, de, ate),
         )
-        alvo = nome.strip().casefold()
-        return [int(s) for s, d in cur.fetchall() if str(d or "").strip().casefold() == alvo]
+        return [dict(zip(_CONFERENCIA, linha, strict=True)) for linha in cur.fetchall()]
     finally:
         cur.close()
 

@@ -104,6 +104,7 @@ def test_leitura_bloqueante_espera_registro_pendente(monkeypatch):
 
     class _Tr:
         default_action = "commit"  # o padrão do fdb
+        default_tpb = None
 
     class _Conn:
         def __init__(self):
@@ -126,6 +127,7 @@ def test_leitura_bloqueante_espera_registro_pendente(monkeypatch):
         fdb.isc_tpb_version3, fdb.isc_tpb_write, fdb.isc_tpb_read_committed,
         fdb.isc_tpb_no_rec_version, fdb.isc_tpb_wait, fdb.isc_tpb_lock_timeout,
     ]) + struct.pack("<bI", 4, 10)]
+    assert conn.main_transaction.default_tpb == conn.begins[0]  # vale depois de cada commit
     assert kws == [{"commit_na_saida": False}]  # saída sempre rollback, nunca commit
     assert conn.main_transaction.default_action == "rollback"
     with FirebirdConnection().connect_leitura_bloqueante({"path": "x"}, lock_timeout=3):

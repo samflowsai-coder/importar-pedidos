@@ -152,6 +152,7 @@ class FirebirdConnection:
             fdb.isc_tpb_no_rec_version, fdb.isc_tpb_wait, fdb.isc_tpb_lock_timeout,
         ]) + struct.pack("<bI", 4, lock_timeout)
         with self._connect_with(cfg, commit_na_saida=False) as conn:
+            conn.main_transaction.default_tpb = tpb
             conn.main_transaction.default_action = "rollback"
             conn.begin(tpb=tpb)
             yield conn

@@ -5,6 +5,7 @@ Fire só-leitura em memória (qualquer escrita derruba o teste); SQLite do ambie
 
 import json
 import re
+import sqlite3
 import time
 from contextlib import nullcontext
 from datetime import UTC, date, datetime, timedelta
@@ -20,6 +21,7 @@ from app.utils.logger import logger
 from tests.test_cadastro_volta_gravar import CONEXAO, LOCK, PAR, FireGravavel, Flow, Relogio
 
 AGORA = datetime(2026, 10, 17, 13, 0, tzinfo=UTC)
+_SQL_VERSAO = "SELECT RDB$GET_CONTEXT('SYSTEM', 'ENGINE_VERSION') FROM RDB$DATABASE"
 ANTIGA = "2026-10-17 12:00:00"
 SOQUETE = {"DESCRICAO": "MEIA SOQUETE", "UNIDADE": "PAR", "GRUPO": 8, "CLASSIF_FISCAL": "61159500"}
 
@@ -42,10 +44,11 @@ class _Cur:
 
 
 class FireLeitura:
-    """`produtos` {seq: dict} e `kit` {pai: [(filho, qtd)]}. Só SELECT; o resto falha."""
+    """`produtos` {seq: dict} e `kit` {pai: [(filho, qtd)]}. Só SELECT; o resto falha.
+    A versão do motor (`versao`) responde à parte: não entra em `consultas` nem em `falha`."""
 
-    def __init__(self, produtos=None, kit=None, falha=None):
-        self.produtos, self.kit, self.falha = produtos or {}, kit or {}, falha
+    def __init__(self, produtos=None, kit=None, falha=None, versao="2.5.9"):
+        self.produtos, self.kit, self.falha, self.versao = produtos or {}, kit or {}, falha, versao
         self.consultas: list = []
 
     def cursor(self):
@@ -55,6 +58,8 @@ class FireLeitura:
         raise AssertionError("a recuperação não comita no ERP")
 
     def ler(self, sql, params):
+        if sql == _SQL_VERSAO:
+            return [(self.versao,)]
         self.consultas.append((sql, params))
         if self.falha is not None:
             raise self.falha
@@ -65,12 +70,14 @@ class FireLeitura:
             return [tuple(params[0] if c == "SEQ" else p.get(c) for c in cols)] if p else []
         if sql.startswith("SELECT CODPRODUTO, QTD FROM PRODUTOS_KIT WHERE CODPRODUTO_PAI = ?"):
             return sorted(self.kit.get(params[0], []))
-        if sql == ("SELECT SEQ, DESCRICAO FROM PRODUTOS WHERE GRUPO = ? AND UNIDADE = ? "
-                   "AND DATA_CAD = ?"):
-            grupo, unidade, dia = params
-            return [(s, p["DESCRICAO"]) for s, p in self.produtos.items()
-                    if p.get("GRUPO") == grupo and p.get("UNIDADE") == unidade
-                    and p.get("DATA_CAD") == dia]
+        m = re.fullmatch(r"SELECT (.+) FROM PRODUTOS WHERE GRUPO = \? "
+                         r"AND DATA_CAD BETWEEN \? AND \?", sql)
+        if m:
+            grupo, de, ate = params
+            cols = [c.strip() for c in m.group(1).split(",")]
+            return [tuple(s if c == "SEQ" else p.get(c) for c in cols)
+                    for s, p in sorted(self.produtos.items())
+                    if p.get("GRUPO") == grupo and de <= p.get("DATA_CAD") <= ate]
         raise AssertionError(f"SQL inesperado na recuperação: {sql}")
 
 
@@ -166,12 +173,42 @@ def test_campos_aparados_e_vazio_igual_a_none(env_conn):
     assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["adotado"] == 1
 
 
-def test_libera_quando_o_seq_tem_outro_produto(env_conn):
+def test_libera_quando_o_seq_tem_produto_cadastrado_com_folga_antes(env_conn):
     _linha(env_conn, seq=3992)
-    fire = FireLeitura(produtos={3992: _no_erp(DESCRICAO="OUTRA COISA")})
+    fire = FireLeitura(produtos={3992: _no_erp(DESCRICAO="OUTRA COISA",
+                                               DATA_CAD=date(2026, 10, 15))})
     r = rec.recuperar("mm", env_conn, fire, agora=AGORA)
     assert r == {"adotado": 0, "liberado": 1, "incerto": 0, "reaplicar": 0}
     assert _estado(env_conn) == ("liberado", None, None)  # Emenda 3: o SEQ zera junto
+
+
+@pytest.mark.parametrize("dia", [date(2026, 10, 16), date(2026, 10, 17), date(2026, 10, 18)])
+def test_descricao_diferente_na_janela_da_reserva_fica_incerto(env_conn, dia):
+    """Renomeado na tela ou por trigger: dentro da janela, outra descrição não prova nada."""
+    _linha(env_conn, seq=3992)
+    fire = FireLeitura(produtos={3992: _no_erp(DESCRICAO="OUTRA COISA", DATA_CAD=dia)})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+    assert _estado(env_conn) == ("incerto", 3992, None)
+
+
+@pytest.mark.parametrize("descricao", [b"MEIA SOQUETE", "", "   ", 123])
+def test_descricao_ilegivel_fica_incerto(env_conn, descricao):
+    _linha(env_conn, seq=3992)
+    fire = FireLeitura(produtos={3992: _no_erp(DESCRICAO=descricao)})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+
+
+@pytest.mark.parametrize("data_cad", [None, "2026-10-01", 20261001])
+def test_data_cad_ilegivel_com_divergencia_fica_incerto(env_conn, data_cad):
+    _linha(env_conn, seq=3992)
+    fire = FireLeitura(produtos={3992: _no_erp(DESCRICAO="OUTRA", DATA_CAD=data_cad)})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+
+
+def test_data_cad_ilegivel_com_tudo_batendo_adota(env_conn):
+    _linha(env_conn, seq=3992)
+    fire = FireLeitura(produtos={3992: _no_erp(DATA_CAD=None)})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["adotado"] == 1
 
 
 @pytest.mark.parametrize("grupo", [8.0, Decimal("8"), Decimal("8.000"), "8"])
@@ -195,11 +232,25 @@ def test_mesma_descricao_e_dia_com_outra_divergencia_fica_incerto(env_conn, erro
     assert _estado(env_conn) == ("incerto", 3992, None)
 
 
-def test_produto_anterior_a_reserva_libera_mesmo_com_a_descricao_igual(env_conn):
+def test_produto_anterior_a_reserva_com_folga_libera_mesmo_com_a_descricao_igual(env_conn):
     _linha(env_conn, seq=3992)
-    fire = FireLeitura(produtos={3992: _no_erp(DATA_CAD=date(2026, 10, 16))})
+    fire = FireLeitura(produtos={3992: _no_erp(DATA_CAD=date(2026, 10, 15))})
     assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["liberado"] == 1
     assert _estado(env_conn) == ("liberado", None, None)
+
+
+def test_dia_anterior_nao_libera_quando_o_fuso_do_gravador_difere(env_conn, monkeypatch):
+    """Sonda edge_tz: gravado às 22:30 de 16/10 em São Paulo (01:30 UTC de 17/10) e
+    recuperado num processo em UTC. O DATA_CAD 16/10 é o nosso produto: adota."""
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    try:
+        _linha(env_conn, seq=3992, iniciado="2026-10-17 01:30:00")
+        fire = FireLeitura(produtos={3992: _no_erp(DATA_CAD=date(2026, 10, 16))})
+        assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["adotado"] == 1
+    finally:
+        monkeypatch.undo()
+        time.tzset()
 
 
 def test_libera_quando_o_seq_nao_existe(env_conn):
@@ -245,7 +296,9 @@ def test_incerto_com_dois_candidatos_por_nome(env_conn, erros):
 
 def test_libera_sem_candidato_por_nome(env_conn):
     _linha(env_conn)
-    fire = FireLeitura(produtos={4001: _no_erp(DATA_CAD=date(2026, 10, 16))})  # outro dia
+    fire = FireLeitura(produtos={4001: _no_erp(DATA_CAD=date(2026, 10, 15)),  # fora da janela
+                                 4002: _no_erp(GRUPO=9),  # outro grupo
+                                 4003: _no_erp(DESCRICAO="MEIA CANO ALTO")})
     assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["liberado"] == 1
     assert _estado(env_conn) == ("liberado", None, None)
 
@@ -257,28 +310,59 @@ def test_um_candidato_por_nome_com_campo_diferente_e_incerto(env_conn):
     assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
 
 
+def _janela(fire):
+    (sql, params), = [c for c in fire.consultas if "BETWEEN" in c[0]]
+    return params
+
+
 def test_busca_por_nome_atravessa_a_meia_noite_local(env_conn, fuso_sp):
-    # 02:58 UTC de 18/10 = 23:58 de 17/10 em São Paulo; o INSERT caiu já no dia 18.
+    # 02:58 UTC de 18/10 = 23:58 de 17/10 em São Paulo; o INSERT pode ter caído no dia 18.
     _linha(env_conn, iniciado="2026-10-18 02:58:00")
     fire = FireLeitura(produtos={4001: _no_erp(DATA_CAD=date(2026, 10, 18))})
     agora = datetime(2026, 10, 18, 4, 0, tzinfo=UTC)
     assert rec.recuperar("mm", env_conn, fire, agora=agora)["adotado"] == 1
-    dias = sorted({p[2] for s, p in fire.consultas if "DATA_CAD = ?" in s})
-    assert dias == [date(2026, 10, 17), date(2026, 10, 18)]
+    assert _janela(fire) == (8, date(2026, 10, 16), date(2026, 10, 19))
 
 
-def test_busca_por_nome_usa_a_data_local(env_conn, fuso_sp):
-    # 01:00 UTC de 18/10 = 22:00 de 17/10 em São Paulo: só o dia 17.
+def test_busca_por_nome_usa_a_data_local_com_um_dia_de_folga(env_conn, fuso_sp):
+    # 01:00 UTC de 18/10 = 22:00 de 17/10 em São Paulo: janela de 16 a 18.
     _linha(env_conn, iniciado="2026-10-18 01:00:00")
-    fire = FireLeitura(produtos={4001: _no_erp(DATA_CAD=date(2026, 10, 18))})
+    fire = FireLeitura(produtos={4001: _no_erp(DATA_CAD=date(2026, 10, 19))})
     agora = datetime(2026, 10, 18, 4, 0, tzinfo=UTC)
     assert rec.recuperar("mm", env_conn, fire, agora=agora)["liberado"] == 1
-    assert {p[2] for s, p in fire.consultas if "DATA_CAD = ?" in s} == {date(2026, 10, 17)}
+    assert _janela(fire) == (8, date(2026, 10, 16), date(2026, 10, 18))
 
 
-def test_plano_sem_unidade_nao_busca_e_fica_incerto(env_conn):
-    """UNIDADE nula no ERP nunca casa `UNIDADE = ?`: zero candidatos não provaria nada."""
+@pytest.mark.parametrize("nome", ["Meia  Soquete", "MÉIA SOQUETE", " meia soquete "])
+def test_nome_parecido_mas_nao_exato_fica_incerto(env_conn, nome):
+    """Renomeado na tela (caixa, acento, espaços): o nome parecido não libera nem adota."""
+    _linha(env_conn)
+    fire = FireLeitura(produtos={4001: _no_erp(DESCRICAO=nome)})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+
+
+def test_nome_parecido_ao_lado_do_exato_fica_incerto(env_conn):
+    _linha(env_conn)
+    fire = FireLeitura(produtos={4001: _no_erp(), 4002: _no_erp(DESCRICAO="Meia Soquete")})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+
+
+@pytest.mark.parametrize("descricao", [None, b"MEIA SOQUETE", 7])
+def test_descricao_nao_texto_na_janela_fica_incerto(env_conn, descricao):
+    _linha(env_conn)
+    fire = FireLeitura(produtos={4001: _no_erp(DESCRICAO=descricao)})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+
+
+def test_plano_sem_unidade_busca_e_compara_vazio(env_conn):
+    """A busca não filtra UNIDADE no SQL: UNIDADE nula dos dois lados bate."""
     _linha(env_conn, plano=_plano({k: v for k, v in SOQUETE.items() if k != "UNIDADE"}))
+    fire = FireLeitura(produtos={4001: _no_erp(UNIDADE=None)})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["adotado"] == 1
+
+
+def test_plano_sem_nome_ou_grupo_nao_busca_e_fica_incerto(env_conn):
+    _linha(env_conn, plano=_plano({k: v for k, v in SOQUETE.items() if k != "GRUPO"}))
     fire = FireLeitura()
     assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
     assert fire.consultas == []
@@ -351,6 +435,8 @@ def test_outra_falha_na_leitura_fica_incerto_so_naquela_linha(env_conn, erros):
 
     class _Falha(FireLeitura):
         def ler(self, sql, params):
+            if sql == _SQL_VERSAO:
+                return [("2.5.9",)]
             raise ValueError("coluna estranha")
 
     r = rec.recuperar("mm", env_conn, _Falha(), agora=AGORA)
@@ -386,20 +472,6 @@ def test_candidato_por_nome_ja_ligado_a_outra_linha_fica_incerto(env_conn, ligac
     assert _estado(env_conn)[0] == "incerto"
 
 
-def test_candidato_que_some_entre_as_consultas_fica_incerto(env_conn, erros):
-    class _Some(FireLeitura):
-        def ler(self, sql, params):
-            if sql.endswith("WHERE SEQ = ?"):
-                self.consultas.append((sql, params))
-                return []
-            return super().ler(sql, params)
-
-    _linha(env_conn)
-    assert rec.recuperar("mm", env_conn, _Some(produtos={4001: _no_erp()}),
-                         agora=AGORA)["incerto"] == 1
-    assert any("sumiu" in e for e in erros)
-
-
 def test_transicao_recusada_pelo_livro_nao_conta(env_conn, monkeypatch, erros):
     _linha(env_conn, seq=3992)
     monkeypatch.setattr(repo, "liberar_comprovado", lambda *a: False)
@@ -411,13 +483,19 @@ class _Sonda(FireLeitura):
     """Aceita qualquer SQL (o ERP de verdade aceitaria): só o guarda pode recusar."""
 
     def ler(self, sql, params):
+        if sql == _SQL_VERSAO:
+            return [("2.5.9",)]
         self.consultas.append((sql, params))
         return []
 
 
 @pytest.mark.parametrize("sql", ["UPDATE PRODUTOS SET DESCRICAO = ? WHERE SEQ = ?",
                                  "  insert into PRODUTOS (SEQ) VALUES (?)",
-                                 "DELETE FROM PRODUTOS_KIT WHERE CODPRODUTO_PAI = ?"])
+                                 "DELETE FROM PRODUTOS_KIT WHERE CODPRODUTO_PAI = ?",
+                                 "SELECT SEQ FROM PRODUTOS WHERE SEQ = ? WITH LOCK",
+                                 "select seq from produtos where seq = ? with\n  lock",
+                                 "SELECT GEN_ID(G_PRODUTOS, 1) FROM RDB$DATABASE",
+                                 "select gen_id (g, 1) from rdb$database"])
 def test_guarda_da_recuperacao_so_deixa_passar_select(sql):
     fire = _Sonda()
     guardada = rec._SoSelect(fire)
@@ -441,6 +519,115 @@ def test_recuperar_le_o_erp_pelo_guarda(env_conn, monkeypatch, erros):
     monkeypatch.setattr(rec.cadastro_fire, "ler_produto", _escreve)
     assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
     assert fire.consultas == []
+
+
+# --- falha no meio da decisão (sonda edge_f) ------------------------------------
+
+
+class _KitFalha(FireLeitura):
+    """`ler_produto` responde; a leitura da composição falha."""
+
+    def __init__(self, exc, **kw):
+        super().__init__(**kw)
+        self.exc = exc
+
+    def ler(self, sql, params):
+        if "PRODUTOS_KIT" in sql:
+            raise self.exc
+        return super().ler(sql, params)
+
+
+def _dois(env_conn, transitorio=False):
+    _linha(env_conn, "c1", seq=3992)
+    _linha(env_conn, "c2", seq=3993)
+    if transitorio:
+        env_conn.execute("UPDATE cadastro_volta SET estado = 'transitorio' WHERE cadastro_id = 'c1'")
+        env_conn.commit()
+    return {3992: _no_erp(), 3993: _no_erp()}
+
+
+@pytest.mark.parametrize("falha", [LOCK, CONEXAO])
+def test_lock_ou_conexao_depois_de_ler_o_produto_para_sem_marcar(env_conn, falha):
+    """F1/F2: a falha vem depois de `ler_produto`; nada é marcado e o SQLite fica limpo."""
+    fire = _KitFalha(falha(), produtos=_dois(env_conn))
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["parado"] == "FdbError"
+    assert _estado(env_conn, "c1") == ("em_andamento", 3992, None)
+    assert _estado(env_conn, "c2") == ("em_andamento", 3993, None)
+    assert not env_conn.in_transaction
+
+
+def test_outra_falha_depois_de_ler_o_produto_fica_incerto_e_segue(env_conn):
+    """F3: falha que não é lock nem conexão: incerto só naquela linha, as outras seguem."""
+    fire = _KitFalha(ValueError("x"), produtos=_dois(env_conn))
+    r = rec.recuperar("mm", env_conn, fire, agora=AGORA)
+    assert (r["incerto"], "parado" in r) == (2, False)
+    assert not env_conn.in_transaction
+
+
+def test_transitorio_com_lock_no_meio_continua_transitorio(env_conn):
+    """F4: a retomada não acontece sem a decisão."""
+    fire = _KitFalha(LOCK(), produtos=_dois(env_conn, transitorio=True))
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["parado"] == "FdbError"
+    assert _estado(env_conn, "c1") == ("transitorio", 3992, None)
+    assert _estado(env_conn, "c2") == ("em_andamento", 3993, None)
+
+
+@pytest.mark.parametrize("transitorio", [False, True])
+def test_erro_no_livro_desfaz_a_linha_e_segue(env_conn, monkeypatch, erros, transitorio):
+    """D3: exceção numa porta do livro depois da retomada: rollback e a linha fica como estava."""
+    _dois(env_conn, transitorio=transitorio)
+
+    def _quebra(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(repo, "liberar_comprovado", _quebra)
+    r = rec.recuperar("mm", env_conn, FireLeitura(), agora=AGORA)
+    assert r["liberado"] == 0 and "parado" not in r
+    assert _estado(env_conn, "c1")[:2] == ("transitorio" if transitorio else "em_andamento", 3992)
+    assert _estado(env_conn, "c2")[:2] == ("em_andamento", 3993)
+    assert not env_conn.in_transaction
+    assert any("erro no livro" in e and "OperationalError" in e for e in erros)
+    assert not any("ERP indisponível" in e for e in erros)
+
+
+# --- versão do motor -------------------------------------------------------------
+
+
+@pytest.fixture
+def motor_limpo(monkeypatch):
+    monkeypatch.setattr(rec, "_motor_avisado", set())
+
+
+@pytest.mark.parametrize("versao", ["2.5.9", "3.0.12"])
+def test_motor_com_no_rec_version_roda(env_conn, motor_limpo, versao):
+    _linha(env_conn, seq=3992)
+    fire = FireLeitura(versao=versao)
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["liberado"] == 1
+
+
+def test_versao_do_motor_que_nao_le_para(env_conn, erros):
+    class _SemVersao(FireLeitura):
+        def ler(self, sql, params):
+            raise LOCK()
+
+    _linha(env_conn, seq=3992)
+    assert rec.recuperar("mm", env_conn, _SemVersao(), agora=AGORA) == {"parado": "FdbError"}
+    assert _estado(env_conn)[0] == "em_andamento"
+    assert any("versão do motor" in e for e in erros)
+
+
+@pytest.mark.parametrize(("versao", "motivo"), [
+    ("5.0.1", "motor_sem_bloqueio"), ("4.0.5", "motor_sem_bloqueio"),
+    (None, "motor_ilegivel"), ("WI-V", "motor_ilegivel"),
+])
+def test_motor_sem_bloqueio_ou_ilegivel_nao_roda(env_conn, motor_limpo, erros, versao, motivo):
+    """ReadConsistency (4.0+) faz o read committed ignorar o NO_REC_VERSION."""
+    _linha(env_conn, seq=3992)
+    fire = FireLeitura(versao=versao)
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA) == {"parado": motivo}
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA) == {"parado": motivo}
+    assert _estado(env_conn)[0] == "em_andamento" and fire.consultas == []
+    assert sum(motivo in e for e in erros) == 1  # uma vez por processo
 
 
 # --- transitorio com SEQ (M3 da revisão da Task 4) ----------------------------
@@ -496,6 +683,8 @@ class FireCiclo(FireGravavel):
     """O Fire gravável do ciclo, com as leituras da recuperação."""
 
     def _responder(self, sql, params):
+        if sql == _SQL_VERSAO:
+            return [("2.5.9",)], 1
         if sql.startswith("SELECT CODPRODUTO, QTD FROM PRODUTOS_KIT WHERE CODPRODUTO_PAI = ?"):
             return sorted((k[2], k[3]) for k in self.kit if k[1] == params[0]), 0
         return super()._responder(sql, params)
