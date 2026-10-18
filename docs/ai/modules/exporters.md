@@ -7,6 +7,12 @@ Persistir o `Order` validado no destino: XLSX (sempre disponível) ou Firebird (
 - `app/exporters/erp_exporter.py` — XLSX. Split por loja (lógica abaixo).
 - `app/exporters/firebird_exporter.py` — driver Firebird.
 
+## Gravação no Fire só pelo preview
+`EXPORT_MODE=db|both` **não** grava mais no Fire a partir de `/api/import`, `/api/reimport`
+nem de `main.py` (CLI recusa; web devolve `skip_reason: USE_PREVIEW`). Com a trava de preço
+em `observando`/`ligado` o XLSX também não nasce na importação (`xlsx_adiado`). Ambos só
+saem pelo preview → exportar/enviar, via `preco_trava.decidir_envio`. Ver `modules/erp.md`.
+
 ## Split por loja (XLSX)
 
 Prioridade da chave de agrupamento (`_delivery_key`):

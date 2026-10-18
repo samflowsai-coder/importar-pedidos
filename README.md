@@ -121,7 +121,7 @@ Lista completa e comentada em [`CLAUDE.md`](CLAUDE.md#variáveis-de-ambiente). O
 | `OPENROUTER_API_KEY` | Sim, para o fallback LLM | Chave OpenRouter |
 | `PORTAL_PORT` | Não | Porta do web (padrão `3636`) |
 | `PORTAL_HOST` | Não | `127.0.0.1` (padrão) ou `0.0.0.0` para a rede local |
-| `EXPORT_MODE` | Não | `xlsx` (padrão), `db` ou `both` |
+| `EXPORT_MODE` | Não | `xlsx` (padrão), `db` ou `both` (a gravação no Fire só ocorre pelo preview → enviar; importação e CLI não gravam) |
 | `APP_DATA_DIR` | Não | Onde ficam os SQLite (padrão `data/`) |
 
 ---

@@ -274,7 +274,12 @@ produção do ERP é irreversível, ao contrário do XLS. Trava proposta: opt-in
 modo `both` (XLS de backup) + cair para o XLS na dúvida. **Exige corrigir o §2.1 antes.**
 Próximo passo se aprovado: brainstorm → spec.
 
-### 4.2 Regra mais forte de validação de preço por cliente — **próxima tarefa (2026-09-12)**
+### 4.2 Regra mais forte de validação de preço por cliente — **coberto pela trava de preço por rede (branch `feat/tabela-preco-por-rede`, 2026-10-17)**
+> Implementada em `docs/ai/modules/erp.md` ("Trava de preço por rede"): tabela por rede,
+> check indisponível/cópia velha bloqueia (fail-closed em `ligado`). **Falta a Task 7**
+> (sync/pendências/decisões com o Flow, aguarda contrato do pcp-app) para ligar. Texto
+> original abaixo, mantido como histórico.
+
 Samuel pediu isto como próximo trabalho, antes de habilitar a inserção direta no Fire.
 
 **O que existe hoje:** `check_order` compara o preço do item do pedido contra o preço do
@@ -299,6 +304,13 @@ empresa foi corrigido (`dbf2708`), mas a regra de fundo segue permissiva.
 
 **Próximo passo:** brainstorming antes de qualquer código. É mudança de regra de negócio
 num caminho que decide se pedido entra ou não, então spec antes de plano.
+
+### 4.3 Menores deferidos da trava de preço
+- `registrar_aplicados` (audit `preco_aplicado`) roda depois do export; revisar a posição se houver falha parcial.
+- Em `ligado` bloqueado o botão primário "Gerar XLS" fica habilitado (o servidor recusa com motivo); desabilitar com explicação.
+- Check salvo validado só pelo tamanho: com Fire fora e de-para trocado após o commit, o KIT avaliado pode diferir do exportado.
+- Preview marca intercompany como liberado, mas o portão aplica a regra de hoje e pode bloquear (`price_check_failed`); sem teste de paridade.
+- Troca do `preco_trava_modo` só vai pro loguru; falta trilha consultável de quem ligou a trava.
 
 ---
 

@@ -75,7 +75,7 @@ task → domínio → arquivos a carregar → testes a rodar. Não carregue o pr
 | Agendamento | **APScheduler** — `app/worker/` |
 | Log | **loguru** com rotação |
 | Lint/format | **ruff** |
-| Testes | **pytest** — **1297 testes** em 106 arquivos |
+| Testes | **pytest** — **2275 testes** em 145 arquivos |
 
 ---
 
@@ -118,7 +118,7 @@ pip install -e ".[dev]"                  # instalar
 ruff check app/ tests/                   # lint
 ruff format app/ tests/                  # format
 
-.venv/bin/pytest tests/ -v               # suíte completa (1297 testes)
+.venv/bin/pytest tests/ -v               # suíte completa (2275 testes)
 .venv/bin/pytest tests/<arquivo>.py -v   # direcionado (use este durante a task)
 
 python ui.py                             # web → http://127.0.0.1:3636

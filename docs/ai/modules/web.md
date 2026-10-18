@@ -237,6 +237,16 @@ precisa dele nos dois ramos (sucesso e erro).
   declarado lê a pasta certa mesmo com nome de arquivo repetido entre empresas.
 - Comando: `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py tests/test_firebird_config_api.py tests/test_routing_wiring.py tests/test_routing_modo.py tests/test_env_do_pedido.py tests/test_rotas_por_pedido_cross_env.py tests/test_pasta_cross_env.py -v`
 
+## EXPORT_MODE=db|both não grava mais no Fire pela importação
+
+`/api/import`, `/api/reimport` e `main.py` **nunca** gravam no Fire: `_run_exporters`
+devolve `db_result={"skipped": True, "skip_reason": "USE_PREVIEW"}` e o `main.py` (CLI)
+recusa `db|both` com `sys.exit`. A gravação só ocorre no preview → enviar
+(`_send_one_to_fire`), onde passa por `preco_trava.decidir_envio` (ver `modules/erp.md`,
+"Trava de preço por rede"). Com a trava `observando`/`ligado`, a importação **também não
+gera XLSX** (resposta traz `xlsx_adiado: "trava_de_preco"`); o XLSX sai pelo preview →
+exportar. O payload do preview ganha `preco`.
+
 ## Reatividade de config (exportMode)
 O botão de ação principal (`#pvCommitBtn` no preview e `#batchSendBtn` no log)
 é dirigido por `cfg.exportMode` — fonte: `GET /api/config`. Mapeamento:

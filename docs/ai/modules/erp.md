@@ -460,3 +460,86 @@ devolve vazio sem levantar, cool-down só em erro de conexão, lote > 200.
 
 `tests/test_numero_pedido.py` — as variantes de número em isolamento,
 incluindo zeros à esquerda (`test_zeros_a_esquerda_viram_variante`).
+
+## Trava de preço por rede
+
+Valida o preço do pedido contra a **tabela de preço da rede** (cópia local da tabela
+do Flow), no lugar de só comparar com o Fire. O Portal **nunca edita preço** e não
+tem tela de gestão de preço: a decisão (aprovar/recusar) vem do Flow. Spec:
+`docs/superpowers/specs/2026-10-17-tabela-preco-por-cliente-design.md`. Branch
+`feat/tabela-preco-por-rede`. Preço sempre em **centavos inteiros**, tolerância zero
+(`_to_cents`).
+
+> **Task 7 PENDENTE: aguarda o contrato do pcp-app.** Sync da tabela, envio de
+> pendências e recebimento de decisões com o Flow **não existem ainda**. Consequência:
+> em `ligado` a cópia local nunca é preenchida, então **todo item sai
+> `copia_desatualizada` e bloqueia** (fail-closed). **Não ligue `ligado` antes da
+> Task 7.** `observando` é seguro (não bloqueia nada, só audita).
+
+### Interruptor por ambiente (`environments.preco_trava_modo`)
+- `desligado` (nasce assim) — **bit a bit o comportamento de hoje** (`check_order` +
+  `is_blocking` + ack). É também o modo de ambiente ausente.
+- `observando` — regra de hoje continua decidindo; a avaliação nova roda e é gravada em
+  audit `preco_observado` (`regra_de_hoje_bloqueia`, itens). Nunca bloqueia, nada vai ao Flow.
+- `ligado` — a regra de hoje **não decide** (aviso de preço do Fire e ack somem); decide
+  a trava. Qualquer exceção ao avaliar **bloqueia** (fail-closed: o portão grava em ERP de produção).
+
+### Arquivos
+- `app/erp/preco_avaliacao.py` — `avaliar(...)`: **puro** (sem I/O; recebe `resolver_rede`,
+  `preco_vigente`, `cnpjs_grupo`, `ultima_sync`, `agora`). Devolve `Avaliacao` de
+  `ItemAvaliado` (`situacao`: `ok | fila | nao_avaliado | fora_intercompany`; `motivo`).
+- `app/erp/preco_trava.py` — o portão e os helpers compartilhados.
+- `app/persistence/precos_repo.py` — cópia local (`aplicar_lote`, `resolver_rede`, `preco_vigente`, `ultima_sync_ok`).
+- `app/persistence/preco_aprovacao_repo.py` — aprovações por linha do pedido.
+
+### Ordem das regras do avaliador
+1. `cliente_sem_cnpj` — sem CNPJ de rede (`cnpj_da_rede`: override de cliente vence) → todos `nao_avaliado`.
+2. `intercompany` — raiz do cliente está em `cnpjs_grupo` (raízes de `environments.cnpj` e
+   `intercompany_cnpj` de todos os ambientes) → `fora_intercompany`. Decidido **antes** da
+   cópia velha: não depende da cópia.
+3. `copia_desatualizada` — sem sync OK ou há mais de **24 h** → todos `nao_avaliado`.
+4. Por item: sem SEQ no Fire → `produto_nao_identificado` (`nao_avaliado`); sem rede →
+   `rede_sem_tabela` (`fila`); rede travada → `rede_travada` (`fila`); preço de tabela 0/ausente →
+   `sem_preco_tabela`; pedido sem preço → `sem_preco_pedido`; igual → `ok` (`igual`);
+   maior → `acima`; menor → `abaixo` (todos `fila`).
+Rede = raiz do CNPJ (8 dígitos); um CNPJ completo (14) cadastrado em `preco_rede_cnpj` vence a raiz.
+Chave do produto = `str(check["items"][i]["fire_product_id"])` (SEQ; o `check` guarda `int`).
+
+### Ponto único de decisão: `decidir_envio`
+`preco_trava.decidir_envio(import_id, order, entry, env=, agora=)` é o **único** portão
+antes do Fire e do XLSX; nenhum caminho grava no Fire sem passar por ele (a perna espelho
+do lote Nasmar→MM deve chamá-lo também, conferir no merge das branches). Devolve
+`DecisaoEnvio` (`bloqueado`, `reason`, `detalhe`, `block_detail`, `metric_labels`,
+`precos_aplicar`, `aplicados`). O chamador audita o bloqueio, conta a métrica e, ao liberar,
+chama `aplicar_precos(order, precos_aplicar)` antes de exportar e `registrar_aplicados`
+(audit `preco_aplicado`) **só depois do sucesso**.
+- Puros e compartilhados com o preview: `avaliar_entry`, `preview_preco`,
+  `classificar_itens` (estado final por item) e `bloqueio_do_pedido`. Paridade preview↔envio testada.
+- `ligado`: a cada avaliação chama `substituir_obsoletas` (mapa completo de assinaturas) →
+  `registrar_pendencias` (itens `fila`) → `decisoes_validas`.
+- **Intercompany** (`fora_intercompany`) roda **a regra de hoje** (`_regra_de_hoje`) e audita
+  `preco_intercompany_fora_da_trava`; pode bloquear com `price_check_failed`.
+
+### Aprovações (`preco_aprovacao`)
+- Presas à **assinatura** `sha256(SEQ|centavos|quantidade|raiz da rede)` (`assinatura()`).
+  Mudou preço, quantidade, produto ou o cliente passou a outra rede → decisão antiga não vale.
+- `substituir_obsoletas` cancela (motivo `substituido`) linhas ativas cuja assinatura não é a atual.
+  **Reativação A→B→A:** assinatura que volta a valer reativa a linha como pendente nova
+  (mesmo `id`), **sem** ressuscitar a decisão antiga. O envio ao Flow (Task 7) precisa de
+  chave de idempotência versionada (id + criado/reativado_em).
+- Preço aprovado: vai o **do pedido**; o aprovador só define o preço quando o pedido veio
+  sem preço (`aplicar_precos`). Vale para Fire e XLSX.
+- `decisao` recusada → bloqueia com o motivo da recusa.
+
+### Razões de 409 (envio ao Fire / export)
+`preco_nao_avaliado` (item `nao_avaliado`, ou falha ao avaliar), `preco_recusado`,
+`preco_aguardando` (item na fila sem decisão válida). Em `desligado`/`observando` e em
+intercompany continuam as razões de hoje (`price_check_failed`, etc.).
+
+### Preview
+`GET` do preview ganha `payload["preco"]` (`modo`, `itens[]` com `situacao/motivo/preco_pedido/
+preco_tabela/decisao/estado`, `resumo`, `bloqueio_pedido`); ausente em `desligado` e em qualquer falha.
+
+### Testes
+`tests/test_preco_avaliacao.py`, `tests/test_preco_trava.py`, `tests/test_precos_repo.py`,
+`tests/test_preco_aprovacao_repo.py`, `tests/test_preco_trava_modo.py`.

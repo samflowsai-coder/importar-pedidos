@@ -110,6 +110,18 @@ completo em [`modules/routing.md`](routing.md), aqui só o schema:
   Etapa 1), `acao`, `tipo`, `seq_reservado`, `erro_codigo`, `erro_mensagem`, `plano_json`,
   `iniciado_em`, `atualizado_em`. Ver `modules/flowpcp.md` §5.
 
+### Trava de preço (db do ambiente, `schema_env.py`)
+Cópia local da tabela do Flow; o Portal só aplica lotes (`precos_repo.aplicar_lote`, tudo ou nada).
+- `preco_rede` — PK `id`; `nome`, `travada`, `travada_motivo`, `atualizado_em`.
+- `preco_rede_cnpj` — PK `cnpj` (8 = raiz, 14 = completo, vence a raiz) → `rede_id`.
+- `preco_tabela` — PK `(rede_id, fire_produto_id, vigente_desde)`; `preco_centavos`,
+  `vigente_ate` (exclusivo); datas ISO.
+- `preco_sync` — PK `recurso` (`redes` | `precos`); `cursor`, `ultima_ok_em` (base da regra de 24 h).
+- `preco_aprovacao` — uma linha por `(import_id, item_index, assinatura)`; `situacao`,
+  `decisao`, `preco_final_centavos`, `flow_id`, `enviada_em`, `cancelada_em`/`motivo_cancelamento`.
+- `imports.cliente_override_cnpj` — CNPJ do cliente escolhido no override; é o que define a
+  rede quando o pedido veio sem CNPJ. Ver `modules/erp.md` ("Trava de preço por rede").
+
 ## Testes
 - `tests/test_persistence_repo.py` —
   `.venv/bin/pytest tests/test_persistence_repo.py -v`

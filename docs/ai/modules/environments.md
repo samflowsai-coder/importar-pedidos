@@ -124,6 +124,16 @@ documento, não escolhido na sessão — o gate deixa de fazer sentido:
   importa) e vira pendência.
 - Sucesso → status='success', `portal_status='parsed'` esperando review
 
+### Trava de preço (`preco_trava_modo`, `preco_fonte_slug`)
+- `preco_trava_modo` — `desligado` (nasce) | `observando` | `ligado`. Troca só por
+  `PATCH /api/admin/environments/{id}/preco-trava` (admin; `{modo}`; 404 se não existe;
+  o `PATCH` principal do ambiente não mexe nele). A troca é registrada via loguru
+  (`set_preco_trava_modo`), sem audit consultável (BACKLOG 4.2).
+- `preco_fonte_slug` — de qual tenant do Flow vem a tabela. **Nasmar usa `"mm"`**
+  (decidido 17/10: a Nasmar não é tenant no Flow; a tabela dela mora no tenant MM com a
+  dimensão *empresa faturadora* = CNPJ do próprio ambiente). Setter/UI entram com a Task 7.
+- Detalhe e advertência de `ligado`: `modules/erp.md` ("Trava de preço por rede").
+
 ## Testes
 
 ```bash
