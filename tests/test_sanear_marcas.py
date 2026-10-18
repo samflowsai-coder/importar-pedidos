@@ -62,6 +62,7 @@ class _Cur:
 
     def execute(self, sql, params=()):
         self.c.sqls.append(sql.split()[0])
+        self.c.completos.append(sql)
         if sql.startswith("INSERT"):
             if self.c.falha_insert:
                 raise self.c.falha_insert
@@ -89,7 +90,7 @@ class _Conn:
         self.esconde, self.falha_insert = esconde, falha_insert
         self.triggers, self.geradores, self.falha_commit = triggers, geradores, falha_commit
         self.falha_rollback = falha_rollback
-        self.sqls, self.commits, self.rollbacks = [], 0, 0
+        self.sqls, self.completos, self.commits, self.rollbacks = [], [], 0, 0
 
     def cursor(self):
         return _Cur(self)
@@ -98,11 +99,6 @@ class _Conn:
         if self.falha_commit:
             raise RuntimeError("commit caiu")
         self.commits += 1
-        self.linhas += self.pend
-        self.pend = []
-
-    def commit_na_saida(self):
-        """O commit que o `_connect_with` real faz na saída limpa do with."""
         self.linhas += self.pend
         self.pend = []
 
@@ -127,8 +123,15 @@ class _Fabrica:
     @contextmanager
     def connect_escrita_cadastro(self, cfg):
         self.usadas.append("escrita")
-        yield self.escrita
-        self.escrita.commit_na_saida()  # como o real: só em saída limpa
+        # Imita `_connect_with(commit_na_saida=False)`: saída limpa = rollback;
+        # exceção = segundo rollback (que pode falhar e substituir a original).
+        conn = self.escrita
+        try:
+            yield conn
+            conn.rollback()
+        except Exception:
+            conn.rollback()
+            raise
 
 
 BASE = [(1, ""), (2, "Forn")]
@@ -160,6 +163,13 @@ def test_dry_run_so_le_e_nao_faz_backup():
     assert not any("segredo" in ln for ln in saida)
 
 
+def test_consulta_de_triggers_filtra_sistema_e_le_inativo():
+    fab = _Fabrica(BASE)
+    _rodar(fab, False)
+    sql = next(q for q in fab.leitura.completos if "RDB$TRIGGERS" in q)
+    assert "RDB$SYSTEM_FLAG" in sql and "RDB$TRIGGER_INACTIVE" in sql
+
+
 def test_conexao_de_leitura_so_recebe_select():
     fab = _Fabrica(BASE)
     _rodar(fab, False)
@@ -181,7 +191,7 @@ def test_gravar_faz_backup_antes_insere_confere_e_commita():
 
     cod, saida = _rodar(fab, True, backup=bk)
     assert cod == 0 and ordem == [("backup", "C:\\b.fbk", ["leitura"])]  # backup antes da escrita
-    assert fab.escrita.commits == 1 and fab.escrita.rollbacks == 0
+    assert fab.escrita.commits == 1 and fab.escrita.rollbacks == 1  # o do gerenciador, na saída
     assert (3, "Kolosh") in fab.escrita.linhas and (4, "Sam's Club") in fab.escrita.linhas
     assert any("closing file" in ln for ln in saida)  # prova impressa
 
@@ -208,9 +218,26 @@ def test_trigger_inativo_so_avisa():
     assert cod == 0 and "Triggers em PRODUTOS_MARCA: TRG_MARCA (inativo)" in saida
 
 
-def test_rollback_falhando_nao_deixa_o_commit_de_saida_gravar():
-    # divergência na conferência + rollback que cai: a exceção tem que sair do
-    # with, senão o commit da saída gravaria as linhas.
+def test_rollback_falha_sempre_diz_resultado_incerto():
+    # O rollback do gerenciador também cai e a exceção dele substitui a nossa;
+    # o relato ao operador não pode depender disso.
+    fab = _Fabrica(BASE, esconde=True, falha_rollback=True)
+    antes = list(fab.escrita.linhas)
+    cod, saida = _rodar(fab, True, backup=_ok)
+    assert cod == 1 and fab.escrita.linhas == antes
+    assert saida[-1].startswith("Gravação falhou e o rollback não confirmou. Resultado incerto")
+    assert any(ln.startswith("Conferência falhou") for ln in saida)
+
+
+def test_commit_e_rollback_falhando_mostram_a_linha_do_commit():
+    fab = _Fabrica(BASE, falha_commit=True, falha_rollback=True)
+    cod, saida = _rodar(fab, True, backup=_ok)
+    assert cod == 1 and any(ln.startswith("Commit falhou") for ln in saida)
+    assert saida[-1].startswith("Gravação falhou e o rollback não confirmou")
+
+
+def test_rollback_falhando_nao_deixa_nada_gravado():
+    # divergência na conferência + rollback que cai: a exceção sai do with.
     fab = _Fabrica(BASE, esconde=True, falha_rollback=True)
     linhas_antes = list(fab.escrita.linhas)
     cod, saida = _rodar(fab, True, backup=_ok)
@@ -261,20 +288,20 @@ def test_leitura_falhando_vira_mensagem_clara():
 def test_banco_mudou_entre_leitura_e_escrita_aborta():
     fab = _Fabrica(BASE, linhas_escrita=[*BASE, (3, "Outro")])
     cod, saida = _rodar(fab, True, backup=_ok)
-    assert cod == 1 and fab.escrita.rollbacks == 1 and fab.escrita.commits == 0
+    assert cod == 1 and fab.escrita.rollbacks == 2 and fab.escrita.commits == 0  # o nosso + o da saída
     assert fab.escrita.pend == [] and any("O banco mudou" in ln for ln in saida)
 
 
 def test_divergencia_na_conferencia_faz_rollback_e_sai_1():
     fab = _Fabrica(BASE, esconde=True)
     cod, _ = _rodar(fab, True, backup=_ok)
-    assert cod == 1 and fab.escrita.rollbacks == 1 and fab.escrita.commits == 0
+    assert cod == 1 and fab.escrita.rollbacks == 2 and fab.escrita.commits == 0  # o nosso + o da saída
 
 
 def test_erro_no_insert_faz_rollback_e_sai_1():
     fab = _Fabrica(BASE, falha_insert=RuntimeError("boom"))
     cod, _ = _rodar(fab, True, backup=_ok)
-    assert cod == 1 and fab.escrita.rollbacks == 1 and fab.escrita.commits == 0
+    assert cod == 1 and fab.escrita.rollbacks == 2 and fab.escrita.commits == 0  # o nosso + o da saída
 
 
 def test_colisao_de_pk_pede_para_rodar_de_novo():

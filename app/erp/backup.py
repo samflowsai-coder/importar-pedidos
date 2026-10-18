@@ -33,9 +33,10 @@ def _host_do_servico(cfg: dict) -> str:
 def gbak(cfg: dict, destino_no_servidor: str, *, services: Any = None) -> str:
     """Faz o backup do banco de `cfg`, espera o serviço terminar e CONFERE o log.
 
-    Devolve a última linha do log (prova). Levanta ValueError para config
-    inválida (sem host, porta ruim) e RuntimeError, com as últimas 5 linhas do
-    log, se alguma linha tiver "ERROR" ou faltar a linha final de sucesso. Falha
+    Devolve a linha do log com a frase final de sucesso (prova). Levanta
+    ValueError para config inválida (sem host, porta ruim) e RuntimeError, com a
+    linha do erro e as últimas 5 linhas do log, se alguma linha casar
+    `gbak: ERROR` ou se faltar a linha final de sucesso. Falha
     do serviço propaga: quem chama NÃO pode seguir sem backup confirmado.
 
     `services`: módulo de serviços injetável (testes); por padrão `fdb.services`,

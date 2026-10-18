@@ -129,13 +129,16 @@ def _curta(exc: BaseException, cfg: dict) -> str:
 
 
 class RollbackFalhouError(RuntimeError):
-    """Levantada DENTRO do `with` da conexão: sem isso o `_connect_with` comita
-    na saída limpa e grava o que devia ter sido desfeito."""
+    """Levantada DENTRO do `with` da conexão para a transação não seguir como
+    se tivesse sido desfeita. Se o gerenciador de conexão também falhar no
+    rollback dele, a exceção dele substitui esta; por isso `estado` guarda o
+    fato à parte, e o relato ao operador não depende da cadeia de exceções."""
 
 
-def _desfazer_ou_levantar(conn) -> None:
+def _desfazer_ou_levantar(conn, estado: dict, causa: str) -> None:
     if not cadastro_fire.desfazer(conn):
-        raise RollbackFalhouError("rollback falhou; resultado incerto")
+        estado["incerto"] = causa
+        raise RollbackFalhouError(f"rollback falhou; resultado incerto ({causa})")
 
 
 def _falha_backup(exc: BaseException, cfg: dict, out) -> None:
@@ -160,7 +163,7 @@ def executar(
     out=print,
 ) -> int:
     """Roda o saneamento e devolve o código de saída. Dublês entram por
-    `conn_factory` (objeto com connect_somente_leitura/connect_with_config) e
+    `conn_factory` (objeto com connect_somente_leitura/connect_escrita_cadastro) e
     `backup` (callable gbak que devolve a linha de prova)."""
     desejadas = MARCAS_FLOW_2026_10_17 if desejadas is None else desejadas
     if conn_factory is None:
@@ -206,27 +209,29 @@ def executar(
     except Exception as exc:  # noqa: BLE001
         _falha_backup(exc, cfg, out)
         return 1
-    out(f"Backup concluído em {backup_servidor}. Última linha do log: {prova}")
+    out(f"Backup concluído em {backup_servidor}. Linha final do gbak: {prova}")
 
     resultado = 0
+    estado: dict = {}
     try:
         with conn_factory.connect_escrita_cadastro(cfg) as conn:
-            resultado = _gravar(conn, plano, desejadas, cfg, out)
-    except RollbackFalhouError:
-        out("Gravação falhou e o rollback não confirmou. Resultado incerto: rode o dry-run para conferir.")
-        return 1
+            resultado = _gravar(conn, plano, desejadas, cfg, out, estado)
     except Exception as exc:  # noqa: BLE001
+        if "incerto" in estado:
+            out(estado["incerto"])
+            out("Gravação falhou e o rollback não confirmou. Resultado incerto: rode o dry-run para conferir.")
+            return 1
         out(f"Gravação falhou ({_curta(exc, cfg)}). Rode o dry-run para conferir.")
         return 1
     return resultado
 
 
-def _gravar(conn, plano: Plano, desejadas: list[str], cfg: dict, out) -> int:
+def _gravar(conn, plano: Plano, desejadas: list[str], cfg: dict, out, estado: dict) -> int:
     """Uma transação: replaneja, insere, relê, confere, commit."""
     try:
         # Se o banco mudou desde o dry-run, aborta em vez de gravar sobre plano velho.
         if planejar(_ler(conn), desejadas).inserir != plano.inserir:
-            _desfazer_ou_levantar(conn)
+            _desfazer_ou_levantar(conn, estado, "O banco mudou desde o plano.")
             out("O banco mudou desde o plano. Nada foi gravado; rode de novo.")
             return 1
         cadastro_fire.inserir_marcas(conn, plano.inserir)
@@ -235,20 +240,22 @@ def _gravar(conn, plano: Plano, desejadas: list[str], cfg: dict, out) -> int:
     except RollbackFalhouError:
         raise
     except Exception as exc:  # noqa: BLE001
-        _desfazer_ou_levantar(conn)
         if cadastro_fire.classificar_erro(exc) == "colisao":
-            out("Outro cadastro tomou o código; rode de novo. Rollback feito.")
+            msg = "Outro cadastro tomou o código; rode de novo."
         else:
-            out(f"Falha na gravação ({_curta(exc, cfg)}). Rollback feito.")
+            msg = f"Falha na gravação ({_curta(exc, cfg)})."
+        _desfazer_ou_levantar(conn, estado, msg)
+        out(f"{msg} Rollback feito.")
         return 1
     if faltando:
-        _desfazer_ou_levantar(conn)
-        out(f"Conferência falhou ({len(faltando)} marca(s) divergentes). Rollback feito.")
+        msg = f"Conferência falhou ({len(faltando)} marca(s) divergentes)."
+        _desfazer_ou_levantar(conn, estado, msg)
+        out(f"{msg} Rollback feito.")
         return 1
     try:
         conn.commit()
     except Exception as exc:  # noqa: BLE001
-        _desfazer_ou_levantar(conn)
+        _desfazer_ou_levantar(conn, estado, f"Commit falhou ({_curta(exc, cfg)}).")
         out(f"Commit falhou ({_curta(exc, cfg)}); resultado incerto; rode o dry-run para conferir.")
         return 1
     out(f"Gravado: {len(plano.inserir)} marca(s).")
