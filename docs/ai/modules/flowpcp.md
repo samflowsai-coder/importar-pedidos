@@ -253,8 +253,10 @@ o slug da variável); `erro: true` no bloco do Flow vira `reenviar: true` e ERRO
 viram WARNING. 400 do Flow com marcas, nota ou composição ligadas aponta no erro as variáveis a retirar.
 O diário (`catalogo_diario`) conhece os dois blocos e entra em atenção com `capacidade_ok`/`leitura_ok`
 falsos ou `reenviar`. *SEQs em aberto*: em **toda** rodada com envio saem do lote os SEQs que o livro
-da volta tem em trânsito (`cadastro_volta_repo.seqs_em_aberto`: `em_andamento`, `gravado_sem_volta`,
-`incerto`, `liberado`/`transitorio` com SEQ e `orfao` de `criar`), reportados em `fora_do_envio_volta`:
+da volta tem em trânsito (`cadastro_volta_repo.seqs_em_aberto`, o mesmo predicado "pode ter gravado"
+da 9b, `_PODE_TER_GRAVADO_SQL`: `em_andamento`, `gravado_sem_volta`, `incerto`, `liberado`/`transitorio`
+com SEQ ou código, e, só de `criar`, `orfao` e `erro_a_enviar`/`erro_registrado`/`superado` com SEQ ou
+código), reportados em `fora_do_envio_volta`:
 o Flow criaria outro produto para um SEQ que o Portal acabou de gravar (ou criou e o Flow não vinculou).
 `orfao_fechado` fica fora da lista: fechar libera o SEQ para a ida, então só se fecha um órfão depois
 de o Flow estar resolvido. A leitura do livro é falha fechada: se
@@ -304,7 +306,7 @@ passo anterior parar o ciclo):
 3. **Recuperação** (só se há linha `em_andamento`, ou `transitorio` com SEQ, com mais de 15 min): abre a conexão bloqueante e resolve o que um processo caído deixou. Falha de conexão vira `{"erro": ...}` no resumo e o ciclo segue.
 4. **"Aguardando modo"**: GET com `simular=1` e `acoes=` das ações que o modo **não** consome, só para contar. Roda antes do GET que reserva para não gastar a janela da reserva.
 5. **GET** com reserva (`acoes=` do modo, limite 20).
-6. **Triagem sem ERP**, item a item, nesta ordem: validação/ids legíveis; duplicata no lote; livro (`(cadastroId, versao)`); item inválido responde o erro; `material` (`tipo_nao_suportado`, ainda não é gravado); `inativar` sem portão (pulado); regra 9b (só `criar`: produto que já tem `criar` que pode ter gravado); escopo de `atualizar`/`inativar` (SEQ na cópia local ou criado pelo Portal, senão `seq_fora_do_escopo`). Só os itens que sobram "a gravar" abrem o ERP.
+6. **Triagem sem ERP**, item a item, nesta ordem: validação/ids legíveis; duplicata no lote; livro (`(cadastroId, versao)`); item inválido responde o erro; `material` (`tipo_nao_suportado`, ainda não é gravado); `inativar` sem portão (pulado); regra 9b (só `criar`: produto que já tem `criar` que pode ter gravado, pelo predicado único `cadastro_volta_repo._PODE_TER_GRAVADO_SQL`, o mesmo da ida do catálogo: `em_andamento`, `gravado_sem_volta`, `incerto`, `confirmado`, `orfao`, `orfao_fechado`, e `liberado`/`transitorio`/`erro_a_enviar`/`erro_registrado`/`superado` com SEQ ou código); escopo de `atualizar`/`inativar` (SEQ na cópia local ou criado pelo Portal, senão `seq_fora_do_escopo`). Só os itens que sobram "a gravar" abrem o ERP.
 7. **Gravação**: abre `connect_escrita_cadastro`, lê nomes e marcas do Fire uma vez e, para cada item, confere (nome, marca, componentes; só SELECT), **reserva a linha no livro** (lease, com commit do SQLite) e só então grava. Antes de cada item checa `PRAZO_LOTE`.
 
 ### Regras de ouro do contrato P4a rev. 4 e como cada uma foi implementada

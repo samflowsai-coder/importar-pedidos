@@ -623,6 +623,39 @@ def test_sem_as_portas_nada_que_pode_ter_gravado_volta_a_reservar(estado, seq, a
                 fila.append(_no(c))
 
 
+# Predicado único "pode ter gravado" (9b e ida): toda linha de `criar` da busca acima.
+@pytest.mark.parametrize(("estado", "seq"), _PODE_TER_GRAVADO)
+def test_9b_ve_todo_criar_que_pode_ter_gravado(estado, seq):
+    c = _linha_em(estado, seq)
+    assert repo.criar_do_produto(c, "p1")["estado"] == estado
+
+
+@pytest.mark.parametrize(("estado", "seq"), _PODE_TER_GRAVADO)
+def test_ida_segura_o_seq_de_todo_criar_que_pode_ter_gravado(estado, seq):
+    """`confirmado` o Flow já vinculou; `orfao_fechado` a operação resolveu no Flow."""
+    c = _linha_em(estado, seq)
+    c.execute("UPDATE cadastro_volta SET erp_produto_id = '4002'")
+    esperado = set() if estado in ("confirmado", "orfao_fechado") else {"4002"} | (
+        {str(seq)} if seq else set())
+    assert repo.seqs_em_aberto(c) == esperado
+
+
+@pytest.mark.parametrize("estado", ["erro_a_enviar", "erro_registrado", "superado", "orfao"])
+def test_atualizar_com_codigo_existente_nao_segura_ida_nem_9b(estado):
+    """O `erp_produto_id` de um `atualizar` é de produto que já estava no catálogo."""
+    c = _linha_em(estado, None, acao="atualizar")
+    c.execute("UPDATE cadastro_volta SET erp_produto_id = '3306'")
+    assert repo.seqs_em_aberto(c) == set()
+    assert repo.criar_do_produto(c, "p1") is None
+
+
+@pytest.mark.parametrize("estado", ["erro_a_enviar", "erro_registrado", "superado"])
+def test_erro_ou_superado_sem_seq_nem_codigo_nao_pode_ter_gravado(estado):
+    c = _linha_em(estado, None)
+    assert repo.criar_do_produto(c, "p1") is None
+    assert repo.seqs_em_aberto(c) == set()
+
+
 def test_listar_por_estado_so_colunas_da_tela(conn):
     _reservar(conn, "c1")
     _reservar(conn, "c2", produto="p2")

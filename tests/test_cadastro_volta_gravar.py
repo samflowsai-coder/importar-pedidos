@@ -622,6 +622,22 @@ def test_9b_liberado_com_seq_nao_grava_nem_responde(modo, env_slug, env_conn, er
     assert erros
 
 
+@pytest.mark.parametrize("estado", ["erro_a_enviar", "erro_registrado", "superado"])
+def test_9b_erro_ou_superado_com_seq_nao_grava_nem_responde(modo, env_slug, env_conn, erros,
+                                                             estado):
+    """Um `criar` com SEQ nesses estados pode ter gravado: a v2 não cria outro produto."""
+    repo.reservar(env_conn, cadastro_id=PAR["cadastroId"], versao=1, produto_id=PROD,
+                  acao="criar", tipo="simples", modo="criar", plano_json="{}")
+    repo.marcar_seq(env_conn, PAR["cadastroId"], 1, 3171)
+    env_conn.execute("UPDATE cadastro_volta SET estado = ?", (estado,))  # cenário forçado
+    modo("criar")
+    v2 = {**PAR, "cadastroId": "33333333-3333-4333-8333-333333333333", "versao": 2}
+    flow, fire = Flow([v2]), FireGravavel()
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts == [] and fire.escritas == []
+    assert erros
+
+
 def test_9b_em_andamento_pula(modo, env_slug, env_conn):
     repo.reservar(env_conn, cadastro_id=PAR["cadastroId"], versao=1, produto_id=PROD,
                   acao="criar", tipo="simples", modo="criar", plano_json="{}")

@@ -64,6 +64,15 @@ _SO_SEM_CRIAR = {"superado": "gravado_sem_volta"}
 _RESPOSTA_MAX = 64
 _NOTA_MAX = 500
 _DESCARTAVEIS_SQL = ", ".join(f"'{e}'" for e in ESTADOS_DESCARTAVEIS)
+# Linha que pode ter gravado (ou já gravou) um produto no ERP. Predicado único da 9b
+# (`criar_do_produto`) e da ida (`seqs_em_aberto`); o teste do livro o confere contra
+# os estados da busca em largura (`_PODE_TER_GRAVADO`).
+_PODE_TER_GRAVADO_SQL = (
+    "(estado IN ('em_andamento', 'gravado_sem_volta', 'incerto', 'confirmado', 'orfao', "
+    "'orfao_fechado') "
+    "OR (estado IN ('liberado', 'transitorio', 'erro_a_enviar', 'erro_registrado', 'superado') "
+    "AND (seq_reservado IS NOT NULL OR erp_produto_id IS NOT NULL)))"
+)
 _PENDENTES_SQL = ", ".join(f"'{e}'" for e in _PENDENTES)
 
 
@@ -421,15 +430,14 @@ def buscar(conn: sqlite3.Connection, cadastro_id: str, versao: int) -> dict[str,
 
 
 def criar_do_produto(conn: sqlite3.Connection, produto_id: str) -> dict[str, Any] | None:
-    """Linha de `criar` deste produto que pode ter (ou já ter) comitado no ERP.
-    Preferência: gravado_sem_volta, em_andamento, incerto, liberado/transitorio com SEQ,
-    orfao/orfao_fechado, confirmado; dentro do estado, a mais recente."""
+    """Linha de `criar` deste produto que pode ter (ou já ter) comitado no ERP
+    (`_PODE_TER_GRAVADO_SQL`). Preferência: gravado_sem_volta, em_andamento, incerto,
+    liberado/transitorio com SEQ, orfao/orfao_fechado, o resto (confirmado, erro_a_enviar,
+    erro_registrado e superado com SEQ ou código); dentro do estado, a mais recente."""
     linhas = _dicts(
         conn.execute(
-            "SELECT * FROM cadastro_volta WHERE produto_id = ? AND acao = 'criar' AND ("
-            "estado IN ('em_andamento', 'gravado_sem_volta', 'incerto', 'confirmado', 'orfao', "
-            "'orfao_fechado') "
-            "OR (estado IN ('liberado', 'transitorio') AND seq_reservado IS NOT NULL)) "
+            "SELECT * FROM cadastro_volta WHERE produto_id = ? AND acao = 'criar' AND "
+            f"{_PODE_TER_GRAVADO_SQL} "
             "ORDER BY CASE estado WHEN 'gravado_sem_volta' THEN 0 WHEN 'em_andamento' THEN 1 "
             "WHEN 'incerto' THEN 2 WHEN 'liberado' THEN 3 WHEN 'transitorio' THEN 3 WHEN 'orfao' THEN 4 WHEN 'orfao_fechado' THEN 4 "
             "ELSE 5 END, "
@@ -487,13 +495,16 @@ def transitorios_com_seq(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 def seqs_em_aberto(conn: sqlite3.Connection) -> set[str]:
-    """SEQs que o Portal tem em trânsito (ida não deve oferecê-los ao Flow). O `orfao`
-    de `criar` entra: o Flow criaria um 2º produto para ele. `orfao_fechado` não:
-    fechar (só depois de o Flow estar resolvido) libera o SEQ para a ida."""
+    """SEQs que o Portal tem em trânsito (ida não deve oferecê-los ao Flow): o mesmo
+    predicado da 9b (`_PODE_TER_GRAVADO_SQL`), menos `confirmado` (o Flow já vinculou) e
+    `orfao_fechado` (fechar, só depois de o Flow estar resolvido, libera o SEQ para a ida).
+    Em `orfao`, `erro_*` e `superado` só o `criar` segura o SEQ: o código de um `atualizar`
+    é de produto que já estava no catálogo. O `orfao` de `criar` entra: o Flow criaria um
+    2º produto para ele."""
     rows = conn.execute(
         "SELECT erp_produto_id, seq_reservado FROM cadastro_volta WHERE "
-        "estado IN ('em_andamento', 'gravado_sem_volta', 'incerto') "
-        "OR (estado IN ('liberado', 'transitorio') AND seq_reservado IS NOT NULL) "
-        "OR (estado = 'orfao' AND acao = 'criar')"
+        f"{_PODE_TER_GRAVADO_SQL} AND estado NOT IN ('confirmado', 'orfao_fechado') "
+        "AND (acao = 'criar' OR estado IN ('em_andamento', 'gravado_sem_volta', 'incerto', "
+        "'liberado', 'transitorio'))"
     ).fetchall()
     return {str(v) for r in rows for v in r if v is not None}
