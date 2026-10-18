@@ -107,3 +107,16 @@ def test_bloco_da_volta_so_usa_tokens_que_existem_e_nenhum_hex():
     usados = set(re.findall(r"var\((--[a-z0-9-]+)", css))
     assert usados and usados <= definidos, usados - definidos
     assert not re.findall(r"#[0-9a-fA-F]{3,6}\b", css)
+
+
+def test_fieldset_do_flowpcp_encolhe_para_a_tabela_nao_estourar_a_pagina():
+    assert "#flowpcp-fieldset { min-width: 0; }" in _css_da_volta()
+
+
+def test_retry_respeita_o_atributo_hidden():
+    assert ".volta-retry[hidden] { display: none; }" in _css_da_volta()
+
+
+def test_uuid_curto_na_celula_e_inteiro_em_title_e_data_id():
+    assert "cheio.slice(0, 8)" in _HTML and "ab.title = cheio" in _HTML
+    assert "td.dataset.id = cheio" in _HTML

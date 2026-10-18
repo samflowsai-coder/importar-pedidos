@@ -619,12 +619,12 @@ def atualizar_sem_volta(slug: str, env_conn) -> None:
 def _aguardando_modo(slug: str, m: str, client) -> int | None:
     """Itens aprovados que este modo não grava, lidos sem reservar (Emenda 1, I9).
     Aproximado: em `criar` entra o `atualizar` derivado de `criar`, que este modo grava.
-    `None` quando não há contagem: o Flow não respondeu ou o portão de inativar está ligado
-    em `criar_e_atualizar` (este modo consome tudo e nada fica aguardando); o ciclo segue."""
+    `0` quando o modo consome as três ações (portão de inativar ligado): zero medido, sem
+    GET. `None` quando o Flow não respondeu; o ciclo segue."""
     consumidas = cv._acoes(slug, m)
     nao_consumidas = tuple(a for a in ("criar", "atualizar", "inativar") if a not in consumidas)
     if not nao_consumidas:
-        return None
+        return 0
     try:
         resp = client.list_cadastros_pendentes(
             limite=cv.LIMITE_FILA, acoes=nao_consumidas, simular=True

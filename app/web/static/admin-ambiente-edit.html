@@ -134,9 +134,11 @@
     .volta-tabela-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .volta-tabela { width: 100%; border-collapse: collapse; font-size: .85em; font-variant-numeric: tabular-nums; }
     .volta-tabela caption { text-align: left; padding: .5rem .6rem; font-weight: 600; }
-    .volta-tabela th, .volta-tabela td { padding: .35rem .6rem; text-align: left; white-space: nowrap; border-top: 1px solid var(--border); }
+    .volta-tabela th, .volta-tabela td { padding: .35rem .5rem; text-align: left; white-space: nowrap; border-top: 1px solid var(--border); }
     .volta-tabela th { font-weight: 500; color: var(--text-muted); }
-    .volta-tabela td.volta-id { font-family: var(--font-mono); white-space: normal; overflow-wrap: anywhere; min-width: 9rem; }
+    .volta-tabela td.volta-id { font-family: var(--font-mono); white-space: nowrap; }
+    .volta-tabela td.volta-alerta { white-space: normal; min-width: 8rem; }
+    .volta-tabela abbr { text-decoration: underline dotted; cursor: help; }
     .volta-mais { margin: .3rem .1rem 0; color: var(--text-muted); font-variant-numeric: tabular-nums; }
     .volta-vazio { margin: .4rem 0; color: var(--text-muted); }
     .volta-retry { display: block; margin-top: .4rem; }
@@ -1400,6 +1402,19 @@
       const p = (n) => String(n).padStart(2, '0');
       return p(t.getDate()) + '/' + p(t.getMonth() + 1) + '/' + t.getFullYear() + ' ' + p(t.getHours()) + ':' + p(t.getMinutes());
     }
+    // UUID inteiro em title e data-id (dá para copiar); a célula mostra os 8 primeiros caracteres.
+    function voltaCelulaId(tr, id, versao) {
+      const td = document.createElement('td');
+      td.className = 'volta-id';
+      const cheio = id === undefined || id === null ? '' : String(id);
+      td.dataset.id = cheio;
+      const ab = document.createElement('abbr');
+      ab.title = cheio;
+      ab.textContent = cheio ? cheio.slice(0, 8) : '—';
+      td.appendChild(ab);
+      td.appendChild(document.createTextNode(' v' + (versao ?? '—')));
+      tr.appendChild(td);
+    }
     function voltaAtencao(d) {
       const box = document.getElementById('volta-atencao');
       const modo = d && typeof d.modo === 'string' ? d.modo : '';
@@ -1415,13 +1430,16 @@
       voltaCartao('sem-volta', nSem, 'aviso');
       const ag = document.getElementById('volta-aguardando');
       const resumo = d && d.ultimo_ciclo && d.ultimo_ciclo.resumo;
-      // Sem contagem (null: Flow não respondeu, portão ligado ou modo sem gravação) a linha some.
+      // A linha some sem medição (null: Flow fora ou modo sem gravação) e com o portão de
+      // inativar ligado em criar_e_atualizar (o modo consome tudo; o 0 não informa nada).
       const nAg = resumo ? resumo.aguardando_modo : null;
-      ag.hidden = typeof nAg !== 'number';
+      const consomeTudo = modo === 'criar_e_atualizar' && d.inativar_ligado === true;
+      ag.hidden = typeof nAg !== 'number' || consomeTudo;
       if (typeof nAg === 'number') document.getElementById('volta-n-aguardando').textContent = String(nAg);
       const corpo = document.getElementById('volta-tabela-corpo');
       corpo.replaceChildren();
-      const grupos = [['Órfão', d && d.orfaos, nOrf], ['Incerto', d && d.incertos, nInc], ['Sem volta', d && d.sem_volta_itens, nSem]];
+      const nRec = voltaNum(d && d.n_aguardando_recuperacao);
+      const grupos = [['Órfão', d && d.orfaos, nOrf], ['Incerto', d && d.incertos, nInc], ['Sem volta', d && d.sem_volta_itens, nSem], ['Aguardando recuperação', d && d.aguardando_recuperacao, nRec]];
       let total = 0;
       const mais = [];
       grupos.forEach(([rot, lista, n]) => {
@@ -1430,12 +1448,12 @@
         itens.forEach((x) => {
           total += 1;
           const tr = document.createElement('tr');
-          voltaCelula(tr, x.aguardando_recuperacao === true ? 'Aguardando recuperação' : rot);
-          voltaCelula(tr, (x.cadastro_id ?? '—') + ' v' + (x.versao ?? '—'), 'volta-id');
+          voltaCelula(tr, rot);
+          voltaCelulaId(tr, x.cadastro_id, x.versao);
           voltaCelula(tr, x.acao);
           voltaCelula(tr, x.erp_produto_id ?? x.seq_reservado);
           voltaCelula(tr, x.tentativas);
-          voltaCelula(tr, x.alerta ? (VOLTA_ALERTAS[x.alerta] || x.alerta) : '');
+          voltaCelula(tr, x.alerta ? (VOLTA_ALERTAS[x.alerta] || x.alerta) : '', 'volta-alerta');
           voltaCelula(tr, voltaData(x.atualizado_em));
           corpo.appendChild(tr);
         });
@@ -1444,7 +1462,7 @@
       maisEl.textContent = mais.join(' · ');
       maisEl.hidden = !mais.length;
       document.getElementById('volta-tabela-wrap').hidden = total === 0;
-      document.getElementById('volta-vazio').hidden = total !== 0 || nOrf + nInc + nSem > 0;
+      document.getElementById('volta-vazio').hidden = total !== 0 || nOrf + nInc + nSem + nRec > 0;
     }
     async function carregarVolta() {
       const st = document.getElementById('volta-status');

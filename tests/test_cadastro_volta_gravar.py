@@ -1211,8 +1211,8 @@ def test_aguardando_modo_com_portao_nao_consulta(modo, env_slug, env_conn):
     flow = FlowAguarda([], n=2)
     _rodar(env_slug, flow, FireGravavel(), env_conn)
     assert len(flow.gets) == 1
-    assert cv.ultimo_ciclo(env_slug)["resumo"]["aguardando_modo"] is None
-    assert _amostra_ou_none("portal_flowpcp_cadastro_volta_aguardando_modo") is None
+    assert cv.ultimo_ciclo(env_slug)["resumo"]["aguardando_modo"] == 0
+    assert _amostra_ou_none("portal_flowpcp_cadastro_volta_aguardando_modo") == 0  # zero medido
 
 
 def test_aguardando_modo_400_vira_none_sem_derrubar_o_ciclo(modo, env_slug, env_conn, avisos):

@@ -59,6 +59,8 @@ def test_livro_vazio(setup, monkeypatch):
         "n_incertos": 0,
         "orfaos": [],
         "incertos": [],
+        "n_aguardando_recuperacao": 0,
+        "aguardando_recuperacao": [],
         "sem_volta_itens": [],
     }
 
@@ -112,12 +114,12 @@ def test_listas_de_atencao_e_portoes(setup, monkeypatch):
     assert {x["cadastro_id"] for x in body["sem_volta_itens"]} == {"s1", "s2"}
     for lista in ("orfaos", "incertos", "sem_volta_itens"):
         for x in body[lista]:
-            assert set(x) - {"aguardando_recuperacao"} == {"cadastro_id", "versao", "acao", "erp_produto_id",
+            assert set(x) == {"cadastro_id", "versao", "acao", "erp_produto_id",
                               "seq_reservado", "tentativas", "alerta", "atualizado_em"}
     assert "SEGREDO" not in r.text
 
 
-def test_transitorio_recente_aguarda_recuperacao_e_nao_conta_como_incerto(setup):
+def test_transitorio_recente_vai_para_lista_propria_e_fora_dos_incertos(setup):
     from datetime import UTC, datetime, timedelta
 
     agora = datetime.now(UTC)
@@ -127,10 +129,27 @@ def test_transitorio_recente_aguarda_recuperacao_e_nao_conta_como_incerto(setup)
         _linha(conn, "novo", "transitorio", 3993, iniciado=(agora - timedelta(minutes=2)).strftime(fmt))
         _linha(conn, "velho", "transitorio", 3994, iniciado=(agora - timedelta(minutes=30)).strftime(fmt))
     body = _get(env["id"]).json()
-    assert body["n_incertos"] == 1
-    por_id = {x["cadastro_id"]: x for x in body["incertos"]}
-    assert por_id["novo"]["aguardando_recuperacao"] is True
-    assert por_id["velho"]["aguardando_recuperacao"] is False
+    assert body["n_incertos"] == 1 and body["n_aguardando_recuperacao"] == 1
+    assert [x["cadastro_id"] for x in body["incertos"]] == ["velho"]
+    assert [x["cadastro_id"] for x in body["aguardando_recuperacao"]] == ["novo"]
+
+
+def test_incertos_com_mais_de_50_ficam_coerentes_com_a_contagem(setup):
+    from datetime import UTC, datetime, timedelta
+
+    agora = datetime.now(UTC)
+    fmt = "%Y-%m-%d %H:%M:%S"
+    env = _env(setup)
+    with router.env_connect("mm") as conn:
+        for i in range(55):
+            _linha(conn, f"i{i:02d}", "incerto")
+        for i in range(3):  # recentes: não entram na lista nem na contagem
+            _linha(conn, f"r{i}", "transitorio", 100 + i,
+                   iniciado=(agora - timedelta(minutes=1)).strftime(fmt))
+    body = _get(env["id"]).json()
+    assert body["n_incertos"] == 55 and len(body["incertos"]) == 50
+    assert not any(x["cadastro_id"].startswith("r") for x in body["incertos"])
+    assert body["n_aguardando_recuperacao"] == 3 and len(body["aguardando_recuperacao"]) == 3
 
 
 def test_listas_de_atencao_nao_vazam_corpo_nem_nota(setup):

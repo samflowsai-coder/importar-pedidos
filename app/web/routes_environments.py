@@ -456,13 +456,16 @@ def cadastro_volta_flowpcp(env_id: str, _=Depends(require_admin)):
             "%Y-%m-%d %H:%M:%S"
         )
         recentes = cadastro_volta_repo.transitorios_com_seq_recentes(conn, corte)
-        n_transitorios = cadastro_volta_repo.contar_transitorios_com_seq(conn)
+        n_antigos = cadastro_volta_repo.contar_transitorios_com_seq(conn) - len(recentes)
+        # Margem dos recentes: garante 50 antigos mesmo com recentes intercalados.
         transitorios = cadastro_volta_repo.listar_por_estado(
-            conn, "transitorio", so_com_seq=True
+            conn, "transitorio", limite=len(recentes) + 50, so_com_seq=True
         )
-        for t in transitorios:
-            t["aguardando_recuperacao"] = (t["cadastro_id"], t["versao"]) in recentes
-        incertos = [*cadastro_volta_repo.listar_por_estado(conn, "incerto"), *transitorios]
+        antigos = [t for t in transitorios if (t["cadastro_id"], t["versao"]) not in recentes]
+        aguardando_recuperacao = [
+            t for t in transitorios if (t["cadastro_id"], t["versao"]) in recentes
+        ]
+        incertos = [*cadastro_volta_repo.listar_por_estado(conn, "incerto"), *antigos[:50]]
         incertos.sort(key=lambda x: x["atualizado_em"] or "", reverse=True)
         sem_volta_itens = [
             *cadastro_volta_repo.listar_por_estado(conn, "gravado_sem_volta"),
@@ -488,9 +491,11 @@ def cadastro_volta_flowpcp(env_id: str, _=Depends(require_admin)):
         "inativar_ligado": cadastro_volta.inativar_ligado(env["slug"]),
         "sem_volta": por_estado.get("gravado_sem_volta", 0) + por_estado.get("erro_a_enviar", 0),
         "n_orfaos": por_estado.get("orfao", 0),
-        "n_incertos": por_estado.get("incerto", 0) + n_transitorios - len(recentes),
+        "n_incertos": por_estado.get("incerto", 0) + n_antigos,
         "orfaos": orfaos,
         "incertos": incertos[:50],
+        "n_aguardando_recuperacao": len(recentes),
+        "aguardando_recuperacao": aguardando_recuperacao[:50],
         "sem_volta_itens": sem_volta_itens[:50],
     }
 
