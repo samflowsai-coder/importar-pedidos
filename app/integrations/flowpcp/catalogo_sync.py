@@ -97,7 +97,7 @@ def run_catalogo_sync(
     soma-se a `fora_do_envio` em toda rodada, manual ou diária. As confirmações
     liberam as travas do Flow e só valem com `dry_run=False`.
     Fiscal (`PORTAL_FLOWPCP_CATALOGO_FISCAL` com o slug): manda NCM, tipo SPED, grupo,
-    código NF-e e cor só quando válidos; o relatório ganha `fiscal_portal`, e sem
+    código NF-e só quando válidos; o relatório ganha `fiscal_portal`, e sem
     `fiscal.v1` nas `capacidades` da resposta (o Flow ignorou os campos) vira
     `capacidade_ok=false` e erro no log.
     Marcas (`PORTAL_FLOWPCP_CATALOGO_MARCAS`) e nota (`PORTAL_FLOWPCP_CATALOGO_NOTA`): mandam

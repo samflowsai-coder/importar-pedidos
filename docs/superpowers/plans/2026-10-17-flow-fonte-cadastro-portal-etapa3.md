@@ -1768,7 +1768,7 @@ Regras (spec §6.3 "Recuperação"), para cada linha `em_andamento` com `iniciad
   - existe e é diferente → **libera** (`marcar_desfecho(..., "liberado")`): outra gravação tomou o SEQ; o item volta pela fila.
   - existe, igual em `PRODUTOS` e diferente na composição → **incerto**.
   - não existe → **libera**.
-- `acao == "criar"` sem `seq_reservado`: `buscar_por_nome` — substituída por `candidatos_por_data` (Task 8 rodada 2). Hoje: `candidatos_por_data` na janela da reserva, sem `GRUPO`. 0 → libera; 1 que bate → adota; qualquer outro → **incerto**.
+- `acao == "criar"` sem `seq_reservado`: `buscar_por_nome` (substituída por `candidatos_por_data` na Task 8 rodada 2); hoje `candidatos_por_data` na janela da reserva, sem `GRUPO`. 0 → libera; 1 que bate → adota; qualquer outro → **incerto**.
 - `acao` `atualizar` ou `inativar` → **libera** (reaplicar é idempotente; o item volta pela fila).
 - `incerto`: `marcar_desfecho(..., "incerto", alerta="recuperacao")`, ERROR com `cadastro_id`, `versao` e os SEQs candidatos. Nunca grava, nunca adota no chute.
 

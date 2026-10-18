@@ -222,8 +222,8 @@ catálogo passa a levar `ncm` (tira pontos, espaços e hífens; só vai se sobra
 dígitos), `tipoItemSped` (0–10 ou 99), `grupoErp` e `codigoNfe`. **`cor` não sai mais**: `DESCRICAO2` é a
 "Descrição Interna" da tela do Fire, não cor (17/10/2026), e `cor_longa` deixou de existir. Valor
 que não passa vai **ausente** ("não mexer" no Flow) e vira pendência no relatório (`ncm_vazio`,
-`ncm_invalido`, `sped_invalido`). **A Task 10 (retirada de `cor`) precisa estar no pacote antes de
-ligar `PORTAL_FLOWPCP_CATALOGO_FISCAL`**: um pacote sem ela manda `DESCRICAO2` como cor. O Flow descarta campo desconhecido sem erro, então o sucesso só
+`ncm_invalido`, `sped_invalido`). **Pacotes anteriores a 17/10/2026 mandam `DESCRICAO2` como `cor`; só ligar
+`PORTAL_FLOWPCP_CATALOGO_FISCAL` com pacote posterior.** O Flow descarta campo desconhecido sem erro, então o sucesso só
 vale com `fiscal.v1` nas `capacidades` da resposta. *Material* (`materiais_sync.run_materiais_sync`,
 `PORTAL_FLOWPCP_MATERIAIS`): tudo fora do grupo 8 CONFECCIONADO vai para
 `materiais_fire` (sempre) e ao Flow; bloqueado vai com `ativo=false` (o Flow não cria insumo
@@ -282,6 +282,10 @@ Flow: P4a rev. 4. Um consumidor só por ambiente (`PORTAL_FLOWPCP_ENVIO=0` desli
 | `criar` | grava só `criar` |
 | `criar_e_atualizar` | grava `criar` e `atualizar`; `inativar` só com o portão |
 
+Variável de modo vazia ou ambiente `desligado`: sem modo e sem resultado guardado, `rodar()` não abre
+token nem Flow; ele lista os ambientes ativos e olha o livro de cada um para reenviar resultado guardado.
+Slug na variável que não é ambiente com FlowPCP habilitado loga WARNING uma vez.
+
 Em `simular` a fila não tem cursor (só o confirmar a anda) e `simular` nunca confirma: a volta só
 enxerga os 50 mais antigos (`LIMITE_FILA`), e o que já está no livro nem abre o Fire. Nos modos de
 gravação o GET reserva os itens no Flow e pede no máximo 20 (`LIMITE_GRAVACAO`).
@@ -293,12 +297,12 @@ gravação o GET reserva os itens no Flow e pede no máximo 20 (`LIMITE_GRAVACAO
 passo anterior parar o ciclo):
 
 1. **Pendências**: `reenviar_pendencias` manda ao Flow o corpo guardado das linhas
-   `gravado_sem_volta` e `erro_a_enviar` cuja espera venceu (até 20). Atualiza o gauge `sem_volta`. Para no primeiro `401`.
+   `gravado_sem_volta` e `erro_a_enviar` cuja espera venceu (até 20). Atualiza o gauge `sem_volta`. Um `401` no reenvio encerra o ciclo inteiro (`erro: credencial`, sem recuperação nem GET).
 2. **P0**: sem `PORTAL_FLOWPCP_CADASTRO_P0` para o slug, devolve `recusado` e o ciclo termina.
 3. **Recuperação** (só se há linha `em_andamento`, ou `transitorio` com SEQ, com mais de 15 min): abre a conexão bloqueante e resolve o que um processo caído deixou. Falha de conexão vira `{"erro": ...}` no resumo e o ciclo segue.
 4. **"Aguardando modo"**: GET com `simular=1` e `acoes=` das ações que o modo **não** consome, só para contar. Roda antes do GET que reserva para não gastar a janela da reserva.
 5. **GET** com reserva (`acoes=` do modo, limite 20).
-6. **Triagem sem ERP**, item a item: validação de borda; `(cadastroId, versao)` no livro; regra 9b (`criar` de produto que já tem `criar` que pode ter gravado); `material` (`tipo_nao_suportado`, ainda não é gravado); `inativar` sem portão; escopo de `atualizar`/`inativar` (SEQ na cópia local ou criado pelo Portal, senão `seq_fora_do_escopo`). Só os itens que sobram "a gravar" abrem o ERP.
+6. **Triagem sem ERP**, item a item, nesta ordem: validação/ids legíveis; duplicata no lote; livro (`(cadastroId, versao)`); item inválido responde o erro; `material` (`tipo_nao_suportado`, ainda não é gravado); `inativar` sem portão (pulado); regra 9b (só `criar`: produto que já tem `criar` que pode ter gravado); escopo de `atualizar`/`inativar` (SEQ na cópia local ou criado pelo Portal, senão `seq_fora_do_escopo`). Só os itens que sobram "a gravar" abrem o ERP.
 7. **Gravação**: abre `connect_escrita_cadastro`, lê nomes e marcas do Fire uma vez e, para cada item, confere (nome, marca, componentes; só SELECT), **reserva a linha no livro** (lease, com commit do SQLite) e só então grava. Antes de cada item checa `PRAZO_LOTE`.
 
 ### Regras de ouro do contrato P4a rev. 4 e como cada uma foi implementada
@@ -307,7 +311,22 @@ passo anterior parar o ciclo):
 2. **Resultado guardado sai antes de tudo**, até sem a P0.
 3. **Timeout incerto**: conexão que cai depois do comando de escrita nunca vira erro nem resposta. A linha fica `em_andamento` com o SEQ, o lote para e a recuperação confere no Fire. Erro só é respondido ao Flow com o rollback provado (`rollback_comprovado=True`: o Fire respondeu erro e desfez, ou nenhum comando de escrita saiu); sem a prova a linha fica `em_andamento` e o lote para.
 4. **Lote < 10 min** (a reserva do Flow dura 10): `PRAZO_LOTE` = 8 min, checado antes de cada item; o que sobra fica para a reentrega do Flow. Rede travada no meio de um item ainda passa do prazo (o `fdb` não tem timeout de socket).
-5. **Decisão pelo status** da resposta, nunca pela `acao`: `cadastro_resultado.ler_resposta` devolve um `Desfecho` (`confirmado`, `erro_registrado`, `transitorio_registrado`, `orfao`, `superado`, `repetir` com espera crescente, `bug_corpo` com espera de 60 min e alerta, `credencial` que para os envios do ciclo). `409 versao_superada`/`conflito_codigo` sobre um `gravado` = `orfao`.
+5. **Decisão pelo status** da resposta, nunca pela `acao`: `cadastro_resultado.ler_resposta` devolve um `Desfecho` (`confirmado`, `erro_registrado`, `transitorio_registrado`, `orfao`, `superado`, `repetir` com espera crescente, `bug_corpo` com espera de 60 min e alerta, `credencial` que para os envios do ciclo). Mapa (`cadastro_resultado.ler_resposta`):
+
+| Resposta do Flow | Desfecho |
+|---|---|
+| 200 `ja_registrado` | `confirmado` (se o corpo era `gravado`) ou `erro_registrado` (se era `erro`) |
+| 200 `gravado` / `registrado_versao_superada` | `confirmado` para `gravado`; `bug_corpo` para `erro` |
+| 200 `erro_registrado` | `erro_registrado` para `erro`; `bug_corpo` para `gravado` |
+| 200 `transitorio_registrado` | `transitorio_registrado` para `erro`; `bug_corpo` para `gravado` |
+| 200 sem `status` texto, ou status desconhecido | `repetir` |
+| 409 `versao_superada` | `orfao` para `gravado`; `superado` para `erro` |
+| 409 `conflito_codigo` | `orfao` para `gravado`; `bug_corpo` para `erro` |
+| outro 409 | `bug_corpo` |
+| 401 | `credencial` |
+| 429 | `repetir` |
+| outros 4xx | `bug_corpo` |
+| 5xx, sem resposta | `repetir` |
 
 ### Estados do livro
 
@@ -367,7 +386,7 @@ A frase que a área de cadastro lê sai sempre de `cadastro_resultado.mensagem_p
 
 ### Validação do item (todos os modos)
 
-Item inválido ou que quebra não trava a fila; `chaves_desconhecidas` no item de topo só gera WARNING (uma vez por ambiente e nome). `nome_existe` compara em Python (`casefold`) sobre `SELECT SEQ, DESCRICAO FROM PRODUTOS`, lido uma vez por ciclo (o `UPPER` do Firebird não é confiável para Ç/Ã/Ú em WIN1252). `marcaErp.codigo` precisa existir em `PRODUTOS_MARCA` (lida uma vez por ciclo), senão `marca_ausente_erp`; `MARCA` é gravada com o nome da tabela. Componentes: `criar` de kit/pack exige lista; `atualizar` com `componentes: null` não mexe; `inativar` ignora; `simples`/`material` exigem `null`. `atualizar`: `ean` e `codigoNfe` `null` limpam no ERP; os demais `null` = não mexer (`ncm`, `tipoItemSped`). `cor` não tem coluna: `DESCRICAO2` não é gravada pela volta. Texto opcional `""` = `contrato_invalido`. Variável vazia: `rodar()` volta na hora, sem listar ambientes nem abrir token; slug que não é ambiente com FlowPCP habilitado loga WARNING uma vez.
+Item inválido ou que quebra não trava a fila; `chaves_desconhecidas` no item de topo só gera WARNING (uma vez por ambiente e nome). `nome_existe` compara em Python (`casefold`) sobre `SELECT SEQ, DESCRICAO FROM PRODUTOS`, lido uma vez por ciclo (o `UPPER` do Firebird não é confiável para Ç/Ã/Ú em WIN1252). `marcaErp.codigo` precisa existir em `PRODUTOS_MARCA` (lida uma vez por ciclo), senão `marca_ausente_erp`; `MARCA` é gravada com o nome da tabela. Componentes: `criar` de kit/pack exige lista; `atualizar` com `componentes: null` não mexe; `inativar` ignora; `simples`/`material` exigem `null`. `atualizar`: `ean` e `codigoNfe` `null` limpam no ERP; os demais `null` = não mexer (`ncm`, `tipoItemSped`). `cor` não tem coluna: `DESCRICAO2` não é gravada pela volta. Texto opcional `""` = `contrato_invalido`.
 
 ### Métricas
 

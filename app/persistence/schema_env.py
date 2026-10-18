@@ -140,8 +140,8 @@ CREATE TABLE IF NOT EXISTS materiais_fire (
     extraido_em     TEXT NOT NULL
 );
 
--- Livro da volta Flow → Fire (spec 2026-10-16 §6.3). Na Etapa 1 só registra
--- `simulado`/`erro_definitivo`: nada é gravado no Fire nem confirmado no Flow.
+-- Livro da volta Flow → Fire (spec 2026-10-16 §6.3). Estados: `simulado`/`erro_definitivo`
+-- (simular) e os da gravação (`em_andamento` ... `orfao_fechado`, ver cadastro_volta_repo.ESTADOS).
 -- (cadastro_id, versao) é o lease: o mesmo item não é processado duas vezes.
 CREATE TABLE IF NOT EXISTS cadastro_volta (
     cadastro_id    TEXT NOT NULL,
