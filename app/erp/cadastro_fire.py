@@ -12,11 +12,14 @@ de gravação só rodam em ambiente liberado por `PORTAL_FLOWPCP_CADASTRO_P0`.
 
 from __future__ import annotations
 
+import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from typing import Literal
+
+from loguru import logger
 
 from app.erp.exceptions import FirebirdConnectionError
 
@@ -28,13 +31,38 @@ PADROES_P0: dict[str, object] = {}
 TENTATIVAS_SEQ = 3
 _lock = threading.Lock()
 
-_TEXTOS_LOCK = ("deadlock", "lock conflict", "update conflicts")
-_TEXTOS_CONEXAO = (
-    "network",
-    "connection",
-    "error writing data to the connection",
-    "unable to complete network request",
+# Fallback por texto, só com a frase inteira: o Firebird repete na mensagem o
+# valor recebido, então palavra solta ("unique", "connection") engana.
+_TEXTOS_COLISAO = (
+    "violation of primary or unique key constraint",
+    "attempt to store duplicate value",
 )
+_TEXTOS_CONEXAO = (
+    "unable to complete network request",
+    "error writing data to the connection",
+    "error reading data from the connection",
+    "connection lost",
+)
+_TEXTOS_LOCK = ("deadlock", "lock conflict", "update conflicts with concurrent update")
+
+# gdscode do Firebird (iberror.h, conferido contra o iberror_c.h do Firebird 5.0).
+_GDS = {
+    335544665: "colisao",  # isc_unique_key_violation
+    335544349: "colisao",  # isc_no_dup
+    335544336: "lock",  # isc_deadlock
+    335544345: "lock",  # isc_lock_conflict
+    335544451: "lock",  # isc_update_conflict
+    335544510: "lock",  # isc_lock_timeout
+    335544721: "conexao",  # isc_network_error
+    335544726: "conexao",  # isc_net_read_err
+    335544727: "conexao",  # isc_net_write_err
+    335544741: "conexao",  # isc_lost_db_connection
+    335544466: "recusa",  # isc_foreign_key
+}
+_SQLCODE = {-803: "colisao", -913: "lock", -902: "conexao", -530: "recusa"}
+
+# Colunas que o gravador monta sozinho ou que não são do Flow: nunca em PADROES_P0.
+_RESERVADAS = frozenset({"SEQ", "BLOQUEADO", "DATA_CAD"})
 
 
 @dataclass(frozen=True)
@@ -47,10 +75,26 @@ class SeqTomadoError(Exception):
     """MAX+1 colidiu TENTATIVAS_SEQ vezes seguidas."""
 
 
+class ReservaFalhouError(Exception):
+    """`ao_reservar` (livro SQLite) falhou: não é erro do Fire e não se repete."""
+
+
 def _checa_colunas(campos: dict) -> None:
     fora = set(campos) - COLUNAS_PERMITIDAS
     if fora:
         raise ValueError(f"coluna fora da lista do gravador: {sorted(fora)}")
+
+
+def _valida_padroes(padroes: dict) -> None:
+    for chave in padroes:
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", chave):
+            raise ValueError(f"PADROES_P0: nome de coluna inválido: {chave!r}")
+    cruzam = set(padroes) & (_RESERVADAS | COLUNAS_PERMITIDAS)
+    if cruzam:
+        raise ValueError(f"PADROES_P0 cruza colunas reservadas/permitidas: {sorted(cruzam)}")
+
+
+_valida_padroes(PADROES_P0)
 
 
 def _um(cur, sql: str, params: tuple = ()):
@@ -60,22 +104,39 @@ def _um(cur, sql: str, params: tuple = ()):
 
 
 def classificar_erro(exc: BaseException) -> Literal["colisao", "lock", "conexao", "recusa"]:
-    """Classe de uma falha do Firebird, pelo tipo e pelo texto. O resto é recusa
-    (NOT NULL, truncamento, conversão): não se tenta de novo."""
+    """Classe de uma falha do Firebird. O resto é recusa (NOT NULL, truncamento,
+    conversão, FK): não se tenta de novo.
+
+    Ordem: tipo, depois os números que o fdb monta em `args` (msg, sqlcode,
+    gdscode), por último o texto (frase inteira, conexão antes de lock)."""
     if isinstance(exc, FirebirdConnectionError):
         return "conexao"
+    args = getattr(exc, "args", ())
+    if len(args) == 3 and isinstance(args[1], int) and isinstance(args[2], int):
+        if args[2] in _GDS:
+            return _GDS[args[2]]
+        if args[1] in _SQLCODE:
+            return _SQLCODE[args[1]]
     texto = str(exc).lower()
-    if "violation" in texto or "primary" in texto or "unique" in texto:
+    if any(t in texto for t in _TEXTOS_COLISAO):
         return "colisao"
-    if any(t in texto for t in _TEXTOS_LOCK):
-        return "lock"
     if any(t in texto for t in _TEXTOS_CONEXAO):
         return "conexao"
+    if any(t in texto for t in _TEXTOS_LOCK):
+        return "lock"
     return "recusa"
 
 
-def _colisao(exc: Exception) -> bool:
+def _colisao(exc: BaseException) -> bool:
     return classificar_erro(exc) == "colisao"
+
+
+def _desfaz(conn) -> None:
+    """Rollback que nunca mascara a exceção original: se falhar, só loga."""
+    try:
+        conn.rollback()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("cadastro_fire: rollback falhou ({})", type(exc).__name__)
 
 
 def _insere_composicao(cur, pai: int, componentes: list[tuple[int, float]]) -> None:
@@ -95,7 +156,10 @@ def criar(conn, *, campos, componentes, hoje: date, ao_reservar: Callable[[int],
             cur = conn.cursor()
             try:
                 seq = int(_um(cur, "SELECT MAX(SEQ) FROM PRODUTOS") or 0) + 1
-                ao_reservar(seq)
+                try:
+                    ao_reservar(seq)
+                except Exception as exc:
+                    raise ReservaFalhouError("reserva do SEQ no livro falhou") from exc
                 colunas = ["SEQ", "BLOQUEADO", "DATA_CAD", *linha]
                 valores = (seq, "Nao", hoje, *linha.values())
                 cur.execute(
@@ -107,17 +171,16 @@ def criar(conn, *, campos, componentes, hoje: date, ao_reservar: Callable[[int],
                     _insere_composicao(cur, seq, componentes)
                 conn.commit()
                 return Gravacao(seq=seq, acao="criar")
-            except Exception as exc:
-                conn.rollback()
-                if not _colisao(exc):
+            except BaseException as exc:
+                _desfaz(conn)
+                if isinstance(exc, ReservaFalhouError) or not _colisao(exc):
                     raise
             finally:
                 cur.close()
     raise SeqTomadoError(f"SEQ tomado {TENTATIVAS_SEQ} vezes seguidas")
 
 
-def atualizar(conn, *, seq: int, campos, componentes) -> Gravacao:
-    _checa_colunas(campos)
+def _atualizar_uma_vez(conn, seq: int, campos, componentes) -> Gravacao:
     cur = conn.cursor()
     try:
         if campos:
@@ -132,11 +195,26 @@ def atualizar(conn, *, seq: int, campos, componentes) -> Gravacao:
             _insere_composicao(cur, seq, componentes)
         conn.commit()
         return Gravacao(seq=seq, acao="atualizar")
-    except Exception:
-        conn.rollback()
+    except BaseException:
+        _desfaz(conn)
         raise
     finally:
         cur.close()
+
+
+def atualizar(conn, *, seq: int, campos, componentes) -> Gravacao:
+    _checa_colunas(campos)
+    if componentes is None:
+        return _atualizar_uma_vez(conn, seq, campos, componentes)
+    # Composição usa MAX(CODIGO)+1: mesmo lock e nova tentativa do criar.
+    with _lock:
+        for _ in range(TENTATIVAS_SEQ):
+            try:
+                return _atualizar_uma_vez(conn, seq, campos, componentes)
+            except Exception as exc:
+                if not _colisao(exc):
+                    raise
+    raise SeqTomadoError(f"CODIGO de composição tomado {TENTATIVAS_SEQ} vezes seguidas")
 
 
 def inativar(conn, *, seq: int) -> Gravacao:
@@ -147,8 +225,8 @@ def inativar(conn, *, seq: int) -> Gravacao:
             raise LookupError(f"SEQ {seq} não existe no Fire")
         conn.commit()
         return Gravacao(seq=seq, acao="inativar")
-    except Exception:
-        conn.rollback()
+    except BaseException:
+        _desfaz(conn)
         raise
     finally:
         cur.close()
