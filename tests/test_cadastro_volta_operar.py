@@ -9,7 +9,7 @@ import pytest
 
 from app.erp import cadastro_fire
 from app.persistence import cadastro_volta_repo as repo
-from app.persistence import router, schema_env
+from app.persistence import environments_repo, router, schema_env
 from tools import cadastro_volta_operar as op
 
 _CAMPOS = {"DESCRICAO": "TENIS X", "UNIDADE": "PAR", "GRUPO": 3, "CODIGO_EAN13": None,
@@ -520,8 +520,6 @@ def test_erp_real_leitura_usa_somente_leitura_e_nunca_connect_with_config(monkey
             raise AssertionError("escrita não é permitida nesta ferramenta")
 
     from app.erp import connection
-    from app.persistence import environments_repo
-
     monkeypatch.setattr(connection, "FirebirdConnection", _Fb)
     monkeypatch.setattr(environments_repo, "get_by_slug", lambda slug: {"slug": slug})
     monkeypatch.setattr(environments_repo, "to_fb_config", lambda env: {"password": "SENHA"})
@@ -531,8 +529,6 @@ def test_erp_real_leitura_usa_somente_leitura_e_nunca_connect_with_config(monkey
 
 
 def test_erp_real_ambiente_inexistente_e_recusa_segura(monkeypatch):
-    from app.persistence import environments_repo
-
     monkeypatch.setattr(environments_repo, "get_by_slug", lambda slug: None)
     with pytest.raises(op._RecusaError, match="ambiente não encontrado"):
         op._erp_real("zz")
@@ -685,3 +681,25 @@ def test_liberar_sem_seq_mostra_classif_fiscal_e_componentes(livro, capsys):
     assert _rodar(livro, _Erp(), "liberar", "c1", "1", "--operador", "a") == 0
     out = capsys.readouterr().out
     assert "CLASSIF_FISCAL" in out and "6404" in out and "COMPONENTES" in out
+
+
+def test_slug_desconhecido_recusa_sem_abrir_o_livro(monkeypatch, capsys):
+    """Slug errado não cria `app_state_<slug>.db`: o ambiente é conferido antes do livro."""
+    monkeypatch.setattr(environments_repo, "get_by_slug", lambda slug: None)
+    abertos = []
+    monkeypatch.setattr(router, "env_connect", lambda slug: abertos.append(slug))
+    assert op.main(["nao-existe", "listar"]) == 1
+    assert abertos == []
+    assert "ambiente 'nao-existe' não encontrado" in capsys.readouterr().err
+
+
+def test_slug_conhecido_abre_o_livro_do_ambiente(monkeypatch, livro):
+    monkeypatch.setattr(environments_repo, "get_by_slug", lambda slug: object())
+
+    @contextmanager
+    def _env_connect(slug):
+        assert slug == "mm"
+        yield livro
+
+    monkeypatch.setattr(router, "env_connect", _env_connect)
+    assert op.main(["mm", "listar"]) == 0

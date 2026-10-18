@@ -91,8 +91,11 @@ def _parser() -> argparse.ArgumentParser:
 
 @contextmanager
 def _livro_real(slug: str):
-    from app.persistence import router
+    from app.persistence import environments_repo, router
 
+    # Antes de abrir: `env_connect` com slug errado criaria um app_state_<slug>.db vazio.
+    if environments_repo.get_by_slug(slug) is None:
+        raise _RecusaError(f"ambiente {slug!r} não encontrado; nada foi aberto.")
     with router.env_connect(slug) as conn:
         yield conn
 
