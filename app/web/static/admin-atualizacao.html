@@ -134,6 +134,7 @@
 
     /* ── Timeline (em andamento) ── */
     .timeline { display: flex; flex-direction: column; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
     .tl-step { display: flex; gap: 12px; position: relative; padding-bottom: 22px; }
     .tl-step:last-child { padding-bottom: 0; }
     .tl-step:not(:last-child)::before {
@@ -272,6 +273,7 @@
       <div class="card-title">Aplicando atualização</div>
       <div class="card-desc">Não feche esta aba. O portal ficará fora do ar por alguns minutos.</div>
       <div class="timeline" id="timeline"></div>
+      <div class="sr-only" id="timeline-live" aria-live="polite"></div>
       <div class="progress-foot">
         <span id="progress-elapsed">0s</span>
         <span id="progress-note"></span>
@@ -323,7 +325,7 @@
     { keys: ['start', 'reiniciando', 'restart', 'restarting'], label: 'Reiniciando' },
     { keys: ['healthcheck', 'health', 'verificando'], label: 'Verificando' },
   ];
-  const RESTARTING_STEP_INDEX = 4; // "Reiniciando" — usado quando o fetch falha (servidor fora do ar)
+  const PIP_KEY = 'pip';
 
   // Restart sem pacote (kind=restart): o updater só reporta stop | start | healthcheck.
   const RESTART_STEPS = [
@@ -331,8 +333,9 @@
     { keys: ['start'], label: 'Iniciando' },
     { keys: ['healthcheck', 'health'], label: 'Verificando' },
   ];
-  const RESTART_RECONNECT_INDEX = 1; // fetch falhou: o portal está fora do ar subindo de novo
   let progressKind = 'update';       // 'update' | 'restart'
+  let progressDeps = null;           // deps_changed do pacote; false = o updater pula o pip
+  let maxIndex = -1;                 // fase mais adiantada já confirmada pelo /status
 
   let staged = null;       // resumo mais recente do /upload (fonte mais rica que o /status)
   let pollTimer = null;
@@ -474,7 +477,8 @@
     $('st-built').textContent = data.built_at ? fmtDate(data.built_at) : '—';
     $('st-files').textContent = (data.files_count ?? '—').toString();
     const notes = (data.notes || '').toString().trim();
-    $('st-notes').textContent = notes;
+    // Notas vêm do CHANGELOG em markdown: só o negrito vira tag, depois do escape.
+    $('st-notes').innerHTML = esc(notes).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     $('st-notes-wrap').hidden = !notes;
     $('st-deps-badge').hidden = !data.deps_changed;
     $('btn-apply').disabled = false;
@@ -496,7 +500,7 @@
           btn.disabled = false;
           return;
         }
-        startProgress();
+        startProgress(null, staged ? staged.deps_changed : null);
       } catch (e) {
         showError('Falha de rede ao iniciar a atualização.');
         btn.disabled = false;
@@ -523,7 +527,19 @@
   }
 
   // ── Em andamento (poll) ──────────────────────────────────────────
-  function currentSteps() { return progressKind === 'restart' ? RESTART_STEPS : PHASE_STEPS; }
+  function currentSteps() {
+    if (progressKind === 'restart') return RESTART_STEPS;
+    return progressDeps === false ? PHASE_STEPS.filter((s) => !s.keys.includes(PIP_KEY)) : PHASE_STEPS;
+  }
+
+  // Com o portal fora do ar não há fase para ler: marca só o que o /status
+  // confirmou e põe o passo seguinte como atual (no mínimo o depois de "parar",
+  // que é quando o portal cai).
+  function reconnectIndex() {
+    const steps = currentSteps();
+    const stop = steps.findIndex((s) => s.keys.includes('stop'));
+    return Math.min(Math.max(maxIndex + 1, stop + 1), steps.length - 1);
+  }
 
   function matchPhaseIndex(phase) {
     if (!phase) return -1;
@@ -552,17 +568,23 @@
       }
       const dotInner = cls === 'current' ? '<span class="spin-accent"></span>' : icon;
       const sub = cls === 'current' && opts.restarting
-        ? `<div class="tl-sub">tentando reconectar…</div>` : '';
+        ? `<div class="tl-sub">portal fora do ar durante a troca, aguardando voltar…</div>` : '';
       return `<div class="tl-step ${cls}">
         <div class="tl-dot">${dotInner}</div>
         <div class="tl-body"><div class="tl-label">${esc(step.label)}</div>${sub}</div>
       </div>`;
     }).join('');
     $('timeline').innerHTML = html;
+    // A lista é redesenhada a cada consulta; o leitor de tela só ouve quando o passo muda.
+    const atual = currentSteps()[activeIndex === -1 ? 0 : activeIndex];
+    const fala = atual ? atual.label + (opts.restarting ? ': portal fora do ar durante a troca, aguardando voltar' : '') : '';
+    if ($('timeline-live').textContent !== fala) $('timeline-live').textContent = fala;
   }
 
-  function startProgress(kind) {
+  function startProgress(kind, depsChanged) {
     progressKind = kind === 'restart' ? 'restart' : 'update';
+    progressDeps = typeof depsChanged === 'boolean' ? depsChanged : null;
+    maxIndex = -1;
     hideAllStateCards();
     $('progress-card').hidden = false;
     $('progress-recovery').hidden = true;
@@ -617,7 +639,7 @@
 
     if (networkError || !data) {
       $('progress-note').textContent = `tentativa ${pollAttempts}`;
-      renderTimeline(progressKind === 'restart' ? RESTART_RECONNECT_INDEX : RESTARTING_STEP_INDEX, { restarting: true });
+      renderTimeline(reconnectIndex(), { restarting: true });
       pollTimer = setTimeout(poll, POLL_INTERVAL_MS);
       return;
     }
@@ -628,8 +650,12 @@
       return;
     }
 
-    const idx = matchPhaseIndex(data.phase);
-    renderTimeline(idx, {});
+    // Nunca anda para trás no mesmo update: uma resposta atrasada (ou a fase de
+    // um status antigo) não desmarca passo já confirmado.
+    // Em apply_requested o updater ainda não escreveu fase nenhuma desta rodada.
+    const fase = data.status === 'apply_requested' ? null : data.phase;
+    maxIndex = Math.max(maxIndex, matchPhaseIndex(fase));
+    renderTimeline(maxIndex, {});
     pollTimer = setTimeout(poll, POLL_INTERVAL_MS);
   }
 
@@ -777,7 +803,7 @@
       };
       renderStaged(staged);
     } else if (data.status === 'apply_requested' || data.status === 'in_progress') {
-      startProgress(data.kind);
+      startProgress(data.kind, data.deps_changed);
     } else if (data.status === 'succeeded') {
       // Sucesso de uma atualização JÁ concluída (reload da página): a "Versão
       // atual" no topo já mostra o resultado — vai direto pro upload, sem card

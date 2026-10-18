@@ -118,6 +118,31 @@ def test_apply_dispara_updater(setup, monkeypatch):
     assert r.status_code == 202 and called.get("ran")
 
 
+def test_fase_do_update_anterior_nao_vaza_para_o_seguinte(setup, monkeypatch):
+    """Produção, 18/10/2026: o status.json do update de 16/10 (succeeded,
+    phase=healthcheck) foi mesclado no staged e no apply_requested do seguinte;
+    a tela leu `healthcheck`, marcou todos os passos e voltou ao `backup`."""
+    from app.updates import package, state
+    from app.web import routes_update
+
+    state.write_status(routes_update.updates_dir(), status="succeeded", phase="healthcheck",
+                       update_id="velho", started_at=1.0, finished_at=2.0,
+                       error="falha antiga", rollback_error="rollback antigo")
+    monkeypatch.setattr(package, "compute_deps_sha256", lambda p: "SHA")
+    up = _client().post("/api/admin/update/upload",
+                        files={"file": ("p.zip", _good_zip("SHA"), "application/zip")}).json()
+    staged = _client().get("/api/admin/update/status").json()
+    assert staged["status"] == "staged" and staged["update_id"] == up["update_id"]
+    for velho in ("phase", "started_at", "finished_at", "error", "rollback_error"):
+        assert staged.get(velho) is None, velho
+
+    monkeypatch.setattr(routes_update, "_start_updater_task", lambda: True)
+    assert _client().post("/api/admin/update/apply", json={"update_id": up["update_id"]}).status_code == 202
+    pedido = _client().get("/api/admin/update/status").json()
+    assert pedido["status"] == "apply_requested" and pedido.get("phase") is None
+    assert pedido["version"] == "20260714-1030" and pedido.get("finished_at") is None
+
+
 def test_upload_invalido_preserva_staging_valido_anterior(setup, monkeypatch):
     """CRITICAL: um upload que falha a validação não pode apagar o staging de
     um pacote válido anterior nem deixar status.json apontando para um

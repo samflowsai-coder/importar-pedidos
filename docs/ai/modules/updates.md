@@ -115,7 +115,7 @@ o lock e, se for `restart`, roda só `lock → stop → start → healthcheck` (
 sem backup, staging, pip nem arquivo tocado; tenta subir uma 2ª vez antes de desistir.
 Fases: `stop | start | healthcheck`. Terminais: `succeeded | restart_failed`. Solta o lock
 e grava em `history.jsonl` uma linha com `kind: "restart"`. Como o `status.json` é
-mesclado, `/upload` e `/apply` zeram `kind` para um update não herdar `restart`.
+mesclado: `/upload` recomeça o status do zero (`clear_status`, como o `/restart`) e `/apply` zera `kind`, `phase`, `finished_at`, `error` e `rollback_error`. Sem isso a `phase` do update anterior vazava para o seguinte e a tela marcava todos os passos e voltava (visto em produção em 18/10/2026). A tela também não anda para trás no mesmo update, ignora `phase` em `apply_requested`, tira o passo do pip quando `deps_changed` é falso e, com o portal fora do ar, marca só o que o `/status` confirmou.
 `restart_failed` conta como terminal no `/dismiss`. Falha inesperada no ramo grava `restart_failed` em best-effort.
 Se a mudança no `.env` trocar `PORTAL_PORT`, o admin precisa abrir o endereço novo depois de reiniciar (a tela avisa).
 
