@@ -175,6 +175,19 @@ def test_seqs_em_aberto(conn):
     assert repo.seqs_em_aberto(conn) == {"100", "200", "300", "400", "500"}
 
 
+def test_seqs_em_aberto_inclui_orfao_de_criar_e_libera_ao_fechar(conn):
+    """O Flow criaria um 2º produto para o SEQ órfão; fechar (Flow já resolvido) libera."""
+    _reservar(conn, cid="a", produto="pa")
+    repo.marcar_gravado(conn, "a", 1, erp_produto_id="3992", corpo_json="{}")
+    repo.marcar_desfecho(conn, "a", 1, "orfao")
+    _reservar(conn, cid="b", produto="pb", acao="atualizar")
+    repo.marcar_gravado(conn, "b", 1, erp_produto_id="3306", corpo_json="{}")
+    _forcar(conn, "b", "orfao")  # órfão de atualizar (livro antigo): o produto já era do Flow
+    assert repo.seqs_em_aberto(conn) == {"3992"}
+    assert repo.fechar_orfao(conn, "a", 1, operador="ana", nota="vinculado no Flow")
+    assert repo.seqs_em_aberto(conn) == set()
+
+
 def test_reservar_nao_reaproveita_liberado_com_seq(conn):
     _reservar(conn)
     repo.marcar_seq(conn, "c1", 1, 4001)

@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 
 from app.erp.catalog_extract import ProdutoFireDTO, extract_com_nota, extract_marcas
@@ -8,6 +10,7 @@ from app.integrations.flowpcp.catalogo_schema import (
     CatalogoContagens,
     CatalogoReconciliacaoResponse,
 )
+from app.persistence import router, schema_env
 
 
 def test_filtra_vazia_longa_e_codigo_invalido():
@@ -285,6 +288,22 @@ def test_sem_par_e_conflitos_viram_warning_com_os_nomes(rodar, logs):
 
 def test_seq_em_aberto_na_volta_nao_vai_no_corpo(rodar):
     rep, corpo = rodar(env=_Env(em_aberto=["3992", "55555"]))
+    assert [i["fireProdutoId"] for i in corpo["itens"]] == ["3306"]
+    assert rep.model_extra["fora_do_envio_volta"] == ["3992"]
+
+
+def test_seq_orfao_de_criar_fica_fora_da_ida_e_o_de_atualizar_nao(rodar):
+    """O Flow criaria um 2º produto para o SEQ que o Portal criou e o Flow não vinculou."""
+    env = sqlite3.connect(":memory:")
+    env.executescript(schema_env.TABLES_SQL)
+    router._apply_column_migrations(env, schema_env.COLUMN_MIGRATIONS)
+    for cid, acao, seq in (("a", "criar", "3992"), ("b", "atualizar", "3306")):
+        env.execute(
+            "INSERT INTO cadastro_volta (cadastro_id, versao, estado, acao, tipo, produto_id, "
+            "modo, erp_produto_id) VALUES (?, 1, 'orfao', ?, 'simples', ?, 'criar', ?)",
+            (cid, acao, f"p{cid}", seq),
+        )
+    rep, corpo = rodar(env=env)
     assert [i["fireProdutoId"] for i in corpo["itens"]] == ["3306"]
     assert rep.model_extra["fora_do_envio_volta"] == ["3992"]
 

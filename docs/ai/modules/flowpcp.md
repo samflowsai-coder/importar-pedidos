@@ -254,8 +254,10 @@ viram WARNING. 400 do Flow com marcas, nota ou composição ligadas aponta no er
 O diário (`catalogo_diario`) conhece os dois blocos e entra em atenção com `capacidade_ok`/`leitura_ok`
 falsos ou `reenviar`. *SEQs em aberto*: em **toda** rodada com envio saem do lote os SEQs que o livro
 da volta tem em trânsito (`cadastro_volta_repo.seqs_em_aberto`: `em_andamento`, `gravado_sem_volta`,
-`incerto` e `liberado`/`transitorio` com SEQ), reportados em `fora_do_envio_volta`: o Flow criaria
-outro produto para um SEQ que o Portal acabou de gravar. A leitura do livro é falha fechada: se
+`incerto`, `liberado`/`transitorio` com SEQ e `orfao` de `criar`), reportados em `fora_do_envio_volta`:
+o Flow criaria outro produto para um SEQ que o Portal acabou de gravar (ou criou e o Flow não vinculou).
+`orfao_fechado` fica fora da lista: fechar libera o SEQ para a ida, então só se fecha um órfão depois
+de o Flow estar resolvido. A leitura do livro é falha fechada: se
 falhar, a cópia local fica e o envio aborta.
 
 Tabelas locais em `modules/persistence.md`. Ferramentas de linha de comando:
@@ -356,7 +358,7 @@ o SEQ só é zerado com `True`), `liberar_comprovado` (`em_andamento` → `liber
 | `confirmado`, `erro_registrado`, `superado` | finais | nada; `superado` com alerta `conflito_codigo` (um `atualizar`/`inativar` gravado no Fire cujo código o Flow recusou): avisar a área de cadastro do Flow |
 | `transitorio` | erro passageiro (`erp_ocupado`, `conexao_recusada`...); o item volta no GET | nada se sem SEQ; **com SEQ** a recuperação o retoma; passado o prazo aparece como incerto na tela |
 | `liberado` | voltou para a fila (recuperação ou operador); as portas zeram o SEQ, então o item é reservado de novo na reentrega do Flow | nada |
-| `orfao` | produto que o Portal **criou** no Fire e o Flow não vinculou (`versao_superada`, `conflito_codigo` de um `criar`) | avisar a área de cadastro com o código; depois `fechar-orfao` com nota |
+| `orfao` | produto que o Portal **criou** no Fire e o Flow não vinculou (`versao_superada`, `conflito_codigo` de um `criar`) | avisar a área de cadastro com o código; o SEQ fica fora da ida enquanto `orfao`; `fechar-orfao` com nota só depois de o Flow estar resolvido (fechar devolve o SEQ à ida) |
 | `orfao_fechado` | final: `orfao` fechado por uma pessoa (`nota_operador`). Não vira `superado` para não apagar a prova de que o produto existe | nada |
 | `incerto` | sem prova do que aconteceu; nem grava nem responde | `adotar` ou `liberar` pela ferramenta do operador |
 

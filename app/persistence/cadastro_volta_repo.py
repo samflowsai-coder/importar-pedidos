@@ -487,10 +487,13 @@ def transitorios_com_seq(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 def seqs_em_aberto(conn: sqlite3.Connection) -> set[str]:
-    """SEQs que o Portal tem em trânsito (ida não deve oferecê-los ao Flow)."""
+    """SEQs que o Portal tem em trânsito (ida não deve oferecê-los ao Flow). O `orfao`
+    de `criar` entra: o Flow criaria um 2º produto para ele. `orfao_fechado` não:
+    fechar (só depois de o Flow estar resolvido) libera o SEQ para a ida."""
     rows = conn.execute(
         "SELECT erp_produto_id, seq_reservado FROM cadastro_volta WHERE "
         "estado IN ('em_andamento', 'gravado_sem_volta', 'incerto') "
-        "OR (estado IN ('liberado', 'transitorio') AND seq_reservado IS NOT NULL)"
+        "OR (estado IN ('liberado', 'transitorio') AND seq_reservado IS NOT NULL) "
+        "OR (estado = 'orfao' AND acao = 'criar')"
     ).fetchall()
     return {str(v) for r in rows for v in r if v is not None}

@@ -14,6 +14,9 @@ toda ação só mostra o que faria.
   `IDADE_MINIMA_RECUPERACAO`. Essa conexão abre transação WRITE por exigência do
   NO_REC_VERSION, mas só passa SELECT (guarda `SoSelect`) e sai SEMPRE em rollback: é a
   mesma decisão já aceita na recuperação.
+- `fechar-orfao` só depois de o Flow estar resolvido (o produto vinculado, ou a área de
+  cadastro decidiu): enquanto `orfao`, o SEQ fica fora da ida do catálogo; fechado, ele
+  volta a ser oferecido ao Flow, que criaria outro produto se nada foi vinculado.
 
     .venv/bin/python tools/cadastro_volta_operar.py <slug> listar
     .venv/bin/python tools/cadastro_volta_operar.py <slug> adotar <cadastroId> <versao> <seq> --operador NOME [--aceito-divergencia] [--confirmar]
@@ -81,7 +84,8 @@ def _parser() -> argparse.ArgumentParser:
     _comum(p)
     p.add_argument("--candidatos-conferidos", help="SEQs da janela, separados por vírgula")
     p.add_argument("--nenhum-candidato", action="store_true", help="a janela está vazia")
-    _comum(sub.add_parser("fechar-orfao", help="fecha um órfão com nota"), nota=True)
+    _comum(sub.add_parser("fechar-orfao", help="fecha um órfão com nota; só depois de o "
+                                        "Flow estar resolvido (o SEQ volta à ida)"), nota=True)
     return ap
 
 
