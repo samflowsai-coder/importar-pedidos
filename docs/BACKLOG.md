@@ -311,6 +311,7 @@ num caminho que decide se pedido entra ou não, então spec antes de plano.
 - Check salvo validado só pelo tamanho: com Fire fora e de-para trocado após o commit, o KIT avaliado pode diferir do exportado.
 - Preview marca intercompany como liberado, mas o portão aplica a regra de hoje e pode bloquear (`price_check_failed`); sem teste de paridade.
 - Troca do `preco_trava_modo` só vai pro loguru; falta trilha consultável de quem ligou a trava.
+- Item com vínculo de-para para SEQ diferente do casamento direto (A/B) sai `unidade_divergente` em `ligado` (a unidade do check é a de A); ler a `UNIDADE` do SEQ do vínculo via `find_products_by_seqs_sql` no check ao vivo do portão para o caso A/B parar de bloquear.
 
 ---
 

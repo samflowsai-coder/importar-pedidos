@@ -29,6 +29,7 @@ from app.erp.preco_avaliacao import (
     avaliar,
     cnpj_da_rede,
     data_ref_do_pedido,
+    unidade_normalizada,
 )
 from app.models.order import Order
 from app.persistence import db, environments_repo, precos_repo, repo
@@ -40,7 +41,9 @@ _MOTIVO_LEGIVEL: dict[str, str] = {
     "produto_nao_identificado": "produto não identificado no Fire",
     "cliente_sem_cnpj": "cliente sem CNPJ",
     "cliente_sem_rede": "cliente sem rede na tabela de preço do Flow",
-    "unidade_divergente": "unidade do produto no Fire diferente da tabela de preço",
+    "unidade_divergente": (
+        "unidade do produto no Fire não confere com a tabela de preço (diferente ou não informada)"
+    ),
     "preco_invalido": "preço da tabela fora do contrato",
     "copia_desatualizada": "tabela de preço sem sincronizar com o Flow há mais de 24 h",
     "empresa_sem_cnpj": "CNPJ da empresa não cadastrado no ambiente",
@@ -77,9 +80,18 @@ def cnpjs_grupo() -> set[str]:
     raizes: set[str] = set()
     for env in environments_repo.list_all():
         for campo in ("cnpj", "intercompany_cnpj"):
-            cnpj = preco_regra.normalizar_cnpj(env.get(campo))
+            bruto = env.get(campo)
+            cnpj = preco_regra.normalizar_cnpj(bruto)
             if cnpj is not None:
                 raizes.add(cnpj[:8])
+            elif bruto:
+                from app.utils.logger import logger
+
+                # Sem o valor no log: só o campo e o ambiente.
+                logger.warning(
+                    f"cnpjs_grupo: {campo} do ambiente {env.get('slug')!r} fora do formato "
+                    "do contrato; fica fora das empresas do grupo"
+                )
     return raizes
 
 
@@ -114,14 +126,17 @@ def _todos(order: Order, check: dict | None, situacao: Situacao, motivo: Motivo)
     itens_av = []
     for i, it in enumerate(order.items):
         bruto = itens[i].get("fire_product_id") if i < len(itens) else None
+        unidade = itens[i].get("fire_unidade") if i < len(itens) else None
         itens_av.append(
             ItemAvaliado(
-                i,
-                None if bruto is None else str(bruto),
-                situacao,
-                motivo,
-                preco_regra.centavos(it.unit_price),
-                None,
+                item_index=i,
+                fire_produto_id=None if bruto is None else str(bruto),
+                situacao=situacao,
+                motivo=motivo,
+                preco_pedido_centavos=preco_regra.centavos(it.unit_price),
+                preco_tabela_centavos=None,
+                preco_tabela_id=None,
+                unidade_erp=unidade_normalizada(unidade),
             )
         )
     return Avaliacao(rede=None, cnpj_rede=None, itens=itens_av)

@@ -105,7 +105,8 @@ def data_ref_do_pedido(order: Order, recebido_em: str | datetime | None, agora: 
     return data_referencia(None, recebido if recebido is not None else agora)
 
 
-def _unidade(bruta: object) -> str | None:
+def unidade_normalizada(bruta: object) -> str | None:
+    """Unidade do Fire/tabela para comparar: `strip().upper()`; vazia → None."""
     if not isinstance(bruta, str):
         return None
     return bruta.strip().upper() or None
@@ -139,7 +140,9 @@ def avaliar(
         return None if bruto is None else str(bruto)
 
     def _un(i: int) -> str | None:
-        return _unidade(check_itens[i].get("fire_unidade")) if i < len(check_itens) else None
+        if i >= len(check_itens):
+            return None
+        return unidade_normalizada(check_itens[i].get("fire_unidade"))
 
     def _tudo(situacao: Situacao, motivo: Motivo, rede: Rede | None = None):
         return Avaliacao(
@@ -147,7 +150,14 @@ def avaliar(
             cnpj_rede=cnpj_rede,
             itens=[
                 ItemAvaliado(
-                    i, _id(i), situacao, motivo, centavos(it.unit_price), None, None, _un(i)
+                    item_index=i,
+                    fire_produto_id=_id(i),
+                    situacao=situacao,
+                    motivo=motivo,
+                    preco_pedido_centavos=centavos(it.unit_price),
+                    preco_tabela_centavos=None,
+                    preco_tabela_id=None,
+                    unidade_erp=_un(i),
                 )
                 for i, it in enumerate(order.items)
             ],
@@ -169,14 +179,14 @@ def avaliar(
 
         def _item(situacao: Situacao, motivo: Motivo, linha: PrecoLinha | None = None):
             return ItemAvaliado(
-                i,
-                pid,
-                situacao,
-                motivo,
-                pedido,
-                linha.preco_centavos if linha else None,
-                linha.preco_id if linha else None,
-                unidade,
+                item_index=i,
+                fire_produto_id=pid,
+                situacao=situacao,
+                motivo=motivo,
+                preco_pedido_centavos=pedido,
+                preco_tabela_centavos=linha.preco_centavos if linha else None,
+                preco_tabela_id=linha.preco_id if linha else None,
+                unidade_erp=unidade,
             )
 
         if pid is None:
@@ -192,7 +202,9 @@ def avaliar(
             continue
         if linha is not None and linha.preco_centavos <= 0:
             linha = None  # dinheiro do contrato é > 0: zero não é preço
-        if unidade is None or (linha is not None and _unidade(linha.unidade_erp) != unidade):
+        if unidade is None or (
+            linha is not None and unidade_normalizada(linha.unidade_erp) != unidade
+        ):
             itens.append(_item("nao_avaliado", "unidade_divergente"))
         elif rede.travada:
             itens.append(_item("fila", "rede_travada", linha))

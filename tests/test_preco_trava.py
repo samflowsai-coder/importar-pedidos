@@ -1090,3 +1090,56 @@ def test_cnpjs_grupo_normaliza_pelo_contrato(monkeypatch):
         ],
     )
     assert preco_trava.cnpjs_grupo() == {"12ABC345", "11111111"}
+
+
+# ── Task 7.2, fix round 1 ────────────────────────────────────────────────────
+
+
+def test_todos_preenche_unidade_erp_como_o_avaliador(monkeypatch):
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    env = {**_env("ligado"), "cnpj": None}  # empresa_sem_cnpj → _todos
+    check = _check()
+    check["items"][0]["fire_unidade"] = " kit "
+    _live(monkeypatch, check)
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=env, agora=AGORA)
+
+    assert d.avaliacao.itens[0].motivo == "empresa_sem_cnpj"
+    assert d.avaliacao.itens[0].unidade_erp == "KIT"
+
+
+def test_unidade_divergente_texto_cobre_unidade_nao_informada(monkeypatch):
+    _copia(5400)
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    check = _check()
+    check["items"][0]["fire_unidade"] = None
+    _live(monkeypatch, check)
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.detalhe == (
+        "1 item(ns) sem avaliação de preço: unidade do produto no Fire não confere com a "
+        "tabela de preço (diferente ou não informada)."
+    )
+
+
+def test_cnpjs_grupo_avisa_cnpj_fora_do_contrato_sem_o_valor(monkeypatch):
+    from app.utils.logger import logger
+
+    monkeypatch.setattr(
+        environments_repo,
+        "list_all",
+        lambda: [{"slug": "nasmar", "cnpj": "11111111000191", "intercompany_cnpj": "99887766"}],
+    )
+    mensagens: list[str] = []
+    sink = logger.add(lambda m: mensagens.append(str(m)), level="WARNING")
+    try:
+        assert preco_trava.cnpjs_grupo() == {"11111111"}
+    finally:
+        logger.remove(sink)
+
+    assert len(mensagens) == 1
+    assert "intercompany_cnpj" in mensagens[0] and "nasmar" in mensagens[0]
+    assert "99887766" not in mensagens[0]
