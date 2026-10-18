@@ -138,13 +138,13 @@ Os nomes no wire seguem o papel do campo (regra P-PROD-08 do Flow): `erpProdutoI
 | `tipoItemSped` | `CODITEMSPED` (inteiro) | Inteiro de 0 a 10 ou 99. Fora disso vai ausente + pendência |
 | `grupoErp` | `GRUPO` (inteiro) + `GRUPO_PRODUTOS.GRUPO` | `{codigo: str, nome: str 1..80}`. Sem nome vai ausente |
 | `codigoNfe` | `CODPARANFE` (varchar 20) | Aparado, de 1 a 60 caracteres |
-| `cor` | `DESCRICAO2` (varchar 200) | Aparado, de 1 a 120 caracteres. Se for maior, vai ausente + pendência |
+| ~~`cor`~~ | ~~`DESCRICAO2`~~ | **Fora** (17/10/2026): `DESCRICAO2` é a "Descrição Interna" da tela do Fire, não cor. O Portal não manda `cor` |
 
 - A unidade continua no campo `unidade`, que já existe e já leva o `UNIDADE` cru. A lista fechada de unidades é decisão do Flow (P4).
 - Interruptor por empresa: `PORTAL_FLOWPCP_CATALOGO_FISCAL=mm`, mesmo formato de `PORTAL_FLOWPCP_CATALOGO_COMPOSICAO`. É variável de ambiente, sem migração.
 - O relatório do Portal ganha `fiscal_portal`:
   - `enviados`;
-  - `pendencias` por SEQ e motivo: `ncm_invalido`, `ncm_vazio`, `sped_invalido`, `cor_longa`;
+  - `pendencias` por SEQ e motivo: `ncm_invalido`, `ncm_vazio`, `sped_invalido` (`cor_longa` saiu com a `cor`);
   - `capacidade_ok`.
 - O Flow devolve o resumo dele em `fiscal`.
 
@@ -212,21 +212,14 @@ Garantia do Flow: um kit só entra na fila quando todos os componentes já têm 
 - `{versao, resultado: "gravado", erpProdutoId, gravadoEm}`;
 - `{versao, resultado: "erro", erro: {tipo: "transitorio"|"definitivo", codigo, mensagem}}`.
 
-Respostas do Flow e o que o Portal faz com cada uma:
-
-| Resposta | Portal |
-|---|---|
-| 200 `confirmado` / `ja_confirmado` | ok, encerra o item no livro |
-| 409 `versao_superada` | descarta a versão local e pega a nova no próximo ciclo |
-| 409 `conflito_erp_id` / `erp_id_diverge` | ERROR + alerta, item `incerto`, sem nova tentativa |
-| 404 | ERROR, item `incerto` |
+Respostas do Flow e o que o Portal faz com cada uma: ver **contrato P4a §5** (rev. 4); a decisão é pelo `status` da resposta, implementada em `cadastro_resultado.ler_resposta` (`docs/ai/modules/flowpcp.md` §5).
 
 #### Validação de borda (antes de qualquer acesso ao Fire)
 
-1. O item passa por um modelo pydantic com `extra="forbid"`, enums fechados e limites por coluna medidos no Fire:
-   - `nome` até 200, `cor` até 200, `unidadeErp` até 10, `ean` até 15, `codigoNfe` até 20, `codigoMes` até 30;
+1. O item passa por um modelo pydantic `strict`, com enums fechados e limites por coluna medidos no Fire. No item de topo, `extra="ignore"`: chave nova não derruba o item (o Flow só acrescenta campo junto com capacidade nova) e o nome dela vai para um WARNING, uma vez por ambiente e nome; nos objetos aninhados (`grupoErp`, `marcaErp`, `componentes[]`), `extra="forbid"`:
+   - `nome` até 200, `unidadeErp` até 10, `ean` até 15, `codigoNfe` até 20, `codigoMes` até 30;
    - `ncm` com `^[0-9]{8}$`, e `tipoItemSped` de 0 a 10 ou 99;
-   - texto opcional (`unidadeErp`, `ean`, `codigoNfe`, `cor`, `codigoMes`) é `null` ou não vazio: `""` é `contrato_invalido`;
+   - texto opcional (`unidadeErp`, `ean`, `codigoNfe`, `codigoMes`) é `null` ou não vazio: `""` é `contrato_invalido`;
    - IDs só com dígitos.
 
    A P0 confirma esses limites.
@@ -402,4 +395,5 @@ Só roda com o ok do Samuel.
 
 - **Respostas do Elias**, no material enviado em 16/10: origem no produto, par 03 ou 04, unidades, figura fiscal padrão, CEST, campos pouco usados, NCM com ponto na nota e campo faltando.
 - **Bloqueio no Apontaê:** resposta do João.
+- **Perfil medido em 18/10/2026** (P0 parte A, `tools/perfil_cadastro_fire.py` com a mesma lógica, Fire da MM Americanense, só leitura; últimos 30 kits e os 11 pares com `UNIDADE='PAR'` do grupo 8). Colunas que a tela preenche em todos e que o gravador ainda não manda: `EST_MINIMO_GERENCIA='Nao'` e `PRODUZIDO='Nao'` (30/30 e 11/11); quase sempre: `CODORIG_MERC=0` (29/30 kits, 4/11 pares), `CODSUBGRUPO=1` (26/30 kits, 1/11 pares), `PRE_CADASTRO='Nao'` (15/30, 8/11). `DESCRICAO2` (descrição interna) vem preenchida em 27/30 kits e 11/11 pares, e a volta não a grava (R3 da Etapa 3). Candidatos a `PADROES_P0`, a confirmar no diff da tela (parte B). **Parte B (18/10/2026, cópia de abril da MM):** o diff tela x Portal confirmou `EST_MINIMO_GERENCIA='Nao'`, `PRODUZIDO='Nao'`, `CODORIG_MERC=0` e `PRE_CADASTRO='Nao'`, que viraram `PADROES_P0`; `CODSUBGRUPO=1` ficou de fora.
 - **Testes na MM** (17/10): LIBERA_TUDO × BLOQ_*, aba "Itens do Kit" e nota de entrada com item novo.

@@ -442,12 +442,43 @@ def cadastro_volta_flowpcp(env_id: str, _=Depends(require_admin)):
     if not env:
         raise HTTPException(404, "Ambiente não encontrado")
 
-    from app.integrations.flowpcp import cadastro_volta
+    from app.integrations.flowpcp import cadastro_recuperacao, cadastro_volta
     from app.persistence import cadastro_volta_repo
 
     with db_router.env_connect(env["slug"]) as conn:
         por_estado = cadastro_volta_repo.contar_por_estado(conn)
         ultimos = cadastro_volta_repo.listar(conn, limite=50)
+        # Itens que pedem a atenção do operador (colunas da tela, até 50 de cada).
+        orfaos = cadastro_volta_repo.listar_por_estado(conn, "orfao")
+        # `transitorio` com SEQ espera a recuperação: depois de IDADE_MINIMA_RECUPERACAO
+        # vira incerto para o operador; antes disso é só "Aguardando recuperação".
+        corte = (datetime.now(UTC) - cadastro_recuperacao.IDADE_MINIMA_RECUPERACAO).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        recentes = cadastro_volta_repo.transitorios_com_seq_recentes(conn, corte)
+        n_antigos = cadastro_volta_repo.contar_transitorios_com_seq(conn) - len(recentes)
+        # Margem dos recentes: garante 50 antigos mesmo com recentes intercalados.
+        transitorios = cadastro_volta_repo.listar_por_estado(
+            conn, "transitorio", limite=len(recentes) + 50, so_com_seq=True
+        )
+        antigos = [t for t in transitorios if (t["cadastro_id"], t["versao"]) not in recentes]
+        aguardando_recuperacao = [
+            t for t in transitorios if (t["cadastro_id"], t["versao"]) in recentes
+        ]
+        incertos = [*cadastro_volta_repo.listar_por_estado(conn, "incerto"), *antigos[:50]]
+        incertos.sort(key=lambda x: x["atualizado_em"] or "", reverse=True)
+        sem_volta_itens = [
+            *cadastro_volta_repo.listar_por_estado(conn, "gravado_sem_volta"),
+            *cadastro_volta_repo.listar_por_estado(conn, "erro_a_enviar"),
+        ]
+        sem_volta_itens.sort(key=lambda x: x["atualizado_em"] or "", reverse=True)
+        # `atualizar`/`inativar` gravado no Fire cujo código o Flow recusou (409 conflito_codigo).
+        conflitos_codigo = cadastro_volta_repo.listar_por_estado(
+            conn, "superado", alerta="conflito_codigo"
+        )
+        n_conflitos_codigo = cadastro_volta_repo.contar_com_alerta(
+            conn, "superado", "conflito_codigo"
+        )
     for linha in ultimos:
         plano = linha.get("plano_json")
         bruto = plano.encode("utf-8") if plano else b""
@@ -463,6 +494,18 @@ def cadastro_volta_flowpcp(env_id: str, _=Depends(require_admin)):
         # Último ciclo deste processo (None desde que subiu) e a thread que o roda.
         "ultimo_ciclo": cadastro_volta.ultimo_ciclo(env["slug"]),
         "thread_desligada": not envio_habilitado(),
+        "p0_ok": cadastro_volta.p0_ok(env["slug"]),
+        "inativar_ligado": cadastro_volta.inativar_ligado(env["slug"]),
+        "sem_volta": por_estado.get("gravado_sem_volta", 0) + por_estado.get("erro_a_enviar", 0),
+        "n_orfaos": por_estado.get("orfao", 0),
+        "n_incertos": por_estado.get("incerto", 0) + n_antigos,
+        "orfaos": orfaos,
+        "incertos": incertos[:50],
+        "n_aguardando_recuperacao": len(recentes),
+        "aguardando_recuperacao": aguardando_recuperacao[:50],
+        "sem_volta_itens": sem_volta_itens[:50],
+        "n_conflitos_codigo": n_conflitos_codigo,
+        "conflitos_codigo": conflitos_codigo,
     }
 
 

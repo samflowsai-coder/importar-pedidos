@@ -1,9 +1,14 @@
 import pytest
 
-from app.integrations.flowpcp.cadastro_schema import codifica_win1252, validar_item
+from app.integrations.flowpcp.cadastro_schema import (
+    chaves_desconhecidas,
+    codifica_win1252,
+    validar_item,
+)
 
 BOM = {
     "cadastroId": "7b0c1c3e-0f7e-4a51-9c39-2a8f3f1d9a10",
+    "produtoId": "77777777-7777-4777-8777-777777777771",
     "versao": 1,
     "acao": "criar",
     "erpProdutoId": None,
@@ -17,6 +22,7 @@ BOM = {
     "codigoNfe": "KIT3-MEIA-CURTO/PRT",
     "cor": "PRETO",
     "componentes": [{"erpProdutoId": "3170", "quantidade": 3}],
+    "marcaErp": {"codigo": 17},
     "codigoMes": None,
     "aprovadoEm": "2026-10-20T12:00:00Z",
 }
@@ -30,11 +36,9 @@ def test_item_bom_passa():
 @pytest.mark.parametrize(
     "campo,valor,codigo",
     [
-        ("extra", 1, "contrato_invalido"),
         ("acao", "apagar", "contrato_invalido"),
         ("tipo", "servico", "contrato_invalido"),
         ("nome", "x" * 201, "campo_excede_fire"),
-        ("cor", "x" * 201, "campo_excede_fire"),
         ("unidadeErp", "UNIDADES123", "campo_excede_fire"),
         ("ean", "1" * 16, "campo_excede_fire"),
         ("codigoNfe", "x" * 21, "campo_excede_fire"),
@@ -57,6 +61,11 @@ def test_acento_portugues_passa_win1252():
     assert codifica_win1252("MEIA AÇÚCAR ÇÃO") and not codifica_win1252("☃")
     bruto = dict(BOM, nome="MEIA AÇÚCAR")
     assert validar_item(bruto)[1] is None
+
+
+def test_cor_nao_vai_ao_fire_entao_nao_e_validada():
+    # cor é aceita e ignorada: não tem coluna no Fire, então não entra no limite nem no WIN1252.
+    assert validar_item(dict(BOM, cor="x" * 300 + " ☃"))[1] is None
 
 
 def test_kit_sem_componentes_e_regras_de_componente():
@@ -126,12 +135,14 @@ def test_atualizar_kit_com_lista_segue_as_regras_do_criar():
 )
 @pytest.mark.parametrize("tipo", ["simples", "kit", "material"])
 def test_inativar_ignora_componentes(comps, tipo):
-    bruto = dict(BOM, acao="inativar", erpProdutoId="2645", tipo=tipo, componentes=comps)
+    bruto = dict(
+        BOM, acao="inativar", erpProdutoId="2645", tipo=tipo, componentes=comps, marcaErp=None
+    )
     item, cod, _ = validar_item(bruto)
     assert cod is None and item.componentes is None
 
 
-@pytest.mark.parametrize("campo", ["ean", "cor", "codigoNfe", "codigoMes", "unidadeErp", "nome"])
+@pytest.mark.parametrize("campo", ["ean", "codigoNfe", "codigoMes", "unidadeErp", "nome"])
 def test_texto_vazio_e_contrato_invalido(campo):
     bruto = dict(BOM)
     bruto[campo] = ""
@@ -139,7 +150,7 @@ def test_texto_vazio_e_contrato_invalido(campo):
     assert item is None and cod == "contrato_invalido"
 
 
-@pytest.mark.parametrize("campo", ["ean", "cor", "codigoNfe", "codigoMes", "unidadeErp"])
+@pytest.mark.parametrize("campo", ["ean", "codigoNfe", "codigoMes", "unidadeErp"])
 def test_texto_opcional_segue_aceitando_null(campo):
     bruto = dict(BOM)
     bruto[campo] = None
@@ -180,7 +191,7 @@ def test_mensagem_nao_vaza_valor_inteiro():
 
 
 def test_mensagem_de_contrato_nao_vaza_valor_nem_chave_hostil():
-    _, cod, msg = validar_item(dict(BOM, acao="SEGREDO-ACAO", **{"chave SEGREDO\n": 1}))
+    _, cod, msg = validar_item(dict(BOM, grupoErp={"codigo": "8", "chave SEGREDO\n": 1}))
     assert cod == "contrato_invalido"
     assert "SEGREDO" not in msg and "\n" not in msg
 
@@ -252,3 +263,204 @@ def test_digitos_unicode_e_versao_enorme_recusados(campo, valor):
         bruto["acao"] = "atualizar"
     item, cod, _ = validar_item(bruto)
     assert item is None and cod == "contrato_invalido"
+
+
+# --- produtoId e marcaErp (cadastros.v1 rev. 3) ----------------------------
+
+PRODUTO_ID = "77777777-7777-4777-8777-777777777771"
+
+
+def _item(**mudancas):
+    base = {
+        "cadastroId": "22222222-2222-4222-8222-222222222222",
+        "produtoId": PRODUTO_ID,
+        "versao": 1,
+        "acao": "criar",
+        "erpProdutoId": None,
+        "tipo": "simples",
+        "nome": "MEIA SOQUETE",
+        "unidadeErp": "PAR",
+        "ean": None,
+        "ncm": "61159500",
+        "tipoItemSped": 3,
+        "grupoErp": {"codigo": "8"},
+        "codigoNfe": None,
+        "cor": None,
+        "componentes": None,
+        "marcaErp": {"codigo": 17},
+        "codigoMes": None,
+        "aprovadoEm": "2026-10-17T13:00:00.123Z",
+    }
+    base.update(mudancas)
+    return base
+
+
+def test_produto_id_obrigatorio():
+    bruto = _item()
+    del bruto["produtoId"]
+    item, codigo, _ = validar_item(bruto)
+    assert item is None and codigo == "contrato_invalido"
+
+
+def test_produto_id_vira_uuid():
+    item, codigo, _ = validar_item(_item())
+    assert codigo is None
+    assert str(item.produtoId) == PRODUTO_ID
+
+
+@pytest.mark.parametrize(
+    "marca", [None, {"codigo": 0}, {"codigo": -1}, {"codigo": "17"}, {"codigo": True}, {}]
+)
+def test_criar_exige_marca_valida(marca):
+    item, codigo, _ = validar_item(_item(marcaErp=marca))
+    assert item is None and codigo == "contrato_invalido"
+
+
+def test_atualizar_aceita_marca_null():
+    item, codigo, _ = validar_item(_item(acao="atualizar", erpProdutoId="3990", marcaErp=None))
+    assert codigo is None and item.marcaErp is None
+
+
+def test_atualizar_aceita_marca_preenchida():
+    item, codigo, _ = validar_item(
+        _item(acao="atualizar", erpProdutoId="3990", marcaErp={"codigo": 18})
+    )
+    assert codigo is None and item.marcaErp.codigo == 18
+
+
+def test_inativar_com_marca_e_contrato_invalido():
+    item, codigo, _ = validar_item(_item(acao="inativar", erpProdutoId="3990"))
+    assert item is None and codigo == "contrato_invalido"
+
+
+def test_marca_acima_do_inteiro_do_fire():
+    item, codigo, _ = validar_item(_item(marcaErp={"codigo": 2**31}))
+    assert item is None and codigo == "contrato_invalido"
+
+
+# --- chave nova no topo: ignorada, e listada para o WARNING ----------------
+
+
+def test_chave_extra_no_topo_e_ignorada():
+    bruto = _item(novoCampo=1)
+    item, codigo, _ = validar_item(bruto)
+    assert codigo is None and item is not None
+    assert chaves_desconhecidas(bruto) == ["novoCampo"]
+
+
+def test_chaves_desconhecidas_saneia_nome_hostil():
+    assert chaves_desconhecidas(_item(**{"chave SEGREDO\n": 1})) == ["?"]
+
+
+def test_chaves_desconhecidas_vazia_quando_tudo_conhecido():
+    assert chaves_desconhecidas(_item()) == []
+
+
+def test_grupo_erp_com_chave_extra_e_contrato_invalido():
+    item, codigo, _ = validar_item(_item(grupoErp={"codigo": "8", "novo": 1}))
+    assert item is None and codigo == "contrato_invalido"
+
+
+def test_marca_erp_com_chave_extra_e_contrato_invalido():
+    item, codigo, _ = validar_item(_item(marcaErp={"codigo": 17, "novo": 1}))
+    assert item is None and codigo == "contrato_invalido"
+
+
+# --- camposAlterados (contrato P4a rev. 5 §2.3) ------------------------------
+
+
+def _atualizar(**mudancas):
+    return _item(acao="atualizar", erpProdutoId="3990", marcaErp=None, **mudancas)
+
+
+def test_campos_alterados_lista_valida_em_atualizar():
+    item, codigo, _ = validar_item(_atualizar(camposAlterados=["nome", "ean", "codigoNfe"]))
+    assert codigo is None and item.camposAlterados == ["nome", "ean", "codigoNfe"]
+
+
+def test_campos_alterados_lista_vazia_em_atualizar():
+    item, codigo, _ = validar_item(_atualizar(camposAlterados=[]))
+    assert codigo is None and item.camposAlterados == []
+
+
+def test_campos_alterados_ausente_em_atualizar_e_rev4():
+    item, codigo, _ = validar_item(_atualizar())
+    assert codigo is None and item.camposAlterados is None
+    assert chaves_desconhecidas(_atualizar(camposAlterados=[])) == []
+
+
+def test_campos_alterados_null_explicito_em_atualizar_e_contrato_invalido():
+    item, codigo, _ = validar_item(_atualizar(camposAlterados=None))
+    assert item is None and codigo == "contrato_invalido"
+
+
+def test_campos_alterados_com_repeticao_e_contrato_invalido():
+    item, codigo, msg = validar_item(_atualizar(camposAlterados=["nome", "nome"]))
+    assert item is None and codigo == "contrato_invalido" and "repet" in msg
+
+
+@pytest.mark.parametrize("valor", ["cor", "codigoMes", "DESCRICAO", "", 1, None])
+def test_campos_alterados_valor_fora_do_enum_e_contrato_invalido(valor):
+    item, codigo, msg = validar_item(_atualizar(camposAlterados=["nome", valor]))
+    assert item is None and codigo == "contrato_invalido"
+    assert "DESCRICAO" not in msg
+
+
+@pytest.mark.parametrize("valor", ["nome", {"a": 1}])
+def test_campos_alterados_que_nao_e_lista_e_contrato_invalido(valor):
+    item, codigo, _ = validar_item(_atualizar(camposAlterados=valor))
+    assert item is None and codigo == "contrato_invalido"
+
+
+@pytest.mark.parametrize("acao,erp,marca", [("criar", None, {"codigo": 17}), ("inativar", "3990", None)])
+def test_campos_alterados_lista_em_criar_ou_inativar_e_contrato_invalido(acao, erp, marca):
+    bruto = _item(acao=acao, erpProdutoId=erp, marcaErp=marca, camposAlterados=["nome"])
+    item, codigo, _ = validar_item(bruto)
+    assert item is None and codigo == "contrato_invalido"
+    vazia = _item(acao=acao, erpProdutoId=erp, marcaErp=marca, camposAlterados=[])
+    assert validar_item(vazia)[1] == "contrato_invalido"
+
+
+@pytest.mark.parametrize("acao,erp,marca", [("criar", None, {"codigo": 17}), ("inativar", "3990", None)])
+def test_campos_alterados_null_ou_ausente_em_criar_ou_inativar_passa(acao, erp, marca):
+    for bruto in (_item(acao=acao, erpProdutoId=erp, marcaErp=marca, camposAlterados=None),
+                  _item(acao=acao, erpProdutoId=erp, marcaErp=marca)):
+        item, codigo, _ = validar_item(bruto)
+        assert codigo is None and item.camposAlterados is None
+
+
+def test_componentes_listado_em_simples_e_contrato_invalido():
+    item, codigo, _ = validar_item(_atualizar(camposAlterados=["componentes"]))
+    assert item is None and codigo == "contrato_invalido"
+
+
+def test_componentes_listado_com_null_em_kit_e_contrato_invalido():
+    bruto = _atualizar(tipo="kit", unidadeErp="KIT", componentes=None,
+                       camposAlterados=["componentes"])
+    item, codigo, _ = validar_item(bruto)
+    assert item is None and codigo == "contrato_invalido"
+
+
+def test_componentes_listado_com_lista_em_kit_passa():
+    bruto = _atualizar(tipo="kit", unidadeErp="KIT", camposAlterados=["componentes"],
+                       componentes=[{"erpProdutoId": "3170", "quantidade": 3}])
+    item, codigo, _ = validar_item(bruto)
+    assert codigo is None and item.camposAlterados == ["componentes"]
+
+
+def test_marca_listada_com_null_e_contrato_invalido():
+    item, codigo, _ = validar_item(_atualizar(camposAlterados=["marcaErp"]))
+    assert item is None and codigo == "contrato_invalido"
+
+
+@pytest.mark.parametrize("campo", ["ncm", "tipoItemSped", "unidadeErp"])
+def test_campo_listado_que_nao_limpa_com_null_e_contrato_invalido(campo):
+    """Só `ean` e `codigoNfe` listados com null limpam; o resto listado vem preenchido."""
+    item, codigo, _ = validar_item(_atualizar(camposAlterados=[campo], **{campo: None}))
+    assert item is None and codigo == "contrato_invalido"
+
+
+@pytest.mark.parametrize("campo", ["ean", "codigoNfe"])
+def test_ean_e_codigo_nfe_listados_com_null_passam(campo):
+    item, codigo, _ = validar_item(_atualizar(camposAlterados=[campo], **{campo: None}))
+    assert codigo is None and item.camposAlterados == [campo]

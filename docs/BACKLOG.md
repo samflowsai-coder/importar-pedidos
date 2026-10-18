@@ -213,6 +213,16 @@ bloqueio), campo de roteamento (`modo`, `degrau`, `env_sugerido`, `env_gravado`)
 `sha_guardado` vs lido (2.11). Spec: `docs/superpowers/specs/2026-10-05-log-de-leituras-design.md`,
 seção "Fora desta entrega".
 
+### 2.19 Trava entre processos por ambiente na volta de cadastro
+A volta Flow → Fire (`docs/ai/modules/flowpcp.md` §5) assume **um consumidor por ambiente**
+(a thread `flowpcp-envio`); nada no código impede dois processos do portal no mesmo
+ambiente (o lock de gravação `cadastro_fire._lock` é só do processo). Hoje a proteção é
+indireta: recuperação só depois de 15 min e leitura bloqueante (NO_REC_VERSION). Dois
+consumidores ainda poderiam reservar o mesmo item ou o mesmo `MAX(SEQ)+1`.
+**Fix:** trava por ambiente (arquivo com lock do SO ou linha de lease no `app_shared.db`
+com validade) tomada no começo do ciclo de gravação e da recuperação. Medir antes se a
+situação acontece de fato (reinício do serviço com o processo antigo ainda vivo).
+
 ---
 
 ## 3. Bloqueado em terceiros

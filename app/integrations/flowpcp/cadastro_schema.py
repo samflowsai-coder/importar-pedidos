@@ -22,16 +22,23 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 MAX_MENSAGEM = 500
 MAX_COMPONENTES = 50
 MAX_QUANTIDADE = 100000
-# Colunas do Fire (PRODUTOS): DESCRICAO, DESCRICAO2, UNIDADE, CODIGO_EAN13, CODPARANFE, CODPROD_ALTERN.
+# Colunas do Fire (PRODUTOS): DESCRICAO, UNIDADE, CODIGO_EAN13, CODPARANFE, CODPROD_ALTERN.
 LIMITES: dict[str, int] = {
     "nome": 200,
-    "cor": 200,
+    # "cor" não tem limite aqui: DESCRICAO2 é a "Descrição Interna" do Fire, não cor (17/10/2026).
     "unidadeErp": 10,
     "ean": 15,
     "codigoNfe": 20,
     "codigoMes": 30,
 }
 _SPED_VALIDOS = frozenset({*range(0, 11), 99})
+# Campos que uma correção (`atualizar`) pode mudar no ERP, na ordem do contrato rev. 5 §2.3.
+CampoAlterado = Literal[
+    "nome", "unidadeErp", "ean", "ncm", "tipoItemSped", "grupoErp", "codigoNfe", "componentes",
+    "marcaErp",
+]
+# atualizar: `ean` e `codigoNfe` null = limpar no ERP; os demais null = não mexer (§2.1).
+LIMPA_COM_NULL = frozenset({"ean", "codigoNfe"})
 _NOME_SEGURO = re.compile(r"^[A-Za-z0-9_]{1,40}$")
 
 
@@ -52,8 +59,18 @@ class ComponenteRef(_Estrito):
     quantidade: float
 
 
+class MarcaRef(_Estrito):
+    # PRODUTOS_MARCA.CODIGO é INTEGER no Fire: cabe em 32 bits.
+    codigo: int = Field(ge=1, le=2**31 - 1)
+
+
 class CadastroPendente(_Estrito):
+    # Chave de topo nova não derruba o item: o Flow só acrescenta campo junto com
+    # capacidade nova. `chaves_desconhecidas` lista o que foi ignorado, para o log.
+    model_config = ConfigDict(extra="ignore", strict=True)
+
     cadastroId: UUID  # noqa: N815
+    produtoId: UUID  # noqa: N815 — id estável do produto no Flow (igual em todas as versões)
     versao: int = Field(ge=1, le=2**31 - 1)
     acao: Literal["criar", "atualizar", "inativar"]
     erpProdutoId: str | None = Field(default=None, pattern=_ID)  # noqa: N815
@@ -68,14 +85,17 @@ class CadastroPendente(_Estrito):
     codigoNfe: str | None = Field(default=None, min_length=1)  # noqa: N815
     cor: str | None = Field(default=None, min_length=1)
     componentes: list[ComponenteRef] | None = None
+    marcaErp: MarcaRef | None = None  # noqa: N815
     codigoMes: str | None = Field(default=None, min_length=1)  # noqa: N815
+    # Rev. 5: ausente em `atualizar` = rev. 4 (grava tudo); `null` explícito só em criar/inativar.
+    camposAlterados: list[CampoAlterado] | None = None  # noqa: N815
     aprovadoEm: datetime  # noqa: N815
 
-    @field_validator("cadastroId", mode="before")
+    @field_validator("cadastroId", "produtoId", mode="before")
     @classmethod
     def _uuid(cls, v: object) -> UUID:
         if not isinstance(v, str):
-            raise ValueError("cadastroId deve ser texto")
+            raise ValueError("id deve ser texto")
         return UUID(v)
 
     @field_validator("aprovadoEm", mode="before")
@@ -143,7 +163,7 @@ def _mensagem_pydantic(exc: ValidationError) -> str:
 def _textos(item: CadastroPendente) -> dict[str, str]:
     campos = {
         "nome": item.nome,
-        "cor": item.cor,
+        # "cor" fora: DESCRICAO2 é a "Descrição Interna" do Fire, não cor (17/10/2026).
         "unidadeErp": item.unidadeErp,
         "ean": item.ean,
         "codigoNfe": item.codigoNfe,
@@ -171,6 +191,38 @@ def _erro_componentes(item: CadastroPendente) -> str | None:
             if item.erpProdutoId is not None and c.erpProdutoId == item.erpProdutoId:
                 return f"componentes[{i}] é o próprio produto"
     return None
+
+
+def vai_ao_erp(item: CadastroPendente, campo: str) -> bool:
+    """O campo é escrito no ERP? `atualizar` com `camposAlterados` escreve só os listados
+    (rev. 5 §2.3); sem a chave (rev. 4), `criar` e `inativar` seguem como antes."""
+    return item.acao != "atualizar" or item.camposAlterados is None or campo in item.camposAlterados
+
+
+def _erro_campos_alterados(item: CadastroPendente) -> str | None:
+    lista = item.camposAlterados
+    if item.acao != "atualizar":
+        return None if lista is None else f"{item.acao} exige camposAlterados null"
+    if lista is None:
+        # Ausente = rev. 4; null explícito não é rev. 4 nem 5 (o Flow exige lista).
+        return "atualizar com camposAlterados null" if "camposAlterados" in item.model_fields_set else None
+    if len(set(lista)) != len(lista):
+        return "camposAlterados com repetição"
+    if "componentes" in lista and item.tipo not in ("kit", "pack"):
+        return f"{item.tipo} não aceita componentes em camposAlterados"
+    for campo in lista:
+        if campo not in LIMPA_COM_NULL and getattr(item, campo) is None:
+            return f"camposAlterados lista {campo} sem valor"
+    return None
+
+
+def chaves_desconhecidas(bruto: dict) -> list[str]:
+    """Nomes de chave de topo que `CadastroPendente` não conhece, ordenados.
+    Nome fora de `_NOME_SEGURO` vira "?": a chave veio do Flow e não vai cru ao log."""
+    if not isinstance(bruto, dict):
+        return []
+    conhecidas = CadastroPendente.model_fields.keys()
+    return sorted(_parte(k) for k in bruto if k not in conhecidas)
 
 
 def validar_item(bruto: dict) -> tuple[CadastroPendente | None, str | None, str | None]:
@@ -202,8 +254,15 @@ def validar_item(bruto: dict) -> tuple[CadastroPendente | None, str | None, str 
         return None, "contrato_invalido", "criar não aceita erpProdutoId"
     if item.acao != "criar" and item.erpProdutoId is None:
         return None, "contrato_invalido", f"{item.acao} exige erpProdutoId"
+    if item.acao == "criar" and item.marcaErp is None:
+        return None, "contrato_invalido", "criar exige marcaErp"
+    if item.acao == "inativar" and item.marcaErp is not None:
+        return None, "contrato_invalido", "inativar exige marcaErp null"
     if item.tipo in ("simples", "material") and item.componentes is not None:
         return None, "contrato_invalido", f"{item.tipo} exige componentes null"
+    erro = _erro_campos_alterados(item)
+    if erro:
+        return None, "contrato_invalido", erro
 
     erro = _erro_componentes(item)
     if erro:

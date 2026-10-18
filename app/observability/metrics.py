@@ -76,7 +76,9 @@ flowpcp_janela_pedidos: Gauge = Gauge(
 cadastro_volta_total: Counter = Counter(
     "portal_flowpcp_cadastro_volta_total",
     "Cadastros da fila do Flow tratados pela volta, por resultado "
-    "(simulado | erro_definitivo | ja_no_livro).",
+    "(simulado | erro_definitivo | ja_no_livro | criado | atualizado | inativado | "
+    "adotado | liberado | incerto | confirmado | erro_registrado | transitorio | orfao | "
+    "superado | repetir | bug_corpo | credencial).",
     ["env", "resultado"],
 )
 cadastro_volta_pendentes: Gauge = Gauge(
@@ -88,6 +90,18 @@ cadastro_volta_pendentes: Gauge = Gauge(
 cadastro_volta_mais_antigo: Gauge = Gauge(
     "portal_flowpcp_cadastro_volta_mais_antigo_segundos",
     "Idade (aprovadoEm) do cadastro mais antigo da fila na última leitura.",
+    ["env"],
+)
+cadastro_volta_sem_volta: Gauge = Gauge(
+    "portal_flowpcp_cadastro_volta_sem_volta",
+    "Linhas do livro com resultado (gravado no Fire ou erro) que o Flow ainda não "
+    "aceitou (gravado_sem_volta + erro_a_enviar).",
+    ["env"],
+)
+cadastro_volta_aguardando_modo: Gauge = Gauge(
+    "portal_flowpcp_cadastro_volta_aguardando_modo",
+    "Itens aprovados no Flow que o modo da volta não grava (contagem aproximada, "
+    "no máximo 50, lida sem reservar). Sem série quando o Flow não respondeu.",
     ["env"],
 )
 

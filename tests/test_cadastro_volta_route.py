@@ -52,6 +52,18 @@ def test_livro_vazio(setup, monkeypatch):
         "ultimos": [],
         "ultimo_ciclo": None,
         "thread_desligada": False,
+        "p0_ok": False,
+        "inativar_ligado": False,
+        "sem_volta": 0,
+        "n_orfaos": 0,
+        "n_incertos": 0,
+        "orfaos": [],
+        "incertos": [],
+        "n_aguardando_recuperacao": 0,
+        "aguardando_recuperacao": [],
+        "sem_volta_itens": [],
+        "n_conflitos_codigo": 0,
+        "conflitos_codigo": [],
     }
 
 
@@ -69,6 +81,85 @@ def test_ultimo_ciclo_e_thread_desligada(setup, monkeypatch):
     body = _get(env["id"]).json()
     assert body["ultimo_ciclo"] == {"em": "2026-10-20T12:05:00+00:00", "resumo": resumo}
     assert body["thread_desligada"] is True
+
+
+def _linha(conn, cid, estado, seq=None, iniciado="2026-01-01 00:00:00"):
+    assert cadastro_volta_repo.reservar(
+        conn, cadastro_id=cid, versao=1, produto_id=f"p-{cid}", acao="criar", tipo="simples",
+        modo="criar", plano_json="{}",
+    )
+    conn.execute(
+        "UPDATE cadastro_volta SET estado = ?, seq_reservado = ?, iniciado_em = ?, "
+        "corpo_json = 'SEGREDO-CORPO', nota_operador = 'SEGREDO-NOTA' WHERE cadastro_id = ?",
+        (estado, seq, iniciado, cid),
+    )
+
+
+def test_listas_de_atencao_e_portoes(setup, monkeypatch):
+    monkeypatch.setenv("PORTAL_FLOWPCP_CADASTRO_P0", "mm")
+    monkeypatch.delenv("PORTAL_FLOWPCP_CADASTRO_VOLTA_INATIVAR", raising=False)
+    env = _env(setup)
+    with router.env_connect("mm") as conn:
+        _linha(conn, "o1", "orfao", 3992)
+        _linha(conn, "i1", "incerto")
+        _linha(conn, "t1", "transitorio", 3993)  # aguarda a recuperação: conta como incerto
+        _linha(conn, "t2", "transitorio")  # sem SEQ: só reentrega, não é alerta
+        _linha(conn, "s1", "gravado_sem_volta", 3994)
+        _linha(conn, "s2", "erro_a_enviar")
+        _linha(conn, "c1", "confirmado", 3995)
+    r = _get(env["id"])
+    body = r.json()
+    assert body["p0_ok"] is True and body["inativar_ligado"] is False
+    assert body["sem_volta"] == 2 and body["n_orfaos"] == 1 and body["n_incertos"] == 2
+    assert [x["cadastro_id"] for x in body["orfaos"]] == ["o1"]
+    assert {x["cadastro_id"] for x in body["incertos"]} == {"i1", "t1"}
+    assert {x["cadastro_id"] for x in body["sem_volta_itens"]} == {"s1", "s2"}
+    for lista in ("orfaos", "incertos", "sem_volta_itens"):
+        for x in body[lista]:
+            assert set(x) == {"cadastro_id", "versao", "acao", "erp_produto_id",
+                              "seq_reservado", "tentativas", "alerta", "atualizado_em"}
+    assert "SEGREDO" not in r.text
+
+
+def test_transitorio_recente_vai_para_lista_propria_e_fora_dos_incertos(setup):
+    from datetime import UTC, datetime, timedelta
+
+    agora = datetime.now(UTC)
+    fmt = "%Y-%m-%d %H:%M:%S"
+    env = _env(setup)
+    with router.env_connect("mm") as conn:
+        _linha(conn, "novo", "transitorio", 3993, iniciado=(agora - timedelta(minutes=2)).strftime(fmt))
+        _linha(conn, "velho", "transitorio", 3994, iniciado=(agora - timedelta(minutes=30)).strftime(fmt))
+    body = _get(env["id"]).json()
+    assert body["n_incertos"] == 1 and body["n_aguardando_recuperacao"] == 1
+    assert [x["cadastro_id"] for x in body["incertos"]] == ["velho"]
+    assert [x["cadastro_id"] for x in body["aguardando_recuperacao"]] == ["novo"]
+
+
+def test_incertos_com_mais_de_50_ficam_coerentes_com_a_contagem(setup):
+    from datetime import UTC, datetime, timedelta
+
+    agora = datetime.now(UTC)
+    fmt = "%Y-%m-%d %H:%M:%S"
+    env = _env(setup)
+    with router.env_connect("mm") as conn:
+        for i in range(55):
+            _linha(conn, f"i{i:02d}", "incerto")
+        for i in range(3):  # recentes: não entram na lista nem na contagem
+            _linha(conn, f"r{i}", "transitorio", 100 + i,
+                   iniciado=(agora - timedelta(minutes=1)).strftime(fmt))
+    body = _get(env["id"]).json()
+    assert body["n_incertos"] == 55 and len(body["incertos"]) == 50
+    assert not any(x["cadastro_id"].startswith("r") for x in body["incertos"])
+    assert body["n_aguardando_recuperacao"] == 3 and len(body["aguardando_recuperacao"]) == 3
+
+
+def test_listas_de_atencao_nao_vazam_corpo_nem_nota(setup):
+    env = _env(setup)
+    with router.env_connect("mm") as conn:
+        _linha(conn, "o1", "orfao", 3992)
+    body = _get(env["id"]).json()
+    assert "corpo_json" not in str(body["orfaos"]) and "SEGREDO" not in str(body["orfaos"])
 
 
 def test_duas_linhas_com_plano_truncado(setup):
@@ -131,3 +222,23 @@ def test_operador_logado_e_403(setup, real_auth):
         == 200
     )
     assert c.get(f"/api/admin/environments/{env['id']}/flowpcp/cadastro-volta").status_code == 403
+
+
+def test_superado_com_conflito_de_codigo_vai_para_lista_propria(setup):
+    """N1: atualizar/inativar gravado no Fire cujo código o Flow recusou (409 conflito_codigo)."""
+    env = _env(setup)
+    with router.env_connect("mm") as conn:
+        _linha(conn, "k1", "superado")
+        _linha(conn, "k2", "superado")
+        _linha(conn, "k3", "orfao")
+        conn.execute("UPDATE cadastro_volta SET acao = 'atualizar', erp_produto_id = '3306', "
+                     "alerta = 'conflito_codigo' WHERE cadastro_id IN ('k1', 'k3')")
+    r = _get(env["id"])
+    body = r.json()
+    assert body["n_conflitos_codigo"] == 1
+    assert [x["cadastro_id"] for x in body["conflitos_codigo"]] == ["k1"]
+    (x,) = body["conflitos_codigo"]
+    assert x["erp_produto_id"] == "3306" and x["alerta"] == "conflito_codigo"
+    assert set(x) == {"cadastro_id", "versao", "acao", "erp_produto_id", "seq_reservado",
+                      "tentativas", "alerta", "atualizado_em"}
+    assert "SEGREDO" not in r.text
