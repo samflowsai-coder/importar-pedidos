@@ -1,5 +1,5 @@
 {
-  "_sobre": "Exemplos canônicos do contrato precos v1 (docs/integrations/portal-pedidos-preco-contrato-v1.md). Validados contra src/lib/services/portal-pedidos/contract-preco.ts em src/lib/services/portal-pedidos/__tests__/contract-preco.test.ts. Nomes e CNPJs são fictícios. Cópia literal de pcp-app docs/integrations/portal-pedidos-preco-exemplos-v1.json no commit e26dcacc (branch feat/tabela-preco-por-rede); só esta nota foi acrescentada.",
+  "_sobre": "Exemplos canônicos do contrato precos v1 (docs/integrations/portal-pedidos-preco-contrato-v1.md). Validados contra src/lib/services/portal-pedidos/contract-preco.ts em src/lib/services/portal-pedidos/__tests__/contract-preco.test.ts. Nomes e CNPJs são fictícios. Cópia literal de pcp-app docs/integrations/portal-pedidos-preco-exemplos-v1.json no commit 4613f0f2 (branch feat/tabela-preco-por-rede); só esta nota foi acrescentada.",
   "tabelaPagina": {
     "schema": "precos.tabela.v1",
     "capacidades": [
@@ -225,6 +225,7 @@
   },
   "confirmacao": {
     "schema": "precos.decisoes.confirmacao.v1",
+    "empresaFaturadoraCnpj": "11111111000191",
     "confirmacoes": [
       {
         "decisaoId": "d4d4d4d4-0000-4000-8000-000000000001",

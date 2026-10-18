@@ -133,10 +133,16 @@ class OutboundClient:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> httpx.Response:
         merged = self._build_headers(headers)
         return self._send_with_retry(
-            "GET", url, headers=merged, params=params, timeout=timeout
+            "GET",
+            url,
+            headers=merged,
+            params=params,
+            timeout=timeout,
+            retry_policy=retry_policy,
         )
 
     # ── internals ────────────────────────────────────────────────────────

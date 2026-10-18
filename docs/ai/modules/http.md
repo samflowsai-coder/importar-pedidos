@@ -12,7 +12,7 @@
 ## Arquivos críticos
 - `app/http/client.py` — `OutboundClient`, `HttpError`,
   `_RetryableHttpStatusError` (interno). API: `post_json(url, json,
-  headers, idempotency_key)`, `get(url, params, headers)`,
+  headers, idempotency_key)`, `get(url, params, headers, retry_policy)`,
   `raise_for_status(response)` (helper estático).
 - `app/http/policies.py` — `RetryPolicy` (dataclass) e três fábricas:
   - `read_only_policy()` — 3 attempts, 5xx + 429.

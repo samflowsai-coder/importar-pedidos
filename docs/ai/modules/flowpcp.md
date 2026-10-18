@@ -30,6 +30,7 @@ acontece — uma falha aqui vira outbox/retry e **nunca** pode derrubar o fluxo 
 | `capacidades.py` | o que o Flow declara aceitar (`fiscal.v1`, `materiais.dryrun.v1`, `materiais.v1`, `cadastros.v1`) |
 | `materiais_sync.py` / `materiais_schema.py` | carga de material (grupo ≠ 8) Fire → cópia local → Flow |
 | `cadastro_volta.py` / `cadastro_schema.py` | volta Flow → Fire dos cadastros aprovados (só `simular` na Etapa 1) |
+| `precos.py` / `precos_schema.py` | trava de preço (contrato precos v1): cópia da tabela, envio de revisões/retiradas, decisões |
 
 ## Configuração — por ambiente, não global
 
@@ -55,6 +56,7 @@ Variáveis de ambiente do processo (todas **ausentes = desligado**; `slug` em mi
 | `PORTAL_FLOWPCP_MATERIAIS` | `mm` (lista por vírgula) | envio da carga de material ao Flow; desligada, só atualiza a cópia local `materiais_fire` e `apply` dá 422 |
 | `PORTAL_FLOWPCP_MATERIAIS_GRUPOS_PRODUCAO_<SLUG>` | `1,4,5,...` | grupos que exigem aprovação (slug em maiúsculas, não alfanumérico vira `_`); padrão `1,4,5,6,11,13,19`; inválido loga ERROR e usa o padrão |
 | `PORTAL_FLOWPCP_CADASTRO_VOLTA` | `mm:simular,nas:desligado` | modo da volta por ambiente: `desligado` (padrão), `simular`, `criar`, `criar_e_atualizar`; entrada inválida = desligado, com ERROR uma vez |
+| `PORTAL_FLOWPCP_PRECOS` | `0` | **exceção: ausente = ligado.** `0` desliga a conversa da trava de preço com o Flow; ligada, só age em ambiente com `preco_trava_modo` ≠ `desligado` |
 
 Rotas admin: `PUT /api/admin/environments/{env_id}/flowpcp`,
 `PUT /api/admin/environments/{env_id}/intercompany`,
@@ -267,6 +269,31 @@ tamanho da fila) e
 `ultimo_ciclo` deste processo e `thread_desligada` com `PORTAL_FLOWPCP_ENVIO=0`). O último ciclo
 (`cadastro_volta.ultimo_ciclo(slug)`) guarda só contagens, `capacidade_ok` e o código/classe do
 erro, em memória: some quando o portal reinicia.
+
+## 6. Trava de preço (contrato precos v1)
+
+`precos.rodar(agora)`, na thread `flowpcp-envio` (`envio_portal.ciclo`), fora das janelas.
+Por ambiente ativo com a trava ≠ `desligado` e `environments.cnpj` válido, com a config do
+Flow de `preco_fonte_slug or slug` (Nasmar: config da MM, `empresaFaturadora` = CNPJ da Nasmar;
+cópia no db do próprio ambiente):
+
+- **Tabela** (`GET /precos/tabela`) a cada 60 s: página em transação até `temMais: false`;
+  `reiniciar` ou cópia de outra empresa → `precos_repo.reiniciar`. Guarda as `capacidades`.
+- **Só em `ligado`**, a cada 30 s e só com `precos.aprovacao.v1` declarado: revisões
+  `pendente_envio` (`marcar_tentada` antes do POST; False = não envia), retiradas, e
+  decisões (lê sem cursor → `gravar_decisao` → confirma com `empresaFaturadoraCnpj`, até vir vazia).
+- Rota (b): 201/200 → `enviada`; 409 da vigente → `subir_piso` e reenvio na mesma volta; 409 de
+  revisão já substituída → não reenvia; 422 de conteúdo e 413 → `recusada_flow` com texto
+  legível; 403 → pausa da aprovação (15 min); 400/401/404/outros → pausa do ambiente (15 min),
+  sem tocar a revisão; 429/5xx/rede → próximo ciclo. Retirada: 409 → reenvia com
+  `revisaoVigente`; 200 com `aprovacaoId` nulo = feita.
+- Estado (`gerado_em`, último erro, `pendente_envio`/`recusada_flow`) no log
+  `flowpcp.precos estado env=…`, só quando muda. Pausas e intervalos vivem na memória do processo.
+
+Cliente: `get_precos_tabela`, `post_precos_aprovacao`, `get_precos_decisoes`,
+`post_precos_confirmar` (GET com `read_only_policy`, POST com `idempotent_post_policy`);
+`FlowPCPClientError` carrega `status_code`, `error` e `details` do corpo de erro.
+Testes: `tests/test_flowpcp_precos.py`, `tests/test_flowpcp_precos_schema.py`.
 
 ## Testes
 

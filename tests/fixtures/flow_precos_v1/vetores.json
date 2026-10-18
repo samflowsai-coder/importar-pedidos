@@ -1,5 +1,5 @@
 {
-  "_sobre": "Vetores de teste da regra de resolução do contrato precos v1 (§5 do documento). Portal e Flow rodam os MESMOS casos: os dois lados precisam chegar à mesma rede e ao mesmo preço vigente. Datas de referência já são data civil em America/Sao_Paulo, exceto no bloco dataReferencia. Cópia literal de pcp-app docs/integrations/portal-pedidos-preco-vetores-v1.json no commit e26dcacc (branch feat/tabela-preco-por-rede); só esta nota foi acrescentada.",
+  "_sobre": "Vetores de teste da regra de resolução do contrato precos v1 (§5 do documento). Portal e Flow rodam os MESMOS casos: os dois lados precisam chegar à mesma rede e ao mesmo preço vigente. Datas de referência já são data civil em America/Sao_Paulo, exceto no bloco dataReferencia. Cópia literal de pcp-app docs/integrations/portal-pedidos-preco-vetores-v1.json no commit 4613f0f2 (branch feat/tabela-preco-por-rede); só esta nota foi acrescentada.",
   "tabela": {
     "redes": [
       {

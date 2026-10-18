@@ -149,3 +149,61 @@ def test_decisao_recusada_sem_motivo_recusa():
     d["motivoRecusa"] = None
     with pytest.raises(ValueError):
         ps.DecisaoPrecoV1.model_validate(d)
+
+
+# ─── rota (a), resposta da (b) e confirmação da (c) ─────────────────────────
+
+
+def test_exemplos_da_tabela_da_resposta_e_da_confirmacao_validam():
+    ps.TabelaPaginaV1.model_validate(EXEMPLOS["tabelaPagina"])
+    ps.AprovacaoRespostaV1.model_validate(EXEMPLOS["aprovacaoResposta"])
+    ps.ConfirmacaoDecisoesV1.model_validate(EXEMPLOS["confirmacao"])
+    ps.ConfirmacaoRespostaV1.model_validate(EXEMPLOS["confirmacaoResposta"])
+
+
+def test_tabela_ignora_campo_novo_e_aceita_preco_base():
+    p = copy.deepcopy(EXEMPLOS["tabelaPagina"])
+    p["campoNovo"] = 1
+    p["mudancas"][2]["redeId"] = None
+    p["mudancas"][2]["outroCampo"] = "x"
+    pagina = ps.TabelaPaginaV1.model_validate(p)
+    assert pagina.mudancas[2].redeId is None
+
+
+@pytest.mark.parametrize(
+    ("indice", "campo", "valor"),
+    [
+        (0, "raizes", ["1122233"]),
+        (1, "cnpjs", ["11.222.333/0009-99"]),
+        (2, "vigenciaInicio", "2026-02-30"),
+        (2, "registradoEm", "2026-10-20T10:42:13-03:00"),
+        (2, "precoCentavos", 0),
+        (2, "unidadeErp", ""),
+        (2, "tipo", "outro"),
+    ],
+)
+def test_mudanca_fora_do_contrato_recusa_a_pagina(indice, campo, valor):
+    p = copy.deepcopy(EXEMPLOS["tabelaPagina"])
+    p["mudancas"][indice][campo] = valor
+    with pytest.raises(ValueError):
+        ps.TabelaPaginaV1.model_validate(p)
+
+
+def test_confirmacao_com_uuid_repetido_em_outra_caixa_recusa():
+    c = copy.deepcopy(EXEMPLOS["confirmacao"])
+    c["confirmacoes"][1]["decisaoId"] = c["confirmacoes"][0]["decisaoId"].upper()
+    with pytest.raises(ValueError):
+        ps.ConfirmacaoDecisoesV1.model_validate(c)
+
+
+def test_resposta_da_retirada_com_aprovacao_nula_valida():
+    r = {
+        "aprovacaoId": "00000000-0000-0000-0000-000000000000",
+        "externalId": "x",
+        "empresaFaturadoraCnpj": "11111111000191",
+        "revisao": 1,
+        "situacao": "retirada",
+        "jaRecebido": False,
+        "itens": [],
+    }
+    assert ps.AprovacaoRespostaV1.model_validate(r).aprovacaoId == r["aprovacaoId"]

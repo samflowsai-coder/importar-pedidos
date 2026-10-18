@@ -1,8 +1,10 @@
 """Schemas do contrato precos v1 (Portal ↔ Flow), porta do zod do pcp-app
 (`src/lib/services/portal-pedidos/contract-preco.ts`), com os `superRefine`.
 
-Aqui: o envio da rota (b) (`aprovacaoEnvioV1`, pedido e retirada) e a decisão
-da rota (c) (`decisaoPrecoV1`, `decisoesPaginaV1`). O Portal valida o corpo do
+Aqui: a página da rota (a) (`tabelaPaginaV1`), o envio da rota (b)
+(`aprovacaoEnvioV1`, pedido e retirada) e a resposta dele (`aprovacaoRespostaV1`),
+a decisão da rota (c) (`decisaoPrecoV1`, `decisoesPaginaV1`) e a confirmação
+(`confirmacaoDecisoesV1`, `confirmacaoRespostaV1`). O Portal valida o corpo do
 envio ANTES de gravar a revisão: corpo inválido é bloqueio local, nunca vai ao
 Flow. Campo desconhecido é ignorado (o zod `object()` descarta).
 
@@ -40,6 +42,8 @@ INT4_MAX = 2_147_483_647
 _TETO_QUANTIDADE = Decimal("999999999999.99")
 
 _CNPJ = re.compile(r"[0-9A-Z]{12}[0-9]{2}")
+_RAIZ = re.compile(r"[0-9A-Z]{8}")
+_DATA_CIVIL = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 _UUID = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}"
     r"|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff"
@@ -69,6 +73,22 @@ def _texto(minimo: int, maximo: int, *, trim: bool = False, code_points: bool = 
 def _cnpj(s: str) -> str:
     if not _CNPJ.fullmatch(s):
         raise ValueError("CNPJ com 14 caracteres (12 de [0-9A-Z] + 2 dígitos), sem máscara")
+    return s
+
+
+def _raiz(s: str) -> str:
+    if not _RAIZ.fullmatch(s):
+        raise ValueError("raiz de CNPJ com 8 caracteres [0-9A-Z]")
+    return s
+
+
+def _data_civil(s: str) -> str:
+    if not _DATA_CIVIL.fullmatch(s):
+        raise ValueError("data civil YYYY-MM-DD")
+    try:
+        date.fromisoformat(s)
+    except ValueError as exc:
+        raise ValueError("data inexistente") from exc
     return s
 
 
@@ -116,6 +136,8 @@ def _quantidade(v: Any) -> float | int:
 
 
 Cnpj = Annotated[StrictStr, AfterValidator(_cnpj)]
+Raiz = Annotated[StrictStr, AfterValidator(_raiz)]
+DataCivil = Annotated[StrictStr, AfterValidator(_data_civil)]
 Uuid = Annotated[StrictStr, AfterValidator(_uuid)]
 InstanteZ = Annotated[StrictStr, AfterValidator(_datetime_z)]
 Centavos = Annotated[StrictInt, _entre(1, TETO_CENTAVOS)]
@@ -130,6 +152,43 @@ MotivoFila = Literal[
 
 class _Base(BaseModel):
     model_config = ConfigDict(extra="ignore")
+
+
+# ─── (a) GET /api/portal-pedidos/precos/tabela ─────────────────────────────
+
+
+class TabelaRedeV1(_Base):
+    tipo: Literal["rede"]
+    redeId: Uuid  # noqa: N815 — nome do contrato
+    nome: Annotated[StrictStr, _texto(1, 200)]
+    ativa: StrictBool
+    travada: StrictBool
+    raizes: Annotated[list[Raiz], Field(max_length=50)]
+    cnpjs: Annotated[list[Cnpj], Field(max_length=500)]
+
+
+class TabelaPrecoV1(_Base):
+    tipo: Literal["preco"]
+    precoId: Uuid  # noqa: N815
+    redeId: Uuid | None  # noqa: N815 — None = preço base do tenant
+    empresaFaturadoraCnpj: Cnpj  # noqa: N815
+    erpProdutoId: ErpProdutoId  # noqa: N815
+    unidadeErp: Annotated[StrictStr, _texto(1, 16, trim=True)] | None  # noqa: N815
+    precoCentavos: Centavos  # noqa: N815
+    vigenciaInicio: DataCivil  # noqa: N815
+    registradoEm: InstanteZ  # noqa: N815
+    cancelado: StrictBool
+
+
+class TabelaPaginaV1(_Base):
+    schema_: Literal["precos.tabela.v1"] = Field(alias="schema")
+    capacidades: list[StrictStr]
+    geradoEm: InstanteZ  # noqa: N815
+    empresaFaturadoraCnpj: Cnpj | None  # noqa: N815
+    reiniciar: StrictBool
+    mudancas: list[Annotated[TabelaRedeV1 | TabelaPrecoV1, Field(discriminator="tipo")]]
+    cursor: Cursor
+    temMais: StrictBool  # noqa: N815
 
 
 # ─── (b) POST /api/portal-pedidos/precos/aprovacoes ────────────────────────
@@ -238,6 +297,25 @@ def validar_envio(corpo: dict[str, Any]) -> AprovacaoPedidoV1 | AprovacaoRetirad
     return _ENVIO.validate_python(corpo)
 
 
+class AprovacaoItemRespostaV1(_Base):
+    itemChave: StrictStr  # noqa: N815
+    situacao: Literal[
+        "conforme_tabela", "aprovado_automatico", "pendente", "decidido", "invalidado"
+    ]
+
+
+class AprovacaoRespostaV1(_Base):
+    """201/200 da rota (b). Informativa: a fonte das decisões é a rota (c)."""
+
+    aprovacaoId: Uuid  # noqa: N815 — UUID nulo na retirada de externalId desconhecido
+    externalId: StrictStr  # noqa: N815
+    empresaFaturadoraCnpj: Cnpj  # noqa: N815
+    revisao: Revisao
+    situacao: Literal["pendente", "decidida", "retirada"]
+    jaRecebido: StrictBool  # noqa: N815
+    itens: list[AprovacaoItemRespostaV1]
+
+
 # ─── (c) GET /api/portal-pedidos/precos/decisoes ───────────────────────────
 
 ResultadoDecisao = Literal[
@@ -285,3 +363,37 @@ class DecisoesPaginaV1(_Base):
     decisoes: list[DecisaoPrecoV1]
     cursor: Cursor | None
     temMais: StrictBool  # noqa: N815
+
+
+# ─── (c) POST /api/portal-pedidos/precos/decisoes/confirmar ────────────────
+
+
+class ConfirmacaoV1(_Base):
+    decisaoId: Uuid  # noqa: N815
+    resultado: Literal["aplicada", "descartada"]
+
+
+class ConfirmacaoDecisoesV1(_Base):
+    schema_: Literal["precos.decisoes.confirmacao.v1"] = Field(alias="schema")
+    empresaFaturadoraCnpj: Cnpj | None = None  # noqa: N815 — o Portal manda sempre
+    confirmacoes: Annotated[list[ConfirmacaoV1], Field(min_length=1, max_length=500)]
+
+    @model_validator(mode="after")
+    def _sem_repeticao(self) -> ConfirmacaoDecisoesV1:
+        """uuid não tem caixa: o mesmo id em maiúsculas e minúsculas é repetido."""
+        ids: set[str] = set()
+        for i, c in enumerate(self.confirmacoes):
+            chave = c.decisaoId.lower()
+            if chave in ids:
+                raise ValueError(f"confirmacoes[{i}].decisaoId repetido")
+            ids.add(chave)
+        return self
+
+
+class ConfirmacaoResultadoV1(_Base):
+    decisaoId: Uuid  # noqa: N815
+    situacao: Literal["confirmada", "ja_confirmada", "conflito", "invalidada", "nao_encontrada"]
+
+
+class ConfirmacaoRespostaV1(_Base):
+    resultados: list[ConfirmacaoResultadoV1]
