@@ -20,7 +20,7 @@ import json
 import os
 import re
 import unicodedata
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime, timedelta
 
 from app.erp.connection import FirebirdConnection
@@ -136,8 +136,14 @@ def _abrir_fire_recuperacao(slug: str):
     return FirebirdConnection().connect_leitura_bloqueante(environments_repo.to_fb_config(env))
 
 
+@contextmanager
 def _env(slug: str, env_conn):
-    return nullcontext(env_conn) if env_conn is not None else router.env_connect(slug)
+    if env_conn is not None:
+        yield env_conn
+        return
+    with router.env_connect(slug) as conn:
+        cadastro_volta_repo.duravel(conn)
+        yield conn
 
 
 def _avisa_chaves(slug: str, brutos: list) -> None:

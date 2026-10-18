@@ -770,3 +770,16 @@ def test_chave_desconhecida_avisa_uma_vez_por_ambiente(env_conn, monkeypatch):
         logger.remove(hid)
     assert sum("'campoNovo'" in a for a in avisos) == 2  # um por ambiente, não três
     assert sum("env=mm:" in a for a in avisos) == 1 and sum("env=nasmar:" in a for a in avisos) == 1
+
+
+def test_livro_da_volta_abre_com_synchronous_full_sem_mudar_o_router(tmp_path, monkeypatch):
+    """O livro decide se o ERP grava de novo: o commit do SEQ não pode se perder numa
+    queda de energia (WAL + NORMAL perde). Só a conexão da volta muda."""
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    router.reset_init_cache()
+    with cv._env("mm", None) as conn:
+        assert conn.execute("PRAGMA synchronous").fetchone()[0] == 2  # FULL
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    with router.env_connect("mm") as conn:
+        assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1  # NORMAL
+    router.reset_init_cache()

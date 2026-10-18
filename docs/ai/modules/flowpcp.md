@@ -435,7 +435,7 @@ erro, em memória: some quando o portal reinicia.
 - **Medir os índices de `PRODUTOS.DATA_CAD`**: a busca sem SEQ por `DATA_CAD` sem `GRUPO` é um full scan sem índice, e com NO_REC_VERSION uma edição aberta na tela do Fire pode parar a recuperação em todo ciclo (liveness).
 - **Trava entre processos por ambiente: backlog** (`docs/BACKLOG.md`). A spec garante um consumidor por ambiente; dois processos no mesmo ambiente não são impedidos por código, só mitigados pela idade mínima de 15 min e pela leitura bloqueante.
 - **`PADROES_P0` está vazio** (`app/erp/cadastro_fire.py`): colunas que a tela do Fire grava e a volta ainda não manda. Perfil medido em 18/10/2026 (spec §11): `EST_MINIMO_GERENCIA='Nao'` e `PRODUZIDO='Nao'` sempre; `CODORIG_MERC=0`, `CODSUBGRUPO=1`, `PRE_CADASTRO='Nao'` quase sempre. A P0 parte B confirma no diff da tela. Sem isso, gravação só em DEV.
-- Caminhos residuais de liberação com produto no ERP (aceitos): exigem `DATA_CAD` editado à mão no Fire ou perda do commit do WAL entre duas reservas; o custo é um produto duplicado, visível no Flow como `conflito_codigo`/órfão.
+- Caminhos residuais de liberação com produto no ERP (aceitos): exigem `DATA_CAD` editado à mão no Fire ou perda do commit do WAL entre duas reservas (a conexão do livro, na volta e na ferramenta do operador, abre com `synchronous=FULL` por `cadastro_volta_repo.duravel`; o resto do router segue `NORMAL`, então só sobra um disco que mente sobre o fsync); o custo é um produto duplicado, visível no Flow como `conflito_codigo`/órfão.
 
 ## Testes
 

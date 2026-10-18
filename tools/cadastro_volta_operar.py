@@ -96,7 +96,10 @@ def _livro_real(slug: str):
     # Antes de abrir: `env_connect` com slug errado criaria um app_state_<slug>.db vazio.
     if environments_repo.get_by_slug(slug) is None:
         raise _RecusaError(f"ambiente {slug!r} não encontrado; nada foi aberto.")
+    from app.persistence import cadastro_volta_repo as repo
+
     with router.env_connect(slug) as conn:
+        repo.duravel(conn)  # o que a ferramenta muda no livro não se perde numa queda
         yield conn
 
 

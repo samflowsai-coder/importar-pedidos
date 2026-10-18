@@ -592,8 +592,9 @@ _OPERACOES = {
 }
 _PORTAS = {"liberar_comprovado", "erro_a_enviar(rb=True)", "liberar_manual"}
 # Estados de onde o produto pode estar (ou já está) no ERP. `em_andamento` sem SEQ
-# fica de fora desta busca, mas pode ter gravado: com WAL e `synchronous=NORMAL`, uma
-# queda de energia pode perder o commit de `marcar_seq` e manter o INSERT no Fire.
+# fica de fora desta busca, mas pode ter gravado: o livro abre com `synchronous=FULL`
+# (`repo.duravel`), mas um disco que mente sobre o fsync ainda pode perder o commit
+# de `marcar_seq` e manter o INSERT no Fire.
 # Esse caso é da recuperação, pela busca por nome (`cadastro_recuperacao._por_nome`).
 _PODE_TER_GRAVADO = [
     ("gravado_sem_volta", None), ("confirmado", None), ("orfao", None), ("orfao_fechado", None),

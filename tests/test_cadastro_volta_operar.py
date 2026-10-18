@@ -703,3 +703,4 @@ def test_slug_conhecido_abre_o_livro_do_ambiente(monkeypatch, livro):
 
     monkeypatch.setattr(router, "env_connect", _env_connect)
     assert op.main(["mm", "listar"]) == 0
+    assert livro.execute("PRAGMA synchronous").fetchone()[0] == 2  # FULL, como na volta

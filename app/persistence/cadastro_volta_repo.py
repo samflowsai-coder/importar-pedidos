@@ -76,6 +76,13 @@ _PODE_TER_GRAVADO_SQL = (
 _PENDENTES_SQL = ", ".join(f"'{e}'" for e in _PENDENTES)
 
 
+def duravel(conn: sqlite3.Connection) -> None:
+    """`synchronous=FULL` nesta conexão (o router abre com NORMAL). O livro decide se o
+    ERP grava de novo: com WAL + NORMAL uma queda de energia pode perder o commit de
+    `marcar_seq` e manter o INSERT no Fire. Vale só para a conexão recebida."""
+    conn.execute("PRAGMA synchronous = FULL")
+
+
 def registrar(
     conn: sqlite3.Connection,
     *,
