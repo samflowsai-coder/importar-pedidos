@@ -619,7 +619,7 @@ def test_erro_recusa_do_erp_vira_definitivo_erp_recusou(modo, env_slug, env_conn
     fire = FireGravavel(falhas={"INSERT INTO PRODUTOS (": [RECUSA()]})
     flow = Flow([PAR])
     _rodar(env_slug, flow, fire, env_conn)
-    assert 3171 not in fire.produtos and fire.rollbacks == 1
+    assert 3171 not in fire.produtos and fire.rollbacks == 2  # o do gravador e a prova
     erro = flow.posts[0][1]["erro"]
     assert (erro["tipo"], erro["codigo"]) == ("definitivo", "erp_recusou")
     linha = repo.buscar(env_conn, PAR["cadastroId"], 1)
@@ -966,3 +966,163 @@ def test_item_repetido_no_mesmo_get_grava_uma_vez(modo, env_slug, env_conn):
     _rodar(env_slug, flow, fire, env_conn)
     assert len([s for s, _ in fire.escritas if s.startswith("INSERT INTO PRODUTOS (")]) == 1
     assert len(flow.posts) == 1
+
+
+# --- fix round 1 ------------------------------------------------------------
+
+
+class _RollbackFalha(FireGravavel):
+    """Rollback que falha nas `falhas_rb` primeiras vezes (o pendente fica)."""
+
+    def __init__(self, falhas_rb=10**6, **kw):
+        super().__init__(**kw)
+        self.falhas_rb = falhas_rb
+
+    def rollback(self):
+        self.rollbacks += 1
+        if self.falhas_rb > 0:
+            self.falhas_rb -= 1
+            raise OSError("rollback caiu")
+        super().rollback()
+        self.rollbacks -= 1  # super() contou de novo
+
+
+def test_9b_orfao_fechado_responde_ja_criado_e_nao_grava(modo, env_slug, env_conn):
+    """Sonda 7b: v1 órfã, fechada pela operação; a v2 com outro nome não vira 2º produto."""
+    modo("criar")
+    fire = FireGravavel()
+    _rodar(env_slug, Flow([PAR], respostas=[RespostaResultado(409, {"error": "conflito_codigo"},
+                                                              None)]), fire, env_conn)
+    assert repo.fechar_orfao(env_conn, PAR["cadastroId"], 1, operador="ana", nota="x")
+    env_conn.commit()
+    v2 = {**PAR, "cadastroId": "33333333-3333-4333-8333-333333333333", "versao": 2,
+          "nome": "MEIA SOQUETE CORRIGIDA"}
+    flow = Flow([v2])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert sorted(fire.produtos) == [3170, 3171]
+    (cid, corpo), = flow.posts
+    assert cid == v2["cadastroId"] and corpo["erro"]["codigo"] == "ja_criado_no_erp"
+    assert corpo["erro"]["tipo"] == "definitivo" and "(código 3171)" in corpo["erro"]["mensagem"]
+
+
+def test_atualizar_kit_com_rollback_falhando_nao_responde_e_para_o_lote(modo, env_slug, env_conn,
+                                                                         erros):
+    """Sonda 7, cenário 1: o DELETE da composição pendente nunca é comitado depois."""
+    _no_catalogo(env_conn, "3990")
+    modo("criar_e_atualizar")
+    fire = _RollbackFalha(produtos={3170: {"DESCRICAO": "PAR", "BLOQUEADO": "Nao"},
+                                    3990: {"DESCRICAO": "KIT", "BLOQUEADO": "Nao"}},
+                          falhas={"INSERT INTO PRODUTOS_KIT": [RECUSA()]})
+    fire.kit = [(1, 3990, 3100, 2.0)]
+    item = _atualizar("3990", tipo="kit", unidadeErp="KIT",
+                      componentes=[{"erpProdutoId": "3170", "quantidade": 3}])
+    seguinte = _outro(2, nome="OUTRO")
+    flow = Flow([item, seguinte])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts == [] and fire.commits == 0
+    assert repo.buscar(env_conn, item["cadastroId"], 2)["estado"] == "em_andamento"
+    assert repo.buscar(env_conn, seguinte["cadastroId"], 1) is None
+    assert erros
+
+
+class _Tr:
+    default_tpb = None
+
+
+class _ConnFdb(_RollbackFalha):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.main_transaction, self.fechada = _Tr(), False
+
+    def begin(self, tpb=None):
+        pass
+
+    def close(self):
+        self.fechada = True
+
+
+@pytest.mark.firebird_stub_proprio
+def test_criar_kit_com_rollback_falhando_nao_comita_na_saida(modo, env_slug, env_conn,
+                                                            monkeypatch, erros):
+    """Sonda 7, cenário 2: a conexão de escrita real (com fdb.connect falso) sai com
+    rollback; o PRODUTOS pendente do kit recusado não fica gravado."""
+    import fdb
+
+    from app.erp.connection import FirebirdConnection
+
+    modo("criar")
+    fire = _ConnFdb(falhas_rb=2, falhas={"INSERT INTO PRODUTOS_KIT": [RECUSA()]})
+    monkeypatch.setattr(FirebirdConnection, "_configure_library", lambda self: None)
+    monkeypatch.setattr(fdb, "connect", lambda **k: fire)
+    monkeypatch.setattr(cv, "_abrir_fire_escrita",
+                        lambda slug: FirebirdConnection().connect_escrita_cadastro({"path": "x"}))
+    kit = _outro(1, tipo="kit", nome="KIT", unidadeErp="KIT",
+                 componentes=[{"erpProdutoId": "3170", "quantidade": 3}])
+    flow = Flow([kit])
+    cv.processar_ambiente(env_slug, _client=flow, _fire_conn=None, _env_conn=env_conn,
+                          _relogio=Relogio())
+    assert flow.posts == [] and fire.commits == 0 and fire.fechada
+    assert sorted(fire.produtos) == [3170] and fire.kit == []  # a saída desfez o pendente
+    assert repo.buscar(env_conn, kit["cadastroId"], 1)["estado"] == "em_andamento"
+
+
+def test_marcar_gravado_que_falha_para_o_lote(modo, env_slug, env_conn, monkeypatch, erros):
+    modo("criar")
+    monkeypatch.setattr(repo, "marcar_gravado", lambda *a, **k: False)
+    fire, segundo = FireGravavel(), _outro(1, nome="OUTRO")
+    flow = Flow([PAR, segundo])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts == [] and 3171 in fire.produtos
+    assert repo.buscar(env_conn, segundo["cadastroId"], 1) is None
+    assert any("3171" in e for e in erros)
+
+
+def test_marcar_seq_que_falha_nao_insere_e_para_o_lote(modo, env_slug, env_conn, monkeypatch,
+                                                      erros):
+    modo("criar")
+    monkeypatch.setattr(repo, "marcar_seq", lambda *a, **k: False)
+    fire, segundo = FireGravavel(), _outro(1, nome="OUTRO")
+    flow = Flow([PAR, segundo])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts == [] and fire.escritas == [] and sorted(fire.produtos) == [3170]
+    assert repo.buscar(env_conn, PAR["cadastroId"], 1)["estado"] == "em_andamento"
+    assert repo.buscar(env_conn, segundo["cadastroId"], 1) is None
+
+
+def test_consulta_que_falha_vai_como_consulta_erp_falhou(modo, env_slug, env_conn):
+    modo("criar")
+    fire = FireGravavel(falhas={"SELECT SEQ, BLOQUEADO FROM PRODUTOS": [RuntimeError("x")]})
+    kit = _outro(1, tipo="kit", nome="KIT", unidadeErp="KIT",
+                 componentes=[{"erpProdutoId": "3170", "quantidade": 3}])
+    flow = Flow([kit])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts[0][1]["erro"] == {
+        "tipo": "transitorio", "codigo": "consulta_erp_falhou",
+        "mensagem": "Não foi possível consultar o ERP agora; o Portal tenta de novo."}
+    assert fire.escritas == []
+
+
+def test_reenvio_na_triagem_sem_espaco_nas_pendencias(modo, env_slug, env_conn, monkeypatch):
+    modo("criar")
+    _rodar(env_slug, Flow([PAR], respostas=[RespostaResultado(None, None, None)]),
+           FireGravavel(), env_conn)
+    monkeypatch.setattr(cv, "LIMITE_PENDENCIAS", 0)  # o reenvio inicial não pega nada
+    fire, flow = FireGravavel(), Flow([PAR])
+    _rodar(env_slug, flow, fire, env_conn, _mais())
+    (cid, corpo), = flow.posts
+    assert cid == PAR["cadastroId"] and corpo["resultado"] == "gravado"
+    assert fire.escritas == []
+    assert repo.buscar(env_conn, PAR["cadastroId"], 1)["estado"] == "confirmado"
+
+
+def test_reenvio_da_v1_pela_9b_sem_espaco_nas_pendencias(modo, env_slug, env_conn, monkeypatch):
+    modo("criar")
+    _rodar(env_slug, Flow([PAR], respostas=[RespostaResultado(None, None, None)]),
+           FireGravavel(), env_conn)
+    monkeypatch.setattr(cv, "LIMITE_PENDENCIAS", 0)
+    v2 = {**PAR, "cadastroId": "33333333-3333-4333-8333-333333333333", "versao": 2}
+    fire, flow = FireGravavel(), Flow([v2])
+    _rodar(env_slug, flow, fire, env_conn, _mais())
+    (cid, corpo), = flow.posts
+    assert cid == PAR["cadastroId"] and corpo["versao"] == 1
+    assert fire.escritas == [] and repo.buscar(env_conn, v2["cadastroId"], 2) is None

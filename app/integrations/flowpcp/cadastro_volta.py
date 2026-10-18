@@ -232,7 +232,7 @@ def _plano(item: CadastroPendente, marcas: dict) -> dict:
         for wire, coluna in COLUNAS.items()
         if getattr(item, wire) is not None
     }
-    campos["GRUPO"] = item.grupoErp.codigo
+    campos["GRUPO"] = int(item.grupoErp.codigo)  # como no gravador (a recuperação compara)
     if item.marcaErp is not None:
         campos["MARCA"] = marcas[item.marcaErp.codigo]
     return {

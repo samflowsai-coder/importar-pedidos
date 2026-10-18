@@ -92,6 +92,7 @@ def test_mensagem_nome_existe_tem_so_o_codigo_como_numero():
         ),
         ("conexao_recusada", "O ERP recusou a conexão."),
         ("erp_ocupado", "O ERP estava ocupado; o Portal tenta de novo."),
+        ("consulta_erp_falhou", "Não foi possível consultar o ERP agora; o Portal tenta de novo."),
         ("codigo_desconhecido", "Motivo não identificado. Fale com o suporte do Portal."),
     ],
 )
@@ -143,6 +144,7 @@ def test_mensagem_para_flow_ja_criado_usa_o_detalhe_como_codigo():
         "erp_recusou",
         "conexao_recusada",
         "erp_ocupado",
+        "consulta_erp_falhou",
         "codigo_desconhecido",
     ],
 )

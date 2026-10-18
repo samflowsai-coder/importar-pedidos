@@ -153,8 +153,9 @@ def _reenviar_linha(lote: _Lote, linha: dict) -> Desfecho | None:
             raise ValueError("corpo sem resultado")
     except (TypeError, ValueError):
         logger.error(lote.log(cid, versao, "corpo guardado ilegível; não reenviado"))
-        repo.adiar(lote.env_conn, cid, versao, ate=_iso(lote.relogio() + _ESPERA_BUG),
-                   alerta="bug_corpo")
+        if not repo.adiar(lote.env_conn, cid, versao, ate=_iso(lote.relogio() + _ESPERA_BUG),
+                          alerta="bug_corpo"):
+            logger.warning(lote.log(cid, versao, "adiamento não aplicado no livro"))
         lote.env_conn.commit()
         return None
     return _enviar(lote, cid, versao, corpo, linha.get("tentativas") or 0)
@@ -291,7 +292,7 @@ def _livre_pela_9b(lote: _Lote, item: CadastroPendente) -> bool:
         return False
     if estado == "em_andamento":
         return False
-    if estado == "orfao":
+    if estado in ("orfao", "orfao_fechado"):  # fechado pela operação: o produto segue no ERP
         try:
             mensagem = mensagem_para_flow("ja_criado_no_erp", detalhe=outra["erp_produto_id"])
         except ValueError:
@@ -415,7 +416,7 @@ def _conferir(lote: _Lote, fire, item: CadastroPendente):
             cv._select(fire, cv._SQL_SONDA, ())
         except Exception:  # noqa: BLE001
             return ("caiu",)
-        return ("erro", "transitorio", "consulta_fire_falhou",
+        return ("erro", "transitorio", "consulta_erp_falhou",
                 f"consulta ao ERP falhou ({type(exc).__name__})", None)
     if falha:
         return ("erro", "definitivo", falha[0], falha[1], None)
@@ -485,7 +486,7 @@ def _gravar_item(lote: _Lote, fire, item: CadastroPendente) -> None:
     except LookupError as exc:
         if item.acao == "criar":  # só atualizar/inativar levantam "SEQ não existe"
             _falha_do_erp(lote, fire, item, exc)
-        else:
+        elif _rollback_provado(lote, fire, cid, versao, "SEQ não existe no ERP"):
             _erro(lote, cid, versao, "definitivo", "seq_inexistente", "SEQ não existe no ERP",
                   rollback_comprovado=True)
         return
@@ -496,7 +497,9 @@ def _gravar_item(lote: _Lote, fire, item: CadastroPendente) -> None:
     corpo = corpo_gravado(versao, seq, lote.relogio())
     if not repo.marcar_gravado(conn, cid, versao, erp_produto_id=seq, corpo_json=json.dumps(corpo)):
         conn.commit()
-        logger.error(lote.log(cid, versao, f"gravado no ERP (SEQ {seq}) mas o livro não mudou"))
+        lote.parar = True
+        logger.error(lote.log(cid, versao, f"gravado no ERP (SEQ {seq}) mas o livro não mudou; "
+                                           "lote parado"))
         return
     conn.commit()
     lote.conta("gravados")
@@ -515,8 +518,9 @@ def _sem_gravar(lote: _Lote, cid: str, versao: int, conferencia: tuple) -> None:
               rollback_comprovado=True)
     elif conferencia[0] == "proprio":
         _, seq, linha = conferencia
-        repo.marcar_desfecho(lote.env_conn, cid, versao, "incerto",
-                             alerta="nome_do_proprio_produto")
+        if not repo.marcar_desfecho(lote.env_conn, cid, versao, "incerto",
+                                    alerta="nome_do_proprio_produto"):
+            logger.warning(lote.log(cid, versao, "incerto não aplicado no livro"))
         lote.env_conn.commit()
         lote.conta("incertos")
         logger.error(lote.log(
@@ -531,6 +535,18 @@ def _sem_gravar(lote: _Lote, cid: str, versao: int, conferencia: tuple) -> None:
         lote.parar = True
 
 
+def _rollback_provado(lote: _Lote, fire, cid: str, versao: int, tecnico: str) -> bool:
+    """O gravador já tentou o rollback, mas relança a exceção original mesmo quando
+    ele falha. Repete aqui e só segue com prova: sem ela, o pendente poderia ser
+    comitado depois; a linha fica `em_andamento` e o lote para."""
+    if cadastro_fire.desfazer(fire):
+        return True
+    lote.parar = True
+    logger.error(lote.log(cid, versao, f"{tecnico} e o rollback não confirmou; fica para a "
+                                       "recuperação, lote parado"))
+    return False
+
+
 def _falha_do_erp(lote: _Lote, fire, item: CadastroPendente, exc: BaseException) -> None:
     cid, versao = str(item.cadastroId), item.versao
     classe = cadastro_fire.classificar_erro(exc)
@@ -539,6 +555,8 @@ def _falha_do_erp(lote: _Lote, fire, item: CadastroPendente, exc: BaseException)
         # Pode ter comitado: a recuperação confere (regra de ouro 3).
         lote.parar = True
         logger.error(lote.log(cid, versao, f"{tecnico} depois do comando; incerto, lote parado"))
+        return
+    if not _rollback_provado(lote, fire, cid, versao, tecnico):
         return
     if item.acao == "criar" and not _ausente_no_fire(lote, fire, cid, versao):
         lote.parar = True

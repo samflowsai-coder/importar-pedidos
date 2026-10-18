@@ -289,7 +289,7 @@ def test_plano_do_item_bom(env_conn, monkeypatch):
         "UNIDADE": "KIT",
         "CLASSIF_FISCAL": "61159500",
         "CODITEMSPED": 4,
-        "GRUPO": "8",
+        "GRUPO": 8,
         "CODPARANFE": "KIT3-MEIA-CURTO/PRT",
         "MARCA": "Kolosh",
     }

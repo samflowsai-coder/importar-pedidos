@@ -138,6 +138,10 @@ class FirebirdConnection:
         vai também como `default_tpb` da transação principal: o fdb abre a
         transação seguinte a cada commit/rollback com esse padrão, então
         todo cadastro do lote roda com o mesmo timeout.
+
+        A saída é SEMPRE rollback, nunca commit: o gravador comita cada
+        cadastro sozinho, e o que sobra pendente (um rollback que falhou no
+        meio) não tem prova de nada.
         """
         import struct
 
@@ -147,13 +151,13 @@ class FirebirdConnection:
             fdb.isc_tpb_version3, fdb.isc_tpb_write, fdb.isc_tpb_read_committed,
             fdb.isc_tpb_rec_version, fdb.isc_tpb_wait, fdb.isc_tpb_lock_timeout,
         ]) + struct.pack("<bI", 4, lock_timeout)
-        with self._connect_with(cfg) as conn:
+        with self._connect_with(cfg, commit_na_saida=False) as conn:
             conn.main_transaction.default_tpb = tpb
             conn.begin(tpb=tpb)
             yield conn
 
     @contextmanager
-    def _connect_with(self, cfg: dict) -> Generator:
+    def _connect_with(self, cfg: dict, *, commit_na_saida: bool = True) -> Generator:
         # fdb (driver legado) — compatível com o cliente Firebird 2.5 do Fire
         # Sistemas. O firebird-driver (moderno) exige fbclient 3.0+, que os
         # servidores 2.5 do cliente não têm.
@@ -177,7 +181,10 @@ class FirebirdConnection:
 
         try:
             yield conn
-            conn.commit()
+            if commit_na_saida:
+                conn.commit()
+            else:
+                conn.rollback()
         except Exception:
             conn.rollback()
             raise

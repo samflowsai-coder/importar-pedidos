@@ -74,7 +74,7 @@ def test_conexao_de_escrita_do_cadastro_tem_lock_timeout_em_toda_transacao(monke
     conn = _Conn()
 
     @contextmanager
-    def _falso(self, cfg):
+    def _falso(self, cfg, **kw):
         yield conn
 
     monkeypatch.setattr(FirebirdConnection, "_connect_with", _falso)
@@ -86,3 +86,50 @@ def test_conexao_de_escrita_do_cadastro_tem_lock_timeout_em_toda_transacao(monke
     ]) + struct.pack("<bI", 4, 10)
     assert conn.begins == [esperado]
     assert conn.main_transaction.default_tpb == esperado
+
+
+@pytest.mark.firebird_stub_proprio
+def test_conexao_de_escrita_sai_com_rollback_nunca_commit(monkeypatch):
+    """O que sobrou sem commit do gravador (rollback que falhou) não tem prova: a saída
+    desfaz. Os outros modos continuam saindo com commit."""
+    import fdb
+
+    from app.erp.connection import FirebirdConnection
+
+    class _Tr:
+        default_tpb = None
+
+    class _Conn:
+        def __init__(self):
+            self.main_transaction, self.chamadas = _Tr(), []
+
+        def begin(self, tpb=None):
+            pass
+
+        def cursor(self):
+            return self
+
+        def execute(self, sql, params=()):
+            self.chamadas.append("execute")
+
+        def commit(self):
+            self.chamadas.append("commit")
+
+        def rollback(self):
+            self.chamadas.append("rollback")
+
+        def close(self):
+            self.chamadas.append("close")
+
+    conn = _Conn()
+    monkeypatch.setattr(FirebirdConnection, "_configure_library", lambda self: None)
+    monkeypatch.setattr(fdb, "connect", lambda **k: conn)
+    with FirebirdConnection().connect_escrita_cadastro({"path": "x"}) as c:
+        c.cursor().execute("INSERT INTO PRODUTOS (SEQ) VALUES (?)", (1,))
+    assert conn.chamadas == ["execute", "rollback", "close"]
+
+    outra = _Conn()
+    monkeypatch.setattr(fdb, "connect", lambda **k: outra)
+    with FirebirdConnection().connect_with_config({"path": "x"}):
+        pass
+    assert outra.chamadas == ["commit", "close"]

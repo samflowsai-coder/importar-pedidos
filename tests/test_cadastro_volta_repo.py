@@ -455,3 +455,11 @@ def test_linha_do_produto_com_seq_acha_por_seq_reservado_ou_codigo(conn):
     assert repo.linha_do_produto_com_seq(conn, "p1", 3100)["cadastro_id"] == "c2"
     assert repo.linha_do_produto_com_seq(conn, "p1", 9999) is None
     assert repo.linha_do_produto_com_seq(conn, "outro", 4001) is None
+
+
+def test_criar_do_produto_acha_orfao_fechado(conn):
+    _reservar(conn)
+    repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
+    repo.marcar_desfecho(conn, "c1", 1, "orfao")
+    repo.fechar_orfao(conn, "c1", 1, operador="ana", nota="x")
+    assert repo.criar_do_produto(conn, "p1")["estado"] == "orfao_fechado"

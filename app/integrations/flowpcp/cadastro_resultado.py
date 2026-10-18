@@ -91,6 +91,7 @@ _MENSAGENS_ERRO: dict[str, str] = {
     "erp_recusou": "Um dado do cadastro não está no formato que o ERP aceita. Fale com o suporte do Portal.",
     "conexao_recusada": "O ERP recusou a conexão.",
     "erp_ocupado": "O ERP estava ocupado; o Portal tenta de novo.",
+    "consulta_erp_falhou": "Não foi possível consultar o ERP agora; o Portal tenta de novo.",
 }
 _MENSAGEM_DESCONHECIDA = "Motivo não identificado. Fale com o suporte do Portal."
 
