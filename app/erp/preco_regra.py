@@ -8,6 +8,7 @@ A regra NÃO normaliza CNPJ: quem chama passa por `normalizar_cnpj` antes.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -59,7 +60,7 @@ def normalizar_cnpj(bruto: str | None) -> str | None:
 def centavos(valor: float | None) -> int | None:
     """Reais → centavos inteiros, meia para cima. `None` ou `<= 0` → None
     (preço zero no pedido = pedido sem preço, contrato §2.3)."""
-    if valor is None:
+    if valor is None or not math.isfinite(valor):
         return None
     reais = Decimal(str(valor)).quantize(Decimal("0.01"), ROUND_HALF_UP)
     if reais <= 0:
@@ -80,9 +81,11 @@ def _registrado(p: PrecoLinha) -> datetime:
     if not isinstance(p.registrado_em, str) or not _INSTANTE_COM_FUSO.fullmatch(p.registrado_em):
         raise PrecoInvalido(f"registradoEm inválido no preço {p.preco_id}")
     try:
-        return datetime.fromisoformat(p.registrado_em)
+        dt = datetime.fromisoformat(p.registrado_em)
     except ValueError as exc:
         raise PrecoInvalido(f"registradoEm inválido no preço {p.preco_id}") from exc
+    # §5: compara ao milissegundo (o Flow emite 3 casas).
+    return dt.replace(microsecond=dt.microsecond // 1000 * 1000)
 
 
 def resolver_preco(

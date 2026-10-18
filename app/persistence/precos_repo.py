@@ -45,7 +45,11 @@ def aplicar_pagina(conn: sqlite3.Connection, pagina: dict[str, Any], *, empresa_
     """Aplica uma página da rota (a) já validada pelo schema, numa transação:
     upsert das redes (chaves substituídas inteiras) e dos preços, e só então o
     `cursor`. `temMais: false` grava `completo_em = geradoEm`; com `true` o
-    `completo_em` anterior fica. `reiniciar` é do chamador (`reiniciar()`)."""
+    `completo_em` anterior fica. `reiniciar` é do chamador (`reiniciar()`).
+    Página filtrada para outra empresa → `ValueError` (nada aplicado)."""
+    filtro = pagina.get("empresaFaturadoraCnpj")
+    if filtro is not None and filtro != empresa_cnpj:
+        raise ValueError("página da tabela de preço de outra empresa faturadora")
     completo = None if pagina["temMais"] else _instante(pagina["geradoEm"]).isoformat()
     with conn:
         for m in pagina["mudancas"]:

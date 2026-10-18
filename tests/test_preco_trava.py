@@ -83,7 +83,7 @@ def _seed(order, **extra):
     return import_id, entry
 
 
-def _pagina_v1(conn, redes, precos, *, gerado, cursor="c1"):
+def _pagina_v1(conn, redes, precos, *, gerado, cursor="c1", empresa_preco=EMPRESA):
     """Página da rota (a) do contrato precos v1 com as redes e preços dados."""
     mudancas = [
         {
@@ -101,7 +101,7 @@ def _pagina_v1(conn, redes, precos, *, gerado, cursor="c1"):
             "tipo": "preco",
             "precoId": f"p-{rede_id}-{pid}",
             "redeId": rede_id,
-            "empresaFaturadoraCnpj": EMPRESA,
+            "empresaFaturadoraCnpj": empresa_preco,
             "erpProdutoId": pid,
             "unidadeErp": "KIT",
             "precoCentavos": c,
@@ -932,3 +932,44 @@ def test_assinatura_usa_a_rede_resolvida_e_nao_so_a_raiz():
     assert a1 != a2
     assert a0 == aprov.assinatura(order.items[0], "123", CNPJ_REDE)
     assert a1 == aprov.assinatura(order.items[0], "123", CNPJ_REDE, rede_id="r1")
+
+
+# ── Fix round 1: empresa faturadora ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize("cnpj_env", [None, "", "123"])
+def test_ligado_sem_cnpj_da_empresa_bloqueia_sem_pendencia(monkeypatch, cnpj_env):
+    _copia(5400)
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())
+    env = {**_env("ligado"), "cnpj": cnpj_env}
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=env, agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.reason == "preco_nao_avaliado"
+    assert [(i.situacao, i.motivo) for i in d.avaliacao.itens] == [
+        ("nao_avaliado", "empresa_sem_cnpj")
+    ]
+    assert "CNPJ da empresa não cadastrado no ambiente" in d.detalhe
+    assert _linhas(import_id) == []
+
+
+def test_preco_de_outra_empresa_nao_libera(monkeypatch):
+    with db.connect() as conn:
+        _pagina_v1(
+            conn,
+            [("r1", "Rede X", CNPJ_REDE[:8])],
+            [("r1", "123", 5400)],
+            gerado=AGORA - timedelta(hours=1),
+            empresa_preco="22222222000182",
+        )
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.avaliacao.itens[0].preco_tabela_centavos is None

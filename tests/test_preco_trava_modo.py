@@ -127,7 +127,7 @@ def _sync_ok(slug):
                 "schema": "precos.tabela.v1",
                 "capacidades": ["precos.tabela.v1", "precos.aprovacao.v1"],
                 "geradoEm": datetime.now(UTC).isoformat(),
-                "empresaFaturadoraCnpj": None,
+                "empresaFaturadoraCnpj": "11111111000191",
                 "reiniciar": False,
                 "mudancas": [],
                 "cursor": "c1",

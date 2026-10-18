@@ -69,6 +69,9 @@ def test_cnpj_valido_nao_normaliza():
         (0, None),
         (-1.0, None),
         (None, None),
+        (float("nan"), None),
+        (float("inf"), None),
+        (float("-inf"), None),
     ],
 )
 def test_centavos_meia_para_cima(valor, esperado):
@@ -139,4 +142,15 @@ def test_empate_por_preco_id_nao_depende_da_ordem():
 
 def test_sem_rede_usa_so_o_base():
     got = _resolver([_linha("a", rede_id="r"), _linha("b", rede_id=None)], rede_id=None)
+    assert got.preco_id == "b"
+
+
+def test_registrado_em_compara_ao_milissegundo():
+    # .0002Z e .0001Z são o mesmo milissegundo: desempata pelo precoId.
+    got = _resolver(
+        [
+            _linha("b", registrado="2026-10-19T10:00:00.0001Z"),
+            _linha("a", registrado="2026-10-19T10:00:00.0002Z"),
+        ]
+    )
     assert got.preco_id == "b"

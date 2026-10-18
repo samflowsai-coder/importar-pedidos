@@ -274,3 +274,23 @@ def test_bootstrap_derruba_as_tabelas_antigas(tmp_path, monkeypatch):
         novas = {"preco_rede_v1", "preco_rede_chave_v1", "preco_tabela_v1", "preco_sync_v1"}
         assert novas <= nomes
         assert precos_repo.ultima_sync_ok(conn) is None
+
+
+def test_pagina_de_outra_empresa_e_recusada(conn):
+    precos_repo.aplicar_pagina(conn, _pagina([_rede()], cursor="c1"), empresa_cnpj=MM)
+    with pytest.raises(ValueError):
+        precos_repo.aplicar_pagina(
+            conn,
+            _pagina(
+                [_rede("r2", raizes=("44555666",)), _preco()], cursor="c2", empresa="22222222000182"
+            ),
+            empresa_cnpj=MM,
+        )
+    assert precos_repo.estado_sync(conn).cursor == "c1"
+    assert precos_repo.resolver_rede(conn, "44555666000100") is None
+    assert conn.execute("SELECT COUNT(*) FROM preco_tabela_v1").fetchone()[0] == 0
+
+
+def test_pagina_sem_filtro_de_empresa_aplica(conn):
+    precos_repo.aplicar_pagina(conn, _pagina([_rede()], empresa=None), empresa_cnpj=MM)
+    assert precos_repo.estado_sync(conn).cursor == "c1"

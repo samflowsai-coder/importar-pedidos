@@ -26,6 +26,7 @@ Motivo = Literal[
     "produto_nao_identificado",
     "cliente_sem_cnpj",
     "copia_desatualizada",
+    "empresa_sem_cnpj",
     "intercompany",
 ]
 

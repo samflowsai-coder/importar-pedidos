@@ -40,6 +40,7 @@ _MOTIVO_LEGIVEL: dict[str, str] = {
     "produto_nao_identificado": "produto não identificado no Fire",
     "cliente_sem_cnpj": "cliente sem CNPJ",
     "copia_desatualizada": "tabela de preço sem sincronizar com o Flow há mais de 24 h",
+    "empresa_sem_cnpj": "CNPJ da empresa não cadastrado no ambiente",
 }
 
 
@@ -139,15 +140,18 @@ def _avaliar_local(
     order: Order, check: dict | None, entry: dict, agora: datetime, env: dict | None
 ) -> Avaliacao:
     """Avalia contra a cópia local (db do ambiente ativo). Sem Fire, sem audit.
-    A empresa faturadora é o CNPJ do ambiente; sem ele, nenhum preço casa."""
+    A empresa faturadora é o CNPJ do ambiente; sem ele, tudo `nao_avaliado`."""
     if check is None:
         return _todos(order, None, "nao_avaliado", "produto_nao_identificado")
     cnpj = _cnpj_cliente(order, entry)
     if entry.get("cliente_override_codigo") is not None and cnpj is None:
         # Sem curto-circuito o avaliador cairia na raiz das lojas de entrega.
         return _todos(order, check, "nao_avaliado", "cliente_sem_cnpj")
-    grupo = cnpjs_grupo()
     empresa = preco_regra.normalizar_cnpj((env or {}).get("cnpj"))
+    if empresa is None:
+        # Sem empresa faturadora nenhum preço é da empresa: bloqueia, sem fila.
+        return _todos(order, check, "nao_avaliado", "empresa_sem_cnpj")
+    grupo = cnpjs_grupo()
     with db.connect() as conn:
 
         def _rede(cnpj_rede: str):
@@ -155,8 +159,6 @@ def _avaliar_local(
             return precos_repo.resolver_rede(conn, normalizado) if normalizado else None
 
         def _preco(rede_id: str, produto: str, data: date) -> int | None:
-            if empresa is None:
-                return None
             linha = precos_repo.preco_vigente(
                 conn, empresa_cnpj=empresa, rede_id=rede_id, erp_produto_id=produto, data=data
             )
