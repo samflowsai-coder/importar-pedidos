@@ -327,12 +327,12 @@ passo anterior parar o ciclo):
 | 409 `versao_superada` | `orfao` para `gravado` de `criar`; `superado` para `gravado` de `atualizar`/`inativar` (o caso comum, contrato §5) e para `erro` |
 | 409 `conflito_codigo` | `orfao` para `gravado` de `criar`; `superado` com alerta `conflito_codigo` para `gravado` de `atualizar`/`inativar`; `bug_corpo` para `erro` |
 | outro 409 | `bug_corpo` |
-
-No 409 de um `gravado`, `ler_resposta` devolve `orfao` e `cadastro_gravacao._orfao_ou_superado` decide pela `acao` que o livro guardou (o que o Portal fez de fato): órfão só se o Portal **criou** o produto. Em `atualizar`/`inativar` o produto já existia no ERP; a gravação fica e a linha fecha `superado`.
 | 401 | `credencial` |
 | 429 | `repetir` |
 | outros 4xx | `bug_corpo` |
 | 5xx, sem resposta | `repetir` |
+
+No 409 de um `gravado`, `ler_resposta` devolve `orfao` e `cadastro_gravacao._orfao_ou_superado` decide pela `acao` que o livro guardou (o que o Portal fez de fato): órfão só se o Portal **criou** o produto. Em `atualizar`/`inativar` o produto já existia no ERP; a gravação fica e a linha fecha `superado`.
 
 ### Estados do livro
 
@@ -366,7 +366,7 @@ o SEQ só é zerado com `True`), `liberar_comprovado` (`em_andamento` → `liber
 
 ### Caminhos manuais (o que a recuperação e a ferramenta não decidem sozinhas)
 
-Nos três casos a linha está segura: nada grava de novo e a 9b segura o produto. O item do Flow é
+Nos quatro casos a linha está segura: nada grava de novo e a 9b segura o produto. O item do Flow é
 pulado em todo ciclo até alguém agir.
 
 - **`em_andamento` em motor ≥ 4.0** (só o DEV, Firebird 5; a produção é 2.5). A recuperação não roda
@@ -386,6 +386,12 @@ pulado em todo ciclo até alguém agir.
   linha (`cadastroId vN`, estado) e o SEQ X. A área de cadastro do Flow vincula o produto ao código X,
   como num órfão. Depois, `liberar` esta linha (sem SEQ: conferir a janela): a reentrega sai como
   `atualizar` com o código X (contrato §4) e é processada.
+- **`criar` novo de um produto com um `criar` anterior `confirmado`, `erro_a_enviar`, `erro_registrado`
+  ou `superado` com SEQ no livro** (log da 9b: "conferir com `tools/produto_no_fire.py`"). O `criar`
+  anterior pode ter gravado o produto, então a versão nova nem grava nem responde; a ferramenta do
+  operador não age nesses estados. O que fazer: conferir o SEQ do log com
+  `tools/produto_no_fire.py <slug> --seq N` e levar ao Samuel com o SEQ, o estado da linha anterior e
+  o que o Fire mostrou; a decisão (vincular no Flow ou outra) é dele, fora do código.
 
 ### Conexões com o Fire (`app/erp/connection.py`)
 

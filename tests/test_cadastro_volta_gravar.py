@@ -608,7 +608,7 @@ def test_9b_incerto_nao_grava_nem_responde(modo, env_slug, env_conn, erros):
     _rodar(env_slug, flow, fire, env_conn)
     assert flow.posts == [] and fire.escritas == []
     assert repo.buscar(env_conn, v2["cadastroId"], 2) is None
-    assert erros
+    assert any("9b:" in e and "ferramenta do operador" in e for e in erros)
 
 
 def test_9b_liberado_com_seq_nao_grava_nem_responde(modo, env_slug, env_conn, erros):
@@ -623,7 +623,7 @@ def test_9b_liberado_com_seq_nao_grava_nem_responde(modo, env_slug, env_conn, er
     assert erros
 
 
-@pytest.mark.parametrize("estado", ["erro_a_enviar", "erro_registrado", "superado"])
+@pytest.mark.parametrize("estado", ["erro_a_enviar", "erro_registrado", "superado", "confirmado"])
 def test_9b_erro_ou_superado_com_seq_nao_grava_nem_responde(modo, env_slug, env_conn, erros,
                                                              estado):
     """Um `criar` com SEQ nesses estados pode ter gravado: a v2 não cria outro produto."""
@@ -636,7 +636,10 @@ def test_9b_erro_ou_superado_com_seq_nao_grava_nem_responde(modo, env_slug, env_
     flow, fire = Flow([v2]), FireGravavel()
     _rodar(env_slug, flow, fire, env_conn)
     assert flow.posts == [] and fire.escritas == []
-    assert erros
+    # N3: a ferramenta do operador não age nesses estados; o log aponta o caminho manual.
+    (msg,) = [e for e in erros if "9b:" in e]
+    assert "tools/produto_no_fire.py" in msg and "Caminhos manuais" in msg
+    assert "ferramenta do operador" not in msg
 
 
 def test_9b_em_andamento_pula(modo, env_slug, env_conn):

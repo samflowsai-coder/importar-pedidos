@@ -334,10 +334,15 @@ def _livre_pela_9b(lote: _Lote, item: CadastroPendente) -> bool:
             mensagem=mensagem,
         )
         return False
+    if estado in ("incerto", "liberado", "transitorio"):
+        caminho = "resolver pela ferramenta do operador"
+    else:  # confirmado, erro_*, superado com SEQ: a ferramenta não age neles
+        caminho = (f"conferir com tools/produto_no_fire.py <slug> --seq {seq} e seguir "
+                   "\"Caminhos manuais\" em docs/ai/modules/flowpcp.md")
     logger.error(lote.log(
         cid, versao,
         f"9b: criar de produto com criar {estado} no livro (v{outra['versao']}, SEQ {seq}); "
-        "não grava nem responde (resolver pela ferramenta do operador)",
+        f"não grava nem responde ({caminho})",
     ))
     return False
 
