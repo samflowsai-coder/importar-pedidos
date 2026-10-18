@@ -629,7 +629,8 @@ def _recuperar(slug: str, env_conn, fire_conn, agora: datetime) -> dict | None:
 
 
 def atualizar_sem_volta(slug: str, env_conn) -> None:
-    """Gauge das linhas gravadas no Fire que o Flow ainda não aceitou. Nunca levanta."""
+    """Gauge das linhas com resultado (gravado ou erro) que o Flow ainda não aceitou.
+    Nunca levanta."""
     try:
         por_estado = repo.contar_por_estado(env_conn)
     except Exception as exc:  # noqa: BLE001 — métrica não derruba o ciclo

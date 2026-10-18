@@ -94,8 +94,8 @@ cadastro_volta_mais_antigo: Gauge = Gauge(
 )
 cadastro_volta_sem_volta: Gauge = Gauge(
     "portal_flowpcp_cadastro_volta_sem_volta",
-    "Linhas do livro gravadas no Fire cujo resultado o Flow ainda não aceitou "
-    "(gravado_sem_volta + erro_a_enviar).",
+    "Linhas do livro com resultado (gravado no Fire ou erro) que o Flow ainda não "
+    "aceitou (gravado_sem_volta + erro_a_enviar).",
     ["env"],
 )
 cadastro_volta_aguardando_modo: Gauge = Gauge(

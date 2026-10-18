@@ -422,7 +422,7 @@ Item inválido ou que quebra não trava a fila; `chaves_desconhecidas` no item d
 
 - `portal_flowpcp_cadastro_volta_total{env,resultado}`. `resultado`: `simulado`, `erro_definitivo`, `ja_no_livro` (simular); `criado`, `atualizado`, `inativado` (gravado no Fire); `adotado`, `liberado`, `incerto` (recuperação); `confirmado`, `erro_registrado`, `transitorio`, `orfao`, `superado`, `repetir`, `bug_corpo`, `credencial` (o que o Flow respondeu ao POST).
 - `portal_flowpcp_cadastro_volta_pendentes{env}` (lidos na última leitura, não o tamanho da fila) e `..._mais_antigo_segundos{env}`.
-- `portal_flowpcp_cadastro_volta_sem_volta{env}`: `gravado_sem_volta` + `erro_a_enviar`, atualizado em todo ciclo de gravação (também quando recusado pela P0). Acima de zero por muito tempo = Flow não aceita o resultado.
+- `portal_flowpcp_cadastro_volta_sem_volta{env}`: resultado (gravado no Fire ou erro) ainda não aceito pelo Flow, `gravado_sem_volta` + `erro_a_enviar`, atualizado em todo ciclo de gravação (também quando recusado pela P0). Acima de zero por muito tempo = Flow não aceita o resultado.
 - `portal_flowpcp_cadastro_volta_aguardando_modo{env}`: itens aprovados que o modo não grava (contagem aproximada, até 50, lida sem reservar; em `criar` conta também o `atualizar` derivado de `criar`, que esse modo grava). `0` medido quando o modo consome as três ações (`criar_e_atualizar` com o portão de `inativar`). **Não publica série** (a série é removida) quando o modo é `desligado`/`simular`, a P0 está desligada, a credencial foi recusada ou o Flow não respondeu à contagem (um 400 do Flow rev. 3 vira WARNING uma vez): ausência de série é "não medido", nunca zero.
 
 A tela do ambiente lê tudo por `GET .../flowpcp/cadastro-volta` (ver `modules/web.md`). O último ciclo
