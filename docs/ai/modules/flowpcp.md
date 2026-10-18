@@ -284,7 +284,7 @@ cópia no db do próprio ambiente):
   decisões (lê sem cursor → `gravar_decisao` → confirma com `empresaFaturadoraCnpj`, até vir vazia).
 - Fila em rotação: revisões por `COALESCE(tentada_em, criado_em)` (`marcar_tentada` grava a
   hora de cada tentativa), lote de 50; retirada que falhou vai para o fim (`_retiradas_presas`,
-  memória do processo). Um pedido preso não segura os outros. Mais de 5 falhas passageiras da
+  memória do processo, até 1000). Um pedido preso não segura os outros. Mais de 5 falhas passageiras da
   mesma revisão → aviso único no log. Decisão de revisão acima da maior local → `descartada`
   e aviso no log (sinal de restore de backup do SQLite).
 - Estado (`gerado_em`, último erro, `pendente_envio`/`bloqueada_local`/`recusada_flow`) no log
@@ -298,7 +298,7 @@ Quatro rotas do Flow (`/api/portal-pedidos/precos/…`): (a) `GET tabela`, (b) `
 | 400 `cursor_invalido` (com cursor salvo) ou `reiniciar: true` | a | reinicia a cópia (máx. 2 por volta; depois pausa tabela e aprovação por 15 min) |
 | 2xx sem objeto JSON (`resposta_sem_json`), 429, 503, rede | a, b, c | transitório: tenta no próximo ciclo, nada muda na revisão; em (b) encerra o envio da volta (retiradas e decisões seguem) |
 | 500, 502, 504 | a, c | transitório: tenta no próximo ciclo |
-| 500, 502, 504 | b | pula só aquele pedido ou retirada; a fila segue e ele vai para o fim |
+| 500, 502, 504 | b | pula só aquele pedido ou retirada; a fila segue e ele vai para o fim. 3 seguidos na volta (revisões e retiradas somadas, zera com qualquer outra resposta) = disjuntor: encerra o envio da volta (decisões seguem) |
 | 201/200 | b (pedido) | `enviada` |
 | 2xx com JSON fora do contrato | b | `enviada`, com o corpo bruto guardado (o Flow gravou) |
 | 2xx com JSON fora do contrato | `POST decisoes/confirmar` | confirmação tida como feita (se não, a decisão volta e é reconfirmada) |

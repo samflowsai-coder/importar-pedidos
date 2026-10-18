@@ -19,8 +19,9 @@ gravou); 409 da vigente → piso e reenvio na mesma volta; 409 de revisão que j
 não é a vigente → fica `substituida`; 422 de conteúdo → `recusada_flow`; 413 e
 400 `payload_invalido` (e corpo inválido aqui) → bloqueio local daquela revisão;
 403, 400/401/404 e outros → pausa só da aprovação (a tabela segue); 500/502/504
-→ pula só aquele pedido; 429/503/rede → para o envio desta volta (retiradas e
-decisões seguem). Pausa e transitório nunca tocam a revisão. A fila gira: quem
+→ pula só aquele pedido (3 seguidos, somando revisões e retiradas = Flow fora:
+o disjuntor encerra o envio da volta); 429/503/rede → para o envio desta volta
+(retiradas e decisões seguem). Pausa e transitório nunca tocam a revisão. A fila gira: quem
 falhou vai para o fim (`tentada_em` das revisões; retiradas presas, na memória
 do processo). Na tabela, 400 `cursor_invalido` com cursor salvo
 reinicia a cópia como o `reiniciar`.
@@ -63,6 +64,8 @@ BLOQUEIO_GRANDE = "pedido grande demais para o Flow (corpo acima de 2 MB)"
 _TRANSITORIOS = frozenset({429, 500, 502, 503, 504})
 _PARAM_O_ENVIO = frozenset({429, 503})  # o Flow pede para esperar: para a volta
 AVISO_TENTATIVAS = 5
+DISJUNTOR_5XX = 3  # 5xx seguidos na volta (revisões + retiradas) = Flow fora
+LIMITE_PRESAS = 1000
 _RECUSAS_422 = frozenset(
     {"rede_desconhecida", "produto_desconhecido", "empresa_faturadora_desconhecida"}
 )
@@ -292,9 +295,10 @@ def _aprovacao(conn, client, slug: str, empresa: str, agora: datetime) -> None:
     if CAPACIDADE_APROVACAO not in capacidades:
         _pausar(slug, agora, tudo=False, motivo=f"o Flow não declara {CAPACIDADE_APROVACAO}")
         return
-    if not _enviar_revisoes(conn, client, slug, agora):
+    disjuntor = {"seguidos": 0}  # 5xx seguidos nesta volta, revisões e retiradas
+    if not _enviar_revisoes(conn, client, slug, agora, disjuntor):
         return
-    if not _enviar_retiradas(conn, client, slug, empresa, agora):
+    if not _enviar_retiradas(conn, client, slug, empresa, agora, disjuntor):
         return
     _ler_decisoes(conn, client, slug, empresa, agora)
 
@@ -315,10 +319,11 @@ def _revisao_vigente_flow(exc: FlowPCPClientError) -> int | None:
     return v if isinstance(v, int) and not isinstance(v, bool) and v >= 1 else None
 
 
-def _enviar_revisoes(conn, client, slug: str, agora: datetime) -> bool:
+def _enviar_revisoes(conn, client, slug: str, agora: datetime, disjuntor: dict) -> bool:
     """Revisões `pendente_envio` (só a vigente de cada pedido, fora as bloqueadas
     localmente). Um pedido ruim não para os outros: 5xx (fora 503) pula só ele.
-    Rede, 429 e 503 encerram o envio desta volta (retiradas e decisões seguem).
+    Rede, 429 e 503 encerram o envio desta volta (retiradas e decisões seguem),
+    e também `DISJUNTOR_5XX` 5xx seguidos (o `disjuntor` vale para as retiradas).
     Mais de `AVISO_TENTATIVAS` falhas passageiras da mesma revisão → aviso
     único no log. False = pausou: parar a volta."""
     fila = revs.pendentes_envio(conn, LOTE_ENVIO)
@@ -338,6 +343,7 @@ def _enviar_revisoes(conn, client, slug: str, agora: datetime) -> bool:
             resposta = client.post_precos_aprovacao(corpo)
         except FlowPCPClientError as exc:
             acao = _erro_do_pedido(conn, slug, imp, n, exc, agora)
+            disjuntor["seguidos"] = disjuntor["seguidos"] + 1 if acao == "pular" else 0
             if acao == "parar":
                 return False
             if acao in ("transitorio", "pular"):
@@ -350,15 +356,18 @@ def _enviar_revisoes(conn, client, slug: str, agora: datetime) -> bool:
                         f"revisão {imp}/{n}: mais de {AVISO_TENTATIVAS} tentativas sem "
                         "resposta do Flow; segue na fila",
                     )
-                if acao == "transitorio":
+                if acao == "transitorio" or disjuntor["seguidos"] >= DISJUNTOR_5XX:
                     return True
                 continue
+            _tentativas.pop((slug, imp, n), None)
             if acao == "reenviar" and reenvios.get(imp, 0) < MAX_REENVIOS:
                 reenvios[imp] = reenvios.get(imp, 0) + 1
                 nova = revs.vigente(conn, imp)
                 if nova is not None and nova["situacao"] == "pendente_envio":
                     fila.insert(0, nova)
             continue
+        disjuntor["seguidos"] = 0
+        _tentativas.pop((slug, imp, n), None)
         revs.marcar_enviada(conn, imp, n, resposta.model_dump(mode="json"), em=agora)
     return True
 
@@ -409,14 +418,21 @@ def _motivo_retirada(texto: str | None) -> str:
     return motivo
 
 
-def _enviar_retiradas(conn, client, slug: str, empresa: str, agora: datetime) -> bool:
+def _enviar_retiradas(
+    conn, client, slug: str, empresa: str, agora: datetime, disjuntor: dict
+) -> bool:
     """Retiradas pendentes. 409 `revisao_obsoleta` → reenvia com a `revisaoVigente`
     do Flow (nunca pausa por isso); 200 com `aprovacaoId` nulo = feito. Retirada
     sem saída (inválida, 409 sem revisão nova) loga uma vez e fica para depois.
     5xx (fora 503) pula só aquela retirada; rede, 429 e 503 encerram as
     retiradas desta volta. Retirada que falhou vai para o fim da fila
-    (`_retiradas_presas`, memória do processo). False = pausou."""
+    (`_retiradas_presas`, memória do processo, até `LIMITE_PRESAS`). Disjuntor
+    aberto (`DISJUNTOR_5XX` 5xx seguidos na volta) encerra. False = pausou."""
+    if disjuntor["seguidos"] >= DISJUNTOR_5XX:
+        return True
     presas = _retiradas_presas.setdefault(slug, set())
+    if len(presas) > LIMITE_PRESAS:
+        presas.clear()  # só ordem da fila: perder a memória não perde retirada
     for r in revs.retiradas_pendentes(conn, LOTE_ENVIO, por_ultimo=presas):
         imp, n = r["import_id"], int(r["revisao"])
         base = {
@@ -442,6 +458,8 @@ def _enviar_retiradas(conn, client, slug: str, empresa: str, agora: datetime) ->
             try:
                 client.post_precos_aprovacao(corpo)
             except FlowPCPClientError as exc:
+                if not _so_este_pedido(exc):
+                    disjuntor["seguidos"] = 0
                 vigente_flow = _revisao_vigente_flow(exc)
                 if exc.status_code == 409 and exc.error == "revisao_obsoleta":
                     if vigente_flow is not None and vigente_flow != alvo:
@@ -466,7 +484,11 @@ def _enviar_retiradas(conn, client, slug: str, empresa: str, agora: datetime) ->
                 presas.add((imp, n))
                 if not _so_este_pedido(exc):
                     return True
+                disjuntor["seguidos"] += 1
+                if disjuntor["seguidos"] >= DISJUNTOR_5XX:
+                    return True
                 break
+            disjuntor["seguidos"] = 0
             revs.marcar_retirada_enviada(conn, imp, n, em=agora)
             presas.discard((imp, n))
             break

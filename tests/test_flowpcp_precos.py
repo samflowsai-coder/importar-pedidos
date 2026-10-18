@@ -632,6 +632,61 @@ def test_revisao_com_mais_de_5_tentativas_avisa_uma_vez(mm, flow, logs):
     assert len(avisos) == 1
 
 
+def test_5xx_em_tudo_abre_o_disjuntor_em_3_posts_por_volta(mm, flow):
+    for imp in ("imp-velho-1", "imp-velho-2"):
+        _revisao(external=imp)
+    precos.rodar(AGORA)
+    with router.env_connect("mm") as conn:
+        for imp in ("imp-velho-1", "imp-velho-2"):
+            revs.retirar(conn, imp, "pedido cancelado no Portal", em=AGORA)
+    for imp in ("imp-a", "imp-b", "imp-c", "imp-d"):
+        _revisao(external=imp)
+    flow.aprovacao = [_erro(500, "erro_interno")] * 100
+    antes = len(flow.de("aprovacao"))
+    n_dec = flow.rotas().count("decisoes")
+    precos.rodar(AGORA + timedelta(seconds=31))
+    assert len(flow.de("aprovacao")) - antes == 3
+    assert flow.rotas().count("decisoes") == n_dec + 1
+
+
+def test_disjuntor_conta_as_retiradas(mm, flow):
+    imps = ("imp-a", "imp-b", "imp-c", "imp-d")
+    for imp in imps:
+        _revisao(external=imp)
+    precos.rodar(AGORA)
+    with router.env_connect("mm") as conn:
+        for imp in imps:
+            revs.retirar(conn, imp, "pedido cancelado no Portal", em=AGORA)
+    flow.aprovacao = [_erro(502, "bad_gateway")] * 100
+    antes = len(flow.de("aprovacao"))
+    precos.rodar(AGORA + timedelta(seconds=31))
+    assert len(flow.de("aprovacao")) - antes == 3
+
+
+def test_disjuntor_zera_com_resposta_que_nao_e_5xx(mm, flow):
+    for imp in ("imp-a", "imp-b", "imp-c", "imp-d", "imp-e"):
+        _revisao(external=imp)
+    flow.aprovacao = _preso("imp-a", "imp-b", "imp-d", "imp-e")
+    precos.rodar(AGORA)
+    assert [c["externalId"] for c in flow.de("aprovacao")] == [
+        "imp-a",
+        "imp-b",
+        "imp-c",
+        "imp-d",
+        "imp-e",
+    ]
+
+
+def test_tentativas_somem_da_memoria_no_sucesso(mm, flow):
+    _revisao(external="imp-a")
+    flow.aprovacao = [_erro(500, "erro_interno")]
+    precos.rodar(AGORA)
+    assert precos._tentativas == {("mm", "imp-a", 1): 1}
+    precos.rodar(AGORA + timedelta(seconds=31))
+    assert _situacoes(external="imp-a") == [(1, "enviada")]
+    assert precos._tentativas == {}
+
+
 def test_erro_de_rede_e_transitorio(mm, flow):
     _revisao()
     flow.aprovacao = [FlowPCPClientError("conexão recusada", status_code=None)]
