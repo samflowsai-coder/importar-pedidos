@@ -407,6 +407,42 @@ def test_transicao_recusada_pelo_livro_nao_conta(env_conn, monkeypatch, erros):
     assert any("não aplicado no livro" in e for e in erros)
 
 
+class _Sonda(FireLeitura):
+    """Aceita qualquer SQL (o ERP de verdade aceitaria): só o guarda pode recusar."""
+
+    def ler(self, sql, params):
+        self.consultas.append((sql, params))
+        return []
+
+
+@pytest.mark.parametrize("sql", ["UPDATE PRODUTOS SET DESCRICAO = ? WHERE SEQ = ?",
+                                 "  insert into PRODUTOS (SEQ) VALUES (?)",
+                                 "DELETE FROM PRODUTOS_KIT WHERE CODPRODUTO_PAI = ?"])
+def test_guarda_da_recuperacao_so_deixa_passar_select(sql):
+    fire = _Sonda()
+    guardada = rec._SoSelect(fire)
+    with pytest.raises(RuntimeError, match="só SELECT"):
+        guardada.cursor().execute(sql, (1,))
+    with pytest.raises(RuntimeError, match="só SELECT"):
+        guardada.commit()
+    assert fire.consultas == []
+    guardada.cursor().execute("SELECT 1 FROM RDB$DATABASE")
+    assert len(fire.consultas) == 1
+
+
+def test_recuperar_le_o_erp_pelo_guarda(env_conn, monkeypatch, erros):
+    """Uma escrita que escapasse no caminho da recuperação é barrada e vira incerto."""
+    _linha(env_conn, seq=3992)
+    fire = _Sonda()
+
+    def _escreve(conn, seq):
+        conn.cursor().execute("UPDATE PRODUTOS SET BLOQUEADO = 'Sim' WHERE SEQ = ?", (seq,))
+
+    monkeypatch.setattr(rec.cadastro_fire, "ler_produto", _escreve)
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+    assert fire.consultas == []
+
+
 # --- transitorio com SEQ (M3 da revisão da Task 4) ----------------------------
 
 

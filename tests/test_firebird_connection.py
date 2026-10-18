@@ -92,8 +92,9 @@ def test_conexao_de_escrita_do_cadastro_tem_lock_timeout_em_toda_transacao(monke
 
 
 def test_leitura_bloqueante_espera_registro_pendente(monkeypatch):
-    """Recuperação do cadastro: READ ONLY + READ COMMITTED + NO_REC_VERSION + WAIT com
-    lock timeout. Um INSERT sem commit de outra transação vira conflito, não ausência."""
+    """Recuperação do cadastro: WRITE + READ COMMITTED + NO_REC_VERSION + WAIT com lock
+    timeout (WRITE porque READ ONLY pode ser pré-comitada e ignorar o NO_REC_VERSION).
+    Um INSERT sem commit de outra transação vira conflito, não ausência; a saída desfaz."""
     import struct
     from contextlib import contextmanager
 
@@ -101,9 +102,12 @@ def test_leitura_bloqueante_espera_registro_pendente(monkeypatch):
 
     from app.erp.connection import FirebirdConnection
 
+    class _Tr:
+        default_action = "commit"  # o padrão do fdb
+
     class _Conn:
         def __init__(self):
-            self.begins = []
+            self.begins, self.main_transaction = [], _Tr()
 
         def begin(self, tpb=None):
             self.begins.append(tpb)
@@ -119,9 +123,11 @@ def test_leitura_bloqueante_espera_registro_pendente(monkeypatch):
     with FirebirdConnection().connect_leitura_bloqueante({"path": "x"}) as c:
         assert c is conn
     assert conn.begins == [bytes([
-        fdb.isc_tpb_version3, fdb.isc_tpb_read, fdb.isc_tpb_read_committed,
+        fdb.isc_tpb_version3, fdb.isc_tpb_write, fdb.isc_tpb_read_committed,
         fdb.isc_tpb_no_rec_version, fdb.isc_tpb_wait, fdb.isc_tpb_lock_timeout,
     ]) + struct.pack("<bI", 4, 10)]
+    assert kws == [{"commit_na_saida": False}]  # saída sempre rollback, nunca commit
+    assert conn.main_transaction.default_action == "rollback"
     with FirebirdConnection().connect_leitura_bloqueante({"path": "x"}, lock_timeout=3):
         pass
     assert conn.begins[-1].endswith(struct.pack("<bI", 4, 3))

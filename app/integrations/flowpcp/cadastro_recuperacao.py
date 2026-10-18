@@ -14,7 +14,7 @@ Nunca grava no ERP e nunca adota no chute. Liberar um produto que existe faz ele
 gravado de novo, então "é outro produto" exige prova forte (descrição diferente ou
 cadastro anterior à reserva); qualquer outra divergência é `incerto`. A leitura
 corre em `connect_leitura_bloqueante`: um INSERT pendente de outro processo vira
-conflito de lock, a recuperação para e nada é marcado.
+conflito de lock, a recuperação para e nada é marcado. Todo SQL passa por `_SoSelect`.
 
 `transitorio` com SEQ (erro que saiu sem prova de rollback) passa pelas mesmas
 regras; a retomada e a porta vão no mesmo commit do SQLite.
@@ -42,6 +42,40 @@ IDADE_MINIMA_RECUPERACAO = cv.PRAZO_LOTE + timedelta(minutes=7)
 _VIRADA_DO_DIA = timedelta(minutes=10)
 _CONFERIDAS = ("DESCRICAO", "UNIDADE", "GRUPO", "CODIGO_EAN13", "CLASSIF_FISCAL")
 _CONTAGENS = ("adotado", "liberado", "incerto", "reaplicar")
+
+
+class _SoSelect:
+    """A conexão do ERP vista pela recuperação: só SELECT passa, commit nunca."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self):
+        return _CursorSoSelect(self._conn.cursor())
+
+    def commit(self):
+        raise RuntimeError("cadastro_recuperacao: só SELECT é permitido no Fire")
+
+
+class _CursorSoSelect:
+    def __init__(self, cur):
+        self._cur = cur
+
+    def execute(self, sql: str, params: tuple = ()):
+        if not sql.lstrip().upper().startswith("SELECT"):
+            raise RuntimeError("cadastro_recuperacao: só SELECT é permitido no Fire")
+        return self._cur.execute(sql, params)
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    def close(self):
+        close = getattr(self._cur, "close", None)
+        if close:
+            close()
 
 
 def _txt(valor: object) -> str:
@@ -253,10 +287,11 @@ def recuperar(slug: str, env_conn, fire_conn, *, agora: datetime) -> dict:
     as linhas que faltam ficam como estão. Outra falha de leitura vira `incerto` só
     naquela linha."""
     contagem: dict = dict.fromkeys(_CONTAGENS, 0)
+    fire = _SoSelect(fire_conn)
     for linha, iniciado, transitorio in _a_recuperar(env_conn, agora):
         cid, versao = linha["cadastro_id"], linha["versao"]
         try:
-            decisao = _decidir(fire_conn, env_conn, linha, iniciado)
+            decisao = _decidir(fire, env_conn, linha, iniciado)
         except Exception as exc:  # noqa: BLE001 — sem leitura, sem decisão
             tipo = type(exc).__name__
             if cadastro_fire.classificar_erro(exc) in ("conexao", "lock"):
