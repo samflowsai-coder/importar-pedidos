@@ -423,7 +423,8 @@ def fechar(
 
 def marcar_erro(conn: sqlite3.Connection, *, lote_id: int, motivo: str, agora: datetime) -> None:
     conn.execute(
-        "UPDATE intercompany_lote SET status = 'erro', erro_motivo = ? WHERE id = ?",
+        "UPDATE intercompany_lote SET status = 'erro', erro_motivo = ? "
+        "WHERE id = ? AND status IN ('aberto','aguardando_fator','erro')",
         (motivo, lote_id),
     )
 

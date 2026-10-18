@@ -236,6 +236,15 @@ def test_marcar_erro(conn):
     assert g["status"] == "erro" and g["erro_motivo"] == "boom"
 
 
+def test_marcar_erro_nao_reabre_lote_fechado(conn):
+    _fator(conn)
+    lote = _lote(conn, date(2026, 8, 17))
+    assert _fechar(conn, lote["id"]) is True
+    lotes_repo.marcar_erro(conn, lote_id=lote["id"], motivo="atrasado", agora=AGORA)
+    g = lotes_repo.get(conn, lote["id"])
+    assert g["status"] == "fechado" and g["erro_motivo"] is None
+
+
 def test_marcar_enviado_so_de_fechado_e_so_uma_vez(conn):
     _fator(conn)
     lote = _lote(conn, date(2026, 8, 17))
