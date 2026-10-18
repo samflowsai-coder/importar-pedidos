@@ -57,6 +57,8 @@ _GDS = {
     335544726: "conexao",  # isc_net_read_err
     335544727: "conexao",  # isc_net_write_err
     335544741: "conexao",  # isc_lost_db_connection
+    335544528: "conexao",  # isc_shutdown
+    335544856: "conexao",  # isc_att_shutdown
     335544466: "recusa",  # isc_foreign_key
 }
 # -902 fica de fora: balde genérico (login inválido e I/O também caem nele).
@@ -276,5 +278,16 @@ def buscar_por_nome(conn, *, nome: str, grupo: int, unidade: str, data_cad: date
         )
         alvo = nome.strip().casefold()
         return [int(s) for s, d in cur.fetchall() if str(d or "").strip().casefold() == alvo]
+    finally:
+        cur.close()
+
+
+def inserir_marcas(conn, itens: list[tuple[int, str]]) -> None:
+    """INSERT em PRODUTOS_MARCA (CODIGO, MARCA), parametrizado. Sem commit: quem
+    chama controla a transação (e o rollback)."""
+    cur = conn.cursor()
+    try:
+        for codigo, nome in itens:
+            cur.execute("INSERT INTO PRODUTOS_MARCA (CODIGO, MARCA) VALUES (?, ?)", (codigo, nome))
     finally:
         cur.close()

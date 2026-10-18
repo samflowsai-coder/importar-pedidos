@@ -444,3 +444,14 @@ def test_criar_do_produto_ignora_transitorio_sem_seq(conn):
     _reservar(conn)
     _forcar(conn, "c1", "transitorio")
     assert repo.criar_do_produto(conn, "p1") is None
+
+
+def test_linha_do_produto_com_seq_acha_por_seq_reservado_ou_codigo(conn):
+    _reservar(conn, "c1")
+    repo.marcar_seq(conn, "c1", 1, 4001)
+    _reservar(conn, "c2", acao="atualizar")
+    repo.marcar_gravado(conn, "c2", 1, erp_produto_id="3100", corpo_json="{}")
+    assert repo.linha_do_produto_com_seq(conn, "p1", 4001)["cadastro_id"] == "c1"
+    assert repo.linha_do_produto_com_seq(conn, "p1", 3100)["cadastro_id"] == "c2"
+    assert repo.linha_do_produto_com_seq(conn, "p1", 9999) is None
+    assert repo.linha_do_produto_com_seq(conn, "outro", 4001) is None

@@ -327,6 +327,22 @@ def criar_do_produto(conn: sqlite3.Connection, produto_id: str) -> dict[str, Any
     return linhas[0] if linhas else None
 
 
+def linha_do_produto_com_seq(
+    conn: sqlite3.Connection, produto_id: str, seq: int
+) -> dict[str, Any] | None:
+    """Linha deste produto que reservou ou gravou `seq` (qualquer estado): o nome
+    achado no ERP pode ser o do próprio produto, não um homônimo."""
+    linhas = _dicts(
+        conn.execute(
+            "SELECT * FROM cadastro_volta WHERE produto_id = ? "
+            "AND (seq_reservado = ? OR erp_produto_id = ?) "
+            "ORDER BY iniciado_em DESC, rowid DESC LIMIT 1",
+            (produto_id, int(seq), str(seq)),
+        )
+    )
+    return linhas[0] if linhas else None
+
+
 def seq_criado_pelo_portal(conn: sqlite3.Connection, seq: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM cadastro_volta WHERE erp_produto_id = ? "

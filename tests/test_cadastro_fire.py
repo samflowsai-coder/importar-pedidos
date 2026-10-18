@@ -200,6 +200,7 @@ def _fdb(sqlcode, gds, extra="x"):
         (335544665, "colisao"), (335544349, "colisao"),
         (335544336, "lock"), (335544345, "lock"), (335544451, "lock"), (335544510, "lock"),
         (335544721, "conexao"), (335544726, "conexao"), (335544727, "conexao"), (335544741, "conexao"),
+        (335544528, "conexao"), (335544856, "conexao"),
         (335544466, "recusa"),
     ],
 )
@@ -359,3 +360,22 @@ def test_atualizar_repete_o_delete_na_segunda_tentativa():
     um = ["SELECT SEQ FROM PRODUTOS", "DELETE FROM PRODUTOS_KIT", "SELECT MAX(CODIGO) FROM PRODUTOS_KIT",
           "INSERT INTO PRODUTOS_KIT"]
     assert [t.split(" WHERE")[0] for t in tipos] == um + um
+
+
+def test_criar_kit_colisao_na_composicao_tenta_de_novo():
+    fire, reservas = _Fire(colide_kit=1), []
+    g = cf.criar(fire, campos=CAMPOS, componentes=[(3170, 3.0)], hoje=date(2026, 10, 17),
+                 ao_reservar=reservas.append)
+    assert g.seq == 3992 and reservas == [3992, 3992]  # mesmo SEQ: o MAX não andou
+    assert fire.rollbacks == 1 and fire.commits == 1
+
+
+def test_inserir_marcas_parametrizado_e_sem_commit():
+    fire = _Fire()
+    cf.inserir_marcas(fire, [(17, "Kolosh"), (18, "Sam's Club")])
+    assert fire.sqls == [
+        ("INSERT INTO PRODUTOS_MARCA (CODIGO, MARCA) VALUES (?, ?)", (17, "Kolosh")),
+        ("INSERT INTO PRODUTOS_MARCA (CODIGO, MARCA) VALUES (?, ?)", (18, "Sam's Club")),
+    ]
+    assert fire.commits == 0 and fire.rollbacks == 0
+

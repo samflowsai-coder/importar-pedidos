@@ -128,6 +128,31 @@ class FirebirdConnection:
             yield conn
 
     @contextmanager
+    def connect_escrita_cadastro(self, cfg: dict, lock_timeout: int = 10) -> Generator:
+        """Conexão de ESCRITA do cadastro de produto (volta Flow -> Fire):
+        READ COMMITTED + REC_VERSION, WAIT com `isc_tpb_lock_timeout` de
+        `lock_timeout` segundos.
+
+        Sem o timeout, um SEQ aberto na tela do Fire deixaria o gravador
+        esperando o lock sem limite (e com ele o `_lock` do processo). O TPB
+        vai também como `default_tpb` da transação principal: o fdb abre a
+        transação seguinte a cada commit/rollback com esse padrão, então
+        todo cadastro do lote roda com o mesmo timeout.
+        """
+        import struct
+
+        import fdb  # type: ignore[import]
+
+        tpb = bytes([
+            fdb.isc_tpb_version3, fdb.isc_tpb_write, fdb.isc_tpb_read_committed,
+            fdb.isc_tpb_rec_version, fdb.isc_tpb_wait, fdb.isc_tpb_lock_timeout,
+        ]) + struct.pack("<bI", 4, lock_timeout)
+        with self._connect_with(cfg) as conn:
+            conn.main_transaction.default_tpb = tpb
+            conn.begin(tpb=tpb)
+            yield conn
+
+    @contextmanager
     def _connect_with(self, cfg: dict) -> Generator:
         # fdb (driver legado) — compatível com o cliente Firebird 2.5 do Fire
         # Sistemas. O firebird-driver (moderno) exige fbclient 3.0+, que os

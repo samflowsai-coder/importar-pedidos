@@ -49,3 +49,40 @@ def test_porta_nao_numerica_levanta_firebird_error():
     # FirebirdConnectionError (contrato de erro do app), não ValueError cru.
     with pytest.raises(FirebirdConnectionError):
         _fb_connect_kwargs({"path": "db", "host": "h", "port": "abc"})
+
+
+def test_conexao_de_escrita_do_cadastro_tem_lock_timeout_em_toda_transacao(monkeypatch):
+    """READ COMMITTED + WAIT com lock timeout de 10 s: um SEQ aberto na tela do Fire
+    não trava o gravador sem limite. O TPB vale também depois de cada commit/rollback."""
+    import struct
+    from contextlib import contextmanager
+
+    import fdb
+
+    from app.erp.connection import FirebirdConnection
+
+    class _Tr:
+        default_tpb = None
+
+    class _Conn:
+        def __init__(self):
+            self.main_transaction, self.begins = _Tr(), []
+
+        def begin(self, tpb=None):
+            self.begins.append(tpb)
+
+    conn = _Conn()
+
+    @contextmanager
+    def _falso(self, cfg):
+        yield conn
+
+    monkeypatch.setattr(FirebirdConnection, "_connect_with", _falso)
+    with FirebirdConnection().connect_escrita_cadastro({"path": "x"}) as c:
+        assert c is conn
+    esperado = bytes([
+        fdb.isc_tpb_version3, fdb.isc_tpb_write, fdb.isc_tpb_read_committed,
+        fdb.isc_tpb_rec_version, fdb.isc_tpb_wait, fdb.isc_tpb_lock_timeout,
+    ]) + struct.pack("<bI", 4, 10)
+    assert conn.begins == [esperado]
+    assert conn.main_transaction.default_tpb == esperado
