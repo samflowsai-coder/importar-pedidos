@@ -63,6 +63,7 @@ def test_conexao_de_escrita_do_cadastro_tem_lock_timeout_em_toda_transacao(monke
 
     class _Tr:
         default_tpb = None
+        default_action = "commit"  # o padrão do fdb
 
     class _Conn:
         def __init__(self):
@@ -86,6 +87,8 @@ def test_conexao_de_escrita_do_cadastro_tem_lock_timeout_em_toda_transacao(monke
     ]) + struct.pack("<bI", 4, 10)
     assert conn.begins == [esperado]
     assert conn.main_transaction.default_tpb == esperado
+    # Fechar a conexão com transação aberta desfaz, nunca comita.
+    assert conn.main_transaction.default_action == "rollback"
 
 
 @pytest.mark.firebird_stub_proprio

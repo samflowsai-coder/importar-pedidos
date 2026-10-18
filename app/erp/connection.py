@@ -153,6 +153,8 @@ class FirebirdConnection:
         ]) + struct.pack("<bI", 4, lock_timeout)
         with self._connect_with(cfg, commit_na_saida=False) as conn:
             conn.main_transaction.default_tpb = tpb
+            # O padrão do fdb é commit ao encerrar a transação ativa (ex.: close).
+            conn.main_transaction.default_action = "rollback"
             conn.begin(tpb=tpb)
             yield conn
 

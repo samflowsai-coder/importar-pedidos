@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.erp import cadastro_fire
 from app.integrations.flowpcp import cadastro_volta as cv
 from app.integrations.flowpcp.cadastro_resultado import mensagem_para_flow
 from app.integrations.flowpcp.cadastro_schema import PendentesResposta
@@ -1023,6 +1024,30 @@ def test_atualizar_kit_com_rollback_falhando_nao_responde_e_para_o_lote(modo, en
     assert repo.buscar(env_conn, item["cadastroId"], 2)["estado"] == "em_andamento"
     assert repo.buscar(env_conn, seguinte["cadastroId"], 1) is None
     assert erros
+
+
+def test_seq_sumido_com_rollback_falhando_nao_responde_e_para_o_lote(modo, env_slug, env_conn,
+                                                                    monkeypatch, erros):
+    """Sonda 7c: `LookupError` de atualizar sem prova de rollback. O UPDATE pendente
+    nunca é comitado depois, nada vai ao Flow e a linha fica para a recuperação."""
+    _no_catalogo(env_conn, "3990")
+    modo("criar_e_atualizar")
+    fire = _RollbackFalha(produtos={3170: {"DESCRICAO": "PAR", "BLOQUEADO": "Nao"},
+                                    3990: {"DESCRICAO": "KIT", "BLOQUEADO": "Nao"}})
+
+    def _sumiu(conn, *, seq, campos, componentes):
+        conn.cursor().execute("UPDATE PRODUTOS SET DESCRICAO = ? WHERE SEQ = ?", ("X", seq))
+        cadastro_fire.desfazer(conn)  # falha: o UPDATE fica pendente
+        raise LookupError("SEQ sumiu")
+
+    monkeypatch.setattr(cadastro_fire, "atualizar", _sumiu)
+    item, seguinte = _atualizar("3990"), _outro(2, nome="OUTRO")
+    flow = Flow([item, seguinte])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts == [] and fire.commits == 0
+    assert repo.buscar(env_conn, item["cadastroId"], 2)["estado"] == "em_andamento"
+    assert repo.buscar(env_conn, seguinte["cadastroId"], 1) is None  # lote parado
+    assert any("rollback não confirmou" in e for e in erros)
 
 
 class _Tr:
