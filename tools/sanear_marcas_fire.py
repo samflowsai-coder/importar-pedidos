@@ -21,6 +21,11 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Rodando como script, a raiz do projeto não está no sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.erp import cadastro_fire, queries  # noqa: E402
+
 # Contrato §8.3: as 17 marcas ativas do Flow em 17/10/2026. O apóstrofo de
 # "Sam's Club" é U+0027 (confirmado pelo Flow).
 MARCAS_FLOW_2026_10_17 = [
@@ -36,11 +41,11 @@ def normalizar(nome: str) -> str:
 
 
 def chave_solta(nome: str) -> str:
-    """`normalizar` sem acento e sem apóstrofo/pontuação. Só para avisar de
+    """`normalizar` sem acento e sem apóstrofo/pontuação/espaço. Só para avisar de
     grafia parecida, nunca para decidir que duas marcas são a mesma."""
     n = unicodedata.normalize("NFKD", normalizar(nome))
     n = "".join(c for c in n if not unicodedata.combining(c))
-    return re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9 ]", "", n)).strip()
+    return re.sub(r"[^A-Z0-9]", "", n)
 
 
 @dataclass
@@ -73,14 +78,30 @@ def planejar(existentes: list[tuple[int, str | None]], desejadas: list[str]) -> 
     return plano
 
 
-_SQL_LER = "SELECT CODIGO, MARCA FROM PRODUTOS_MARCA ORDER BY CODIGO"
-_SQL_INSERIR = "INSERT INTO PRODUTOS_MARCA (CODIGO, MARCA) VALUES (?, ?)"
+_SQL_TRIGGERS = (
+    "SELECT TRIM(RDB$TRIGGER_NAME) FROM RDB$TRIGGERS WHERE RDB$RELATION_NAME = 'PRODUTOS_MARCA'"
+)
+_SQL_GERADORES = (
+    "SELECT TRIM(RDB$GENERATOR_NAME) FROM RDB$GENERATORS "
+    "WHERE RDB$SYSTEM_FLAG = 0 AND RDB$GENERATOR_NAME CONTAINING 'MARCA'"
+)
 
 
 def _ler(conn) -> list[tuple[int, str | None]]:
     cur = conn.cursor()
-    cur.execute(_SQL_LER)
+    cur.execute(queries.LIST_PRODUTOS_MARCA)
     return [(int(c), m) for c, m in cur.fetchall()]
+
+
+def _ler_automatismos(conn) -> tuple[list[str], list[str]]:
+    """Triggers em PRODUTOS_MARCA e geradores com MARCA no nome: qualquer um
+    pode dar outro código ao INSERT, e o plano usa MAX+1 literal."""
+    cur = conn.cursor()
+    cur.execute(_SQL_TRIGGERS)
+    triggers = [str(r[0]) for r in cur.fetchall()]
+    cur.execute(_SQL_GERADORES)
+    geradores = [str(r[0]) for r in cur.fetchall()]
+    return triggers, geradores
 
 
 def _imprimir(plano: Plano, out=print) -> None:
@@ -90,6 +111,19 @@ def _imprimir(plano: Plano, out=print) -> None:
         out(f"  PARECIDA    {codigo:>4}  {nome}  ~  {existente}")
     for codigo, nome in plano.inserir:
         out(f"  INSERIR     {codigo:>4}  {nome}")
+    out(
+        f"Resumo: {len(plano.ja_existem)} já existem, "
+        f"{len(plano.parecidas)} parecidas, {len(plano.inserir)} a inserir."
+    )
+
+
+def _curta(exc: BaseException, cfg: dict) -> str:
+    """`Tipo: mensagem curta`, sem a senha."""
+    texto = " ".join(str(exc).split())
+    senha = cfg.get("password") or ""
+    if senha:
+        texto = texto.replace(senha, "***")
+    return f"{type(exc).__name__}: {texto[:160]}"
 
 
 def executar(
@@ -97,6 +131,7 @@ def executar(
     *,
     gravar: bool,
     backup_servidor: str | None,
+    slug: str = "",
     desejadas: list[str] | None = None,
     conn_factory=None,
     backup=None,
@@ -104,7 +139,7 @@ def executar(
 ) -> int:
     """Roda o saneamento e devolve o código de saída. Dublês entram por
     `conn_factory` (objeto com connect_somente_leitura/connect_with_config) e
-    `backup` (callable gbak)."""
+    `backup` (callable gbak que devolve a linha de prova)."""
     desejadas = MARCAS_FLOW_2026_10_17 if desejadas is None else desejadas
     if conn_factory is None:
         from app.erp.connection import FirebirdConnection
@@ -113,45 +148,80 @@ def executar(
     if gravar and backup is None:
         from app.erp.backup import gbak as backup
 
-    with conn_factory.connect_somente_leitura(cfg) as conn:
-        plano = planejar(_ler(conn), desejadas)
+    out(f"Ambiente {slug} · {cfg.get('host')}:{cfg.get('port')} · {cfg.get('path')}")
+    try:
+        with conn_factory.connect_somente_leitura(cfg) as conn:
+            plano = planejar(_ler(conn), desejadas)
+            triggers, geradores = _ler_automatismos(conn)
+    except Exception as exc:  # noqa: BLE001
+        out(f"Leitura falhou ({_curta(exc, cfg)}). Nada foi gravado.")
+        return 1
     _imprimir(plano, out)
+    out(f"Triggers em PRODUTOS_MARCA: {', '.join(triggers) or 'nenhum'}")
+    out(f"Geradores com MARCA no nome: {', '.join(geradores) or 'nenhum'}")
 
     if not gravar:
+        if plano.parecidas:
+            out("Atenção: há grafia parecida; o --gravar vai recusar até a revisão.")
+        if triggers or geradores:
+            out("Atenção: há trigger/gerador; o --gravar vai recusar.")
         out("Dry-run: nada gravado.")
         return 0
     if plano.parecidas:
         out("Há marcas com grafia parecida no Fire. Revise antes de gravar; nada foi gravado.")
         return 1
+    if triggers or geradores:
+        out("Há trigger ou gerador ligado a PRODUTOS_MARCA; o código planejado não é garantido. Nada foi gravado.")
+        return 1
     if not plano.inserir:
         out("Nada a inserir.")
         return 0
 
-    backup(cfg, backup_servidor)  # levanta se falhar: nada é gravado sem backup
-    out(f"Backup concluído em {backup_servidor}.")
+    try:
+        prova = backup(cfg, backup_servidor)
+    except Exception as exc:  # noqa: BLE001
+        out(f"Backup falhou ({_curta(exc, cfg)}). Nada foi gravado.")
+        return 1
+    out(f"Backup concluído em {backup_servidor}. Última linha do log: {prova}")
 
-    with conn_factory.connect_with_config(cfg) as conn:
-        # Refaz o plano dentro da transação de escrita: se o banco mudou desde o
-        # dry-run, aborta em vez de gravar sobre um plano velho.
+    resultado = 0
+    try:
+        with conn_factory.connect_with_config(cfg) as conn:
+            resultado = _gravar(conn, plano, desejadas, cfg, out)
+    except Exception as exc:  # noqa: BLE001
+        out(f"Gravação falhou ({_curta(exc, cfg)}). Rode o dry-run para conferir.")
+        return 1
+    return resultado
+
+
+def _gravar(conn, plano: Plano, desejadas: list[str], cfg: dict, out) -> int:
+    """Uma transação: replaneja, insere, relê, confere, commit."""
+    try:
+        # Se o banco mudou desde o dry-run, aborta em vez de gravar sobre plano velho.
         if planejar(_ler(conn), desejadas).inserir != plano.inserir:
-            conn.rollback()
+            cadastro_fire._desfaz(conn)
             out("O banco mudou desde o plano. Nada foi gravado; rode de novo.")
             return 1
-        try:
-            cur = conn.cursor()
-            for codigo, nome in plano.inserir:
-                cur.execute(_SQL_INSERIR, (codigo, nome))
-            lidas = {c: m for c, m in _ler(conn)}
-            faltando = [n for c, n in plano.inserir if lidas.get(c) != n]
-            if faltando:
-                conn.rollback()
-                out(f"Conferência falhou ({len(faltando)} marca(s) divergentes). Rollback feito.")
-                return 1
-            conn.commit()
-        except Exception as exc:
-            conn.rollback()
-            out(f"Falha na gravação ({type(exc).__name__}). Rollback feito.")
-            return 1
+        cadastro_fire.inserir_marcas(conn, plano.inserir)
+        lidas = dict(_ler(conn))
+        faltando = [n for c, n in plano.inserir if lidas.get(c) != n]
+    except Exception as exc:  # noqa: BLE001
+        cadastro_fire._desfaz(conn)
+        if cadastro_fire.classificar_erro(exc) == "colisao":
+            out("Outro cadastro tomou o código; rode de novo. Rollback feito.")
+        else:
+            out(f"Falha na gravação ({_curta(exc, cfg)}). Rollback feito.")
+        return 1
+    if faltando:
+        cadastro_fire._desfaz(conn)
+        out(f"Conferência falhou ({len(faltando)} marca(s) divergentes). Rollback feito.")
+        return 1
+    try:
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        cadastro_fire._desfaz(conn)
+        out(f"Commit falhou ({_curta(exc, cfg)}); resultado incerto; rode o dry-run para conferir.")
+        return 1
     out(f"Gravado: {len(plano.inserir)} marca(s).")
     return 0
 
@@ -165,7 +235,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.gravar and not args.backup_servidor:
         parser.error("--gravar exige --backup-servidor")
 
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from app.persistence import environments_repo
 
     env = environments_repo.get_by_slug(args.slug)
@@ -176,6 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         environments_repo.to_fb_config(env),
         gravar=args.gravar,
         backup_servidor=args.backup_servidor,
+        slug=args.slug,
     )
 
 
