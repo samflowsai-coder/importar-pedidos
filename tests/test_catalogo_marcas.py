@@ -69,6 +69,21 @@ def test_extract_marcas_le_codigo_e_nome_bruto():
     assert fire.sqls == [LIST_PRODUTOS_MARCA]
 
 
+def test_extract_marcas_nao_converte_codigo_estranho():
+    assert extract_marcas(_Fire([(None, "A"), ("12x", "B")])) == [(None, "A"), ("12x", "B")]
+
+
+def test_filtrar_nome_so_com_espacos_codigo_bool_e_texto():
+    enviadas, filtradas = cm.filtrar([(1, "   "), (True, "Sim"), ("7", "Sete"), (None, "Nulo")])
+    assert enviadas == []
+    assert filtradas == [
+        {"codigo": 1, "motivo": "nome_vazio"},
+        {"codigo": True, "motivo": "codigo_invalido"},
+        {"codigo": "7", "motivo": "codigo_invalido"},
+        {"codigo": None, "motivo": "codigo_invalido"},
+    ]
+
+
 def test_extract_com_nota_devolve_seqs_como_texto_e_ignora_nulo():
     fire = _Fire([(3306,), (2544,), (None,)])
     assert extract_com_nota(fire) == {"3306", "2544"}
@@ -188,7 +203,12 @@ def test_nota_ligada_marca_cada_item(rodar):
     rep, corpo = rodar(nota=True)
     assert [i["temNotaFiscal"] for i in corpo["itens"]] == [True, False]
     assert "marcasErp" not in corpo
-    assert rep.model_extra["nota_portal"] == {"com_nota": 1, "enviados": 2, "capacidade_ok": True}
+    assert rep.model_extra["nota_portal"] == {
+        "com_nota": 1,
+        "enviados": 2,
+        "leitura_ok": True,
+        "capacidade_ok": True,
+    }
 
 
 def test_nota_com_leitura_quebrada_nenhum_item_com_a_chave(rodar, monkeypatch):
@@ -270,7 +290,7 @@ def test_seq_em_aberto_na_volta_nao_vai_no_corpo(rodar):
 
 
 def test_seq_em_aberto_soma_a_fora_sem_disparar_inexistente(rodar):
-    rep, corpo = rodar(env=_Env(em_aberto=["3992"]), fora_do_envio=frozenset({"3306"}))
+    rep, corpo = rodar(env=_Env(em_aberto=["3992", "55555"]), fora_do_envio=frozenset({"3306"}))
     assert corpo["itens"] == []
     assert rep.model_extra["fora_do_envio_volta"] == ["3992"]
 
@@ -279,3 +299,64 @@ def test_sem_nada_em_aberto_nao_reporta_volta(rodar):
     rep, corpo = rodar()
     assert len(corpo["itens"]) == 2
     assert "fora_do_envio_volta" not in (rep.model_extra or {})
+
+
+def test_leituras_ok_marcam_leitura_ok_true(rodar):
+    rep, _ = rodar(marcas=True, nota=True)
+    assert rep.model_extra["marcas_portal"]["leitura_ok"] is True
+    assert rep.model_extra["nota_portal"]["leitura_ok"] is True
+
+
+def test_nota_lida_vazia_nao_manda_false_para_todos(rodar, monkeypatch, logs):
+    monkeypatch.setattr(catalogo_sync, "extract_com_nota", lambda conn: set())
+    rep, corpo = rodar(nota=True)
+    assert all("temNotaFiscal" not in i for i in corpo["itens"])
+    assert rep.model_extra["nota_portal"]["leitura_ok"] is False
+    assert any(n == "ERROR" and "NOTAPROD" in m for n, m in logs)
+
+
+def test_nota_lida_sem_nenhum_seq_do_lote_nao_manda_a_chave(rodar, monkeypatch, logs):
+    monkeypatch.setattr(catalogo_sync, "extract_com_nota", lambda conn: {"1", "2"})
+    rep, corpo = rodar(nota=True)
+    assert all("temNotaFiscal" not in i for i in corpo["itens"])
+    assert rep.model_extra["nota_portal"]["leitura_ok"] is False
+    assert any(n == "ERROR" and "NOTAPROD" in m for n, m in logs)
+
+
+def test_400_com_so_marcas_ligada_loga_corpo_e_cita_o_interruptor(rodar, logs):
+    from app.integrations.flowpcp.client import FlowPCPClientError
+
+    class _Recusa(_Client):
+        def send_catalogo(self, request):
+            raise FlowPCPClientError("HTTP 400", status_code=400, body="marcasErp.0.nome: too_big")
+
+    with pytest.raises(FlowPCPClientError) as e:
+        rodar(marcas=True, cliente=_Recusa())
+    assert "PORTAL_FLOWPCP_CATALOGO_MARCAS" in str(e.value)
+    assert "COMPOSICAO" not in str(e.value) and "NOTA" not in str(e.value)
+    assert any("marcasErp.0.nome" in m for n, m in logs if n == "ERROR")
+
+
+def test_capacidade_sem_bloco_no_apply_avisa(rodar, logs):
+    cli = _Client(capacidades=["marcas.v1"])
+    rodar(marcas=True, cliente=cli, dry_run=False)
+    assert any(n == "WARNING" and "não devolveu o bloco" in m for n, m in logs)
+
+
+def test_falha_na_leitura_do_livro_aborta_mas_mantem_a_copia_local(rodar):
+    class _EnvQuebraNoLivro(_Env):
+        gravou = False
+
+        def execute(self, sql, params=()):
+            if "cadastro_volta" in sql:
+                raise RuntimeError("livro ilegível")
+            return super().execute(sql, params)
+
+        def executemany(self, *a):
+            self.gravou = True
+
+    env = _EnvQuebraNoLivro()
+    cli = _Client()
+    with pytest.raises(RuntimeError):
+        rodar(env=env, cliente=cli)
+    assert env.gravou is True and cli.sent is None

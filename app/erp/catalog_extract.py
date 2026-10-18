@@ -167,8 +167,8 @@ def extract_composicao(fire_conn) -> dict[str, list[tuple[str | None, float | No
 
 
 def extract_marcas(fire_conn) -> list[tuple[int, str | None]]:
-    """PRODUTOS_MARCA inteiro como (CODIGO, MARCA), por código. Read-only. O nome
-    vai bruto: `catalogo_marcas.filtrar` decide o que o Flow aceita. Erro do
+    """PRODUTOS_MARCA inteiro como (CODIGO, MARCA), por código. Read-only. Código e
+    nome vão brutos: `catalogo_marcas.filtrar` decide o que o Flow aceita. Erro do
     driver sobe (o sync trata como "marcas não enviadas")."""
     cur = fire_conn.cursor()
     try:
@@ -176,7 +176,7 @@ def extract_marcas(fire_conn) -> list[tuple[int, str | None]]:
         rows = cur.fetchall()
     finally:
         cur.close()
-    return [(int(codigo), None if nome is None else str(nome)) for codigo, nome in rows]
+    return [(codigo, None if nome is None else str(nome)) for codigo, nome in rows]
 
 
 def extract_com_nota(fire_conn) -> set[str]:

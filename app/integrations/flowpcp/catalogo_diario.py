@@ -126,6 +126,8 @@ _BLOCOS = (
     "composicao_portal",
     "fora_do_envio_guardado",
     "fiscal_portal",
+    "marcas_portal",
+    "nota_portal",
 )
 
 
@@ -139,6 +141,7 @@ def _precisa_atencao(rep: object) -> bool:
     comp = extra.get("composicao") or {}
     portal = extra.get("composicao_portal") or {}
     fiscal = extra.get("fiscal_portal") or {}
+    novos = (extra.get("marcas_portal") or {}, extra.get("nota_portal") or {})
     trava = comp.get("travaRemocaoAtiva") is True or comp.get("travaSubstituicaoAtiva") is True
     return bool(
         trava
@@ -146,6 +149,12 @@ def _precisa_atencao(rep: object) -> bool:
         or portal.get("leitura_ok") is False
         or portal.get("divergencia_nome")
         or fiscal.get("capacidade_ok") is False
+        or any(
+            b.get("capacidade_ok") is False
+            or b.get("reenviar") is True
+            or b.get("leitura_ok") is False
+            for b in novos
+        )
     )
 
 
@@ -158,4 +167,7 @@ def _resumo(rep: object) -> str:
         for k, v in (getattr(rep, "model_extra", None) or {}).items()
         if isinstance(v, int | str) or k in _BLOCOS
     }
+    volta = (getattr(rep, "model_extra", None) or {}).get("fora_do_envio_volta")
+    if volta:
+        extras["fora_do_envio_volta"] = len(volta)
     return f"contagens={contagens.model_dump(by_alias=True)} {extras}".strip()

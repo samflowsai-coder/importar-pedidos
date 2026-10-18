@@ -154,16 +154,17 @@ def run_catalogo_sync(
     env_ctx = nullcontext(_env_conn) if _env_conn is not None else router.env_connect(slug)
     with env_ctx as env_conn:
         catalogo_fire_repo.replace_all(env_conn, dtos, extraido_em=extraido_em)
-        em_aberto = (
-            cadastro_volta_repo.seqs_em_aberto(env_conn)
-            if getattr(cfg, "catalogo_push", False)
-            else set()
-        )
     logger.info(f"catalogo sync env={slug} itens={len(dtos)} — cópia local atualizada")
 
     if not getattr(cfg, "catalogo_push", False):
         logger.info(f"catalogo sync env={slug}: envio ao Flow DESLIGADO (catalogo_push=0)")
         return CatalogoLocalResult(itens=len(dtos), extraido_em=extraido_em)
+
+    # Leitura própria, depois do commit da cópia local: se falhar, a cópia fica e o
+    # envio aborta (falha fechada — sem o livro não dá para saber o que está em trânsito).
+    env_ctx = nullcontext(_env_conn) if _env_conn is not None else router.env_connect(slug)
+    with env_ctx as env_conn:
+        em_aberto = cadastro_volta_repo.seqs_em_aberto(env_conn)
 
     guardado = catalogo_composicao.excluir_guardado(slug)
     fora = fora_do_envio | guardado
@@ -209,15 +210,25 @@ def run_catalogo_sync(
             marcas_resumo = {"enviadas": 0, "filtradas": [], "leitura_ok": False}
         else:
             marcas, filtradas = catalogo_marcas.filtrar(marcas_lidas)
-            marcas_resumo = {"enviadas": len(marcas), "filtradas": filtradas}
+            marcas_resumo = {"enviadas": len(marcas), "filtradas": filtradas, "leitura_ok": True}
     if catalogo_marcas.nota_ligada(slug):
+        com_nota_no_lote = sum(1 for d in enviados if d.fire_produto_id in (nota_lida or ()))
+        # Vazia, ou sem nenhum SEQ do lote, é anomalia (banco errado, base restaurada):
+        # mandar False em todos tiraria a nota de todo produto no Flow.
         if nota_lida is None:
+            nota_resumo = {"com_nota": 0, "enviados": 0, "leitura_ok": False}
+        elif not nota_lida or (enviados and not com_nota_no_lote):
+            logger.error(
+                f"catalogo sync env={slug}: NOTAPROD veio {'vazia' if not nota_lida else 'sem nenhum SEQ do lote'} "
+                "— temNotaFiscal não enviado"
+            )
             nota_resumo = {"com_nota": 0, "enviados": 0, "leitura_ok": False}
         else:
             com_nota = nota_lida
             nota_resumo = {
-                "com_nota": sum(1 for d in enviados if d.fire_produto_id in nota_lida),
+                "com_nota": com_nota_no_lote,
                 "enviados": len(enviados),
+                "leitura_ok": True,
             }
     client = _client or _build_client(cfg)
     try:
@@ -241,14 +252,23 @@ def run_catalogo_sync(
         try:
             rep = client.send_catalogo(request)
         except FlowPCPClientError as exc:
-            if ligado and exc.status_code == 400:
+            vars_ligadas = [
+                v
+                for v, on in (
+                    ("PORTAL_FLOWPCP_CATALOGO_COMPOSICAO", ligado),
+                    ("PORTAL_FLOWPCP_CATALOGO_MARCAS", marcas is not None),
+                    ("PORTAL_FLOWPCP_CATALOGO_NOTA", com_nota is not None),
+                )
+                if on
+            ]
+            if vars_ligadas and exc.status_code == 400:
                 # o caminho do Zod (campo recusado) só aparece no corpo; sem segredo nele
                 logger.error(
                     f"catalogo sync env={slug}: Flow recusou status=400 body={(exc.body or '')[:500]}"
                 )
                 raise FlowPCPClientError(
-                    f"{exc} — o Flow recusou o catálogo com composição. Se a Fatia A não "
-                    f"estiver no ar, tire '{slug}' de PORTAL_FLOWPCP_CATALOGO_COMPOSICAO",
+                    f"{exc} — o Flow recusou o catálogo com campos novos. Se o lado dele "
+                    f"não estiver no ar, tire '{slug}' de {' / '.join(vars_ligadas)}",
                     status_code=exc.status_code,
                     body=exc.body,
                 ) from exc
@@ -279,6 +299,7 @@ def run_catalogo_sync(
                 marcas_resumo,
                 ("vinculadas", "jaVinculadas", "semPar", "conflitos", "recebidas"),
                 "PORTAL_FLOWPCP_CATALOGO_MARCAS",
+                not dry_run,
             )
         if nota_resumo is not None:
             rep.nota_portal = _ler_bloco(
@@ -289,6 +310,7 @@ def run_catalogo_sync(
                 nota_resumo,
                 ("atualizados",),
                 "PORTAL_FLOWPCP_CATALOGO_NOTA",
+                not dry_run,
             )
         if guardado:
             rep.fora_do_envio_guardado = sorted(guardado, key=int)
@@ -308,6 +330,7 @@ def _ler_bloco(
     resumo: dict,
     campos: tuple[str, ...],
     variavel: str,
+    apply: bool,
 ) -> dict:
     """Junta ao resumo do Portal o que o Flow devolveu em `chave` (`marcas`/`notaFiscal`).
     Sem a capacidade, o Flow ignorou o campo: `capacidade_ok=False` e ERROR. `erro: true`
@@ -323,6 +346,10 @@ def _ler_bloco(
         return resumo
     bloco = (getattr(rep, "model_extra", None) or {}).get(chave)
     if not isinstance(bloco, dict):
+        if apply:
+            logger.warning(
+                f"catalogo sync env={slug}: o Flow aceitou {chave} mas não devolveu o bloco"
+            )
         return resumo
     if bloco.get("erro") is True:
         resumo["reenviar"] = True
