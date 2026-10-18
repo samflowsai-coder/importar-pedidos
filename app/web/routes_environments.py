@@ -472,6 +472,13 @@ def cadastro_volta_flowpcp(env_id: str, _=Depends(require_admin)):
             *cadastro_volta_repo.listar_por_estado(conn, "erro_a_enviar"),
         ]
         sem_volta_itens.sort(key=lambda x: x["atualizado_em"] or "", reverse=True)
+        # `atualizar`/`inativar` gravado no Fire cujo código o Flow recusou (409 conflito_codigo).
+        conflitos_codigo = cadastro_volta_repo.listar_por_estado(
+            conn, "superado", alerta="conflito_codigo"
+        )
+        n_conflitos_codigo = cadastro_volta_repo.contar_com_alerta(
+            conn, "superado", "conflito_codigo"
+        )
     for linha in ultimos:
         plano = linha.get("plano_json")
         bruto = plano.encode("utf-8") if plano else b""
@@ -497,6 +504,8 @@ def cadastro_volta_flowpcp(env_id: str, _=Depends(require_admin)):
         "n_aguardando_recuperacao": len(recentes),
         "aguardando_recuperacao": aguardando_recuperacao[:50],
         "sem_volta_itens": sem_volta_itens[:50],
+        "n_conflitos_codigo": n_conflitos_codigo,
+        "conflitos_codigo": conflitos_codigo,
     }
 
 

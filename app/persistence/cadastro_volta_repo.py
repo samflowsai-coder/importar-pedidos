@@ -136,16 +136,30 @@ _COLS_TELA = (
 
 
 def listar_por_estado(
-    conn: sqlite3.Connection, estado: str, limite: int = 50, *, so_com_seq: bool = False
+    conn: sqlite3.Connection,
+    estado: str,
+    limite: int = 50,
+    *,
+    so_com_seq: bool = False,
+    alerta: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Linhas de um estado, as mais recentes primeiro, só com as colunas da tela."""
+    """Linhas de um estado (e, se dado, só com esse `alerta`), as mais recentes primeiro,
+    só com as colunas da tela."""
     filtro = " AND seq_reservado IS NOT NULL" if so_com_seq else ""
+    if alerta is not None:
+        filtro += " AND alerta = ?"
     rows = conn.execute(
         f"SELECT {', '.join(_COLS_TELA)} FROM cadastro_volta WHERE estado = ?{filtro} "
         "ORDER BY atualizado_em DESC, rowid DESC LIMIT ?",
-        (estado, limite),
+        (estado, *((alerta,) if alerta is not None else ()), limite),
     ).fetchall()
     return [dict(zip(_COLS_TELA, r, strict=True)) for r in rows]
+
+
+def contar_com_alerta(conn: sqlite3.Connection, estado: str, alerta: str) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) FROM cadastro_volta WHERE estado = ? AND alerta = ?", (estado, alerta)
+    ).fetchone()[0]
 
 
 def contar_transitorios_com_seq(conn: sqlite3.Connection) -> int:

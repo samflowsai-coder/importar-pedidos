@@ -123,6 +123,17 @@ def test_listar_mostra_so_incerto_orfao_e_transitorio_com_seq_sem_segredos(livro
     assert "SEGREDO" not in out and "TENIS X" not in out
 
 
+def test_listar_inclui_superado_com_conflito_de_codigo(livro, capsys):
+    _linha(livro, "superado", cid="k1", erp="3306")
+    _linha(livro, "superado", cid="k2", erp="3307")  # superado comum: fora
+    livro.execute("UPDATE cadastro_volta SET acao = 'atualizar', alerta = 'conflito_codigo' "
+                  "WHERE cadastro_id = 'k1'")
+    assert _rodar(livro, _Erp(), "listar") == 0
+    out = capsys.readouterr().out
+    assert "k1" in out and "3306" in out and "conflito" in out
+    assert "k2" not in out and "SEGREDO" not in out
+
+
 def test_listar_vazio(livro, capsys):
     assert _rodar(livro, _Erp(), "listar") == 0
     assert "nenhuma linha" in capsys.readouterr().out

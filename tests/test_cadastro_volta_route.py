@@ -62,6 +62,8 @@ def test_livro_vazio(setup, monkeypatch):
         "n_aguardando_recuperacao": 0,
         "aguardando_recuperacao": [],
         "sem_volta_itens": [],
+        "n_conflitos_codigo": 0,
+        "conflitos_codigo": [],
     }
 
 
@@ -220,3 +222,23 @@ def test_operador_logado_e_403(setup, real_auth):
         == 200
     )
     assert c.get(f"/api/admin/environments/{env['id']}/flowpcp/cadastro-volta").status_code == 403
+
+
+def test_superado_com_conflito_de_codigo_vai_para_lista_propria(setup):
+    """N1: atualizar/inativar gravado no Fire cujo código o Flow recusou (409 conflito_codigo)."""
+    env = _env(setup)
+    with router.env_connect("mm") as conn:
+        _linha(conn, "k1", "superado")
+        _linha(conn, "k2", "superado")
+        _linha(conn, "k3", "orfao")
+        conn.execute("UPDATE cadastro_volta SET acao = 'atualizar', erp_produto_id = '3306', "
+                     "alerta = 'conflito_codigo' WHERE cadastro_id IN ('k1', 'k3')")
+    r = _get(env["id"])
+    body = r.json()
+    assert body["n_conflitos_codigo"] == 1
+    assert [x["cadastro_id"] for x in body["conflitos_codigo"]] == ["k1"]
+    (x,) = body["conflitos_codigo"]
+    assert x["erp_produto_id"] == "3306" and x["alerta"] == "conflito_codigo"
+    assert set(x) == {"cadastro_id", "versao", "acao", "erp_produto_id", "seq_reservado",
+                      "tentativas", "alerta", "atualizado_em"}
+    assert "SEGREDO" not in r.text

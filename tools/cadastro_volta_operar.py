@@ -65,7 +65,7 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("slug", help="slug do ambiente (environments)")
     sub = ap.add_subparsers(dest="comando", required=True)
 
-    sub.add_parser("listar", help="incerto, orfao e transitorio/liberado com SEQ")
+    sub.add_parser("listar", help="incerto, orfao, transitorio/liberado com SEQ e conflito de código")
 
     def _comum(p: argparse.ArgumentParser, *, nota: bool = False) -> None:
         p.add_argument("cadastro_id")
@@ -143,8 +143,18 @@ def _listar(livro) -> int:
             )
         if len(linhas) > _LIMITE_LISTA:
             print(f"-- {estado}: mostrando {_LIMITE_LISTA} de {len(linhas)}")
+    # Gravado no ERP, mas o Flow diz que o código é de outro produto: avisar a área de cadastro.
+    linhas = repo.listar_por_estado(livro, "superado", _TODAS, alerta="conflito_codigo")
+    for r in linhas[:_LIMITE_LISTA]:
+        total += 1
+        print(
+            f"{'conflito':<11} {r['cadastro_id']} v{r['versao']} acao={r['acao']} "
+            f"erp_produto_id={r['erp_produto_id']} alerta={r['alerta']} em={r['atualizado_em']}"
+        )
+    if len(linhas) > _LIMITE_LISTA:
+        print(f"-- conflito: mostrando {_LIMITE_LISTA} de {len(linhas)}")
     if total == 0:
-        print("nenhuma linha incerto, orfao, transitorio ou liberado com SEQ.")
+        print("nenhuma linha incerto, orfao, transitorio ou liberado com SEQ, nem conflito de código.")
     return 0
 
 

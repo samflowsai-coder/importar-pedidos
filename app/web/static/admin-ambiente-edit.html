@@ -461,6 +461,10 @@
               <div class="volta-card-rot">Sem volta<span class="volta-sr">: </span><strong id="volta-n-sem-volta" class="volta-card-n">0</strong></div>
               <p class="volta-card-txt">Sem volta: resultado (gravado no Fire ou erro) ainda não aceito pelo Flow. O Portal reenvia sozinho.</p>
             </div>
+            <div class="volta-card" id="volta-card-conflito-codigo">
+              <div class="volta-card-rot">Conflito de código<span class="volta-sr">: </span><strong id="volta-n-conflito-codigo" class="volta-card-n">0</strong></div>
+              <p class="volta-card-txt">Gravado no Fire, mas o Flow diz que o código é de outro produto. Avise a área de cadastro com o código.</p>
+            </div>
           </div>
           <div id="volta-aguardando" class="volta-aguardando" hidden>
             <strong>Aguardando outro modo: <span id="volta-n-aguardando">—</span></strong>
@@ -1393,6 +1397,7 @@
       bug_corpo: 'Resposta inesperada do Flow',
       recuperacao: 'Cadastro interrompido',
       nome_do_proprio_produto: 'Nome já existe no ERP neste produto',
+      conflito_codigo: 'Código é de outro produto no Flow',
     };
     // O livro grava UTC sem fuso ("AAAA-MM-DD HH:MM:SS"); a tela mostra dd/mm/aaaa hh:mm no fuso do navegador.
     function voltaData(v) {
@@ -1419,8 +1424,9 @@
       const box = document.getElementById('volta-atencao');
       const modo = d && typeof d.modo === 'string' ? d.modo : '';
       const nOrf = voltaNum(d && d.n_orfaos), nInc = voltaNum(d && d.n_incertos), nSem = voltaNum(d && d.sem_volta);
+      const nConf = voltaNum(d && d.n_conflitos_codigo);
       // Desligada sem nada pendente: só "Desligada". Pendência em qualquer modo aparece.
-      box.hidden = modo === 'desligado' && nOrf + nInc + nSem === 0;
+      box.hidden = modo === 'desligado' && nOrf + nInc + nSem + nConf === 0;
       const portoes = document.getElementById('volta-portoes');
       portoes.replaceChildren();
       catLinha(portoes, 'Portão da P0', d && d.p0_ok === true ? 'liberado' : 'não liberado', d && d.p0_ok === true ? undefined : 'aviso');
@@ -1428,6 +1434,7 @@
       voltaCartao('orfaos', nOrf, 'err');
       voltaCartao('incertos', nInc, 'aviso');
       voltaCartao('sem-volta', nSem, 'aviso');
+      voltaCartao('conflito-codigo', nConf, 'err');
       const ag = document.getElementById('volta-aguardando');
       const resumo = d && d.ultimo_ciclo && d.ultimo_ciclo.resumo;
       // A linha some sem medição (null: Flow fora ou modo sem gravação) e com o portão de
@@ -1439,7 +1446,7 @@
       const corpo = document.getElementById('volta-tabela-corpo');
       corpo.replaceChildren();
       const nRec = voltaNum(d && d.n_aguardando_recuperacao);
-      const grupos = [['Órfão', d && d.orfaos, nOrf], ['Incerto', d && d.incertos, nInc], ['Sem volta', d && d.sem_volta_itens, nSem], ['Aguardando recuperação', d && d.aguardando_recuperacao, nRec]];
+      const grupos = [['Órfão', d && d.orfaos, nOrf], ['Incerto', d && d.incertos, nInc], ['Sem volta', d && d.sem_volta_itens, nSem], ['Aguardando recuperação', d && d.aguardando_recuperacao, nRec], ['Conflito de código', d && d.conflitos_codigo, nConf]];
       let total = 0;
       const mais = [];
       grupos.forEach(([rot, lista, n]) => {
@@ -1462,7 +1469,7 @@
       maisEl.textContent = mais.join(' · ');
       maisEl.hidden = !mais.length;
       document.getElementById('volta-tabela-wrap').hidden = total === 0;
-      document.getElementById('volta-vazio').hidden = total !== 0 || nOrf + nInc + nSem + nRec > 0;
+      document.getElementById('volta-vazio').hidden = total !== 0 || nOrf + nInc + nSem + nRec + nConf > 0;
     }
     async function carregarVolta() {
       const st = document.getElementById('volta-status');
