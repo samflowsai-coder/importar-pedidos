@@ -1655,3 +1655,243 @@ def test_nome_longo_e_truncado_em_unidades_utf16(monkeypatch):
     assert d.reason == "preco_aguardando"
     nome = _corpo(import_id)["cliente"]["nome"]
     assert len(nome.encode("utf-16-le")) // 2 <= 255
+
+
+# ── Task 7.5: Nasmar avalia pela chave do produto da MM ──────────────────────
+
+ENV_MM = {"id": "mm-id", "slug": "mm", "preco_trava_modo": "ligado", "cnpj": OUTRO_CNPJ}
+
+
+def _env_nasmar(modo, fonte="mm"):
+    return {
+        "id": "nasmar-id",
+        "slug": "nasmar",
+        "preco_trava_modo": modo,
+        "cnpj": EMPRESA,
+        "preco_fonte_slug": fonte,
+    }
+
+
+def _checks_por_ambiente(monkeypatch, *, proprio, fonte, ambientes=None):
+    """`check_order` falso: devolve o check da MM quando chamado com o ambiente
+    `mm` e o próprio nos outros. Registra (slug do env, slug do contexto ativo)."""
+    from app.persistence import context as env_context
+
+    ambientes = {"mm": ENV_MM} if ambientes is None else ambientes
+    monkeypatch.setattr(environments_repo, "get_by_slug", lambda s: ambientes.get(s))
+    chamadas = []
+
+    def fake(order, *, env=None):
+        ativo = env_context.current()
+        chamadas.append(((env or {}).get("slug"), ativo["slug"] if ativo else None))
+        return copy.deepcopy(fonte if (env or {}).get("slug") == "mm" else proprio)
+
+    monkeypatch.setattr(pc, "check_order", fake)
+    return chamadas
+
+
+def test_nasmar_avalia_com_o_seq_da_mm(monkeypatch):
+    _precos_por_produto({"777": 5000})
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    chamadas = _checks_por_ambiente(monkeypatch, proprio=_check(ids=[123]), fonte=_check(ids=[777]))
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.avaliacao.itens[0].fire_produto_id == "777"
+    assert d.reason == "preco_aguardando"
+    assert _corpo(import_id)["itens"][0]["erpProdutoId"] == "777"
+    # O check da MM roda com o contexto da MM ativo (o de-para lê o SQLite da MM).
+    assert ("mm", "mm") in chamadas
+
+
+def test_nasmar_item_sem_casamento_na_mm_nao_e_avaliado(monkeypatch):
+    _precos_por_produto({"123": 5400})
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _checks_por_ambiente(monkeypatch, proprio=_check(ids=[123]), fonte=_check(ids=[None]))
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.reason == "preco_nao_avaliado"
+    assert d.avaliacao.itens[0].motivo == "produto_nao_identificado"
+    assert d.avaliacao.itens[0].fire_produto_id is None
+    assert _revisoes(import_id) == []
+
+
+def test_nasmar_com_mm_fora_bloqueia_mesmo_com_check_salvo(monkeypatch):
+    _precos_por_produto({"123": 5400, "777": 5400})
+    order = _order((54.0,))
+    import_id, entry = _seed(order, check=_check(ids=[123]), check_preco=_check(ids=[777]))
+    _checks_por_ambiente(
+        monkeypatch, proprio=_check(ids=[123]), fonte=_check(available=False, ids=[None])
+    )
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.reason == "preco_nao_avaliado"
+    assert _revisoes(import_id) == []
+
+
+def test_nasmar_com_ambiente_fonte_inexistente_bloqueia(monkeypatch):
+    _precos_por_produto({"123": 5400})
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    chamadas = _checks_por_ambiente(
+        monkeypatch, proprio=_check(ids=[123]), fonte=_check(ids=[123]), ambientes={}
+    )
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.reason == "preco_nao_avaliado"
+    assert [c for c in chamadas if c[0] == "mm"] == []
+
+
+@pytest.mark.parametrize("fonte", [None, "", "test"])
+def test_ambiente_sem_fonte_nao_chama_um_segundo_check(monkeypatch, fonte):
+    _copia(5400)
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    chamadas = _checks_por_ambiente(monkeypatch, proprio=_check(), fonte=_check(ids=[777]))
+    env = {**_env("ligado"), "preco_fonte_slug": fonte}
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=env, agora=AGORA)
+
+    assert d.bloqueado is False
+    assert len(chamadas) == 1
+    assert d.avaliacao.itens[0].fire_produto_id == "123"
+
+
+def test_desligado_com_fonte_nao_consulta_a_mm(monkeypatch):
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    chamadas = _checks_por_ambiente(
+        monkeypatch, proprio=_check(status="mismatch"), fonte=_check(ids=[777])
+    )
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env_nasmar("desligado"), agora=AGORA
+    )
+
+    assert d.bloqueado is True and d.reason == "price_check_failed"
+    assert [c[0] for c in chamadas] == ["nasmar"]
+
+
+@pytest.mark.parametrize("seq_mm", [777, None])
+def test_vinculo_da_nasmar_com_seq_que_existe_na_mm_nunca_sai(monkeypatch, seq_mm):
+    # De-para da Nasmar aponta o item para o SEQ 456 da Nasmar. Na MM o SEQ 456
+    # é OUTRO produto (com preço que liberaria). O item só pode ser avaliado com
+    # o SEQ que a MM casou (777), ou ficar não avaliado — nunca com 456.
+    _precos_por_produto({"456": 5400, "777": 5000})
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _checks_por_ambiente(monkeypatch, proprio=_check(ids=[456]), fonte=_check(ids=[seq_mm]))
+
+    d = preco_trava.decidir_envio(
+        import_id,
+        order,
+        entry,
+        env=_env_nasmar("ligado"),
+        agora=AGORA,
+        produtos_por_item={0: 456},
+    )
+
+    assert d.bloqueado is True
+    item = d.avaliacao.itens[0]
+    assert item.fire_produto_id == (None if seq_mm is None else "777")
+    import json
+
+    for r in _revisoes(import_id):
+        assert all(i["erpProdutoId"] != "456" for i in json.loads(r["corpo_json"])["itens"])
+
+
+def test_nasmar_observando_audita_com_o_seq_da_mm(monkeypatch):
+    _precos_por_produto({"777": 5000})
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _checks_por_ambiente(monkeypatch, proprio=_check(ids=[123]), fonte=_check(ids=[777]))
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env_nasmar("observando"), agora=AGORA
+    )
+
+    assert d.bloqueado is False
+    obs = _audits(import_id, "preco_observado")
+    assert obs[0]["detail"]["itens"][0]["fire_produto_id"] == "777"
+
+
+def test_preview_da_nasmar_usa_o_check_preco_salvo(monkeypatch):
+    _precos_por_produto({"123": 5400, "777": 5000})
+    order = _order((54.0,))
+    import_id, entry = _seed(order, check=_check(ids=[123]), check_preco=_check(ids=[777]))
+    monkeypatch.setattr(pc, "check_order", lambda *a, **k: pytest.fail("preview sem Fire"))
+
+    preco = preco_trava.preview_preco(
+        import_id,
+        entry,
+        order,
+        env=_env_nasmar("ligado"),
+        agora=AGORA,
+        produtos_por_item={0: 123},
+    )
+
+    assert preco["itens"][0]["motivo"] == "preco_acima"  # 54 > 50 do 777
+    assert preco["itens"][0]["estado"] == "aguardando"
+
+
+def test_preview_da_nasmar_sem_check_preco_fica_sem_avaliacao():
+    _precos_por_produto({"123": 5400})
+    order = _order((54.0,))
+    import_id, entry = _seed(order, check=_check(ids=[123]))
+
+    preco = preco_trava.preview_preco(
+        import_id, entry, order, env=_env_nasmar("ligado"), agora=AGORA
+    )
+
+    assert preco["itens"][0]["motivo"] == "produto_nao_identificado"
+    assert preco["itens"][0]["estado"] == "nao_avaliado"
+
+
+def test_check_preco_para_gravar(monkeypatch):
+    order = _order((54.0,))
+    chamadas = _checks_por_ambiente(monkeypatch, proprio=_check(), fonte=_check(ids=[777]))
+
+    assert preco_trava.check_preco_para_gravar(order, _env_nasmar("desligado")) is None
+    assert preco_trava.check_preco_para_gravar(order, _env("ligado")) is None
+    assert preco_trava.check_preco_para_gravar(order, None) is None
+    assert chamadas == []
+
+    salvo = preco_trava.check_preco_para_gravar(order, _env_nasmar("observando"))
+    assert salvo["items"][0]["fire_product_id"] == 777
+    assert chamadas == [("mm", "mm")]
+
+
+def test_check_preco_para_gravar_com_mm_fora_devolve_none(monkeypatch):
+    order = _order((54.0,))
+    _checks_por_ambiente(monkeypatch, proprio=_check(), fonte=_check(available=False))
+    assert preco_trava.check_preco_para_gravar(order, _env_nasmar("ligado")) is None
+
+
+def test_check_preco_persiste_no_import():
+    order = _order((54.0,))
+    import_id, _ = _seed(order, check_preco=None)
+    assert repo.get_import(import_id)["check_preco"] is None
+
+    repo.update_fire_metadata(import_id, check_preco=_check(ids=[777]))
+    assert repo.get_import(import_id)["check_preco"]["items"][0]["fire_product_id"] == 777
+
+    repo.insert_import(
+        {
+            "id": "outro",
+            "source_filename": "p.pdf",
+            "imported_at": "2026-10-17T09:00:00",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": order.model_dump(),
+            "check_preco": _check(ids=[888]),
+        }
+    )
+    assert repo.get_import("outro")["check_preco"]["items"][0]["fire_product_id"] == 888

@@ -222,9 +222,18 @@
               <option value="ligado">Ligado</option>
             </select>
           </label>
+          <label>
+            <span>Chave do produto</span>
+            <select id="preco-fonte-slug">
+              <option value="">Esta empresa</option>
+            </select>
+          </label>
         </div>
         <p class="hint">
           Desligado: como hoje. Observando: avalia e mostra; não bloqueia o envio, mas a planilha da importação passa a sair só pela revisão. Ligado: pedido só sai com preço da tabela ou aprovado no Flow.
+        </p>
+        <p class="hint">
+          Chave do produto: de qual empresa vêm o Fire que identifica o produto e o Flow que guarda a tabela. A Nasmar usa a MM; a MM usa ela mesma.
         </p>
         <div class="actions" style="margin-top:.75rem">
           <button type="button" id="btn-save-preco-trava" class="btn btn-secondary">Salvar trava de preço</button>
@@ -576,6 +585,25 @@
         f.elements['slug'].readOnly = true;
         erpBasePadrao();
         document.getElementById('preco-trava-modo').value = env.preco_trava_modo || 'desligado';
+        // Chave do produto: só ambientes com FlowPCP ligado (o servidor ainda
+        // confere url/tenant/token). O valor salvo nunca some do <select>.
+        {
+          const fonteSel = document.getElementById('preco-fonte-slug');
+          const fonteSalva = env.preco_fonte_slug || '';
+          const outros = (Array.isArray(allEnvs) ? allEnvs : [])
+            .filter(e => e.slug !== env.slug && e.flowpcp_enabled);
+          let fonteOpts = '<option value="">Esta empresa</option>' + outros
+            .map(e => '<option value="' + escAttr(e.slug) + '">' + escAttr(e.name) +
+              ' (' + escAttr(e.slug) + ')</option>')
+            .join('');
+          if (fonteSalva && !outros.some(e => e.slug === fonteSalva)) {
+            fonteOpts += '<option value="' + escAttr(fonteSalva) + '">' + escAttr(fonteSalva) +
+              (Array.isArray(allEnvs) ? ' — sem Flow ou removido' : ' — lista indisponível, valor preservado') +
+              '</option>';
+          }
+          fonteSel.innerHTML = fonteOpts;
+          fonteSel.value = fonteSalva;
+        }
         // FlowPCP: prefill (sem o token, que é write-only) e revela a seção.
         fv('flowpcp_enabled').checked = !!env.flowpcp_enabled;
         fv('flowpcp_base_url').value = env.flowpcp_base_url ?? '';
@@ -872,7 +900,8 @@
       }
     });
 
-    // Trava de preço: PATCH só do modo (select sem `name`, fora do payload do form).
+    // Trava de preço: PATCH do modo e da chave do produto (selects sem `name`,
+    // fora do payload do form).
     document.getElementById('btn-save-preco-trava').addEventListener('click', async (e) => {
       const btn = e.currentTarget;
       const status = document.getElementById('preco-trava-status');
@@ -883,7 +912,10 @@
         const r = await fetch('/api/admin/environments/' + envId + '/preco-trava', {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ modo: document.getElementById('preco-trava-modo').value }),
+          body: JSON.stringify({
+            modo: document.getElementById('preco-trava-modo').value,
+            preco_fonte_slug: document.getElementById('preco-fonte-slug').value || null,
+          }),
         });
         if (r.ok) {
           status.textContent = '✓ Trava de preço salva';

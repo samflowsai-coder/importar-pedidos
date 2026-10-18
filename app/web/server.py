@@ -2253,6 +2253,11 @@ def commit_preview(
             log_entry["check"] = entry.check
             if env_alvo is not None:
                 log_entry["environment_id"] = env_alvo["id"]
+            # Trava de preço com ambiente fonte (Nasmar → MM): o check do Fire da
+            # fonte fica salvo para o preview. Desligado/sem fonte: None, sem I/O.
+            from app.erp import preco_trava
+
+            log_entry["check_preco"] = preco_trava.check_preco_para_gravar(order, env_alvo)
 
             # DB first — if this fails, the file stays in the watch folder and user
             # can retry without losing the original document.
@@ -3524,6 +3529,13 @@ def vincular_produto(
     # com um "indisponível".
     if check.get("available"):
         repo.update_fire_metadata(import_id, check=check)
+    # Trava de preço com ambiente fonte: o check da fonte é refeito também
+    # (o vínculo pode ter mudado o produto). Desligado/sem fonte: None, sem I/O.
+    from app.erp import preco_trava
+
+    check_preco = preco_trava.check_preco_para_gravar(order, _request_environment(request))
+    if check_preco is not None:
+        repo.update_fire_metadata(import_id, check_preco=check_preco)
     return JSONResponse({"entry_id": import_id, "vinculos": gravou, "check": check})
 
 

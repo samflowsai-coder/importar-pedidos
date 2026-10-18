@@ -377,6 +377,31 @@ def set_preco_trava_modo(env_id: str, valor: str, *, por: str) -> None:
     logger.info("preco_trava_modo env_id={} -> {} por={}", env_id, valor, por)
 
 
+def set_preco_fonte_slug(env_id: str, slug: str | None, *, por: str) -> None:
+    """Ambiente cuja config do Flow e cujo Fire dão a chave do produto na
+    trava de preço (Nasmar → `"mm"`). Vazio ou igual ao próprio grava None
+    (= o próprio ambiente). Slug inexistente ou sem config do Flow completa
+    (ligada, url, tenant e token) levanta ValueError sem tocar no banco."""
+    from app.integrations.flowpcp.config import flowpcp_config_for_slug  # evita ciclo
+
+    valor = (slug or "").strip().lower() or None
+    atual = get(env_id)
+    if atual is not None and valor == atual["slug"]:
+        valor = None
+    if valor is not None:
+        if get_by_slug(valor) is None:
+            raise ValueError(f"ambiente {valor!r} não existe")
+        cfg = flowpcp_config_for_slug(valor)
+        if cfg is None or not (cfg.base_url and cfg.tenant_id and cfg.service_token):
+            raise ValueError(f"ambiente {valor!r} sem integração com o Flow configurada")
+    with router.shared_connect() as conn:
+        conn.execute(
+            "UPDATE environments SET preco_fonte_slug = ?, updated_at = ? WHERE id = ?",
+            (valor, _now(), env_id),
+        )
+    logger.info("preco_fonte_slug env_id={} -> {} por={}", env_id, valor, por)
+
+
 def get_flowpcp_token(env_id: str) -> str | None:
     with router.shared_connect() as conn:
         row = conn.execute(

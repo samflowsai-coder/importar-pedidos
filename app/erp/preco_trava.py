@@ -133,6 +133,73 @@ def _com_vinculos(check: dict | None, produtos_por_item: dict[int, int] | None) 
     return {**check, "items": itens}
 
 
+def _fonte(env: dict | None) -> str | None:
+    """Slug do ambiente que dá a chave do produto (`preco_fonte_slug`) quando
+    não é o próprio: a Nasmar avalia pelo SEQ da MM (contrato §9.2)."""
+    slug = ((env or {}).get("preco_fonte_slug") or "").strip().lower()
+    return slug if slug and slug != (env or {}).get("slug") else None
+
+
+def _check_da_fonte(order: Order, fonte: str) -> dict | None:
+    """`check_order` no Fire do ambiente fonte, com o contexto DELE ativo: o
+    degrau de-para lê o SQLite da fonte, nunca o do ambiente do pedido.
+    Fonte inexistente → None (bloqueia)."""
+    from app.persistence import context as env_context
+
+    amb = environments_repo.get_by_slug(fonte)
+    if amb is None:
+        return None
+    with env_context.active_env(amb["id"], amb["slug"]):
+        return pc.check_order(order, env=amb)
+
+
+def _check_para_preco(
+    order: Order,
+    entry: dict,
+    live: dict | None,
+    env: dict | None,
+    produtos_por_item: dict[int, int] | None = None,
+) -> dict | None:
+    """Check cujo `fire_product_id`/`fire_unidade` a trava avalia e manda no corpo.
+    Sem fonte (ou fonte = o próprio): o check de hoje com os vínculos de-para.
+    Com fonte: o check do Fire da fonte, sem fallback para check salvo (fonte
+    fora → bloqueia) e SEM os vínculos do ambiente, que são SEQs do Fire dele."""
+    fonte = _fonte(env)
+    if fonte is None:
+        return _com_vinculos(
+            _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order),
+            produtos_por_item,
+        )
+    return _check_utilizavel(_check_da_fonte(order, fonte), order)
+
+
+def _check_salvo_para_preco(
+    entry: dict, order: Order, env: dict | None, produtos_por_item: dict[int, int] | None
+) -> dict | None:
+    """O mesmo do `_check_para_preco` para o preview, só com o que está salvo:
+    com fonte, `entry["check_preco"]` (gravado no commit e no vínculo)."""
+    if _fonte(env) is None:
+        return _com_vinculos(_check_utilizavel(entry.get("check"), order), produtos_por_item)
+    return _check_utilizavel(entry.get("check_preco"), order)
+
+
+def check_preco_para_gravar(order: Order, env: dict | None) -> dict | None:
+    """Check do ambiente fonte para gravar em `check_preco` (commit e vínculo
+    de-para). None quando a trava está desligada, quando não há fonte (nenhuma
+    consulta extra) ou quando o Fire da fonte não respondeu."""
+    fonte = _fonte(env)
+    if _modo(env) == "desligado" or fonte is None:
+        return None
+    try:
+        check = _check_da_fonte(order, fonte)
+    except Exception as exc:  # noqa: BLE001 — o preview fica sem avaliação; o portão refaz
+        from app.utils.logger import logger
+
+        logger.warning(f"check_preco da fonte {fonte!r} falhou ({type(exc).__name__}): {exc}")
+        return None
+    return check if check and check.get("available") else None
+
+
 def _todos(order: Order, check: dict | None, situacao: Situacao, motivo: Motivo) -> Avaliacao:
     itens = (check or {}).get("items") or []
     itens_av = []
@@ -222,7 +289,7 @@ def avaliar_entry(
     `produtos_por_item`: SEQ do vínculo de-para por item (o mesmo do envio)."""
     if _modo(env) == "desligado":
         return None
-    check = _com_vinculos(_check_utilizavel(entry.get("check"), order), produtos_por_item)
+    check = _check_salvo_para_preco(entry, order, env, produtos_por_item)
     return _avaliar_local(order, check, entry, agora, env)
 
 
@@ -714,7 +781,9 @@ def _decidir_ligado(
     produtos_por_item: dict[int, int] | None,
     env: dict | None,
 ) -> DecisaoEnvio:
-    check = _com_vinculos(
+    # Check da regra de hoje (intercompany) e do bloqueio de pedido: sempre o
+    # do próprio ambiente. O da avaliação vem de `_check_para_preco`.
+    check_hoje = _com_vinculos(
         _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order),
         produtos_por_item,
     )
@@ -725,9 +794,10 @@ def _decidir_ligado(
     try:
         # Bloqueio de nível de pedido nunca toca revisão nem decisão: erro de
         # configuração ou Fire fora não pode invalidar decisão já dada.
-        bloqueio = bloqueio_do_pedido(order, entry, check)
+        bloqueio = bloqueio_do_pedido(order, entry, check_hoje)
         if bloqueio is not None:
             return _bloqueio_trava("preco_nao_avaliado", bloqueio, vazio, {})
+        check = _check_para_preco(order, entry, live, env, produtos_por_item)
         if check is None:
             av = _todos(order, None, "nao_avaliado", "produto_nao_identificado")
             return _bloqueio_trava(
@@ -771,7 +841,7 @@ def _decidir_ligado(
             "preco_intercompany_fora_da_trava",
             {"cnpj_rede": av.cnpj_rede},
         )
-        hoje = _regra_de_hoje(check, ack_items)
+        hoje = _regra_de_hoje(check_hoje, ack_items)
         hoje.avaliacao = av
         return hoje
 
@@ -847,10 +917,7 @@ def decidir_envio(
     hoje = _regra_de_hoje(live, ack_items)
     if modo == "observando":
         try:
-            check = _com_vinculos(
-                _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order),
-                produtos_por_item,
-            )
+            check = _check_para_preco(order, entry, live, env, produtos_por_item)
             av = _avaliar_local(order, check, entry, agora, env)
             repo.append_audit(
                 import_id,

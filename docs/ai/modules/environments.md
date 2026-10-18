@@ -129,9 +129,14 @@ documento, não escolhido na sessão — o gate deixa de fazer sentido:
   `PATCH /api/admin/environments/{id}/preco-trava` (admin; `{modo}`; 404 se não existe;
   o `PATCH` principal do ambiente não mexe nele). A troca é registrada via loguru
   (`set_preco_trava_modo`), sem audit consultável (BACKLOG 4.2).
-- `preco_fonte_slug` — de qual tenant do Flow vem a tabela. **Nasmar usa `"mm"`**
-  (decidido 17/10: a Nasmar não é tenant no Flow; a tabela dela mora no tenant MM com a
-  dimensão *empresa faturadora* = CNPJ do próprio ambiente). Setter/UI entram com a Task 7.
+- `preco_fonte_slug` — ambiente cuja config do Flow (url/tenant/token) e cujo Fire dão a
+  chave do produto. **Nasmar usa `"mm"`** (decidido 17/10: a Nasmar não é tenant no Flow;
+  a tabela dela mora no tenant MM com a dimensão *empresa faturadora* = CNPJ do próprio
+  ambiente). NULL = o próprio. Setter `set_preco_fonte_slug(env_id, slug|None, *, por)`:
+  vazio ou igual ao próprio grava NULL; slug inexistente ou sem config do Flow completa
+  → `ValueError` sem tocar no banco. Pelo mesmo `PATCH .../preco-trava` com o campo
+  opcional `preco_fonte_slug` (ausente = não muda; inválido = 422 e nem o modo muda) e
+  pelo select "Chave do produto" no cartão da trava em `/admin/ambientes/{id}`.
 - Detalhe e advertência de `ligado`: `modules/erp.md` ("Trava de preço por rede").
 
 ## Testes

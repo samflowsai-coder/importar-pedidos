@@ -185,3 +185,90 @@ def test_hint_do_observando_avisa_da_planilha_adiada():
         "Observando: avalia e mostra; não bloqueia o envio, mas a planilha da importação "
         "passa a sair só pela revisão."
     ) in html
+
+
+# ── Task 7.5: ambiente fonte da chave do produto (preco_fonte_slug) ──────────
+
+
+def _dois_ambientes(setup, *, flow_na_mm=True):
+    mm = _novo_env(setup)
+    nasmar = environments_repo.create(
+        slug="nasmar",
+        name="Nasmar",
+        watch_dir=str(setup),
+        output_dir=str(setup),
+        fb_path=str(setup / "n.fdb"),
+    )
+    if flow_na_mm:
+        environments_repo.set_flowpcp_config(
+            mm["id"],
+            enabled=True,
+            base_url="https://flow.exemplo",
+            tenant_id="t1",
+            service_token="tok",
+        )
+    return mm, nasmar
+
+
+def test_set_fonte_aponta_para_ambiente_com_flow(setup):
+    _, nasmar = _dois_ambientes(setup)
+    environments_repo.set_preco_fonte_slug(nasmar["id"], " MM ", por="admin@x.com")
+    assert environments_repo.get_by_slug("nasmar")["preco_fonte_slug"] == "mm"
+
+
+@pytest.mark.parametrize("valor", [None, "", "  ", "nasmar"])
+def test_set_fonte_vazio_ou_o_proprio_vira_none(setup, valor):
+    _, nasmar = _dois_ambientes(setup)
+    environments_repo.set_preco_fonte_slug(nasmar["id"], "mm", por="x")
+    environments_repo.set_preco_fonte_slug(nasmar["id"], valor, por="x")
+    assert environments_repo.get_by_slug("nasmar")["preco_fonte_slug"] is None
+
+
+def test_set_fonte_inexistente_recusa_sem_mudar(setup):
+    _, nasmar = _dois_ambientes(setup)
+    with pytest.raises(ValueError):
+        environments_repo.set_preco_fonte_slug(nasmar["id"], "nao-existe", por="x")
+    assert environments_repo.get_by_slug("nasmar")["preco_fonte_slug"] is None
+
+
+def test_set_fonte_sem_config_do_flow_recusa(setup):
+    _, nasmar = _dois_ambientes(setup, flow_na_mm=False)
+    with pytest.raises(ValueError):
+        environments_repo.set_preco_fonte_slug(nasmar["id"], "mm", por="x")
+    assert environments_repo.get_by_slug("nasmar")["preco_fonte_slug"] is None
+
+
+def test_rota_grava_a_fonte_junto_com_o_modo(setup):
+    from app.web.server import app
+
+    _, nasmar = _dois_ambientes(setup)
+    c = TestClient(app)
+    url = f"/api/admin/environments/{nasmar['id']}/preco-trava"
+
+    r = c.patch(url, json={"modo": "observando", "preco_fonte_slug": "mm"})
+    assert r.status_code == 200, r.text
+    assert r.json()["preco_fonte_slug"] == "mm"
+
+    # Campo ausente: a fonte fica como está.
+    assert c.patch(url, json={"modo": "desligado"}).status_code == 200
+    assert environments_repo.get_by_slug("nasmar")["preco_fonte_slug"] == "mm"
+
+    # Inválida: 422 e nada muda (nem o modo).
+    r = c.patch(url, json={"modo": "observando", "preco_fonte_slug": "nao-existe"})
+    assert r.status_code == 422
+    lido = environments_repo.get_by_slug("nasmar")
+    assert (lido["preco_trava_modo"], lido["preco_fonte_slug"]) == ("desligado", "mm")
+
+    r = c.patch(url, json={"modo": "desligado", "preco_fonte_slug": None})
+    assert r.status_code == 200
+    assert environments_repo.get_by_slug("nasmar")["preco_fonte_slug"] is None
+
+
+def test_cartao_da_trava_tem_o_select_da_fonte():
+    from pathlib import Path
+
+    html = (
+        Path(__file__).parent.parent / "app" / "web" / "static" / "admin-ambiente-edit.html"
+    ).read_text(encoding="utf-8")
+    assert 'id="preco-fonte-slug"' in html
+    assert "preco_fonte_slug:" in html

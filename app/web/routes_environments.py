@@ -177,13 +177,17 @@ def set_environment_intercompany(
 
 class PrecoTravaRequest(BaseModel):
     modo: Literal["desligado", "observando", "ligado"]
+    # Ausente = não muda; None/"" = o próprio ambiente (ver set_preco_fonte_slug).
+    preco_fonte_slug: str | None = Field(default=None, max_length=64)
 
 
 @router.patch("/{env_id}/preco-trava")
 def set_environment_preco_trava(
     env_id: str, payload: PrecoTravaRequest, user=Depends(require_admin)
 ):
-    """Troca o interruptor da trava de preço (desligado | observando | ligado).
+    """Troca o interruptor da trava de preço (desligado | observando | ligado)
+    e, quando `preco_fonte_slug` vem no corpo, o ambiente fonte da chave do
+    produto (Nasmar avalia pela MM).
 
     `ligado` só depois da 1ª sync da tabela com o Flow: sem ela todo pedido de
     rede externa sai `copia_desatualizada` e a empresa para de faturar."""
@@ -201,6 +205,12 @@ def set_environment_preco_trava(
                     "sincronizada com o Flow."
                 ),
             )
+    # Fonte antes do modo: fonte inválida recusa sem mudar nada.
+    if "preco_fonte_slug" in payload.model_fields_set:
+        try:
+            environments_repo.set_preco_fonte_slug(env_id, payload.preco_fonte_slug, por=user.email)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
     environments_repo.set_preco_trava_modo(env_id, payload.modo, por=user.email)
     return environments_repo.get(env_id)
 

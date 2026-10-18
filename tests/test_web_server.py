@@ -2302,6 +2302,58 @@ def test_vincular_produto_422_fire_produto_id_desconhecido():
     assert r.status_code == 422
 
 
+def test_vincular_produto_regrava_o_check_preco(monkeypatch):
+    import uuid
+
+    from app.erp import preco_trava
+    from app.persistence import repo
+
+    entry_id = str(uuid.uuid4())
+    _seed_parsed_import_with_item(
+        entry_id,
+        item={"description": "TENIS", "quantity": 1.0, "product_code": "ABC123", "ean": "789"},
+        customer_cnpj="11.222.333/0001-44",
+    )
+    _seed_catalogo_fire(
+        [{"fire_produto_id": "10", "codigo": "10", "nome": "TENIS AZUL", "ean": "789"}]
+    )
+    monkeypatch.setattr(
+        preco_trava, "check_preco_para_gravar", lambda order, env: {"available": True, "items": []}
+    )
+
+    r = client.post(
+        f"/api/imported/{entry_id}/vincular-produto",
+        json={"item_index": 0, "fire_produto_id": "10"},
+    )
+
+    assert r.status_code == 200, r.text
+    assert repo.get_import(entry_id)["check_preco"] == {"available": True, "items": []}
+
+
+def test_vincular_produto_sem_fonte_nao_grava_check_preco():
+    import uuid
+
+    from app.persistence import repo
+
+    entry_id = str(uuid.uuid4())
+    _seed_parsed_import_with_item(
+        entry_id,
+        item={"description": "TENIS", "quantity": 1.0, "product_code": "ABC123", "ean": "789"},
+        customer_cnpj="11.222.333/0001-44",
+    )
+    _seed_catalogo_fire(
+        [{"fire_produto_id": "10", "codigo": "10", "nome": "TENIS AZUL", "ean": "789"}]
+    )
+
+    r = client.post(
+        f"/api/imported/{entry_id}/vincular-produto",
+        json={"item_index": 0, "fire_produto_id": "10"},
+    )
+
+    assert r.status_code == 200, r.text
+    assert repo.get_import(entry_id)["check_preco"] is None
+
+
 def test_delete_depara_desfaz():
     from datetime import datetime
 
@@ -2429,6 +2481,30 @@ def test_commit_grava_sha256_e_caminho_da_copia_no_import(tmp_path, monkeypatch)
     entry = client.get(f"/api/imported/{r2.json()['entry_id']}").json()["entry"]
     assert entry["file_sha256"] == hashlib.sha256(pdf.read_bytes()).hexdigest()
     assert Path(entry["original_path"]) == _arquivos_recebidos()[0]
+
+
+def test_commit_grava_o_check_preco_da_fonte(tmp_path, monkeypatch):
+    from app.erp import preco_trava
+    from app.persistence import repo
+
+    _config_em_tmp(monkeypatch, tmp_path)
+    chamadas = []
+
+    def fake(order, env):
+        chamadas.append(order.header.order_number)
+        return {"available": True, "items": [], "fonte": "mm"}
+
+    monkeypatch.setattr(preco_trava, "check_preco_para_gravar", fake)
+    pdf = _sample_pdf()
+    r = client.post(
+        "/api/preview", files=[("file", (pdf.name, pdf.read_bytes(), "application/pdf"))]
+    )
+
+    r2 = client.post("/api/commit", json={"preview_id": r.json()["preview_id"]})
+
+    assert r2.status_code == 200, r2.text
+    assert len(chamadas) == 1
+    assert repo.get_import(r2.json()["entry_id"])["check_preco"]["fonte"] == "mm"
 
 
 def test_preview_da_pasta_guarda_copia_e_o_move_para_importados_continua(tmp_path, monkeypatch):

@@ -32,6 +32,7 @@ def insert_import(entry: dict) -> None:
     """
     snapshot = entry.get("snapshot")
     check = entry.get("check")
+    check_preco = entry.get("check_preco")
     output_files = entry.get("output_files")
     db_result = entry.get("db_result")
 
@@ -66,6 +67,7 @@ def insert_import(entry: dict) -> None:
         int(entry.get("state_version", 1)),
         entry.get("file_sha256"),
         entry.get("original_path"),
+        json.dumps(check_preco, ensure_ascii=False) if check_preco is not None else None,
     )
     with db.connect() as conn:
         conn.execute(
@@ -78,8 +80,8 @@ def insert_import(entry: dict) -> None:
                 portal_status, sent_to_fire_at,
                 production_status, released_at, released_by,
                 trace_id, state_version,
-                file_sha256, original_path
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                file_sha256, original_path, check_preco_json
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 source_filename = excluded.source_filename,
                 imported_at     = excluded.imported_at,
@@ -89,6 +91,7 @@ def insert_import(entry: dict) -> None:
                 fire_codigo     = excluded.fire_codigo,
                 snapshot_json   = excluded.snapshot_json,
                 check_json      = excluded.check_json,
+                check_preco_json = COALESCE(excluded.check_preco_json, imports.check_preco_json),
                 output_files_json = excluded.output_files_json,
                 db_result_json  = excluded.db_result_json,
                 status          = excluded.status,
@@ -158,6 +161,7 @@ def _row_to_entry(row) -> dict:
         "db_result": json.loads(row["db_result_json"]) if row["db_result_json"] else None,
         "snapshot": json.loads(row["snapshot_json"]) if row["snapshot_json"] else None,
         "check": json.loads(row["check_json"]) if _get("check_json") else None,
+        "check_preco": json.loads(_get("check_preco_json")) if _get("check_preco_json") else None,
     }
 
 
@@ -309,7 +313,7 @@ def get_import(import_id: str) -> dict | None:
                    cliente_override_at, cliente_override_by, cliente_override_cnpj,
                    file_sha256, original_path,
                    sem_preco_ack_by, sem_preco_ack_at, sem_preco_ack_items,
-                   fire_status_last_seen, fire_status_polled_at
+                   fire_status_last_seen, fire_status_polled_at, check_preco_json
             FROM imports WHERE id = ?
             """,
             (import_id,),
@@ -343,6 +347,7 @@ def update_fire_metadata(
     output_files: list[dict] | None = None,
     sent_to_fire_at: str | None = None,
     check: dict | None = None,
+    check_preco: dict | None = None,
 ) -> None:
     """Update Fire-related auxiliary columns. Does NOT touch portal_status /
     production_status — those mutations belong to `app.state.transition`.
@@ -351,6 +356,7 @@ def update_fire_metadata(
     `check`: quando passado, regrava `check_json` com o resultado fresco do
     `check_order` (ex.: após um vínculo de-para, para o re-open e o badge da
     lista refletirem o novo match em vez do check antigo armazenado).
+    `check_preco`: idem para o check do ambiente fonte da trava de preço.
     """
     sets: list[str] = []
     params: list[Any] = []
@@ -369,6 +375,9 @@ def update_fire_metadata(
     if check is not None:
         sets.append("check_json = ?")
         params.append(json.dumps(check, ensure_ascii=False))
+    if check_preco is not None:
+        sets.append("check_preco_json = ?")
+        params.append(json.dumps(check_preco, ensure_ascii=False))
     if not sets:
         return
     params.append(import_id)
