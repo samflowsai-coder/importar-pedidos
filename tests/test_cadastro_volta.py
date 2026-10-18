@@ -718,3 +718,23 @@ def test_simular_avisa_chave_desconhecida_uma_vez_por_nome(env_conn, monkeypatch
     assert sum("chave desconhecida" in a for a in avisos) == 2  # campoNovo e "?" (dedup)
     assert sum("'campoNovo'" in a for a in avisos) == 1 and sum("'?'" in a for a in avisos) == 1
     assert not any("<b>" in a or "<i>" in a for a in avisos)
+
+
+def test_chave_desconhecida_avisa_uma_vez_por_ambiente(env_conn, monkeypatch):
+    monkeypatch.setenv(cv.VAR_MODO, "mm:simular,nasmar:simular")
+    avisos: list[str] = []
+    hid = logger.add(
+        lambda m: avisos.append(str(m)),
+        level="WARNING",
+        filter=lambda r: r["level"].name == "WARNING",
+    )
+    try:
+        novo = dict(BOM, campoNovo=1)
+        for slug in ("mm", "nasmar", "mm"):
+            cv.processar_ambiente(
+                slug, _client=_Client([novo]), _fire_conn=_Fire(), _env_conn=env_conn
+            )
+    finally:
+        logger.remove(hid)
+    assert sum("'campoNovo'" in a for a in avisos) == 2  # um por ambiente, não três
+    assert sum("env=mm:" in a for a in avisos) == 1 and sum("env=nasmar:" in a for a in avisos) == 1

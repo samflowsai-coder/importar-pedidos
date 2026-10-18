@@ -22,10 +22,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 MAX_MENSAGEM = 500
 MAX_COMPONENTES = 50
 MAX_QUANTIDADE = 100000
-# Colunas do Fire (PRODUTOS): DESCRICAO, DESCRICAO2, UNIDADE, CODIGO_EAN13, CODPARANFE, CODPROD_ALTERN.
+# Colunas do Fire (PRODUTOS): DESCRICAO, UNIDADE, CODIGO_EAN13, CODPARANFE, CODPROD_ALTERN.
 LIMITES: dict[str, int] = {
     "nome": 200,
-    "cor": 200,
+    # "cor" não tem limite aqui: DESCRICAO2 é a "Descrição Interna" do Fire, não cor (17/10/2026).
     "unidadeErp": 10,
     "ean": 15,
     "codigoNfe": 20,
@@ -154,7 +154,7 @@ def _mensagem_pydantic(exc: ValidationError) -> str:
 def _textos(item: CadastroPendente) -> dict[str, str]:
     campos = {
         "nome": item.nome,
-        "cor": item.cor,
+        # "cor" fora: DESCRICAO2 é a "Descrição Interna" do Fire, não cor (17/10/2026).
         "unidadeErp": item.unidadeErp,
         "ean": item.ean,
         "codigoNfe": item.codigoNfe,

@@ -39,7 +39,6 @@ def test_item_bom_passa():
         ("acao", "apagar", "contrato_invalido"),
         ("tipo", "servico", "contrato_invalido"),
         ("nome", "x" * 201, "campo_excede_fire"),
-        ("cor", "x" * 201, "campo_excede_fire"),
         ("unidadeErp", "UNIDADES123", "campo_excede_fire"),
         ("ean", "1" * 16, "campo_excede_fire"),
         ("codigoNfe", "x" * 21, "campo_excede_fire"),
@@ -62,6 +61,11 @@ def test_acento_portugues_passa_win1252():
     assert codifica_win1252("MEIA AÇÚCAR ÇÃO") and not codifica_win1252("☃")
     bruto = dict(BOM, nome="MEIA AÇÚCAR")
     assert validar_item(bruto)[1] is None
+
+
+def test_cor_nao_vai_ao_fire_entao_nao_e_validada():
+    # cor é aceita e ignorada: não tem coluna no Fire, então não entra no limite nem no WIN1252.
+    assert validar_item(dict(BOM, cor="x" * 300 + " ☃"))[1] is None
 
 
 def test_kit_sem_componentes_e_regras_de_componente():
@@ -138,7 +142,7 @@ def test_inativar_ignora_componentes(comps, tipo):
     assert cod is None and item.componentes is None
 
 
-@pytest.mark.parametrize("campo", ["ean", "cor", "codigoNfe", "codigoMes", "unidadeErp", "nome"])
+@pytest.mark.parametrize("campo", ["ean", "codigoNfe", "codigoMes", "unidadeErp", "nome"])
 def test_texto_vazio_e_contrato_invalido(campo):
     bruto = dict(BOM)
     bruto[campo] = ""
@@ -146,7 +150,7 @@ def test_texto_vazio_e_contrato_invalido(campo):
     assert item is None and cod == "contrato_invalido"
 
 
-@pytest.mark.parametrize("campo", ["ean", "cor", "codigoNfe", "codigoMes", "unidadeErp"])
+@pytest.mark.parametrize("campo", ["ean", "codigoNfe", "codigoMes", "unidadeErp"])
 def test_texto_opcional_segue_aceitando_null(campo):
     bruto = dict(BOM)
     bruto[campo] = None
