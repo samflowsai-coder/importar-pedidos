@@ -216,7 +216,7 @@ Respostas do Flow e o que o Portal faz com cada uma: ver **contrato P4a §5** (r
 
 #### Validação de borda (antes de qualquer acesso ao Fire)
 
-1. O item passa por um modelo pydantic com `extra="forbid"`, enums fechados e limites por coluna medidos no Fire:
+1. O item passa por um modelo pydantic `strict`, com enums fechados e limites por coluna medidos no Fire. No item de topo, `extra="ignore"`: chave nova não derruba o item (o Flow só acrescenta campo junto com capacidade nova) e o nome dela vai para um WARNING, uma vez por ambiente e nome; nos objetos aninhados (`grupoErp`, `marcaErp`, `componentes[]`), `extra="forbid"`:
    - `nome` até 200, `unidadeErp` até 10, `ean` até 15, `codigoNfe` até 20, `codigoMes` até 30;
    - `ncm` com `^[0-9]{8}$`, e `tipoItemSped` de 0 a 10 ou 99;
    - texto opcional (`unidadeErp`, `ean`, `codigoNfe`, `codigoMes`) é `null` ou não vazio: `""` é `contrato_invalido`;
