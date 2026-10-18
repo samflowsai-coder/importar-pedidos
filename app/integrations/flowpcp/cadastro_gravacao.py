@@ -586,13 +586,14 @@ def _recusar_conexao(lote: _Lote, itens: list[CadastroPendente], exc: BaseExcept
 
 
 def _recuperar(slug: str, env_conn, fire_conn, agora: datetime) -> dict | None:
-    """Antes do GET: linhas que um processo caído deixou no meio (só lê o ERP)."""
+    """Antes do GET: linhas que um processo caído deixou no meio. Só lê o ERP, pela
+    conexão bloqueante (INSERT pendente de outro processo = lock, não ausência)."""
     if not cadastro_recuperacao.ha_o_que_recuperar(env_conn, agora=agora):
         return None
     try:
         with ExitStack() as stack:
             fire = fire_conn if fire_conn is not None else stack.enter_context(
-                cv._abrir_fire_escrita(slug)
+                cv._abrir_fire_recuperacao(slug)
             )
             return cadastro_recuperacao.recuperar(slug, env_conn, fire, agora=agora)
     except Exception as exc:  # noqa: BLE001 — as linhas ficam para o próximo ciclo

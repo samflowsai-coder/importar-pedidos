@@ -128,6 +128,29 @@ class FirebirdConnection:
             yield conn
 
     @contextmanager
+    def connect_leitura_bloqueante(self, cfg: dict, lock_timeout: int = 10) -> Generator:
+        """Conexão para LER provas de ausência (recuperação do cadastro): READ ONLY +
+        READ COMMITTED + NO_REC_VERSION, WAIT com `isc_tpb_lock_timeout`.
+
+        Com REC_VERSION (ou SNAPSHOT), um INSERT sem commit de outra transação
+        simplesmente não aparece e "não existe" pareceria provado. Com
+        NO_REC_VERSION, ler um registro cuja última versão está pendente espera e,
+        vencido o timeout, levanta conflito de lock: quem chama aborta, não marca.
+        READ ONLY: o próprio Firebird recusa escrita nesta transação.
+        """
+        import struct
+
+        import fdb  # type: ignore[import]
+
+        tpb = bytes([
+            fdb.isc_tpb_version3, fdb.isc_tpb_read, fdb.isc_tpb_read_committed,
+            fdb.isc_tpb_no_rec_version, fdb.isc_tpb_wait, fdb.isc_tpb_lock_timeout,
+        ]) + struct.pack("<bI", 4, lock_timeout)
+        with self._connect_with(cfg) as conn:
+            conn.begin(tpb=tpb)
+            yield conn
+
+    @contextmanager
     def connect_escrita_cadastro(self, cfg: dict, lock_timeout: int = 10) -> Generator:
         """Conexão de ESCRITA do cadastro de produto (volta Flow -> Fire):
         READ COMMITTED + REC_VERSION, WAIT com `isc_tpb_lock_timeout` de
@@ -153,7 +176,8 @@ class FirebirdConnection:
         ]) + struct.pack("<bI", 4, lock_timeout)
         with self._connect_with(cfg, commit_na_saida=False) as conn:
             conn.main_transaction.default_tpb = tpb
-            # O padrão do fdb é commit ao encerrar a transação ativa (ex.: close).
+            # Por padrão o fdb comita a transação ativa quando ela é encerrada sem
+            # commit/rollback explícito (`begin()` de uma nova, `Transaction.close()`).
             conn.main_transaction.default_action = "rollback"
             conn.begin(tpb=tpb)
             yield conn

@@ -91,6 +91,42 @@ def test_conexao_de_escrita_do_cadastro_tem_lock_timeout_em_toda_transacao(monke
     assert conn.main_transaction.default_action == "rollback"
 
 
+def test_leitura_bloqueante_espera_registro_pendente(monkeypatch):
+    """Recuperação do cadastro: READ ONLY + READ COMMITTED + NO_REC_VERSION + WAIT com
+    lock timeout. Um INSERT sem commit de outra transação vira conflito, não ausência."""
+    import struct
+    from contextlib import contextmanager
+
+    import fdb
+
+    from app.erp.connection import FirebirdConnection
+
+    class _Conn:
+        def __init__(self):
+            self.begins = []
+
+        def begin(self, tpb=None):
+            self.begins.append(tpb)
+
+    conn, kws = _Conn(), []
+
+    @contextmanager
+    def _falso(self, cfg, **kw):
+        kws.append(kw)
+        yield conn
+
+    monkeypatch.setattr(FirebirdConnection, "_connect_with", _falso)
+    with FirebirdConnection().connect_leitura_bloqueante({"path": "x"}) as c:
+        assert c is conn
+    assert conn.begins == [bytes([
+        fdb.isc_tpb_version3, fdb.isc_tpb_read, fdb.isc_tpb_read_committed,
+        fdb.isc_tpb_no_rec_version, fdb.isc_tpb_wait, fdb.isc_tpb_lock_timeout,
+    ]) + struct.pack("<bI", 4, 10)]
+    with FirebirdConnection().connect_leitura_bloqueante({"path": "x"}, lock_timeout=3):
+        pass
+    assert conn.begins[-1].endswith(struct.pack("<bI", 4, 3))
+
+
 @pytest.mark.firebird_stub_proprio
 def test_conexao_de_escrita_sai_com_rollback_nunca_commit(monkeypatch):
     """O que sobrou sem commit do gravador (rollback que falhou) não tem prova: a saída

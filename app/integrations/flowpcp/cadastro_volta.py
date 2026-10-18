@@ -132,6 +132,11 @@ def _abrir_fire_escrita(slug: str):
     return FirebirdConnection().connect_escrita_cadastro(environments_repo.to_fb_config(env))
 
 
+def _abrir_fire_recuperacao(slug: str):
+    env = environments_repo.get_by_slug(slug)
+    return FirebirdConnection().connect_leitura_bloqueante(environments_repo.to_fb_config(env))
+
+
 def _env(slug: str, env_conn):
     return nullcontext(env_conn) if env_conn is not None else router.env_connect(slug)
 

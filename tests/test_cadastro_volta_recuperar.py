@@ -6,7 +6,9 @@ Fire só-leitura em memória (qualquer escrita derruba o teste); SQLite do ambie
 import json
 import re
 import time
-from datetime import UTC, date, datetime
+from contextlib import nullcontext
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 
@@ -15,7 +17,7 @@ from app.integrations.flowpcp import cadastro_volta as cv
 from app.persistence import cadastro_volta_repo as repo
 from app.persistence import router
 from app.utils.logger import logger
-from tests.test_cadastro_volta_gravar import PAR, FireGravavel, Flow, Relogio
+from tests.test_cadastro_volta_gravar import CONEXAO, LOCK, PAR, FireGravavel, Flow, Relogio
 
 AGORA = datetime(2026, 10, 17, 13, 0, tzinfo=UTC)
 ANTIGA = "2026-10-17 12:00:00"
@@ -113,6 +115,7 @@ def _linha(env_conn, cid="c1", *, seq=None, acao="criar", plano=None, iniciado=A
         assert repo.marcar_seq(env_conn, cid, 1, seq)
     env_conn.execute("UPDATE cadastro_volta SET iniciado_em = ? WHERE cadastro_id = ?",
                      (iniciado, cid))
+    env_conn.commit()  # como o ciclo: a recuperação pode dar rollback no SQLite
 
 
 def _no_erp(**kw):
@@ -169,6 +172,34 @@ def test_libera_quando_o_seq_tem_outro_produto(env_conn):
     r = rec.recuperar("mm", env_conn, fire, agora=AGORA)
     assert r == {"adotado": 0, "liberado": 1, "incerto": 0, "reaplicar": 0}
     assert _estado(env_conn) == ("liberado", None, None)  # Emenda 3: o SEQ zera junto
+
+
+@pytest.mark.parametrize("grupo", [8.0, Decimal("8"), Decimal("8.000"), "8"])
+def test_grupo_numerico_inteiro_adota(env_conn, grupo):
+    _linha(env_conn, seq=3992)
+    fire = FireLeitura(produtos={3992: _no_erp(GRUPO=grupo)})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["adotado"] == 1
+
+
+@pytest.mark.parametrize("campos", [
+    {"GRUPO": None}, {"GRUPO": 8.5}, {"GRUPO": "oito"}, {"GRUPO": 9},
+    {"CLASSIF_FISCAL": "61159900"},  # editada à mão no mesmo dia
+    {"DESCRICAO": "meia soquete"},  # mesma descrição em outra caixa
+    {"DESCRICAO": None}, {"UNIDADE": "UN"}, {"CODIGO_EAN13": "7890000000000"},
+])
+def test_mesma_descricao_e_dia_com_outra_divergencia_fica_incerto(env_conn, erros, campos):
+    """Sem prova forte de que é outro produto, nunca libera (seria gravado de novo)."""
+    _linha(env_conn, seq=3992)
+    fire = FireLeitura(produtos={3992: _no_erp(**campos)})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+    assert _estado(env_conn) == ("incerto", 3992, None)
+
+
+def test_produto_anterior_a_reserva_libera_mesmo_com_a_descricao_igual(env_conn):
+    _linha(env_conn, seq=3992)
+    fire = FireLeitura(produtos={3992: _no_erp(DATA_CAD=date(2026, 10, 16))})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["liberado"] == 1
+    assert _estado(env_conn) == ("liberado", None, None)
 
 
 def test_libera_quando_o_seq_nao_existe(env_conn):
@@ -279,8 +310,10 @@ def test_libera_atualizar_e_inativar(env_conn, acao):
     assert fire.consultas == []
 
 
-def test_nao_toca_linha_com_menos_de_dois_minutos(env_conn):
-    _linha(env_conn, seq=3992, iniciado="2026-10-17 12:58:30")
+def test_nao_toca_linha_com_menos_da_idade_minima(env_conn):
+    # 15 min: maior que PRAZO_LOTE (8 min), a gravação viva de um ciclo não é tocada.
+    assert rec.IDADE_MINIMA_RECUPERACAO == timedelta(minutes=15)
+    _linha(env_conn, seq=3992, iniciado="2026-10-17 12:46:00")
     fire = FireLeitura()
     assert rec.recuperar("mm", env_conn, fire, agora=AGORA) == dict.fromkeys(
         ("adotado", "liberado", "incerto", "reaplicar"), 0)
@@ -299,14 +332,72 @@ def test_ignora_incerto_da_triagem(env_conn):
     assert not rec.ha_o_que_recuperar(env_conn, agora=AGORA)
 
 
-def test_leitura_que_falha_para_e_deixa_as_linhas(env_conn, erros):
+@pytest.mark.parametrize("falha", [LOCK, CONEXAO])
+def test_lock_ou_conexao_na_leitura_para_e_deixa_as_linhas(env_conn, erros, falha):
+    """Registro pendente de outra transação (NO_REC_VERSION) = conflito de lock, não ausência."""
     _linha(env_conn, "c1", seq=3992)
     _linha(env_conn, "c2", seq=3993)
-    fire = FireLeitura(falha=OSError("rede caiu"))
-    assert sum(rec.recuperar("mm", env_conn, fire, agora=AGORA).values()) == 0
+    fire = FireLeitura(falha=falha())
+    r = rec.recuperar("mm", env_conn, fire, agora=AGORA)
+    assert r == {"adotado": 0, "liberado": 0, "incerto": 0, "reaplicar": 0, "parado": "FdbError"}
     assert _estado(env_conn, "c1")[0] == _estado(env_conn, "c2")[0] == "em_andamento"
     assert len(fire.consultas) == 1  # parou na primeira
-    assert any("OSError" in e and "rede caiu" not in e for e in erros)
+    assert any("FdbError" in e and "VALOR-DO-USUARIO" not in e for e in erros)
+
+
+def test_outra_falha_na_leitura_fica_incerto_so_naquela_linha(env_conn, erros):
+    _linha(env_conn, "c1", seq=3992)
+    _linha(env_conn, "c2", acao="atualizar")
+
+    class _Falha(FireLeitura):
+        def ler(self, sql, params):
+            raise ValueError("coluna estranha")
+
+    r = rec.recuperar("mm", env_conn, _Falha(), agora=AGORA)
+    assert (r["incerto"], r["reaplicar"], "parado" in r) == (1, 1, False)
+    assert _estado(env_conn, "c1")[0] == "incerto"
+    assert any("ValueError" in e and "coluna estranha" not in e for e in erros)
+
+
+def test_iniciado_em_ilegivel_fica_incerto(env_conn, erros):
+    _linha(env_conn, seq=3992, iniciado="ontem à tarde")
+    fire = FireLeitura(produtos={3992: _no_erp()})
+    assert rec.ha_o_que_recuperar(env_conn, agora=AGORA)
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+    assert fire.consultas == []
+    assert any("iniciado_em" in e for e in erros)
+
+
+@pytest.mark.parametrize("ligacao", ["gravado_de_outro_produto", "outra_versao_do_produto"])
+def test_candidato_por_nome_ja_ligado_a_outra_linha_fica_incerto(env_conn, ligacao):
+    if ligacao == "gravado_de_outro_produto":
+        repo.reservar(env_conn, cadastro_id="c9", versao=1, produto_id="p9", acao="criar",
+                      tipo="simples", modo="criar", plano_json=_plano())
+        repo.marcar_gravado(env_conn, "c9", 1, erp_produto_id="4001", corpo_json="{}")
+        repo.marcar_desfecho(env_conn, "c9", 1, "confirmado")
+    else:  # v1 do mesmo produto reservou o 4001 e ficou incerto
+        repo.reservar(env_conn, cadastro_id="c9", versao=1, produto_id="p1", acao="criar",
+                      tipo="simples", modo="criar", plano_json=_plano())
+        repo.marcar_seq(env_conn, "c9", 1, 4001)
+        repo.marcar_desfecho(env_conn, "c9", 1, "incerto")
+    _linha(env_conn)
+    fire = FireLeitura(produtos={4001: _no_erp()})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+    assert _estado(env_conn)[0] == "incerto"
+
+
+def test_candidato_que_some_entre_as_consultas_fica_incerto(env_conn, erros):
+    class _Some(FireLeitura):
+        def ler(self, sql, params):
+            if sql.endswith("WHERE SEQ = ?"):
+                self.consultas.append((sql, params))
+                return []
+            return super().ler(sql, params)
+
+    _linha(env_conn)
+    assert rec.recuperar("mm", env_conn, _Some(produtos={4001: _no_erp()}),
+                         agora=AGORA)["incerto"] == 1
+    assert any("sumiu" in e for e in erros)
 
 
 def test_transicao_recusada_pelo_livro_nao_conta(env_conn, monkeypatch, erros):
@@ -324,6 +415,7 @@ def _transitorio(env_conn, seq=3992):
     repo.marcar_erro_a_enviar(env_conn, "c1", 1, codigo="x", mensagem="m", corpo_json="{}",
                               rollback_comprovado=False)
     assert repo.marcar_desfecho(env_conn, "c1", 1, "transitorio")
+    env_conn.commit()
 
 
 def test_transitorio_com_seq_adota_quando_o_produto_esta_la(env_conn):
@@ -337,6 +429,21 @@ def test_transitorio_com_seq_libera_quando_ausente(env_conn):
     _transitorio(env_conn)
     assert rec.recuperar("mm", env_conn, FireLeitura(), agora=AGORA)["liberado"] == 1
     assert _estado(env_conn) == ("liberado", None, None)
+
+
+def test_transitorio_com_leitura_que_falha_continua_transitorio(env_conn):
+    _transitorio(env_conn)
+    r = rec.recuperar("mm", env_conn, FireLeitura(falha=LOCK()), agora=AGORA)
+    assert r["parado"] == "FdbError"
+    assert _estado(env_conn) == ("transitorio", 3992, None)
+
+
+def test_transitorio_com_porta_recusada_continua_transitorio(env_conn, monkeypatch):
+    """Retomada e porta no mesmo commit: sem a porta, a retomada também não fica."""
+    _transitorio(env_conn)
+    monkeypatch.setattr(repo, "liberar_comprovado", lambda *a: False)
+    assert rec.recuperar("mm", env_conn, FireLeitura(), agora=AGORA)["liberado"] == 0
+    assert _estado(env_conn) == ("transitorio", 3992, None)
 
 
 def test_transitorio_com_seq_e_composicao_diferente_fica_incerto(env_conn):
@@ -417,6 +524,7 @@ def test_ciclo_sem_linha_antiga_nao_abre_o_erp(gravacao, env_conn, monkeypatch):
         raise AssertionError("abriu o ERP sem nada a recuperar nem a gravar")
 
     monkeypatch.setattr(cv, "_abrir_fire_escrita", _nao_abre)
+    monkeypatch.setattr(cv, "_abrir_fire_recuperacao", _nao_abre)
     r = cv.processar_ambiente("mm", _client=Flow([]), _fire_conn=None, _env_conn=env_conn,
                               _relogio=Relogio())
     assert "recuperacao" not in r
@@ -428,10 +536,28 @@ def test_ciclo_com_erp_fora_adia_a_recuperacao(gravacao, env_conn, monkeypatch, 
     def _fora(slug):
         raise OSError("sem rede")
 
-    monkeypatch.setattr(cv, "_abrir_fire_escrita", _fora)
+    monkeypatch.setattr(cv, "_abrir_fire_recuperacao", _fora)
     flow = Flow([])
     r = cv.processar_ambiente("mm", _client=flow, _fire_conn=None, _env_conn=env_conn,
                               _relogio=Relogio())
     assert r["recuperacao"] == {"erro": "OSError"} and flow.gets  # o ciclo segue
     assert _estado(env_conn, PAR["cadastroId"])[0] == "em_andamento"
     assert any("recuperação" in e for e in erros)
+
+
+def test_ciclo_recupera_pela_leitura_bloqueante_nao_pela_escrita(gravacao, env_conn, monkeypatch):
+    _interrompido(env_conn, 3171)
+    abertas = []
+
+    def _escrita(slug):
+        raise AssertionError("a recuperação não usa a conexão de escrita")
+
+    def _leitura(slug):
+        abertas.append(slug)
+        return nullcontext(FireCiclo())
+
+    monkeypatch.setattr(cv, "_abrir_fire_escrita", _escrita)
+    monkeypatch.setattr(cv, "_abrir_fire_recuperacao", _leitura)
+    r = cv.processar_ambiente("mm", _client=Flow([]), _fire_conn=None, _env_conn=env_conn,
+                              _relogio=Relogio())
+    assert abertas == ["mm"] and r["recuperacao"]["liberado"] == 1
