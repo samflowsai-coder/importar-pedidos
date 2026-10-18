@@ -54,9 +54,12 @@ _CONFERIDAS = ("DESCRICAO", "UNIDADE", "GRUPO", "CODIGO_EAN13", "CLASSIF_FISCAL"
 _CONTAGENS = ("adotado", "liberado", "incerto", "reaplicar")
 _SQL_VERSAO = "SELECT RDB$GET_CONTEXT('SYSTEM', 'ENGINE_VERSION') FROM RDB$DATABASE"
 _SO_SELECT = "cadastro_recuperacao: só SELECT é permitido no Fire"
-# SELECT que trava ou escreve: `WITH LOCK` bloqueia a linha, `GEN_ID` avança gerador.
-_SELECT_PROIBIDO = re.compile(r"\bWITH\s+LOCK\b|\bGEN_ID\s*\(", re.IGNORECASE)
-_motor_avisado: set[tuple[str, str]] = set()
+# SELECT que trava ou escreve: `WITH LOCK` bloqueia a linha, `GEN_ID`/`NEXT VALUE FOR`
+# avançam gerador. Comentário (`/*`, `--`) nunca é necessário aqui e esconderia SQL.
+_SELECT_PROIBIDO = re.compile(
+    r"\bWITH\s+LOCK\b|\bGEN_ID\s*\(|\bNEXT\s+VALUE\s+FOR\b|/\*|--", re.IGNORECASE
+)
+_motor_avisado: set[str] = set()
 
 
 class _SoSelect:
@@ -186,7 +189,9 @@ def _confere_seq(fire, seq: int, plano: dict, iniciado: datetime) -> tuple:
     if lido is None:
         return ("liberar", f"SEQ {seq} não existe no ERP")
     data_cad = _data(lido.get("DATA_CAD"))
-    if data_cad is not None and data_cad < _dias_locais(iniciado)[0] - _FOLGA_FUSO:
+    if data_cad is None:  # o gravador sempre grava DATA_CAD: nulo ou ilegível = linha mexida
+        return ("incerto", "DATA_CAD ilegível", [seq])
+    if data_cad < _dias_locais(iniciado)[0] - _FOLGA_FUSO:
         return ("liberar", f"SEQ {seq} tem produto cadastrado antes da reserva")
     return _adota_se_bate(fire, seq, lido, plano, [seq])
 
@@ -208,8 +213,10 @@ def _por_nome(fire, env_conn, linha: dict, plano: dict, iniciado: datetime) -> t
     linhas = cadastro_fire.candidatos_por_data(
         fire, grupo=grupo, de=dias[0] - _FOLGA_FUSO, ate=dias[-1] + _FOLGA_FUSO
     )
-    if any(not isinstance(r["DESCRICAO"], str) for r in linhas):
-        seqs = sorted(r["SEQ"] for r in linhas if not isinstance(r["DESCRICAO"], str))
+    ilegiveis = sorted(r["SEQ"] for r in linhas
+                       if not isinstance(r["DESCRICAO"], str) or not r["DESCRICAO"].strip())
+    if ilegiveis:
+        seqs = ilegiveis
         return ("incerto", "produto sem descrição legível na janela da reserva", seqs)
     parecidos = [r for r in linhas if _parecido(r["DESCRICAO"]) == _parecido(nome)]
     seqs = sorted(r["SEQ"] for r in parecidos)
@@ -267,25 +274,38 @@ def ha_o_que_recuperar(env_conn, *, agora: datetime) -> bool:
     return bool(_a_recuperar(env_conn, agora))
 
 
-def _motor_sem_bloqueio(slug: str, fire) -> str | None:
-    """None se o motor respeita NO_REC_VERSION (< 4.0); senão o motivo para parar."""
-    cur = fire.cursor()
+def _motor_sem_bloqueio(slug: str, fire) -> bool:
+    """True = a recuperação não roda: motor 4.0+ (ReadConsistency faz o read committed
+    ignorar o NO_REC_VERSION), versão ilegível ou leitura da versão que falha."""
+    detalhe = ""
     try:
-        cur.execute(_SQL_VERSAO)
-        linha = cur.fetchone()
-    finally:
-        cur.close()
-    versao = linha[0] if linha else None
-    principal = _int(versao.split(".", 1)[0]) if isinstance(versao, str) else None
-    if principal is not None and principal < 4:
-        return None
-    motivo = "motor_ilegivel" if principal is None else "motor_sem_bloqueio"
-    if (slug, motivo) not in _motor_avisado:
-        _motor_avisado.add((slug, motivo))
-        logger.error(f"flowpcp.cadastro_volta env={slug}: recuperação desligada ({motivo}): "
-                     "sem a leitura bloqueante, INSERT pendente de outro processo pareceria "
-                     "ausência; as linhas ficam para a operação")
-    return motivo
+        cur = fire.cursor()
+        try:
+            cur.execute(_SQL_VERSAO)
+            linha = cur.fetchone()
+        finally:
+            cur.close()
+        versao = linha[0] if linha else None
+        principal = _int(versao.split(".", 1)[0]) if isinstance(versao, str) else None
+        if principal is not None and principal < 4:
+            return False
+        detalhe = "versão 4.0 ou maior" if principal is not None else "versão ilegível"
+    except Exception as exc:  # noqa: BLE001 — sem a versão, a leitura bloqueante não está provada
+        detalhe = f"leitura da versão do motor falhou ({type(exc).__name__})"
+    if slug not in _motor_avisado:
+        _motor_avisado.add(slug)
+        logger.error(f"flowpcp.cadastro_volta env={slug}: recuperação desligada "
+                     f"(motor_sem_bloqueio: {detalhe}): sem a leitura bloqueante, INSERT "
+                     "pendente de outro processo pareceria ausência; as linhas ficam para a operação")
+    return True
+
+
+def _desfazer_livro(env_conn, prefixo: str) -> None:
+    """Rollback do SQLite que nunca sobe ao ciclo (seria lido como ERP indisponível)."""
+    try:
+        env_conn.rollback()
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"{prefixo}: erro no livro ao desfazer ({type(exc).__name__})")
 
 
 def _aplicar(slug: str, env_conn, linha: dict, decisao: tuple, agora: datetime,
@@ -319,12 +339,12 @@ def _aplicar(slug: str, env_conn, linha: dict, decisao: tuple, agora: datetime,
         if ok:
             env_conn.commit()
     except Exception as exc:  # noqa: BLE001 — a linha volta a como estava
-        env_conn.rollback()
+        _desfazer_livro(env_conn, prefixo)
         logger.error(f"{prefixo}: erro no livro ao aplicar '{chave}' ({type(exc).__name__}); "
                      "linha como estava")
         return
     if not ok:
-        env_conn.rollback()
+        _desfazer_livro(env_conn, prefixo)
         logger.error(f"{prefixo}: {texto} não aplicado no livro")
         return
     contagem[chave] += 1
@@ -339,16 +359,10 @@ def recuperar(slug: str, env_conn, fire_conn, *, agora: datetime) -> dict:
     -> contagens `adotado`, `liberado`, `incerto`, `reaplicar`, e `parado` (tipo da
     exceção) quando uma falha de conexão ou de lock para a recuperação neste ciclo:
     as linhas que faltam ficam como estão. Outra falha de leitura vira `incerto` só
-    naquela linha. Motor sem leitura bloqueante: `{"parado": motivo}`, nada lido."""
+    naquela linha. Motor sem leitura bloqueante: `{"parado": "motor_sem_bloqueio"}`."""
     fire = _SoSelect(fire_conn)
-    try:
-        motivo = _motor_sem_bloqueio(slug, fire)
-    except Exception as exc:  # noqa: BLE001 — sem a versão, não há leitura bloqueante provada
-        logger.error(f"flowpcp.cadastro_volta env={slug}: recuperação parada, leitura da versão "
-                     f"do motor falhou ({type(exc).__name__}); nada marcado")
-        return {"parado": type(exc).__name__}
-    if motivo is not None:
-        return {"parado": motivo}
+    if _motor_sem_bloqueio(slug, fire):
+        return {"parado": "motor_sem_bloqueio"}
     contagem: dict = dict.fromkeys(_CONTAGENS, 0)
     for linha, iniciado, transitorio in _a_recuperar(env_conn, agora):
         cid, versao = linha["cadastro_id"], linha["versao"]

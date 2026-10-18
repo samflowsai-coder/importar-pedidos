@@ -77,7 +77,8 @@ class FireLeitura:
             cols = [c.strip() for c in m.group(1).split(",")]
             return [tuple(s if c == "SEQ" else p.get(c) for c in cols)
                     for s, p in sorted(self.produtos.items())
-                    if p.get("GRUPO") == grupo and de <= p.get("DATA_CAD") <= ate]
+                    if p.get("GRUPO") == grupo and isinstance(p.get("DATA_CAD"), date)
+                    and de <= p["DATA_CAD"] <= ate]  # BETWEEN do SQL: nulo fica de fora
         raise AssertionError(f"SQL inesperado na recuperação: {sql}")
 
 
@@ -205,10 +206,12 @@ def test_data_cad_ilegivel_com_divergencia_fica_incerto(env_conn, data_cad):
     assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
 
 
-def test_data_cad_ilegivel_com_tudo_batendo_adota(env_conn):
+@pytest.mark.parametrize("data_cad", [None, "2026-10-17"])
+def test_data_cad_ilegivel_com_tudo_batendo_fica_incerto(env_conn, data_cad):
+    """O gravador sempre grava DATA_CAD = hoje: nulo ou ilegível é linha mexida."""
     _linha(env_conn, seq=3992)
-    fire = FireLeitura(produtos={3992: _no_erp(DATA_CAD=None)})
-    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["adotado"] == 1
+    fire = FireLeitura(produtos={3992: _no_erp(DATA_CAD=data_cad)})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
 
 
 @pytest.mark.parametrize("grupo", [8.0, Decimal("8"), Decimal("8.000"), "8"])
@@ -347,11 +350,18 @@ def test_nome_parecido_ao_lado_do_exato_fica_incerto(env_conn):
     assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
 
 
-@pytest.mark.parametrize("descricao", [None, b"MEIA SOQUETE", 7])
+@pytest.mark.parametrize("descricao", [None, b"MEIA SOQUETE", 7, "", "   "])
 def test_descricao_nao_texto_na_janela_fica_incerto(env_conn, descricao):
     _linha(env_conn)
     fire = FireLeitura(produtos={4001: _no_erp(DESCRICAO=descricao)})
     assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+
+
+def test_data_cad_nulo_fica_fora_da_janela_da_busca(env_conn):
+    """Como o BETWEEN do SQL: DATA_CAD nulo não é candidato (o gravador nunca grava nulo)."""
+    _linha(env_conn)
+    fire = FireLeitura(produtos={4001: _no_erp(DATA_CAD=None)})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["liberado"] == 1
 
 
 def test_plano_sem_unidade_busca_e_compara_vazio(env_conn):
@@ -495,7 +505,11 @@ class _Sonda(FireLeitura):
                                  "SELECT SEQ FROM PRODUTOS WHERE SEQ = ? WITH LOCK",
                                  "select seq from produtos where seq = ? with\n  lock",
                                  "SELECT GEN_ID(G_PRODUTOS, 1) FROM RDB$DATABASE",
-                                 "select gen_id (g, 1) from rdb$database"])
+                                 "select gen_id (g, 1) from rdb$database",
+                                 "SELECT NEXT VALUE FOR G_PRODUTOS FROM RDB$DATABASE",
+                                 "select next  value\nfor g from rdb$database",
+                                 "SELECT 1 FROM RDB$DATABASE /* ; */",
+                                 "SELECT 1 FROM RDB$DATABASE -- x"])
 def test_guarda_da_recuperacao_so_deixa_passar_select(sql):
     fire = _Sonda()
     guardada = rec._SoSelect(fire)
@@ -590,6 +604,31 @@ def test_erro_no_livro_desfaz_a_linha_e_segue(env_conn, monkeypatch, erros, tran
     assert not any("ERP indisponível" in e for e in erros)
 
 
+def test_rollback_do_livro_que_falha_nao_vira_erp_indisponivel(env_conn, monkeypatch, erros):
+    _dois(env_conn)
+
+    class _ConnRollbackFalha:
+        """O livro de verdade, com rollback que levanta."""
+
+        def __init__(self, conn):
+            self._conn = conn
+
+        def __getattr__(self, nome):
+            return getattr(self._conn, nome)
+
+        def rollback(self):
+            raise sqlite3.OperationalError("disk I/O error")
+
+    def _quebra(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(repo, "liberar_comprovado", _quebra)
+    r = rec.recuperar("mm", _ConnRollbackFalha(env_conn), FireLeitura(), agora=AGORA)
+    assert r["liberado"] == 0
+    assert sum("erro no livro" in e for e in erros) >= 2
+    assert not any("ERP indisponível" in e for e in erros)
+
+
 # --- versão do motor -------------------------------------------------------------
 
 
@@ -605,29 +644,30 @@ def test_motor_com_no_rec_version_roda(env_conn, motor_limpo, versao):
     assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["liberado"] == 1
 
 
-def test_versao_do_motor_que_nao_le_para(env_conn, erros):
+def test_versao_do_motor_que_nao_le_para(env_conn, motor_limpo, erros):
     class _SemVersao(FireLeitura):
         def ler(self, sql, params):
             raise LOCK()
 
     _linha(env_conn, seq=3992)
-    assert rec.recuperar("mm", env_conn, _SemVersao(), agora=AGORA) == {"parado": "FdbError"}
+    parado = {"parado": "motor_sem_bloqueio"}
+    assert rec.recuperar("mm", env_conn, _SemVersao(), agora=AGORA) == parado
+    assert rec.recuperar("mm", env_conn, _SemVersao(), agora=AGORA) == parado
     assert _estado(env_conn)[0] == "em_andamento"
-    assert any("versão do motor" in e for e in erros)
+    avisos = [e for e in erros if "motor_sem_bloqueio" in e]
+    assert len(avisos) == 1 and "FdbError" in avisos[0]  # uma vez por processo, com o tipo
 
 
-@pytest.mark.parametrize(("versao", "motivo"), [
-    ("5.0.1", "motor_sem_bloqueio"), ("4.0.5", "motor_sem_bloqueio"),
-    (None, "motor_ilegivel"), ("WI-V", "motor_ilegivel"),
-])
-def test_motor_sem_bloqueio_ou_ilegivel_nao_roda(env_conn, motor_limpo, erros, versao, motivo):
-    """ReadConsistency (4.0+) faz o read committed ignorar o NO_REC_VERSION."""
+@pytest.mark.parametrize("versao", ["5.0.1", "4.0.5", None, "WI-V", 4])
+def test_motor_sem_bloqueio_ou_ilegivel_nao_roda(env_conn, motor_limpo, erros, versao):
+    """ReadConsistency (4.0+) faz o read committed ignorar o NO_REC_VERSION; sem versão
+    legível, nada prova o contrário."""
     _linha(env_conn, seq=3992)
     fire = FireLeitura(versao=versao)
-    assert rec.recuperar("mm", env_conn, fire, agora=AGORA) == {"parado": motivo}
-    assert rec.recuperar("mm", env_conn, fire, agora=AGORA) == {"parado": motivo}
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA) == {"parado": "motor_sem_bloqueio"}
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA) == {"parado": "motor_sem_bloqueio"}
     assert _estado(env_conn)[0] == "em_andamento" and fire.consultas == []
-    assert sum(motivo in e for e in erros) == 1  # uma vez por processo
+    assert sum("motor_sem_bloqueio" in e for e in erros) == 1  # uma vez por processo
 
 
 # --- transitorio com SEQ (M3 da revisão da Task 4) ----------------------------
