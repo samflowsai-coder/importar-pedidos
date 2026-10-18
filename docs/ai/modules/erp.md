@@ -472,13 +472,22 @@ tem tela de gestão de preço: a decisão (aprovar/recusar) vem do Flow. Spec:
 `feat/tabela-preco-por-rede`. Preço sempre em **centavos inteiros**, tolerância zero
 (`_to_cents`).
 
-> **Task 7 PENDENTE: aguarda o contrato do pcp-app.** Sync da tabela, envio de
-> pendências e recebimento de decisões com o Flow **não existem ainda**. Consequência:
-> em `ligado` a cópia local nunca é preenchida, então **todo pedido de rede externa sai
-> `copia_desatualizada` e bloqueia** (fail-closed). **Não ligue `ligado` antes da
-> Task 7.** O `PATCH /api/admin/environments/{id}/preco-trava` recusa `ligado` (409)
-> enquanto `precos_repo.ultima_sync_ok` do db da empresa for `None`. `observando` é
-> seguro para o envio (não bloqueia nada, só audita), mas adia o XLSX da importação.
+> **Conversa com o Flow (Task 7) implementada** em `app/integrations/flowpcp/precos.py`
+> (ver `modules/flowpcp.md` §6). O `PATCH /api/admin/environments/{id}/preco-trava` ainda
+> recusa `ligado` (409) enquanto `precos_repo.ultima_sync_ok` do db da empresa for `None`
+> (a cópia nunca completou). `observando` não bloqueia nada, só audita, mas adia o XLSX da
+> importação. A conversa está ligada por padrão (`PORTAL_FLOWPCP_PRECOS=0` desliga) e só age
+> em ambiente com trava ≠ `desligado`.
+
+### Runbook: ligar a trava de preço
+1. Gravar o CNPJ da empresa (`environments.cnpj`); sem ele nada sincroniza (aviso uma vez no log).
+2. Nasmar: `preco_fonte_slug="mm"` (avalia pela chave do produto da MM e fala com o Flow da
+   MM, com o CNPJ da Nasmar como `empresaFaturadora`) e o Flow ligado na MM.
+3. Passar por `observando` antes: a tabela sincroniza e o audit `preco_observado` mostra o que
+   `ligado` faria. Conferir no log `flowpcp.precos estado env=…` (`gerado_em`, `ultimo_erro`).
+4. Recarregar o preview dos pedidos abertos: check salvo antes do deploy (sem `fire_unidade`,
+   ou de outra fonte) mostra "sem avaliação" até ser regravado (`/api/commit` ou `vincular-produto`).
+5. Só então `ligado` (409 até a 1ª cópia completa). Desligar volta ao comportamento de hoje.
 
 ### Interruptor por ambiente (`environments.preco_trava_modo`)
 - `desligado` (nasce assim) — **bit a bit o comportamento de hoje** (`check_order` +
@@ -513,7 +522,8 @@ tem tela de gestão de preço: a decisão (aprovar/recusar) vem do Flow. Spec:
 2. `intercompany` — raiz do cliente está em `cnpjs_grupo` (raízes de `environments.cnpj` e
    `intercompany_cnpj` de todos os ambientes) → `fora_intercompany`. Decidido **antes** da
    cópia velha: não depende da cópia.
-3. `copia_desatualizada` — sem sync OK ou há mais de **24 h** → todos `nao_avaliado`.
+3. `copia_desatualizada` — sem sync OK ou há mais de **24 h** → todo item `nao_avaliado` (só
+   chega aqui o pedido com CNPJ de rede e fora do grupo: `cliente_sem_cnpj` e intercompany decidem antes).
 4. Por item, não avaliados (bloqueiam): sem SEQ no Fire → `produto_nao_identificado`; sem
    rede → `cliente_sem_rede`; `PrecoInvalido` → `preco_invalido`; `fire_unidade` vazia, ou
    preço achado com `unidadeErp` nula ou diferente (`strip().upper()`) → `unidade_divergente`.

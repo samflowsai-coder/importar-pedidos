@@ -126,7 +126,9 @@ bootstrap derruba as tabelas do modelo anterior (`preco_rede`, `preco_rede_cnpj`
 - `preco_revisao` — PK `(import_id, revisao)`: revisão do pedido na aprovação de preço
   (contrato precos v1 §4). `conteudo_hash`, `corpo_json` (`aprovacaoEnvioV1` com a revisão),
   `situacao` (`pendente_envio | enviada | recusada_flow | substituida | retirada`),
-  `tentada_em` (POST saiu), `enviada_em`/`resposta_json`, `erro_definitivo` (422), `retirada_em`/`retirada_motivo`/
+  `tentada_em` (POST saiu), `enviada_em`/`resposta_json`, `erro_definitivo` (422),
+  `bloqueio_local` (texto do bloqueio: corpo que não pode ir ao Flow; sai da fila de envio e só
+  conteúdo novo cria outra revisão), `retirada_em`/`retirada_motivo`/
   `retirada_enviada_em`. Repo: `preco_revisao_repo`.
 - `preco_revisao_piso` — PK `import_id`: piso vindo do 409 `revisao_obsoleta` (a próxima
   revisão nasce acima dele).
@@ -135,6 +137,9 @@ bootstrap derruba as tabelas do modelo anterior (`preco_rede`, `preco_rede_cnpj`
   a devolver (`aplicada | descartada`, `confirmada_em`).
 - `preco_aprovacao` (aprovação por item, modelo anterior) saiu: o bootstrap faz `DROP TABLE IF
   EXISTS` (nunca saiu da branch).
+- `imports.check_preco_json` — check de produto que a trava avalia (gravado no `/api/commit` e
+  regravado no `vincular-produto`); leva a marca `preco_fonte_slug` da fonte que o gerou, e
+  de outra fonte vale como sem avaliação. `repo.get_import` devolve como `check_preco`.
 - `imports.cliente_override_cnpj` — CNPJ do cliente escolhido no override; é o que define a
   rede quando o pedido veio sem CNPJ. Ver `modules/erp.md` ("Trava de preço por rede").
 

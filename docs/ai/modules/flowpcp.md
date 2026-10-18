@@ -295,6 +295,28 @@ cópia no db do próprio ambiente):
 - Estado (`gerado_em`, último erro, `pendente_envio`/`bloqueada_local`/`recusada_flow`) no log
   `flowpcp.precos estado env=…`, só quando muda. Pausas e intervalos vivem na memória do processo.
 
+Quatro rotas do Flow (`/api/portal-pedidos/precos/…`): (a) `GET tabela`, (b) `POST aprovacoes`,
+(c) `GET decisoes` e `POST decisoes/confirmar`. Resumo do tratamento (`precos.py`):
+
+| Resposta | Rota | Efeito |
+|---|---|---|
+| 400 `cursor_invalido` (com cursor salvo) ou `reiniciar: true` | a | reinicia a cópia (máx. 2 por volta; depois pausa tabela e aprovação por 15 min) |
+| 2xx sem objeto JSON (`resposta_sem_json`), 429/5xx, rede | a, b, c | transitório: tenta no próximo ciclo, nada muda na revisão |
+| 2xx com JSON fora do contrato | b | `enviada`, com o corpo bruto guardado (o Flow gravou) |
+| 2xx com JSON fora do contrato | c | confirmação tida como feita (se não, a decisão volta e é reconfirmada) |
+| 409 `revisao_obsoleta`/`conteudo_divergente` | b | vigente aqui: sobe o piso e reenvia (máx. 3 por pedido na volta); já substituída: não reenvia |
+| 413, 400 `payload_invalido`, corpo inválido local | b | `bloqueio_local`: só conteúdo novo cria nova revisão; não há desbloqueio por clique |
+| 422 `rede_desconhecida`/`produto_desconhecido`/`empresa_faturadora_desconhecida` | b | `recusada_flow`; reenvio do operador cria a revisão seguinte (rev+1) |
+| 403, 400/401/404, outros | b, c | pausa só a aprovação por 15 min (a tabela segue) |
+| demais erros | a | pausa tabela e aprovação por 15 min |
+
+Intervalos: tabela 60 s (trava ≠ `desligado`), envio e decisões 30 s (só `ligado`); independem
+das janelas do Flow. `PORTAL_FLOWPCP_PRECOS=0` desliga tudo.
+
+**Só a thread do processo web roda isso**: `envio_portal.ciclo` chama `precos.rodar`; o worker
+docker (`python -m app.worker`) **não** chama. O deploy Windows roda `ui.py`, então vale.
+Ligar a trava: runbook em `modules/erp.md` ("Trava de preço por rede").
+
 Cliente: `get_precos_tabela`, `post_precos_aprovacao`, `get_precos_decisoes`,
 `post_precos_confirmar` (GET com `read_only_policy`, POST com `idempotent_post_policy`);
 `FlowPCPClientError` carrega `status_code`, `error` e `details` do corpo de erro.

@@ -2318,7 +2318,9 @@ def test_vincular_produto_regrava_o_check_preco(monkeypatch):
         [{"fire_produto_id": "10", "codigo": "10", "nome": "TENIS AZUL", "ean": "789"}]
     )
     monkeypatch.setattr(
-        preco_trava, "check_preco_para_gravar", lambda order, env, entry=None: {"available": True, "items": []}
+        preco_trava,
+        "check_preco_para_gravar",
+        lambda order, env, entry=None: {"available": True, "items": []},
     )
 
     r = client.post(
