@@ -66,6 +66,14 @@ def test_assinatura_muda_com_preco_quantidade_e_produto():
     assert repo.assinatura(_item(preco=None), None)
 
 
+def test_assinatura_muda_com_a_rede_e_usa_so_a_raiz():
+    base = repo.assinatura(_item(), "123", "11222333000144")
+    assert base == repo.assinatura(_item(), "123", "11.222.333/0099-99")
+    assert base == repo.assinatura(_item(), "123", "11222333")
+    assert base != repo.assinatura(_item(), "123", "55666777000188")
+    assert base != repo.assinatura(_item(), "123")
+
+
 def test_decisao_com_assinatura_antiga_e_descartada(conn):
     ass_antiga, _ = _pendencia(conn, preco=54.0)
     ass_nova = repo.assinatura(_item(55.0), "123")

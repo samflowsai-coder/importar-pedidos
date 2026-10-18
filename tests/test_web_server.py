@@ -2852,7 +2852,7 @@ def test_export_xlsx_leva_preco_aprovado(monkeypatch, tmp_path):
                 conn,
                 import_id=entry_id,
                 item_index=0,
-                assinatura=aprov.assinatura(item, "123"),
+                assinatura=aprov.assinatura(item, "123", "11222333000144"),
                 decisao="preco_inicial",
                 preco_final_centavos=4800,
                 por="rafael",
@@ -2869,6 +2869,195 @@ def test_export_xlsx_leva_preco_aprovado(monkeypatch, tmp_path):
     ws = load_workbook(path).active
     valores = [c.value for row in ws.iter_rows() for c in row]
     assert 48.0 in valores
+    from app.persistence import repo
+
+    aplicados = [a["detail"] for a in repo.list_audit(entry_id) if a["event_type"] == "preco_aplicado"]
+    assert aplicados == [{"item_index": 0, "preco": 48.0, "flow_id": "f1"}]
+
+
+def _aprovar_preco_inicial(entry_id, centavos):
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from app.models.order import OrderItem
+    from app.persistence import preco_aprovacao_repo as aprov
+
+    with db.connect() as conn:
+        item = OrderItem(description="x", quantity=10.0, ean="7891", product_code="C1")
+        assert aprov.aplicar_decisao(
+            conn,
+            import_id=entry_id,
+            item_index=0,
+            assinatura=aprov.assinatura(item, "123", "11222333000144"),
+            decisao="preco_inicial",
+            preco_final_centavos=centavos,
+            por="rafael",
+            em=_dt.now(UTC),
+            motivo=None,
+            flow_id="f1",
+        )
+
+
+def test_send_to_fire_ligado_entrega_o_preco_aprovado_ao_exporter(monkeypatch, tmp_path):
+    import uuid
+
+    from app import config as app_config
+    from app.exporters import firebird_exporter as fb_mod
+    from app.persistence import repo
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_trava(entry_id, None)
+    _check_trava(monkeypatch)
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "db"},
+    )
+    recebidos: list = []
+
+    def _export(self, order, **kw):
+        recebidos.append([it.unit_price for it in order.items])
+        return fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number, items_inserted=1, fire_codigo=777
+        )
+
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _export)
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+        assert r.status_code == 409, r.text
+        assert recebidos == []
+        assert not [a for a in repo.list_audit(entry_id) if a["event_type"] == "preco_aplicado"]
+        _aprovar_preco_inicial(entry_id, 4800)
+        r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 200, r.text
+    assert recebidos == [[48.0]]
+    aplicados = [a["detail"] for a in repo.list_audit(entry_id) if a["event_type"] == "preco_aplicado"]
+    assert aplicados == [{"item_index": 0, "preco": 48.0, "flow_id": "f1"}]
+
+
+def test_send_to_fire_que_falha_no_fire_nao_grava_preco_aplicado(monkeypatch, tmp_path):
+    import uuid
+
+    from app import config as app_config
+    from app.exporters import firebird_exporter as fb_mod
+    from app.persistence import repo
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_trava(entry_id, None)
+    _check_trava(monkeypatch)
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "db"},
+    )
+    monkeypatch.setattr(
+        fb_mod.FirebirdExporter,
+        "export",
+        lambda self, order, **kw: fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number,
+            items_inserted=0,
+            skipped=True,
+            skip_reason="PRODUCT_NOT_FOUND",
+        ),
+    )
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        assert client.post(f"/api/imported/{entry_id}/send-to-fire").status_code == 409
+        _aprovar_preco_inicial(entry_id, 4800)  # liberado pela trava...
+        r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 409, r.text  # ...mas o Fire recusou
+    assert "não existe no Fire" in r.json()["detail"]
+    assert not [a for a in repo.list_audit(entry_id) if a["event_type"] == "preco_aplicado"]
+
+
+@pytest.mark.parametrize("modo", ["observando", "ligado"])
+def test_run_exporters_com_trava_ativa_adia_o_xlsx(monkeypatch, tmp_path, modo):
+    from app import config as app_config
+    from app.models.order import Order, OrderHeader, OrderItem
+    from app.web import server as server_mod
+
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx"},
+    )
+    order = Order(
+        header=OrderHeader(order_number="A1"),
+        items=[OrderItem(description="x", quantity=1, unit_price=10.0)],
+    )
+
+    out = server_mod._run_exporters(order, tmp_path, env={"slug": "mm", "preco_trava_modo": modo})
+
+    assert out["output_files"] == []
+    assert out["xlsx_adiado"] == "trava_de_preco"
+    assert list(tmp_path.glob("*.xlsx")) == []
+
+
+@pytest.mark.parametrize("env", [None, {"slug": "mm", "preco_trava_modo": "desligado"}])
+def test_run_exporters_desligado_gera_xlsx_como_hoje(monkeypatch, tmp_path, env):
+    from app import config as app_config
+    from app.models.order import Order, OrderHeader, OrderItem
+    from app.web import server as server_mod
+
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx"},
+    )
+    order = Order(
+        header=OrderHeader(order_number="A1"),
+        items=[OrderItem(description="x", quantity=1, unit_price=10.0)],
+    )
+
+    out = server_mod._run_exporters(order, tmp_path, env=env)
+
+    assert len(out["output_files"]) == 1
+    assert "xlsx_adiado" not in out
+    assert set(out) == {"output_files", "db_result", "fire_codigo"}
+
+
+def test_reimport_com_trava_ligada_nao_gera_xlsx_e_fica_em_revisao(monkeypatch, tmp_path):
+    import shutil
+
+    from app import config as app_config
+    from app.persistence import repo
+
+    pdf = SAMPLES / "2600009562-2026-02-25.pdf"
+    if not pdf.exists():
+        pytest.skip("Sample PDF not available")
+    env = _env_trava_ligada(tmp_path)
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx"},
+    )
+    imp = tmp_path / "in" / "Pedidos importados"
+    imp.mkdir(parents=True)
+    shutil.copy(pdf, imp / pdf.name)
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post("/api/reimport", json={"filename": pdf.name})
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["files"] == []
+    assert body["xlsx_adiado"] == "trava_de_preco"
+    assert list((tmp_path / "out").glob("*.xlsx")) == []
+    assert repo.get_import(body["entry_id"])["portal_status"] == "parsed"
 
 
 def test_override_cliente_grava_o_cnpj_do_fire(monkeypatch):

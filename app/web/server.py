@@ -469,7 +469,13 @@ def _run_exporters(order, output_path: Path, *, env: dict | None = None) -> dict
     db_result_dict: dict | None = None
     fire_codigo: int | None = None
 
-    if export_mode in ("xlsx", "both"):
+    # Trava de preço ativa (observando/ligado): o XLSX não nasce na importação.
+    # O pedido fica em revisão e só sai pelo preview → exportar/enviar, que
+    # passa por `preco_trava.decidir_envio`.
+    from app.erp import preco_trava
+
+    adiado = preco_trava.trava_ativa(env)
+    if export_mode in ("xlsx", "both") and not adiado:
         exporter = ERPExporter()
         paths = exporter.export(order, str(output_path))
         output_files = [{"name": p.name, "path": str(p)} for p in paths]
@@ -479,11 +485,20 @@ def _run_exporters(order, output_path: Path, *, env: dict | None = None) -> dict
         # checados em `_send_one_to_fire`). Este caminho legado nunca grava.
         db_result_dict = {"skipped": True, "skip_reason": "USE_PREVIEW"}
 
-    return {
+    out = {
         "output_files": output_files,
         "db_result": db_result_dict,
         "fire_codigo": fire_codigo,
     }
+    if adiado and export_mode in ("xlsx", "both"):
+        out["xlsx_adiado"] = "trava_de_preco"
+    return out
+
+
+def _marca_xlsx_adiado(result: dict) -> dict:
+    """`{"xlsx_adiado": ...}` só quando a trava adiou o XLSX; senão nada (a
+    resposta de hoje fica igual)."""
+    return {"xlsx_adiado": result["xlsx_adiado"]} if result.get("xlsx_adiado") else {}
 
 
 def _guardar_original(raw: bytes, nome: str):
@@ -1491,6 +1506,7 @@ def import_files(
                             "files": result["output_files"],
                             "fire_codigo": result.get("fire_codigo"),
                             "entry_id": entry["id"],
+                            **_marca_xlsx_adiado(result),
                         }
                     )
 
@@ -1734,6 +1750,7 @@ def reimport_file(
                         "files": result["output_files"],
                         "fire_codigo": result.get("fire_codigo"),
                         "entry_id": entry["id"],
+                        **_marca_xlsx_adiado(result),
                     }
                 )
         except Exception as exc:
@@ -2469,6 +2486,7 @@ def _send_one_to_fire(
                 "cliente_override_codigo": override,
             },
         )
+        preco_trava.registrar_aplicados(import_id, decisao)
         transition(
             import_id,
             LifecycleEvent.SEND_TO_FIRE_SUCCEEDED,
@@ -2635,6 +2653,7 @@ def _export_one_xlsx(
 
         repo.update_fire_metadata(import_id, output_files=output_files)
         repo.append_audit(import_id, "xlsx_exported", {"files": output_files})
+        preco_trava.registrar_aplicados(import_id, decisao)
 
         # Ponte FlowPCP (IDA): mesmo com o Fire manual (XLS), o pedido já vai
         # pro Flow. Gated por flowpcp_enabled dentro do hook; o Flow deduplica

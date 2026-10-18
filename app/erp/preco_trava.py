@@ -22,7 +22,14 @@ from typing import Any
 
 import app.erp.product_check as pc
 from app.erp.cnpj import cnpj_digits
-from app.erp.preco_avaliacao import Avaliacao, ItemAvaliado, Motivo, Situacao, avaliar
+from app.erp.preco_avaliacao import (
+    Avaliacao,
+    ItemAvaliado,
+    Motivo,
+    Situacao,
+    avaliar,
+    cnpj_da_rede,
+)
 from app.models.order import Order
 from app.persistence import db, environments_repo, precos_repo, repo
 from app.persistence import preco_aprovacao_repo as aprov
@@ -45,11 +52,19 @@ class DecisaoEnvio:
     metric_labels: list[str] = field(default_factory=list)
     precos_aplicar: dict[int, float] = field(default_factory=dict)
     avaliacao: Avaliacao | None = None
+    # {item_index, preco, flow_id} por preço aplicado; o chamador audita
+    # `preco_aplicado` só depois que o pedido saiu (registrar_aplicados).
+    aplicados: list[dict] = field(default_factory=list)
 
 
 def _modo(env: dict | None) -> str:
     modo = (env or {}).get("preco_trava_modo")
     return modo if modo in ("observando", "ligado") else "desligado"
+
+
+def trava_ativa(env: dict | None) -> bool:
+    """Trava em `observando` ou `ligado` (XLSX só pelo portão)."""
+    return _modo(env) != "desligado"
 
 
 def cnpjs_grupo() -> set[str]:
@@ -90,17 +105,30 @@ def _todos(order: Order, check: dict | None, situacao: Situacao, motivo: Motivo)
     return Avaliacao(rede=None, cnpj_rede=None, itens=itens_av)
 
 
+def _cnpj_cliente(order: Order, entry: dict) -> str | None:
+    """CNPJ do cliente: o do override quando há override (None se ele não tem
+    CNPJ válido), senão o do cabeçalho."""
+    if entry.get("cliente_override_codigo") is not None:
+        cnpj = cnpj_digits(entry.get("cliente_override_cnpj"))
+        return cnpj if len(cnpj) in (8, 14) else None
+    return order.header.customer_cnpj
+
+
+def _eh_intercompany(order: Order, entry: dict) -> bool:
+    if entry.get("cliente_override_codigo") is not None and _cnpj_cliente(order, entry) is None:
+        return False
+    rede = cnpj_da_rede(order, _cnpj_cliente(order, entry))
+    return rede is not None and rede[:8] in cnpjs_grupo()
+
+
 def _avaliar_local(order: Order, check: dict | None, entry: dict, agora: datetime) -> Avaliacao:
     """Avalia contra a cópia local (db do ambiente ativo). Sem Fire, sem audit."""
     if check is None:
         return _todos(order, None, "nao_avaliado", "produto_nao_identificado")
-    if entry.get("cliente_override_codigo") is not None:
-        cnpj = cnpj_digits(entry.get("cliente_override_cnpj"))
-        if len(cnpj) not in (8, 14):
-            # Sem curto-circuito o avaliador cairia na raiz das lojas de entrega.
-            return _todos(order, check, "nao_avaliado", "cliente_sem_cnpj")
-    else:
-        cnpj = order.header.customer_cnpj
+    cnpj = _cnpj_cliente(order, entry)
+    if entry.get("cliente_override_codigo") is not None and cnpj is None:
+        # Sem curto-circuito o avaliador cairia na raiz das lojas de entrega.
+        return _todos(order, check, "nao_avaliado", "cliente_sem_cnpj")
     grupo = cnpjs_grupo()
     with db.connect() as conn:
         return avaliar(
@@ -129,6 +157,13 @@ def aplicar_precos(order: Order, precos: dict[int, float]) -> None:
     """Preço do aprovador nos itens sem preço (transiente, como o depara_apply)."""
     for i, preco in precos.items():
         order.items[i].unit_price = preco
+
+
+def registrar_aplicados(import_id: str, decisao: DecisaoEnvio) -> None:
+    """Audit `preco_aplicado`, um por item. Chamar só depois que o pedido saiu
+    (insert no Fire ou XLSX gerado com sucesso)."""
+    for aplicado in decisao.aplicados:
+        repo.append_audit(import_id, "preco_aplicado", aplicado)
 
 
 def _regra_de_hoje(check: dict, ack_items: list) -> DecisaoEnvio:
@@ -190,14 +225,20 @@ def _decidir_ligado(
     try:
         if not order.items:
             return _bloqueio_trava(
+                "preco_nao_avaliado", "Pedido sem itens: nada para avaliar.", vazio, {}
+            )
+        if check is None and _eh_intercompany(order, entry):
+            return _bloqueio_trava(
                 "preco_nao_avaliado",
-                "0 item(ns) sem avaliação de preço: pedido sem itens.",
+                "Pedido intercompany: não foi possível checar no Fire agora; tente de novo.",
                 vazio,
                 {},
             )
         av = _avaliar_local(order, check, entry, agora)
         assinaturas = {
-            it.item_index: aprov.assinatura(order.items[it.item_index], it.fire_produto_id)
+            it.item_index: aprov.assinatura(
+                order.items[it.item_index], it.fire_produto_id, av.cnpj_rede
+            )
             for it in av.itens
         }
         with db.connect() as conn:
@@ -268,11 +309,8 @@ def _decidir_ligado(
     if reason is not None:
         return _bloqueio_trava(reason, " ".join(partes), av, decisoes)
 
-    for i, preco in precos.items():
-        repo.append_audit(
-            import_id, "preco_aplicado", {"item_index": i, "preco": preco, "flow_id": flow_ids[i]}
-        )
-    return DecisaoEnvio(False, precos_aplicar=precos, avaliacao=av)
+    aplicados = [{"item_index": i, "preco": p, "flow_id": flow_ids[i]} for i, p in precos.items()]
+    return DecisaoEnvio(False, precos_aplicar=precos, avaliacao=av, aplicados=aplicados)
 
 
 def decidir_envio(

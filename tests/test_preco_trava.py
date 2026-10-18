@@ -118,13 +118,15 @@ def _audits(import_id, tipo=None):
     return [a for a in out if tipo is None or a["event_type"] == tipo]
 
 
-def _decidir(import_id, order, item_index=0, *, decisao="acordo", preco=None, motivo=None):
+def _decidir(
+    import_id, order, item_index=0, *, decisao="acordo", preco=None, motivo=None, rede=CNPJ_REDE
+):
     with db.connect() as conn:
         ok = aprov.aplicar_decisao(
             conn,
             import_id=import_id,
             item_index=item_index,
-            assinatura=aprov.assinatura(order.items[item_index], "123"),
+            assinatura=aprov.assinatura(order.items[item_index], "123", rede),
             decisao=decisao,
             preco_final_centavos=preco,
             por="rafael",
@@ -353,8 +355,9 @@ def test_ligado_sem_preco_no_pedido_aplica_preco_do_aprovador(monkeypatch):
 
     assert d.bloqueado is False
     assert d.precos_aplicar == {0: 48.0}
-    aplicado = _audits(import_id, "preco_aplicado")
-    assert [a["detail"] for a in aplicado] == [{"item_index": 0, "preco": 48.0, "flow_id": "f1"}]
+    assert d.aplicados == [{"item_index": 0, "preco": 48.0, "flow_id": "f1"}]
+    # o portão não afirma que o preço foi aplicado: quem grava é o chamador, após sair
+    assert _audits(import_id, "preco_aplicado") == []
 
 
 def test_ligado_aprovado_sem_preco_final_num_item_sem_preco_nao_libera(monkeypatch):
@@ -516,6 +519,62 @@ def test_ligado_pedido_sem_itens_bloqueia(monkeypatch):
 
     assert d.bloqueado is True
     assert d.reason == "preco_nao_avaliado"
+    assert d.detalhe == "Pedido sem itens: nada para avaliar."
+
+
+def test_intercompany_com_fire_fora_e_sem_check_salvo_bloqueia_com_mensagem_propria(monkeypatch):
+    _copia(5400)
+    _env_grupo("nasmar", intercompany=CNPJ_REDE)
+    order = _order((54.0,))
+    import_id, entry = _seed(order, check=None)
+    _live(monkeypatch, _check(available=False, ids=[None]))
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.reason == "preco_nao_avaliado"
+    assert d.detalhe == "Pedido intercompany: não foi possível checar no Fire agora; tente de novo."
+
+
+def test_aprovacao_de_uma_rede_nao_vale_depois_do_override_para_outra(monkeypatch):
+    _copia(5000)
+    with db.connect() as conn:
+        precos_repo.aplicar_lote(
+            conn,
+            redes=[{"id": "r2", "nome": "Rede Y", "travada": False}],
+            cnpjs=[{"cnpj": "55666777", "rede_id": "r2", "removido": False}],
+            precos=[
+                {
+                    "rede_id": "r2",
+                    "fire_produto_id": "123",
+                    "vigente_desde": date(2026, 1, 1),
+                    "vigente_ate": None,
+                    "preco_centavos": 5000,
+                    "removido": False,
+                }
+            ],
+            cursor="c2",
+            agora=AGORA - timedelta(hours=1),
+            recursos=("precos", "redes"),
+        )
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())
+    preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+    _decidir(import_id, order, decisao="acordo", preco=5400)
+    assert not preco_trava.decidir_envio(
+        import_id, order, entry, env=_env("ligado"), agora=AGORA
+    ).bloqueado
+
+    entry["cliente_override_codigo"] = 777
+    entry["cliente_override_cnpj"] = "55666777000188"
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.reason == "preco_aguardando"
+    linhas = _linhas(import_id)
+    assert linhas[0]["motivo_cancelamento"] == "substituido"
+    assert linhas[1]["situacao"] == "pendente"
 
 
 def test_ligado_substitui_obsoletas_com_o_mapa_completo(monkeypatch):
@@ -536,8 +595,8 @@ def test_ligado_substitui_obsoletas_com_o_mapa_completo(monkeypatch):
 
     assert len(chamadas) == 1
     assert chamadas[0] == {
-        0: aprov.assinatura(order.items[0], "123"),
-        1: aprov.assinatura(order.items[1], "124"),
+        0: aprov.assinatura(order.items[0], "123", CNPJ_REDE),
+        1: aprov.assinatura(order.items[1], "124", CNPJ_REDE),
     }
 
 

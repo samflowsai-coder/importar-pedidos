@@ -11,6 +11,7 @@ import hashlib
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
+from app.erp.cnpj import cnpj_digits
 from app.erp.product_check import _to_cents
 
 if TYPE_CHECKING:
@@ -24,10 +25,13 @@ MotivoCancelamento = Literal["pedido_cancelado", "substituido"]
 _DECISOES = frozenset({"acordo", "regra", "preco_inicial", "recusado", "auto_tabela"})
 
 
-def assinatura(item: OrderItem, fire_produto_id: str | None) -> str:
+def assinatura(item: OrderItem, fire_produto_id: str | None, cnpj_rede: str | None = None) -> str:
+    """produto|preço|quantidade|raiz do CNPJ da rede: trocar o cliente para
+    outra rede (override) invalida a decisão dada para a rede anterior."""
     cents = _to_cents(item.unit_price)
     qtd = f"{float(item.quantity):g}" if item.quantity is not None else ""
-    base = f"{fire_produto_id or ''}|{'' if cents is None else cents}|{qtd}"
+    raiz = cnpj_digits(cnpj_rede)[:8]
+    base = f"{fire_produto_id or ''}|{'' if cents is None else cents}|{qtd}|{raiz}"
     return hashlib.sha256(base.encode("utf-8")).hexdigest()
 
 
