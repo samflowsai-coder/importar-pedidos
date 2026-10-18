@@ -619,9 +619,12 @@ intercompany continuam as razões de hoje (`price_check_failed`, etc.).
 
 ### Preview
 `GET` do preview ganha `payload["preco"]` (`modo`, `itens[]` com `situacao/motivo/preco_pedido/
-preco_tabela/decisao/estado`, `resumo`, `bloqueio_pedido`, `revisao` = `{numero, situacao,
-erro_flow}` ou null); ausente em `desligado` e em qualquer falha. Só leitura: nunca cria nem
-retira revisão; em `ligado` lê a revisão como o portão (hash atual, mesma `_acao_revisao`).
+preco_tabela/decisao/estado`, `resumo`, `bloqueio_pedido`, `copia` = `{sincronizada_em,
+idade_min}` (de `precos_repo.ultima_sync_ok`; ambos null se nunca sincronizou), `revisao` =
+`{numero, situacao, erro_flow}` ou null); ausente em `desligado` e em qualquer falha. Só
+leitura: nunca cria nem retira revisão; em `ligado` lê a revisão como o portão (hash atual,
+mesma `_acao_revisao`). Em `ligado` com o pedido bloqueado pela trava (mesmo agregado do
+banner) o botão principal do rodapé fica `disabled` e a nota diz o motivo.
 
 ### Testes
 `tests/test_preco_avaliacao.py`, `tests/test_preco_trava.py`, `tests/test_precos_repo.py`,

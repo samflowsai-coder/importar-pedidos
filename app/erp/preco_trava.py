@@ -562,6 +562,16 @@ def _reais(centavos: int | None) -> float | None:
     return None if centavos is None else round(centavos / 100, 2)
 
 
+def _copia_do_preview(agora: datetime) -> dict:
+    """Frescor da cópia local de preços para o preview (`ultima_sync_ok`)."""
+    with db.connect() as conn:
+        sync = precos_repo.ultima_sync_ok(conn)
+    if sync is None:
+        return {"sincronizada_em": None, "idade_min": None}
+    idade = max(0, int((agora - sync).total_seconds() // 60))
+    return {"sincronizada_em": sync.isoformat(), "idade_min": idade}
+
+
 def preview_preco(
     import_id: str,
     entry: dict,
@@ -643,6 +653,7 @@ def preview_preco(
         "itens": itens,
         "resumo": resumo,
         "bloqueio_pedido": bloqueio,
+        "copia": _copia_do_preview(agora),
         "revisao": None
         if revisao is None or "revisao" not in revisao
         else {

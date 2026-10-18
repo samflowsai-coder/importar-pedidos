@@ -2149,17 +2149,43 @@ function precoLinhasLigado(preco) {
   if (r.nao_avaliados > 0) l.push({ t: `${r.nao_avaliados} item(ns) sem avaliação de preço: o envio fica bloqueado.`, k: 'erro' });
   return l;
 }
+// Motivo curto do bloqueio em 'ligado' para o rodapé ('' = não bloqueia).
+// Mesmo agregado do banner (precoLinhasLigado), do mais grave ao mais brando.
+function precoMotivoEnvioBloqueado(preco) {
+  if (!precoLinhasLigado(preco).length) return '';
+  const r = preco.resumo || {};
+  if (preco.bloqueio_pedido) return 'pedido sem avaliação de preço';
+  if (r.recusados > 0) return 'item recusado no Flow';
+  if (r.nao_avaliados > 0) return 'item sem avaliação de preço';
+  return 'aguardando aprovação no Flow';
+}
+// Idade da cópia local da tabela de preço (backend: preco.copia.idade_min).
+function precoCopiaHtml(preco) {
+  const c = preco.copia;
+  if (!c) return '';
+  const m = c.idade_min;
+  let t;
+  if (m == null) t = 'Tabela de preço nunca sincronizada.';
+  else if (m < 1) t = 'Tabela de preço atualizada há menos de 1 min.';
+  else if (m < 60) t = `Tabela de preço atualizada há ${m} min.`;
+  else if (m < 1440) t = `Tabela de preço atualizada há ${Math.floor(m / 60)} h.`;
+  else { const d = Math.floor(m / 1440); t = `Tabela de preço atualizada há ${d} ${d === 1 ? 'dia' : 'dias'}.`; }
+  const quando = c.sincronizada_em ? ` title="${esc(new Date(c.sincronizada_em).toLocaleString('pt-BR'))}"` : '';
+  return `<div style="color:var(--text-muted);font-size:11px"${quando}>${esc(t)}</div>`;
+}
 function precoBannerHtml(preco) {
   if (!preco) return '';
   const r = preco.resumo || {};
   if (preco.modo === 'observando') {
-    return r.fila > 0
+    return (r.fila > 0
       ? `<div style="color:var(--warn-ink);font-weight:600">Trava em observação: ${r.fila} item(ns) iriam para a fila de aprovação. Nada é bloqueado nem enviado ao Flow.</div>`
-      : '<div style="color:var(--text-muted)">Trava em observação: o pedido não é bloqueado.</div>';
+      : '<div style="color:var(--text-muted)">Trava em observação: o pedido não é bloqueado.</div>')
+      + precoCopiaHtml(preco);
   }
-  return precoLinhasLigado(preco).map(x =>
+  const linhas = precoLinhasLigado(preco).map(x =>
     `<div style="color:var(--${x.k === 'warn' ? 'warn-ink' : 'error-strong'});font-weight:600">${esc(x.t)}</div>`
   ).join('');
+  return linhas + precoCopiaHtml(preco);
 }
 
 function fmtSize(b) {
@@ -2729,13 +2755,16 @@ function renderPreviewFooter(data, itemsCount) {
     const noteSuffix = action.fn === 'exportXlsx'
       ? 'Confira o match e gere o XLS quando estiver OK.'
       : 'Confira o match com o Fire e envie quando estiver OK.';
-    note.innerHTML = `Pedido <strong>em revisão</strong>. ${noteSuffix}`;
+    const travaMotivo = precoMotivoEnvioBloqueado(data.preco);
+    note.innerHTML = travaMotivo
+      ? `Pedido <strong>em revisão</strong>. Envio bloqueado pela trava de preço: ${esc(travaMotivo)}.`
+      : `Pedido <strong>em revisão</strong>. ${noteSuffix}`;
     const blocked = _isBlockedByPriceCheck(data);
     const reason = blocked ? _blockReasonText(data) : '';
-    const disabledAttr = blocked ? 'disabled' : '';
+    const disabledAttr = (blocked || travaMotivo) ? 'disabled' : '';
     const gateTxt = precoLinhasLigado(data.preco).map(x => x.t).join(' ');
     const titleAttr = blocked ? `title="${esc(reason)}"`
-      : (gateTxt ? `title="${esc('O envio será recusado: ' + gateTxt)}" aria-describedby="pvPrecoBanner"` : '');
+      : (gateTxt ? `title="${esc('Envio bloqueado pela trava de preço: ' + gateTxt)}" aria-describedby="pvPrecoBanner pvFooterNote"` : '');
     actions.innerHTML = `
       ${originalFileBtnHtml(data)}
       <button class="btn" onclick="cancelImport('${esc(data.preview_id)}')" style="color:var(--error)">Cancelar pedido</button>

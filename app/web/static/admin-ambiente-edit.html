@@ -54,6 +54,7 @@
     label.check > span { margin: 0; color: var(--text); font-size: .9em; }
     .flowpcp-status { font-size: .85em; }
     .row { display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; }
+    .row.row-igual { grid-template-columns: 1fr 1fr; }
     .field-row { display: flex; gap: .5rem; align-items: stretch; }
     .field-row > input { flex: 1; }
     .field-row > .btn { white-space: nowrap; }
@@ -213,7 +214,7 @@
            `name` no select pra não entrar no payload do formulário principal. -->
       <fieldset id="preco-trava-fs" hidden>
         <legend>Trava de preço</legend>
-        <div class="row">
+        <div class="row row-igual">
           <label>
             <span>Modo</span>
             <select id="preco-trava-modo">

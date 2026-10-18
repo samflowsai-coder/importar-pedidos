@@ -1067,6 +1067,40 @@ def test_avaliar_entry_sem_fire_sem_audit_e_sem_pendencia(monkeypatch):
     assert _revisoes(import_id) == []  # preview nunca cria revisão
 
 
+@pytest.mark.parametrize("modo", ["observando", "ligado"])
+def test_preview_mostra_a_idade_da_copia(modo):
+    _copia(5000, sync=AGORA - timedelta(minutes=95))
+    order = _order((54.0,))
+    import_id, entry = _seed(order, check=_check())
+
+    preco = preco_trava.preview_preco(import_id, entry, order, env=_env(modo), agora=AGORA)
+
+    assert preco["copia"] == {
+        "sincronizada_em": (AGORA - timedelta(minutes=95)).isoformat(),
+        "idade_min": 95,
+    }
+
+
+def test_preview_sem_copia_diz_que_nunca_sincronizou():
+    order = _order((54.0,))
+    import_id, entry = _seed(order, check=_check())
+
+    preco = preco_trava.preview_preco(import_id, entry, order, env=_env("ligado"), agora=AGORA)
+
+    assert preco["copia"] == {"sincronizada_em": None, "idade_min": None}
+
+
+def test_preview_desligado_nao_traz_a_copia():
+    _copia(5000)
+    order = _order((54.0,))
+    import_id, entry = _seed(order, check=_check())
+
+    assert (
+        preco_trava.preview_preco(import_id, entry, order, env=_env("desligado"), agora=AGORA)
+        is None
+    )
+
+
 # ── Caminho web: audit e métrica idênticos aos de hoje em `desligado` ──────────
 
 
