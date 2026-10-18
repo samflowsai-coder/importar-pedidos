@@ -287,8 +287,8 @@ def test_ensure_schema_migra_banco_antigo(tmp_path):
     c = sqlite3.connect(caminho)
     try:
         colunas = {r[1] for r in c.execute("PRAGMA table_info(cadastro_volta)")}
-        assert {"produto_id", "modo", "erp_produto_id", "corpo_json", "tentativas",
-                "proxima_tentativa_em", "alerta", "resposta_flow"} <= colunas
+        esperadas = {c for t, c, _ in schema_env.COLUMN_MIGRATIONS if t == "cadastro_volta"}
+        assert "nota_operador" in esperadas and esperadas <= colunas
         indices = {r[1] for r in c.execute("PRAGMA index_list(cadastro_volta)")}
         assert "idx_cadastro_volta_produto" in indices
         assert c.execute("SELECT tentativas FROM cadastro_volta").fetchone() == (0,)
@@ -463,3 +463,115 @@ def test_criar_do_produto_acha_orfao_fechado(conn):
     repo.marcar_desfecho(conn, "c1", 1, "orfao")
     repo.fechar_orfao(conn, "c1", 1, operador="ana", nota="x")
     assert repo.criar_do_produto(conn, "p1")["estado"] == "orfao_fechado"
+
+
+# --- Task 8: transitorio com SEQ, desempate e a busca em largura das portas -----
+
+
+@pytest.mark.parametrize("mais_novo", ["liberado", "transitorio"])
+def test_criar_do_produto_desempate_transitorio_liberado_mais_recente_vence(conn, mais_novo):
+    """`liberado` e `transitorio` com SEQ têm a mesma prioridade: vale a mais recente."""
+    mais_velho = "transitorio" if mais_novo == "liberado" else "liberado"
+    for cid, estado, quando in (("a", mais_velho, "2026-10-17 10:00:00"),
+                                ("b", mais_novo, "2026-10-17 11:00:00")):
+        _reservar(conn, cid=cid, versao=1)
+        repo.marcar_seq(conn, cid, 1, 4001)
+        _forcar(conn, cid, estado)
+        conn.execute("UPDATE cadastro_volta SET iniciado_em = ? WHERE cadastro_id = ?", (quando, cid))
+    linha = repo.criar_do_produto(conn, "p1")
+    assert (linha["cadastro_id"], linha["estado"]) == ("b", mais_novo)
+
+
+def test_retomar_transitorio_com_seq_volta_para_em_andamento_com_o_seq(conn):
+    _reservar(conn)
+    repo.marcar_seq(conn, "c1", 1, 4001)
+    _forcar(conn, "c1", "transitorio")
+    conn.execute("UPDATE cadastro_volta SET iniciado_em = '2026-10-17 10:00:00'")
+    assert [r["cadastro_id"] for r in repo.transitorios_com_seq(conn)] == ["c1"]
+    assert repo.retomar_transitorio_com_seq(conn, "c1", 1) is True
+    linha = repo.buscar(conn, "c1", 1)
+    assert (linha["estado"], linha["seq_reservado"]) == ("em_andamento", 4001)
+    assert linha["iniciado_em"] == "2026-10-17 10:00:00"  # a idade conta da reserva
+    assert repo.transitorios_com_seq(conn) == []
+    assert repo.retomar_transitorio_com_seq(conn, "c1", 1) is False
+
+
+@pytest.mark.parametrize("estado", sorted(repo.ESTADOS - {"transitorio"}))
+def test_retomar_transitorio_so_de_transitorio_com_seq(conn, estado):
+    _reservar(conn)
+    _forcar(conn, "c1", "transitorio")  # sem SEQ: reaproveitável, nada a retomar
+    assert repo.transitorios_com_seq(conn) == []
+    assert repo.retomar_transitorio_com_seq(conn, "c1", 1) is False
+    _forcar(conn, "c1", estado, seq=4001)
+    assert repo.retomar_transitorio_com_seq(conn, "c1", 1) is False
+    assert repo.buscar(conn, "c1", 1)["estado"] == estado
+
+
+def _linha_em(estado, seq):
+    c = sqlite3.connect(":memory:")
+    c.executescript(schema_env.TABLES_SQL)
+    router._apply_column_migrations(c, schema_env.COLUMN_MIGRATIONS)
+    c.executescript(schema_env.INDEXES_SQL)
+    c.execute(
+        "INSERT INTO cadastro_volta (cadastro_id, versao, estado, acao, tipo, produto_id, modo, "
+        "plano_json, seq_reservado) VALUES ('c1', 1, ?, 'criar', 'simples', 'p1', 'criar', '{}', ?)",
+        (estado, seq),
+    )
+    return c
+
+
+def _no(c):
+    r = repo.buscar(c, "c1", 1)
+    return (r["estado"], r["seq_reservado"])
+
+
+def _erro_a_enviar(rb):
+    return lambda c: repo.marcar_erro_a_enviar(c, "c1", 1, codigo="x", mensagem="m",
+                                               corpo_json="{}", rollback_comprovado=rb)
+
+
+# Toda função pública que muda o estado da linha. As PORTAS são as que afirmam,
+# com prova, que nada do nosso produto está no ERP: só elas podem levar a reservar.
+_OPERACOES = {
+    "marcar_seq": lambda c: repo.marcar_seq(c, "c1", 1, 7),
+    "marcar_gravado": lambda c: repo.marcar_gravado(c, "c1", 1, erp_produto_id="9",
+                                                    corpo_json="{}"),
+    "erro_a_enviar(rb=False)": _erro_a_enviar(False),
+    "erro_a_enviar(rb=True)": _erro_a_enviar(True),
+    "liberar_comprovado": lambda c: repo.liberar_comprovado(c, "c1", 1),
+    "retomar_transitorio_com_seq": lambda c: repo.retomar_transitorio_com_seq(c, "c1", 1),
+    "fechar_orfao": lambda c: repo.fechar_orfao(c, "c1", 1, operador="o", nota="n"),
+    "adiar": lambda c: repo.adiar(c, "c1", 1, ate="2099-01-01T00:00:00"),
+    "registrar": lambda c: repo.registrar(
+        c, cadastro_id="c1", versao=1, estado="transitorio", acao="criar", tipo="simples",
+        erro_codigo=None, erro_mensagem=None, plano_json=None),
+    **{f"desfecho({d})": (lambda d: lambda c: repo.marcar_desfecho(c, "c1", 1, d))(d)
+       for d in repo.TRANSICOES},
+}
+_PORTAS = {"liberar_comprovado", "erro_a_enviar(rb=True)"}
+# Estados de onde o produto pode estar (ou já está) no ERP. `em_andamento` sem SEQ
+# fica de fora: sem SEQ no disco, o INSERT nunca foi enviado.
+_PODE_TER_GRAVADO = [
+    ("gravado_sem_volta", None), ("confirmado", None), ("orfao", None), ("orfao_fechado", None),
+    ("incerto", 4001), ("incerto", None), ("liberado", 4001), ("transitorio", 4001),
+    ("em_andamento", 4001), ("erro_a_enviar", 4001), ("erro_registrado", 4001),
+    ("superado", 4001), ("gravado_sem_volta", 4001),
+]
+
+
+@pytest.mark.parametrize(("estado", "seq"), _PODE_TER_GRAVADO)
+def test_sem_as_portas_nada_que_pode_ter_gravado_volta_a_reservar(estado, seq):
+    """Busca em largura sobre as funções públicas, sem as portas declaradas."""
+    vistos, fila = {(estado, seq)}, [(estado, seq)]
+    while fila:
+        no = fila.pop(0)
+        c = _linha_em(*no)
+        assert not repo.reservar(c, cadastro_id="c1", versao=1, produto_id="p1", acao="criar",
+                                 tipo="simples", modo="criar", plano_json="{}"), no
+        for nome, op in _OPERACOES.items():
+            if nome in _PORTAS:
+                continue
+            c = _linha_em(*no)
+            if op(c) and _no(c) not in vistos:
+                vistos.add(_no(c))
+                fila.append(_no(c))

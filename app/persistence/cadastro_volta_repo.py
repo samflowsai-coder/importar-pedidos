@@ -238,6 +238,20 @@ def liberar_comprovado(conn: sqlite3.Connection, cadastro_id: str, versao: int) 
     return cur.rowcount == 1
 
 
+def retomar_transitorio_com_seq(conn: sqlite3.Connection, cadastro_id: str, versao: int) -> bool:
+    """`transitorio` com SEQ -> `em_andamento`, com o mesmo SEQ e o mesmo `iniciado_em`.
+    O erro saiu sem prova de rollback, então o INSERT pode ter comitado: a linha volta
+    para a recuperação, que decide pelas portas de `em_andamento` (adotar, liberar com
+    prova ou `incerto`). Fora de `TRANSICOES`: não torna nada reaproveitável."""
+    cur = conn.execute(
+        "UPDATE cadastro_volta SET estado = 'em_andamento', atualizado_em = datetime('now') "
+        "WHERE cadastro_id = ? AND versao = ? AND estado = 'transitorio' "
+        "AND seq_reservado IS NOT NULL",
+        (cadastro_id, versao),
+    )
+    return cur.rowcount == 1
+
+
 def fechar_orfao(
     conn: sqlite3.Connection, cadastro_id: str, versao: int, *, operador: str, nota: str
 ) -> bool:
@@ -356,6 +370,12 @@ def seq_criado_pelo_portal(conn: sqlite3.Connection, seq: str) -> bool:
 
 def em_andamento(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return _dicts(conn.execute("SELECT * FROM cadastro_volta WHERE estado = 'em_andamento'"))
+
+
+def transitorios_com_seq(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return _dicts(conn.execute(
+        "SELECT * FROM cadastro_volta WHERE estado = 'transitorio' AND seq_reservado IS NOT NULL"
+    ))
 
 
 def seqs_em_aberto(conn: sqlite3.Connection) -> set[str]:
