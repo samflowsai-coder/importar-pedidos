@@ -32,6 +32,13 @@ LIMITES: dict[str, int] = {
     "codigoMes": 30,
 }
 _SPED_VALIDOS = frozenset({*range(0, 11), 99})
+# Campos que uma correção (`atualizar`) pode mudar no ERP, na ordem do contrato rev. 5 §2.3.
+CampoAlterado = Literal[
+    "nome", "unidadeErp", "ean", "ncm", "tipoItemSped", "grupoErp", "codigoNfe", "componentes",
+    "marcaErp",
+]
+# atualizar: `ean` e `codigoNfe` null = limpar no ERP; os demais null = não mexer (§2.1).
+LIMPA_COM_NULL = frozenset({"ean", "codigoNfe"})
 _NOME_SEGURO = re.compile(r"^[A-Za-z0-9_]{1,40}$")
 
 
@@ -80,6 +87,8 @@ class CadastroPendente(_Estrito):
     componentes: list[ComponenteRef] | None = None
     marcaErp: MarcaRef | None = None  # noqa: N815
     codigoMes: str | None = Field(default=None, min_length=1)  # noqa: N815
+    # Rev. 5: ausente em `atualizar` = rev. 4 (grava tudo); `null` explícito só em criar/inativar.
+    camposAlterados: list[CampoAlterado] | None = None  # noqa: N815
     aprovadoEm: datetime  # noqa: N815
 
     @field_validator("cadastroId", "produtoId", mode="before")
@@ -184,6 +193,29 @@ def _erro_componentes(item: CadastroPendente) -> str | None:
     return None
 
 
+def vai_ao_erp(item: CadastroPendente, campo: str) -> bool:
+    """O campo é escrito no ERP? `atualizar` com `camposAlterados` escreve só os listados
+    (rev. 5 §2.3); sem a chave (rev. 4), `criar` e `inativar` seguem como antes."""
+    return item.acao != "atualizar" or item.camposAlterados is None or campo in item.camposAlterados
+
+
+def _erro_campos_alterados(item: CadastroPendente) -> str | None:
+    lista = item.camposAlterados
+    if item.acao != "atualizar":
+        return None if lista is None else f"{item.acao} exige camposAlterados null"
+    if lista is None:
+        # Ausente = rev. 4; null explícito não é rev. 4 nem 5 (o Flow exige lista).
+        return "atualizar com camposAlterados null" if "camposAlterados" in item.model_fields_set else None
+    if len(set(lista)) != len(lista):
+        return "camposAlterados com repetição"
+    if "componentes" in lista and item.tipo not in ("kit", "pack"):
+        return f"{item.tipo} não aceita componentes em camposAlterados"
+    for campo in lista:
+        if campo not in LIMPA_COM_NULL and getattr(item, campo) is None:
+            return f"camposAlterados lista {campo} sem valor"
+    return None
+
+
 def chaves_desconhecidas(bruto: dict) -> list[str]:
     """Nomes de chave de topo que `CadastroPendente` não conhece, ordenados.
     Nome fora de `_NOME_SEGURO` vira "?": a chave veio do Flow e não vai cru ao log."""
@@ -228,6 +260,9 @@ def validar_item(bruto: dict) -> tuple[CadastroPendente | None, str | None, str 
         return None, "contrato_invalido", "inativar exige marcaErp null"
     if item.tipo in ("simples", "material") and item.componentes is not None:
         return None, "contrato_invalido", f"{item.tipo} exige componentes null"
+    erro = _erro_campos_alterados(item)
+    if erro:
+        return None, "contrato_invalido", erro
 
     erro = _erro_componentes(item)
     if erro:
