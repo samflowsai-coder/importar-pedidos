@@ -1378,7 +1378,7 @@ git commit -m "feat(erp): gravador do cadastro no Fire (criar, atualizar, inativ
 > 1. **`reenviar_pendencias` primeiro, sempre**, antes da checagem da P0 (I5). Sem P0, o ciclo reenvia as pendências e só então recusa o resto.
 > 2. Checa a P0 (recusa como antes).
 > 3. GET (como antes). Em `criar`, o Flow (rev. 4) vai mandar também `atualizar` derivado de `criar`: **trate pela `acao` do item** — `atualizar` que chega no modo `criar` é processado como `atualizar` (mesmo escopo, mesmo gravador). `inativar` que chegue sem o portão próprio: não processa, não responde, WARNING (volta depois da reserva).
-> 4. **Triagem sem o ERP, para todos os itens, antes de abrir o ERP** (C1): validação, livro (`gravado_sem_volta`/`erro_a_enviar` → só reenvia o corpo guardado; `em_andamento`/`incerto`/`orfao`/`confirmado`/... → pula), 9b, escopo, `reservar`. Só os itens que saem da triagem como "a gravar" seguem.
+> 4. **Triagem sem o ERP, para todos os itens, antes de abrir o ERP** (C1): validação, livro (`gravado_sem_volta`/`erro_a_enviar` → só reenvia o corpo guardado; `em_andamento`/`incerto`/`orfao`/`confirmado`/... → pula), 9b, escopo. **Emenda 5 (revisão da T7):** o `reservar` sai da triagem e acontece no início da gravação de cada item (antes de qualquer comando ao ERP), para o item cortado pelo prazo do lote ficar fora do livro; `orfao_fechado` conta como `orfao` na 9b. Só os itens que saem da triagem como "a gravar" seguem.
 > 5. Abre o ERP se houver item "a gravar" **ou** linha `em_andamento` (M2). Falha de conexão: `transitorio` `conexao_recusada` **só** para os itens "a gravar" desta rodada (linhas recém-reservadas, nunca uma linha que já estava gravada).
 > 6. Recuperação (Task 8) e depois a gravação item a item, com o prazo do lote.
 >
