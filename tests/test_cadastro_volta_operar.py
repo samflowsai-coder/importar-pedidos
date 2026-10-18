@@ -65,7 +65,7 @@ class _Cur:
     def execute(self, sql, params=()):
         assert sql.lstrip().upper().startswith("SELECT"), "ERP é só leitura"
         self.erp.sql.append(sql)
-        cols = cadastro_fire._CONFERENCIA
+        cols = cadastro_fire.CAMPOS_CONFERENCIA
         if "ENGINE_VERSION" in sql:
             self.rows = [(self.erp.versao,)]
         elif "PRODUTOS_KIT" in sql:
@@ -93,13 +93,14 @@ def _prod(seq, nome="TENIS X"):
             "CODIGO_EAN13": None, "CLASSIF_FISCAL": "6404", "DATA_CAD": date(2026, 10, 17)}
 
 
-def _rodar(livro, erp, *argv):
+def _rodar(livro, erp, *argv, bloqueante=None, leitura=None):
     @contextmanager
     def abrir_livro(slug):
         yield livro
 
-    return op.main(["mm", *argv], abrir_livro=abrir_livro, abrir_erp=erp.abrir,
-                   abrir_erp_bloqueante=erp.abrir)
+    return op.main(["mm", *argv], abrir_livro=abrir_livro,
+                   abrir_erp=(leitura or erp).abrir,
+                   abrir_erp_bloqueante=(bloqueante or erp).abrir)
 
 
 def _estado(livro, cid="c1"):
@@ -551,3 +552,136 @@ def test_importar_o_modulo_nao_carrega_app_nem_fdb_nem_roda_main():
     )
     r = subprocess.run([sys.executable, "-I", "-c", codigo, str(raiz)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+# ---- rodada de correção 2 ----
+
+class _Proibido:
+    """Abrir esta conexão é erro: prova qual das duas o comando usou."""
+
+    def abrir(self, slug):
+        raise AssertionError("conexão errada para o comando")
+
+
+def _velho(seq=17):
+    p = _prod(seq)
+    p["DATA_CAD"] = date(2019, 1, 1)
+    return p
+
+
+def test_liberar_seq_de_produto_antigo_libera_e_diz_por_que(livro, capsys):
+    _linha(livro, "incerto", seq=17)
+    erp = _Erp({17: _velho()})
+    assert _rodar(livro, erp, "liberar", "c1", "1", "--operador", "a") == 0
+    assert "foi cadastrado antes da reserva; não é este cadastro" in capsys.readouterr().out
+    assert _estado(livro)["estado"] == "incerto"
+    assert _rodar(livro, erp, "liberar", "c1", "1", "--operador", "a", "--confirmar") == 0
+    r = _estado(livro)
+    assert (r["estado"], r["seq_reservado"]) == ("liberado", None)
+
+
+def test_liberar_seq_existente_com_data_cad_ilegivel_recusa(livro, capsys):
+    _linha(livro, "incerto", seq=17)
+    p = _prod(17)
+    p["DATA_CAD"] = None
+    assert _rodar(livro, _Erp({17: p}), "liberar", "c1", "1", "--operador", "a", "--confirmar") == 1
+    assert "ilegível" in capsys.readouterr().err
+    assert _estado(livro)["seq_reservado"] == 17
+
+
+def test_liberar_com_iniciado_ilegivel_recusa(livro, capsys):
+    _linha(livro, "incerto", seq=4001)
+    livro.execute("UPDATE cadastro_volta SET iniciado_em = 'ontem'")
+    assert _rodar(livro, _Erp(), "liberar", "c1", "1", "--operador", "a", "--confirmar") == 1
+    assert "início legível" in capsys.readouterr().err
+    assert _estado(livro)["estado"] == "incerto"
+
+
+def test_liberar_usa_so_a_conexao_bloqueante(livro):
+    _linha(livro, "incerto", seq=4001)
+    bloq = _Erp()
+    assert _rodar(livro, bloq, "liberar", "c1", "1", "--operador", "a", "--confirmar",
+                  leitura=_Proibido(), bloqueante=bloq) == 0
+    assert bloq.aberturas >= 1
+
+
+def test_adotar_usa_so_a_conexao_somente_leitura(livro):
+    _linha(livro, "incerto")
+    leitura = _Erp({4001: _prod(4001)})
+    assert _rodar(livro, leitura, "adotar", "c1", "1", "4001", "--operador", "a", "--confirmar",
+                  leitura=leitura, bloqueante=_Proibido()) == 0
+    assert leitura.aberturas == 1
+
+
+class _Permissivo(_Erp):
+    """Aceita qualquer SQL (o ERP de verdade aceitaria): só o guarda pode recusar."""
+
+    def cursor(self):
+        erp = self
+
+        class _C(_Cur):
+            def execute(self, sql, params=()):
+                erp.sql.append(sql)
+                self.rows = [(erp.versao,)] if "ENGINE_VERSION" in sql else []
+
+        return _C(self)
+
+
+@pytest.mark.parametrize("argv", [
+    ("liberar", "c1", "1", "--operador", "a", "--confirmar"),
+    ("adotar", "c1", "1", "4001", "--operador", "a", "--confirmar"),
+])
+def test_guarda_de_select_protege_adotar_e_liberar(livro, monkeypatch, capsys, argv):
+    _linha(livro, "incerto", seq=4001)
+    erp = _Permissivo()
+
+    def _escrita(fire, seq):
+        fire.cursor().execute("UPDATE PRODUTOS SET DESCRICAO = 'x' WHERE SEQ = ?", (seq,))
+
+    monkeypatch.setattr(cadastro_fire, "ler_produto", _escrita)
+    assert _rodar(livro, erp, *argv) == 1
+    assert "RuntimeError" in capsys.readouterr().err
+    assert not any(q.lstrip().upper().startswith("UPDATE") for q in erp.sql)
+    assert _estado(livro)["estado"] == "incerto"
+
+
+class _LivroSemCommit:
+    def __init__(self, c):
+        self.c = c
+
+    def __getattr__(self, n):
+        return getattr(self.c, n)
+
+    def commit(self):
+        raise sqlite3.OperationalError("disco cheio /x/y")
+
+
+@pytest.mark.parametrize(("estado", "seq", "argv", "esperado"), [
+    ("incerto", None, ("adotar", "c1", "1", "4001", "--operador", "a", "--confirmar"), "incerto"),
+    ("incerto", 4001, ("liberar", "c1", "1", "--operador", "a", "--confirmar"), "incerto"),
+])
+def test_commit_que_falha_em_adotar_e_liberar_nao_diz_sucesso(livro, capsys, estado, seq, argv, esperado):
+    _linha(livro, estado, seq=seq)
+    livro.commit()
+
+    @contextmanager
+    def abrir_livro(slug):
+        yield _LivroSemCommit(livro)
+
+    erp = _Erp({4001: _prod(4001)} if argv[0] == "adotar" else {})
+    rc = op.main(["mm", *argv], abrir_livro=abrir_livro, abrir_erp=erp.abrir,
+                 abrir_erp_bloqueante=erp.abrir)
+    cap = capsys.readouterr()
+    assert rc == 1 and "nada foi alterado" in cap.err
+    assert "Adotado" not in cap.out and "Liberado" not in cap.out
+    assert _estado(livro)["estado"] == esperado
+
+
+def test_liberar_sem_seq_mostra_classif_fiscal_e_componentes(livro, capsys):
+    livro.execute("INSERT INTO cadastro_volta (cadastro_id, versao, estado, acao, tipo, produto_id, "
+                  "modo, plano_json, iniciado_em) VALUES ('c1', 1, 'incerto', 'criar', 'kit', 'p1', "
+                  "'criar', ?, '2026-10-17 12:00:00')",
+                  (json.dumps({"campos": _CAMPOS, "componentes": [{"erpProdutoId": 7, "quantidade": 2}]}),))
+    assert _rodar(livro, _Erp(), "liberar", "c1", "1", "--operador", "a") == 0
+    out = capsys.readouterr().out
+    assert "CLASSIF_FISCAL" in out and "6404" in out and "COMPONENTES" in out

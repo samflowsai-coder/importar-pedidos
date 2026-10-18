@@ -246,6 +246,7 @@ def inativar(conn, *, seq: int) -> Gravacao:
 
 
 _CONFERENCIA = ("SEQ", "DESCRICAO", "UNIDADE", "GRUPO", "CODIGO_EAN13", "CLASSIF_FISCAL", "DATA_CAD")
+CAMPOS_CONFERENCIA = _CONFERENCIA  # público: a ferramenta do operador não usa privados
 
 
 def ler_produto(conn, seq: int) -> dict | None:

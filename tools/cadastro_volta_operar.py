@@ -203,7 +203,7 @@ def _adotar(livro, abrir_erp, slug, a) -> int:
     divergentes = rec.confere(lido, plano, composicao)
     print(f"{a.cadastro_id} v{a.versao} ({linha['estado']}) -> adotar SEQ {a.seq}")
     print(f"  {'campo':<16} {'ERP (lido)':<40} plano")
-    for campo in cadastro_fire._CONFERENCIA:
+    for campo in cadastro_fire.CAMPOS_CONFERENCIA:
         marca = "  <-- DIVERGE" if campo in divergentes else ""
         print(f"  {campo:<16} {lido.get(campo)!s:<40} {campos.get(campo, '-')}{marca}")
     marca = "  <-- DIVERGE" if "COMPOSICAO" in divergentes else ""
@@ -242,36 +242,49 @@ def _liberar(livro, abrir_erp_bloqueante, slug, a) -> int:
     from app.persistence import cadastro_volta_repo as repo
 
     linha = _linha_valida(livro, a, "liberar")
-    iniciado = rec._iniciado(linha)
-    if iniciado is not None and datetime.now(UTC) - iniciado < rec.IDADE_MINIMA_RECUPERACAO:
+    iniciado = rec.iniciado(linha)
+    if iniciado is None:
+        raise _RecusaError("linha sem instante de início legível; não há como provar a ausência.")
+    if datetime.now(UTC) - iniciado < rec.IDADE_MINIMA_RECUPERACAO:
         raise _RecusaError("a linha é recente demais: pode haver gravação em curso. Tente mais tarde.")
     seq = linha["seq_reservado"]
     conferidos = _ler_candidatos(a.candidatos_conferidos)
     campos = _plano(linha).get("campos")
     campos = campos if isinstance(campos, dict) else {}
 
-    def _prova(fire) -> list[dict] | None:
-        """Levanta _RecusaError se o produto pode estar no ERP; devolve os candidatos (sem SEQ)."""
+    def _prova(fire) -> tuple[list[dict] | None, str]:
+        """Levanta _RecusaError se o produto pode estar no ERP; devolve (candidatos sem
+        SEQ, nota da prova)."""
         if seq is not None:
-            if cadastro_fire.ler_produto(fire, int(seq)) is not None:
+            lido = cadastro_fire.ler_produto(fire, int(seq))
+            if lido is None:
+                return None, f"Prova: o SEQ {seq} não existe no ERP."
+            antes = rec.cadastrado_antes_da_reserva(lido, linha)
+            if antes is None:
+                raise _RecusaError(f"o SEQ {seq} existe no ERP e a data de cadastro é ilegível; não é seguro liberar.")
+            if not antes:
                 raise _RecusaError(f"o SEQ {seq} EXISTE no ERP; não é seguro liberar. Use adotar.")
-            return None
+            return None, (f"Prova: o produto no SEQ {seq} foi cadastrado antes da reserva; "
+                          "não é este cadastro.")
         janela = rec.janela_da_reserva(linha)
         if janela is None:
             raise _RecusaError("linha sem instante de início legível; não há janela para conferir.")
-        return cadastro_fire.candidatos_por_data(fire, de=janela[0], ate=janela[1])
+        return cadastro_fire.candidatos_por_data(fire, de=janela[0], ate=janela[1]), ""
 
     with abrir_erp_bloqueante(slug) as bruto:
         fire = rec.SoSelect(bruto)
         if rec.motor_sem_bloqueio(slug, fire):
             raise _RecusaError("motor do ERP 4.0+ ou de versão ilegível: a leitura bloqueante não prova ausência.")
-        cands = _prova(fire)
+        cands, nota = _prova(fire)
         if seq is not None:
-            print(f"Prova: o SEQ {seq} não existe no ERP.")
+            print(nota)
         else:
+            plano = _plano(linha)
             print("Plano deste cadastro:")
-            for c in cadastro_fire._CONFERENCIA[1:5]:
+            for c in cadastro_fire.CAMPOS_CONFERENCIA[1:6]:
                 print(f"  {c:<16} {campos.get(c, '-')}")
+            if plano.get("componentes"):
+                print(f"  {'COMPONENTES':<16} {plano['componentes']}")
             print(f"Sem SEQ reservado: {len(cands)} produto(s) cadastrado(s) na janela da reserva.")
             nome = str(campos.get("DESCRICAO") or "").strip().casefold()
             for c in cands:
@@ -290,7 +303,7 @@ def _liberar(livro, abrir_erp_bloqueante, slug, a) -> int:
             if informados != atuais:
                 raise _RecusaError("a lista informada difere da janela atual; confira de novo.")
             # Relê na hora de liberar: nada pode ter entrado desde a primeira leitura.
-            novos = _prova(fire)
+            novos, _ = _prova(fire)
             if sorted({int(c["SEQ"]) for c in novos}) != atuais:
                 raise _RecusaError("a janela mudou durante a conferência; nada foi alterado.")
         else:

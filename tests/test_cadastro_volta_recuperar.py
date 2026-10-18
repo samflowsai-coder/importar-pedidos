@@ -516,6 +516,19 @@ def test_candidato_por_nome_ja_ligado_a_outra_linha_fica_incerto(env_conn, ligac
     assert _estado(env_conn)[0] == "incerto"
 
 
+@pytest.mark.parametrize("estado", ["superado", "orfao_fechado"])
+def test_candidato_por_nome_com_seq_de_outro_produto_em_estado_final_fica_incerto(env_conn, estado):
+    """O SEQ já esteve em qualquer linha do livro (outro produto, estado final): não é nosso."""
+    repo.reservar(env_conn, cadastro_id="c9", versao=1, produto_id="p9", acao="criar",
+                  tipo="simples", modo="criar", plano_json=_plano())
+    env_conn.execute("UPDATE cadastro_volta SET estado = ?, erp_produto_id = '4001' "
+                     "WHERE cadastro_id = 'c9'", (estado,))
+    _linha(env_conn)
+    fire = FireLeitura(produtos={4001: _no_erp()})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+    assert _estado(env_conn)[0] == "incerto"
+
+
 def test_transicao_recusada_pelo_livro_nao_conta(env_conn, monkeypatch, erros):
     _linha(env_conn, seq=3992)
     monkeypatch.setattr(repo, "liberar_comprovado", lambda *a: False)

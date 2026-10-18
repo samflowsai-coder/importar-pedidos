@@ -178,6 +178,9 @@ def _iniciado(linha: dict) -> datetime | None:
         return None
 
 
+iniciado = _iniciado  # público: instante (UTC) em que a linha foi reservada, ou None
+
+
 def _dias_locais(iniciado: datetime) -> list[date]:
     """Datas locais em que o INSERT pode ter caído (mesma conversão do gravador)."""
     return sorted({iniciado.astimezone().date(), (iniciado + _VIRADA_DO_DIA).astimezone().date()})
