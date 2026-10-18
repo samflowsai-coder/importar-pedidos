@@ -1826,7 +1826,8 @@ def test_nasmar_observando_audita_com_o_seq_da_mm(monkeypatch):
 def test_preview_da_nasmar_usa_o_check_preco_salvo(monkeypatch):
     _precos_por_produto({"123": 5400, "777": 5000})
     order = _order((54.0,))
-    import_id, entry = _seed(order, check=_check(ids=[123]), check_preco=_check(ids=[777]))
+    salvo = {**_check(ids=[777]), "preco_fonte_slug": "mm"}
+    import_id, entry = _seed(order, check=_check(ids=[123]), check_preco=salvo)
     monkeypatch.setattr(pc, "check_order", lambda *a, **k: pytest.fail("preview sem Fire"))
 
     preco = preco_trava.preview_preco(
@@ -1895,3 +1896,82 @@ def test_check_preco_persiste_no_import():
         }
     )
     assert repo.get_import("outro")["check_preco"]["items"][0]["fire_product_id"] == 888
+
+
+# ── Task 7.5 fix 1: intercompany não depende da MM; check salvo marca a fonte ──
+
+
+def test_nasmar_intercompany_com_mm_fora_segue_a_regra_de_hoje(monkeypatch):
+    _copia(5400)
+    _env_grupo("grupo", intercompany=CNPJ_REDE)
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    proprio = _check(ids=[123], status="mismatch")
+    chamadas = _checks_por_ambiente(
+        monkeypatch, proprio=proprio, fonte=_check(available=False, ids=[None])
+    )
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    _, detalhe, block_detail, labels = _hoje(proprio, [])
+    assert (d.reason, d.detalhe, d.block_detail) == ("price_check_failed", detalhe, block_detail)
+    assert d.avaliacao.itens[0].situacao == "fora_intercompany"
+    assert len(_audits(import_id, "preco_intercompany_fora_da_trava")) == 1
+    assert [c for c in chamadas if c[0] == "mm"] == []
+
+
+def test_preview_da_nasmar_intercompany_usa_o_check_proprio():
+    _copia(5400)
+    _env_grupo("grupo", intercompany=CNPJ_REDE)
+    order = _order((54.0,))
+    import_id, entry = _seed(order, check=_check(ids=[123]))
+
+    preco = preco_trava.preview_preco(
+        import_id, entry, order, env=_env_nasmar("ligado"), agora=AGORA
+    )
+
+    assert preco["itens"][0]["situacao"] == "fora_intercompany"
+    assert preco["itens"][0]["estado"] == "intercompany"
+
+
+def test_check_preco_para_gravar_pula_intercompany(monkeypatch):
+    _env_grupo("grupo", intercompany=CNPJ_REDE)
+    chamadas = _checks_por_ambiente(monkeypatch, proprio=_check(), fonte=_check(ids=[777]))
+
+    assert preco_trava.check_preco_para_gravar(_order((54.0,)), _env_nasmar("ligado")) is None
+    assert chamadas == []
+
+
+def test_check_preco_salvo_guarda_a_fonte(monkeypatch):
+    _checks_por_ambiente(monkeypatch, proprio=_check(), fonte=_check(ids=[777]))
+    salvo = preco_trava.check_preco_para_gravar(_order((54.0,)), _env_nasmar("ligado"))
+    assert salvo["preco_fonte_slug"] == "mm"
+
+
+def test_check_preco_salvo_de_outra_fonte_fica_sem_avaliacao():
+    _precos_por_produto({"777": 5000})
+    order = _order((54.0,))
+    salvo = {**_check(ids=[777]), "preco_fonte_slug": "outra"}
+    import_id, entry = _seed(order, check=_check(ids=[123]), check_preco=salvo)
+
+    preco = preco_trava.preview_preco(
+        import_id, entry, order, env=_env_nasmar("ligado"), agora=AGORA
+    )
+
+    assert preco["itens"][0]["motivo"] == "produto_nao_identificado"
+    assert preco["itens"][0]["estado"] == "nao_avaliado"
+
+
+def test_upsert_sem_check_preco_preserva_o_salvo():
+    order = _order((54.0,))
+    base = {
+        "id": "replay",
+        "source_filename": "p.pdf",
+        "imported_at": "2026-10-17T09:00:00",
+        "status": "success",
+        "portal_status": "parsed",
+        "snapshot": order.model_dump(),
+    }
+    repo.insert_import({**base, "check_preco": _check(ids=[888])})
+    repo.insert_import(base)  # replay sem o campo
+    assert repo.get_import("replay")["check_preco"]["items"][0]["fire_product_id"] == 888

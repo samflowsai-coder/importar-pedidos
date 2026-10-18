@@ -556,6 +556,9 @@
       slugInput.setSelectionRange(start, start);
     });
 
+    // Chave do produto salva da trava de preço (preenchida no load da edição).
+    let precoFonteSalva = '';
+
     if (isEdit) {
       document.getElementById('title').textContent = 'Editar ambiente';
       testBtn.hidden = false;
@@ -603,6 +606,7 @@
           }
           fonteSel.innerHTML = fonteOpts;
           fonteSel.value = fonteSalva;
+          precoFonteSalva = fonteSalva;
         }
         // FlowPCP: prefill (sem o token, que é write-only) e revela a seção.
         fv('flowpcp_enabled').checked = !!env.flowpcp_enabled;
@@ -901,7 +905,8 @@
     });
 
     // Trava de preço: PATCH do modo e da chave do produto (selects sem `name`,
-    // fora do payload do form).
+    // fora do payload do form). A chave só vai quando mudou: desligar a trava
+    // não revalida uma fonte salva (`precoFonteSalva`, declarada acima).
     document.getElementById('btn-save-preco-trava').addEventListener('click', async (e) => {
       const btn = e.currentTarget;
       const status = document.getElementById('preco-trava-status');
@@ -909,15 +914,17 @@
       status.className = 'flowpcp-status';
       btn.disabled = true;
       try {
+        const fonteNova = document.getElementById('preco-fonte-slug').value;
         const r = await fetch('/api/admin/environments/' + envId + '/preco-trava', {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            modo: document.getElementById('preco-trava-modo').value,
-            preco_fonte_slug: document.getElementById('preco-fonte-slug').value || null,
-          }),
+          body: JSON.stringify(Object.assign(
+            { modo: document.getElementById('preco-trava-modo').value },
+            fonteNova !== precoFonteSalva ? { preco_fonte_slug: fonteNova || null } : {},
+          )),
         });
         if (r.ok) {
+          precoFonteSalva = fonteNova;
           status.textContent = '✓ Trava de preço salva';
           status.classList.add('ok');
         } else {

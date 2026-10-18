@@ -564,8 +564,10 @@ chama `aplicar_precos(order, precos_aplicar)` antes de exportar e `registrar_apl
   casamento na MM → `produto_nao_identificado`; MM fora ou fonte inexistente → bloqueia,
   sem fallback para check salvo. O preview usa `entry["check_preco"]`
   (`imports.check_preco_json`, gravado no `/api/commit` e regravado no `vincular-produto`
-  por `check_preco_para_gravar`); ausente → sem avaliação. `desligado` não faz consulta
-  extra. Bloqueio de pedido e regra de hoje do intercompany seguem com o check próprio.
+  por `check_preco_para_gravar`, marcado com `preco_fonte_slug` da fonte que o gerou);
+  ausente ou de outra fonte → sem avaliação. `desligado` não faz consulta extra.
+  **Pedido intercompany não depende da fonte**: portão, preview e `check_preco_para_gravar`
+  usam o check próprio (sem ida à MM); bloqueio de pedido e regra de hoje também.
 - **Intercompany** (`fora_intercompany`) roda **a regra de hoje** (`_regra_de_hoje`) e audita
   `preco_intercompany_fora_da_trava`; pode bloquear com `price_check_failed`.
 

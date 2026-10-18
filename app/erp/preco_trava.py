@@ -161,11 +161,12 @@ def _check_para_preco(
     produtos_por_item: dict[int, int] | None = None,
 ) -> dict | None:
     """Check cujo `fire_product_id`/`fire_unidade` a trava avalia e manda no corpo.
-    Sem fonte (ou fonte = o próprio): o check de hoje com os vínculos de-para.
+    Sem fonte (ou fonte = o próprio) ou pedido intercompany (fora da trava, não
+    depende da fonte): o check de hoje com os vínculos de-para.
     Com fonte: o check do Fire da fonte, sem fallback para check salvo (fonte
     fora → bloqueia) e SEM os vínculos do ambiente, que são SEQs do Fire dele."""
     fonte = _fonte(env)
-    if fonte is None:
+    if fonte is None or _eh_intercompany(order, entry):
         return _com_vinculos(
             _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order),
             produtos_por_item,
@@ -177,27 +178,39 @@ def _check_salvo_para_preco(
     entry: dict, order: Order, env: dict | None, produtos_por_item: dict[int, int] | None
 ) -> dict | None:
     """O mesmo do `_check_para_preco` para o preview, só com o que está salvo:
-    com fonte, `entry["check_preco"]` (gravado no commit e no vínculo)."""
-    if _fonte(env) is None:
+    com fonte, `entry["check_preco"]` (gravado no commit e no vínculo) — e só
+    se foi gerado por essa mesma fonte; de outra fonte = sem avaliação."""
+    fonte = _fonte(env)
+    if fonte is None or _eh_intercompany(order, entry):
         return _com_vinculos(_check_utilizavel(entry.get("check"), order), produtos_por_item)
-    return _check_utilizavel(entry.get("check_preco"), order)
+    salvo = entry.get("check_preco")
+    if not salvo or salvo.get("preco_fonte_slug") != fonte:
+        return None
+    return _check_utilizavel(salvo, order)
 
 
-def check_preco_para_gravar(order: Order, env: dict | None) -> dict | None:
+def check_preco_para_gravar(
+    order: Order, env: dict | None, entry: dict | None = None
+) -> dict | None:
     """Check do ambiente fonte para gravar em `check_preco` (commit e vínculo
-    de-para). None quando a trava está desligada, quando não há fonte (nenhuma
-    consulta extra) ou quando o Fire da fonte não respondeu."""
+    de-para), marcado com a fonte que o gerou (`preco_fonte_slug`). None quando
+    a trava está desligada, quando não há fonte, quando o pedido é intercompany
+    (nenhuma consulta extra) ou quando o Fire da fonte não respondeu."""
     fonte = _fonte(env)
     if _modo(env) == "desligado" or fonte is None:
         return None
     try:
+        if _eh_intercompany(order, entry or {}):
+            return None
         check = _check_da_fonte(order, fonte)
     except Exception as exc:  # noqa: BLE001 — o preview fica sem avaliação; o portão refaz
         from app.utils.logger import logger
 
         logger.warning(f"check_preco da fonte {fonte!r} falhou ({type(exc).__name__}): {exc}")
         return None
-    return check if check and check.get("available") else None
+    if not check or not check.get("available"):
+        return None
+    return {**check, "preco_fonte_slug": fonte}
 
 
 def _todos(order: Order, check: dict | None, situacao: Situacao, motivo: Motivo) -> Avaliacao:

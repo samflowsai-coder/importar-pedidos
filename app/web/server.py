@@ -3533,7 +3533,7 @@ def vincular_produto(
     # (o vínculo pode ter mudado o produto). Desligado/sem fonte: None, sem I/O.
     from app.erp import preco_trava
 
-    check_preco = preco_trava.check_preco_para_gravar(order, _request_environment(request))
+    check_preco = preco_trava.check_preco_para_gravar(order, _request_environment(request), entry)
     if check_preco is not None:
         repo.update_fire_metadata(import_id, check_preco=check_preco)
     return JSONResponse({"entry_id": import_id, "vinculos": gravou, "check": check})

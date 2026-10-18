@@ -2318,7 +2318,7 @@ def test_vincular_produto_regrava_o_check_preco(monkeypatch):
         [{"fire_produto_id": "10", "codigo": "10", "nome": "TENIS AZUL", "ean": "789"}]
     )
     monkeypatch.setattr(
-        preco_trava, "check_preco_para_gravar", lambda order, env: {"available": True, "items": []}
+        preco_trava, "check_preco_para_gravar", lambda order, env, entry=None: {"available": True, "items": []}
     )
 
     r = client.post(
@@ -2491,10 +2491,17 @@ def test_commit_grava_o_check_preco_da_fonte(tmp_path, monkeypatch):
     chamadas = []
 
     def fake(order, env):
-        chamadas.append(order.header.order_number)
+        chamadas.append((order.header.order_number, env))
         return {"available": True, "items": [], "fonte": "mm"}
 
     monkeypatch.setattr(preco_trava, "check_preco_para_gravar", fake)
+    # O env passado é o `env_alvo` do commit (o ambiente onde o pedido é gravado).
+    from app.persistence import context as env_context
+    from app.web import server
+
+    ativo = env_context.current()
+    alvo = {**ativo, "watch_dir": str(tmp_path), "output_dir": str(tmp_path), "marca": "alvo"}
+    monkeypatch.setattr(server, "_resolver_env_alvo", lambda *a, **k: alvo)
     pdf = _sample_pdf()
     r = client.post(
         "/api/preview", files=[("file", (pdf.name, pdf.read_bytes(), "application/pdf"))]
@@ -2504,6 +2511,7 @@ def test_commit_grava_o_check_preco_da_fonte(tmp_path, monkeypatch):
 
     assert r2.status_code == 200, r2.text
     assert len(chamadas) == 1
+    assert chamadas[0][1] is alvo
     assert repo.get_import(r2.json()["entry_id"])["check_preco"]["fonte"] == "mm"
 
 

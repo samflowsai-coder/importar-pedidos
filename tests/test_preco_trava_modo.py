@@ -272,3 +272,45 @@ def test_cartao_da_trava_tem_o_select_da_fonte():
     ).read_text(encoding="utf-8")
     assert 'id="preco-fonte-slug"' in html
     assert "preco_fonte_slug:" in html
+
+
+# ── Task 7.5 fix 1 ───────────────────────────────────────────────────────────
+
+
+def test_desligar_com_fonte_salva_que_perdeu_o_flow_passa(setup):
+    from app.web.server import app
+
+    mm, nasmar = _dois_ambientes(setup)
+    environments_repo.set_preco_fonte_slug(nasmar["id"], "mm", por="x")
+    environments_repo.set_flowpcp_config(mm["id"], enabled=False, base_url=None, tenant_id=None)
+    c = TestClient(app)
+
+    r = c.patch(
+        f"/api/admin/environments/{nasmar['id']}/preco-trava",
+        json={"modo": "desligado", "preco_fonte_slug": "mm"},
+    )
+
+    assert r.status_code == 200, r.text
+    assert environments_repo.get_by_slug("nasmar")["preco_fonte_slug"] == "mm"
+
+
+def test_set_fonte_inativa_recusa(setup):
+    mm, nasmar = _dois_ambientes(setup)
+    environments_repo.soft_delete(mm["id"])
+    with pytest.raises(ValueError):
+        environments_repo.set_preco_fonte_slug(nasmar["id"], "mm", por="x")
+    assert environments_repo.get_by_slug("nasmar")["preco_fonte_slug"] is None
+
+
+def test_set_fonte_que_tem_fonte_propria_recusa(setup):
+    mm, nasmar = _dois_ambientes(setup)
+    environments_repo.set_flowpcp_config(
+        nasmar["id"], enabled=True, base_url="https://f", tenant_id="t2", service_token="t"
+    )
+    environments_repo.set_preco_fonte_slug(nasmar["id"], "mm", por="x")
+    terceiro = environments_repo.create(
+        slug="terceiro", name="T", watch_dir=str(setup), output_dir=str(setup), fb_path=""
+    )
+    with pytest.raises(ValueError):
+        environments_repo.set_preco_fonte_slug(terceiro["id"], "nasmar", por="x")
+    assert environments_repo.get_by_slug("terceiro")["preco_fonte_slug"] is None
