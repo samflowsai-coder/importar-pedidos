@@ -3422,3 +3422,73 @@ def test_trava_libera_pelo_vinculo_e_o_exporter_recebe_o_mesmo_seq(monkeypatch, 
     assert r.status_code == 200, r.text
     assert recebidos == [{0: 456}]
 
+
+def test_registrar_aplicados_que_falha_nao_derruba_o_envio(monkeypatch, tmp_path):
+    import uuid
+
+    from app.erp import preco_trava
+    from app.exporters import firebird_exporter as fb_mod
+    from app.persistence import repo
+    from app.web import server
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_trava(entry_id, None)
+    _check_trava(monkeypatch)
+    _cfg_db(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        fb_mod.FirebirdExporter,
+        "export",
+        lambda self, order, **kw: fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number, items_inserted=1, fire_codigo=777
+        ),
+    )
+    pushes: list = []
+    monkeypatch.setattr(server, "push_new_order", lambda *a, **kw: pushes.append(kw) or True)
+
+    def _boom(*a, **kw):
+        raise RuntimeError("audit caiu")
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        assert client.post(f"/api/imported/{entry_id}/send-to-fire").status_code == 409
+        _aprovar_preco_inicial(entry_id, 4800)
+        monkeypatch.setattr(preco_trava, "registrar_aplicados", _boom)
+        r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 200, r.text
+    assert repo.get_import(entry_id)["portal_status"] == "sent_to_fire"
+    assert len(pushes) == 1
+
+
+def test_registrar_aplicados_que_falha_nao_pula_o_push_do_xlsx(monkeypatch, tmp_path):
+    import uuid
+
+    from app.erp import preco_trava
+    from app.web import server
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_trava(entry_id, None)
+    _check_trava(monkeypatch)
+    _cfg_db(monkeypatch, tmp_path, modo="xlsx")
+    pushes: list = []
+    monkeypatch.setattr(server, "push_new_order", lambda *a, **kw: pushes.append(kw) or True)
+
+    def _boom(*a, **kw):
+        raise RuntimeError("audit caiu")
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        assert client.post(f"/api/imported/{entry_id}/export-xlsx").status_code == 409
+        _aprovar_preco_inicial(entry_id, 4800)
+        monkeypatch.setattr(preco_trava, "registrar_aplicados", _boom)
+        r = client.post(f"/api/imported/{entry_id}/export-xlsx")
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 200, r.text
+    assert len(pushes) == 1
+

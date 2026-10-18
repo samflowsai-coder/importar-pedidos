@@ -2349,6 +2349,19 @@ def _vinculos_de_para(order, caminho: str) -> tuple[list[dict], dict[int, int]]:
         return [], {}
 
 
+def _registrar_aplicados(import_id: str, decisao) -> None:
+    """Audit `preco_aplicado` depois que o pedido saiu. Nunca derruba um envio
+    que já deu certo (o Fire já tem o pedido / o XLSX já existe)."""
+    from app.erp import preco_trava
+
+    try:
+        preco_trava.registrar_aplicados(import_id, decisao)
+    except Exception as exc:  # noqa: BLE001
+        from app.utils.logger import logger
+
+        logger.warning(f"audit preco_aplicado falhou ({type(exc).__name__}): {exc}")
+
+
 def _send_one_to_fire(
     import_id: str, cfg: dict, *, request_env: dict | None = None
 ) -> _FireSendOutcome:
@@ -2501,7 +2514,6 @@ def _send_one_to_fire(
                 "cliente_override_codigo": override,
             },
         )
-        preco_trava.registrar_aplicados(import_id, decisao)
         transition(
             import_id,
             LifecycleEvent.SEND_TO_FIRE_SUCCEEDED,
@@ -2512,6 +2524,7 @@ def _send_one_to_fire(
                 "cliente_override_codigo": override,
             },
         )
+        _registrar_aplicados(import_id, decisao)
 
         # SP1: vínculo exato item do ERP ↔ posição em order.items (best-effort).
         if request_env:
@@ -2668,7 +2681,6 @@ def _export_one_xlsx(
 
         repo.update_fire_metadata(import_id, output_files=output_files)
         repo.append_audit(import_id, "xlsx_exported", {"files": output_files})
-        preco_trava.registrar_aplicados(import_id, decisao)
 
         # Ponte FlowPCP (IDA): mesmo com o Fire manual (XLS), o pedido já vai
         # pro Flow. Gated por flowpcp_enabled dentro do hook; o Flow deduplica
@@ -2678,6 +2690,7 @@ def _export_one_xlsx(
         if slug:
             pushed = push_new_order(order, import_id=import_id, slug=slug)
             repo.append_audit(import_id, "flowpcp_push", {"ok": pushed})
+        _registrar_aplicados(import_id, decisao)
 
         return _XlsxExportOutcome(True, output_files=output_files)
 
