@@ -113,3 +113,64 @@ def test_rota_operador_e_403(setup, real_auth):
     r = c.patch(f"/api/admin/environments/{e['id']}/preco-trava", json={"modo": "ligado"})
     assert r.status_code == 403
     assert environments_repo.get_by_slug("mm")["preco_trava_modo"] == "desligado"
+
+
+def _sync_ok(slug):
+    from datetime import UTC, datetime
+
+    from app.persistence import precos_repo
+
+    with router.env_connect(slug) as conn:
+        precos_repo.aplicar_lote(
+            conn, redes=[], cnpjs=[], precos=[], cursor="c1", agora=datetime.now(UTC)
+        )
+
+
+def test_rota_recusa_ligar_sem_tabela_sincronizada(setup):
+    from app.web.server import app
+
+    e = _novo_env(setup)
+    c = TestClient(app)
+    r = c.patch(f"/api/admin/environments/{e['id']}/preco-trava", json={"modo": "ligado"})
+
+    assert r.status_code == 409
+    assert r.json()["detail"] == (
+        "Não dá para ligar: a tabela de preço desta empresa ainda não foi sincronizada com o Flow."
+    )
+    assert environments_repo.get_by_slug("mm")["preco_trava_modo"] == "desligado"
+
+
+def test_rota_liga_depois_da_primeira_sync(setup):
+    from app.web.server import app
+
+    e = _novo_env(setup)
+    _sync_ok("mm")
+    c = TestClient(app)
+    r = c.patch(f"/api/admin/environments/{e['id']}/preco-trava", json={"modo": "ligado"})
+
+    assert r.status_code == 200, r.text
+    assert environments_repo.get_by_slug("mm")["preco_trava_modo"] == "ligado"
+
+
+@pytest.mark.parametrize("modo", ["observando", "desligado"])
+def test_rota_observando_e_desligado_sem_sync(setup, modo):
+    from app.web.server import app
+
+    e = _novo_env(setup)
+    c = TestClient(app)
+    r = c.patch(f"/api/admin/environments/{e['id']}/preco-trava", json={"modo": modo})
+
+    assert r.status_code == 200
+    assert environments_repo.get_by_slug("mm")["preco_trava_modo"] == modo
+
+
+def test_hint_do_observando_avisa_da_planilha_adiada():
+    from pathlib import Path
+
+    html = (
+        Path(__file__).parent.parent / "app" / "web" / "static" / "admin-ambiente-edit.html"
+    ).read_text(encoding="utf-8")
+    assert (
+        "Observando: avalia e mostra; não bloqueia o envio, mas a planilha da importação "
+        "passa a sair só pela revisão."
+    ) in html

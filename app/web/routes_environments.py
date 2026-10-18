@@ -24,7 +24,13 @@ from pydantic import BaseModel, Field
 
 from app.erp_eventos.canonico import formatar_instante
 from app.erp_eventos.foto import dia_local
-from app.persistence import environments_repo, erp_bases_repo, erp_estado_repo, erp_foto_repo
+from app.persistence import (
+    environments_repo,
+    erp_bases_repo,
+    erp_estado_repo,
+    erp_foto_repo,
+    precos_repo,
+)
 from app.persistence import router as db_router
 from app.web.auth import require_admin
 
@@ -177,9 +183,24 @@ class PrecoTravaRequest(BaseModel):
 def set_environment_preco_trava(
     env_id: str, payload: PrecoTravaRequest, user=Depends(require_admin)
 ):
-    """Troca o interruptor da trava de preço (desligado | observando | ligado)."""
-    if environments_repo.get(env_id) is None:
+    """Troca o interruptor da trava de preço (desligado | observando | ligado).
+
+    `ligado` só depois da 1ª sync da tabela com o Flow: sem ela todo pedido de
+    rede externa sai `copia_desatualizada` e a empresa para de faturar."""
+    env = environments_repo.get(env_id)
+    if env is None:
         raise HTTPException(status_code=404, detail="Ambiente não encontrado")
+    if payload.modo == "ligado":
+        with db_router.env_connect(env["slug"]) as conn:
+            sincronizada = precos_repo.ultima_sync_ok(conn) is not None
+        if not sincronizada:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Não dá para ligar: a tabela de preço desta empresa ainda não foi "
+                    "sincronizada com o Flow."
+                ),
+            )
     environments_repo.set_preco_trava_modo(env_id, payload.modo, por=user.email)
     return environments_repo.get(env_id)
 
