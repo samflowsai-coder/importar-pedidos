@@ -392,4 +392,5 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("cadastro_volta", "proxima_tentativa_em", "ALTER TABLE cadastro_volta ADD COLUMN proxima_tentativa_em TEXT"),
     ("cadastro_volta", "alerta", "ALTER TABLE cadastro_volta ADD COLUMN alerta TEXT"),
     ("cadastro_volta", "resposta_flow", "ALTER TABLE cadastro_volta ADD COLUMN resposta_flow TEXT"),
+    ("cadastro_volta", "nota_operador", "ALTER TABLE cadastro_volta ADD COLUMN nota_operador TEXT"),
 )

@@ -52,7 +52,7 @@ def test_reservar_retoma_linha_simulada(conn):
 
 def test_reservar_retoma_transitorio_mas_nao_gravado(conn):
     _reservar(conn)
-    repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}")
+    repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}", rollback_comprovado=False)
     assert repo.marcar_desfecho(conn, "c1", 1, "transitorio") is True
     assert _reservar(conn) is True
     repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
@@ -141,13 +141,13 @@ def test_gravado_sem_volta_vira_orfao(conn):
 def test_erro_a_enviar_nao_sobrescreve_gravado(conn):
     _reservar(conn)
     repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
-    repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}")
+    repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}", rollback_comprovado=False)
     assert repo.buscar(conn, "c1", 1)["estado"] == "gravado_sem_volta"
 
 
 def test_erro_a_enviar_em_linha_em_andamento(conn):
     _reservar(conn)
-    repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}")
+    repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}", rollback_comprovado=False)
     assert repo.buscar(conn, "c1", 1)["estado"] == "erro_a_enviar"
 
 
@@ -197,7 +197,7 @@ def test_cadeia_orfao_nao_volta_a_gravar(conn):
     _reservar(conn)
     repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
     assert repo.marcar_desfecho(conn, "c1", 1, "orfao") is True
-    assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}") is False
+    assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}", rollback_comprovado=False) is False
     assert repo.buscar(conn, "c1", 1)["estado"] == "orfao"
     assert repo.marcar_desfecho(conn, "c1", 1, "transitorio") is False
     assert repo.buscar(conn, "c1", 1)["estado"] == "orfao"
@@ -210,7 +210,7 @@ def test_confirmado_nao_tem_saida(conn):
     repo.marcar_desfecho(conn, "c1", 1, "confirmado")
     for estado in ("transitorio", "orfao", "erro_registrado", "incerto", "superado"):
         assert repo.marcar_desfecho(conn, "c1", 1, estado) is False
-    assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}") is False
+    assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}", rollback_comprovado=False) is False
     assert repo.buscar(conn, "c1", 1)["estado"] == "confirmado"
     assert _reservar(conn) is False
 
@@ -324,7 +324,7 @@ def test_cadeia_incerto_nao_chega_a_reservar(conn):
     _reservar(conn)
     repo.marcar_seq(conn, "c1", 1, 4001)
     repo.marcar_desfecho(conn, "c1", 1, "incerto")
-    assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}") is False
+    assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}", rollback_comprovado=False) is False
     for destino in ("transitorio", "superado", "erro_registrado"):
         assert repo.marcar_desfecho(conn, "c1", 1, destino) is False
     assert repo.adiar(conn, "c1", 1, ate="2026-10-17T13:00:00") is False
@@ -336,7 +336,7 @@ def test_cadeia_liberado_com_seq_nao_chega_a_reservar(conn):
     _reservar(conn)
     repo.marcar_seq(conn, "c1", 1, 4001)
     _forcar(conn, "c1", "liberado")
-    assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}") is False
+    assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}", rollback_comprovado=False) is False
     assert repo.marcar_desfecho(conn, "c1", 1, "transitorio") is False
     assert repo.liberar_comprovado(conn, "c1", 1) is False
     assert _reservar(conn) is False
@@ -350,7 +350,7 @@ def test_cadeia_orfao_fechado_nao_chega_a_reservar(conn):
     assert repo.fechar_orfao(conn, "c1", 1, operador="samuel", nota="conferido") is True
     linha = repo.buscar(conn, "c1", 1)
     assert (linha["estado"], linha["alerta"]) == ("orfao_fechado", "fechado_manual:samuel")
-    assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}") is False
+    assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}", rollback_comprovado=False) is False
     for destino in repo.TRANSICOES:
         assert repo.marcar_desfecho(conn, "c1", 1, destino) is False
     assert repo.fechar_orfao(conn, "c1", 1, operador="x", nota="y") is False
@@ -381,3 +381,48 @@ def test_adiar_so_em_pendente(conn):
     assert repo.adiar(conn, "c1", 1, ate="2026-10-17T13:00:00") is False
     linha = repo.buscar(conn, "c1", 1)
     assert (linha["tentativas"], linha["proxima_tentativa_em"]) == (0, None)
+
+
+def _cadeia_b(conn, rollback):
+    _reservar(conn)
+    repo.marcar_seq(conn, "c1", 1, 4001)
+    assert repo.marcar_erro_a_enviar(
+        conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}", rollback_comprovado=rollback
+    ) is True
+    assert repo.marcar_desfecho(conn, "c1", 1, "transitorio") is True
+
+
+def test_cadeia_b_com_rollback_comprovado_chega_a_reservar(conn):
+    _cadeia_b(conn, True)
+    assert repo.buscar(conn, "c1", 1)["seq_reservado"] is None
+    assert _reservar(conn) is True
+
+
+def test_cadeia_b_sem_rollback_comprovado_nao_chega_a_reservar(conn):
+    _cadeia_b(conn, False)
+    assert repo.buscar(conn, "c1", 1)["seq_reservado"] == 4001
+    assert _reservar(conn) is False
+    assert repo.buscar(conn, "c1", 1)["estado"] == "transitorio"
+
+
+def test_rollback_comprovado_e_obrigatorio_e_so_por_palavra_chave(conn):
+    with pytest.raises(TypeError):
+        repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}")
+
+
+def test_fechar_orfao_trunca_alerta_e_nota(conn):
+    _reservar(conn)
+    repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
+    repo.marcar_desfecho(conn, "c1", 1, "orfao")
+    assert repo.fechar_orfao(conn, "c1", 1, operador="o" * 100, nota="n" * 900) is True
+    linha = repo.buscar(conn, "c1", 1)
+    assert len(linha["alerta"]) == 64 and linha["alerta"].startswith("fechado_manual:")
+    assert len(linha["nota_operador"]) == 500
+    assert linha["erro_mensagem"] is None
+
+
+def test_invariante_ja_no_erp_nunca_reaproveitavel():
+    assert not set(repo._JA_NO_ERP) & set(repo.ESTADOS_DESCARTAVEIS)
+    for destino, origens in repo.TRANSICOES.items():
+        if destino in repo.ESTADOS_DESCARTAVEIS:
+            assert not set(repo._JA_NO_ERP) & set(origens)

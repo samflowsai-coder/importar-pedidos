@@ -59,6 +59,7 @@ TRANSICOES: dict[str, frozenset[str]] = {
     "incerto": frozenset({"em_andamento"}),
 }
 _RESPOSTA_MAX = 64
+_NOTA_MAX = 500
 _DESCARTAVEIS_SQL = ", ".join(f"'{e}'" for e in ESTADOS_DESCARTAVEIS)
 _PENDENTES_SQL = ", ".join(f"'{e}'" for e in _PENDENTES)
 
@@ -119,8 +120,8 @@ def reservar(
     plano_json: str,
 ) -> bool:
     """Lease de `(cadastro_id, versao)`. True = este ciclo é dono do item.
-    Linha descartável (simulação, transitório, liberada sem SEQ) é reaproveitada;
-    `liberado` com SEQ não, porque o INSERT pode ter comitado no ERP."""
+    Linha descartável (simulação, transitório, liberada) é reaproveitada, mas
+    `transitorio`/`liberado` com SEQ não: o INSERT pode ter comitado no ERP."""
     cur = conn.execute(
         "INSERT OR IGNORE INTO cadastro_volta "
         "(cadastro_id, versao, estado, acao, tipo, produto_id, modo, plano_json) "
@@ -136,7 +137,7 @@ def reservar(
         "proxima_tentativa_em = NULL, alerta = NULL, resposta_flow = NULL, "
         "iniciado_em = datetime('now'), atualizado_em = datetime('now') "
         f"WHERE cadastro_id = ? AND versao = ? AND estado IN ({_DESCARTAVEIS_SQL}) "
-        "AND NOT (estado = 'liberado' AND seq_reservado IS NOT NULL)",
+        "AND NOT (estado IN ('liberado', 'transitorio') AND seq_reservado IS NOT NULL)",
         (acao, tipo, produto_id, modo, plano_json, cadastro_id, versao),
     )
     return cur.rowcount == 1
@@ -178,14 +179,19 @@ def marcar_erro_a_enviar(
     codigo: str,
     mensagem: str,
     corpo_json: str,
+    rollback_comprovado: bool,
 ) -> bool:
-    """Só age em `em_andamento` (nunca em linha que já está no ERP). True se mudou."""
+    """Só age em `em_andamento` (nunca em linha que já está no ERP). True se mudou.
+    Um `em_andamento` com SEQ pode ter comitado no ERP, então o SEQ só é zerado
+    quando quem chama afirma `rollback_comprovado=True` (o Fire deu rollback e nada
+    comitou); com False o SEQ fica e a linha nunca volta a ser reservável."""
     cur = conn.execute(
         "UPDATE cadastro_volta SET estado = 'erro_a_enviar', erro_codigo = ?, "
         "erro_mensagem = ?, corpo_json = ?, proxima_tentativa_em = NULL, "
+        "seq_reservado = CASE WHEN ? THEN NULL ELSE seq_reservado END, "
         "atualizado_em = datetime('now') "
         "WHERE cadastro_id = ? AND versao = ? AND estado = 'em_andamento'",
-        (codigo, mensagem, corpo_json, cadastro_id, versao),
+        (codigo, mensagem, corpo_json, int(rollback_comprovado), cadastro_id, versao),
     )
     return cur.rowcount == 1
 
@@ -202,6 +208,9 @@ def marcar_desfecho(
     """True se mudou. Só vale a lista branca `TRANSICOES` (destino -> origens):
     o que pode ter comitado no ERP (`incerto`, `liberado` com SEQ, `gravado_sem_volta`,
     `confirmado`, `orfao`) nunca volta a um estado reaproveitável por aqui.
+    `em_andamento` com SEQ só chega a `transitorio` (reaproveitável) se o SEQ foi
+    zerado antes por `marcar_erro_a_enviar(rollback_comprovado=True)`; sem isso,
+    `reservar` recusa `transitorio` com SEQ.
     Destino fora da tabela: ValueError."""
     origens = TRANSICOES.get(estado)
     if origens is None:
@@ -233,12 +242,12 @@ def fechar_orfao(
     conn: sqlite3.Connection, cadastro_id: str, versao: int, *, operador: str, nota: str
 ) -> bool:
     """`orfao` -> `orfao_fechado` (final). Não vira `superado`: um estado reaproveitável
-    apagaria a prova de que o produto existe no ERP. A nota fica em `erro_mensagem`."""
+    apagaria a prova de que o produto existe no ERP. A nota fica em `nota_operador` (500)."""
     cur = conn.execute(
-        "UPDATE cadastro_volta SET estado = 'orfao_fechado', alerta = ?, erro_mensagem = ?, "
+        "UPDATE cadastro_volta SET estado = 'orfao_fechado', alerta = ?, nota_operador = ?, "
         "atualizado_em = datetime('now') "
         "WHERE cadastro_id = ? AND versao = ? AND estado = 'orfao'",
-        (f"fechado_manual:{operador}"[:_RESPOSTA_MAX], nota, cadastro_id, versao),
+        (f"fechado_manual:{operador}"[:_RESPOSTA_MAX], nota[:_NOTA_MAX], cadastro_id, versao),
     )
     return cur.rowcount == 1
 
