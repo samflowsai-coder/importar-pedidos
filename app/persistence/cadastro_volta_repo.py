@@ -326,8 +326,8 @@ def adotar_manual(
     o envio ao Flow fica com o ciclo normal. Quem chama conferiu a linha no ERP."""
     cur = conn.execute(
         "UPDATE cadastro_volta SET estado = 'gravado_sem_volta', erp_produto_id = ?, "
-        "corpo_json = ?, alerta = ?, proxima_tentativa_em = NULL, "
-        "atualizado_em = datetime('now') "
+        "corpo_json = ?, alerta = ?, erro_codigo = NULL, erro_mensagem = NULL, tentativas = 0, "
+        "proxima_tentativa_em = NULL, atualizado_em = datetime('now') "
         "WHERE cadastro_id = ? AND versao = ? AND (estado = 'incerto' "
         "OR (estado IN ('liberado', 'transitorio') AND seq_reservado IS NOT NULL))",
         (str(seq), corpo_json, f"adotado_manual:{operador}"[:_RESPOSTA_MAX], cadastro_id, versao),
@@ -336,17 +336,19 @@ def adotar_manual(
 
 
 def liberar_manual(
-    conn: sqlite3.Connection, cadastro_id: str, versao: int, *, operador: str
+    conn: sqlite3.Connection, cadastro_id: str, versao: int, *, seq: int | None, operador: str
 ) -> bool:
     """`incerto`, ou `transitorio`/`liberado` com SEQ, -> `liberado`, zerando o SEQ.
     Porta declarada, como `liberar_comprovado`: só a ferramenta do operador chama, e só
-    depois de provar no ERP que o produto não está lá."""
+    depois de provar no ERP que o produto não está lá. `seq` é o SEQ que ela conferiu
+    (None = linha sem SEQ): se a linha mudou desde a conferência, nada é liberado."""
     cur = conn.execute(
         "UPDATE cadastro_volta SET estado = 'liberado', seq_reservado = NULL, alerta = ?, "
         "atualizado_em = datetime('now') "
-        "WHERE cadastro_id = ? AND versao = ? AND (estado = 'incerto' "
+        "WHERE cadastro_id = ? AND versao = ? AND seq_reservado IS ? AND erp_produto_id IS NULL "
+        "AND (estado = 'incerto' "
         "OR (estado IN ('transitorio', 'liberado') AND seq_reservado IS NOT NULL))",
-        (f"liberado_manual:{operador}"[:_RESPOSTA_MAX], cadastro_id, versao),
+        (f"liberado_manual:{operador}"[:_RESPOSTA_MAX], cadastro_id, versao, seq),
     )
     return cur.rowcount == 1
 
@@ -442,6 +444,17 @@ def linha_do_produto_com_seq(
         )
     )
     return linhas[0] if linhas else None
+
+
+def outra_linha_com_seq(conn: sqlite3.Connection, seq: int, cadastro_id: str, versao: int) -> bool:
+    """Outra `(cadastro_id, versao)` tem este SEQ em `erp_produto_id` ou `seq_reservado`,
+    em qualquer estado (inclusive `orfao` e `orfao_fechado`)."""
+    row = conn.execute(
+        "SELECT 1 FROM cadastro_volta WHERE (seq_reservado = ? OR erp_produto_id = ?) "
+        "AND NOT (cadastro_id = ? AND versao = ?) LIMIT 1",
+        (int(seq), str(seq), cadastro_id, versao),
+    ).fetchone()
+    return row is not None
 
 
 def seq_criado_pelo_portal(conn: sqlite3.Connection, seq: str) -> bool:

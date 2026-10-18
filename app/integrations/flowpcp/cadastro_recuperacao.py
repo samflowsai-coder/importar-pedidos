@@ -19,7 +19,7 @@ nada (renomeado na tela, trigger).
 A leitura corre em `connect_leitura_bloqueante` (NO_REC_VERSION): um INSERT pendente
 de outro processo vira conflito de lock, a recuperação para e nada é marcado. Por
 isso ela só roda em motor < 4.0 (no 4.0+, ReadConsistency faz o read committed
-ignorar o NO_REC_VERSION). Todo SQL passa por `_SoSelect`.
+ignorar o NO_REC_VERSION). Todo SQL passa por `SoSelect`.
 
 `transitorio` com SEQ (erro que saiu sem prova de rollback) passa pelas mesmas
 regras; a retomada e a porta vão no mesmo commit do SQLite.
@@ -62,7 +62,7 @@ _SELECT_PROIBIDO = re.compile(
 _motor_avisado: set[str] = set()
 
 
-class _SoSelect:
+class SoSelect:
     """A conexão do ERP vista pela recuperação: só SELECT passa, commit nunca."""
 
     def __init__(self, conn):
@@ -124,20 +124,39 @@ def _data(valor: object) -> date | None:
     return valor if isinstance(valor, date) else None
 
 
-def _bate(lido: dict, plano: dict) -> bool:
+def _colunas_divergentes(lido: dict, plano: dict) -> list[str]:
     """As cinco colunas conferidas, aparadas (`None` = vazio); `GRUPO` como inteiro;
-    `DESCRICAO` só como texto não vazio."""
-    descricao = lido.get("DESCRICAO")
-    if not isinstance(descricao, str) or not descricao.strip():
-        return False
+    `DESCRICAO` só como texto não vazio. -> as colunas que não batem."""
+    ruins = []
     for coluna in _CONFERIDAS:
+        if coluna == "DESCRICAO":
+            descricao = lido.get(coluna)
+            if not isinstance(descricao, str) or not descricao.strip():
+                ruins.append(coluna)
+                continue
         if coluna == "GRUPO":
             grupo = _int(lido.get(coluna))
             if grupo is None or grupo != _int(plano.get(coluna)):
-                return False
+                ruins.append(coluna)
         elif _txt(lido.get(coluna)) != _txt(plano.get(coluna)):
-            return False
-    return True
+            ruins.append(coluna)
+    return ruins
+
+
+def _bate(lido: dict, plano: dict) -> bool:
+    return not _colunas_divergentes(lido, plano)
+
+
+def confere(lido: dict, plano: dict, composicao_lida: list[tuple[int, float]] | None) -> list[str]:
+    """Divergências entre o produto lido no ERP e o `plano` do livro: nomes das colunas
+    e `COMPOSICAO`. `composicao_lida=None` não confere a composição. Lista vazia = bate."""
+    campos = plano.get("campos") if isinstance(plano, dict) else None
+    ruins = _colunas_divergentes(lido, campos if isinstance(campos, dict) else {})
+    if composicao_lida is not None:
+        esperada = _composicao_do_plano(plano if isinstance(plano, dict) else {})
+        if esperada is None or sorted((f, round(q, 6)) for f, q in composicao_lida) != esperada:
+            ruins.append("COMPOSICAO")
+    return ruins
 
 
 def _composicao_do_plano(plano: dict) -> list[tuple[int, float]] | None:
@@ -164,40 +183,56 @@ def _dias_locais(iniciado: datetime) -> list[date]:
     return sorted({iniciado.astimezone().date(), (iniciado + _VIRADA_DO_DIA).astimezone().date()})
 
 
+def janela_da_reserva(linha: dict) -> tuple[date, date] | None:
+    """(de, até) em que um produto desta reserva pode ter sido cadastrado, com a folga
+    de fuso; None se `iniciado_em` é ilegível. É a janela da busca por nome e a fronteira
+    do "cadastrado antes da reserva"."""
+    iniciado = _iniciado(linha)
+    if iniciado is None:
+        return None
+    dias = _dias_locais(iniciado)
+    return (dias[0] - _FOLGA_FUSO, dias[-1] + _FOLGA_FUSO)
+
+
+def cadastrado_antes_da_reserva(lido: dict, linha: dict) -> bool | None:
+    """True se `DATA_CAD` é anterior à janela (não pode ser o nosso produto); None se
+    `DATA_CAD` ou `iniciado_em` é ilegível."""
+    janela, data_cad = janela_da_reserva(linha), _data(lido.get("DATA_CAD"))
+    if janela is None or data_cad is None:
+        return None
+    return data_cad < janela[0]
+
+
+def ligado_a_outra_linha(env_conn, seq: int, linha: dict) -> bool:
+    """O SEQ já está em `erp_produto_id` ou `seq_reservado` de OUTRA linha do livro, em
+    qualquer estado (inclusive `orfao`/`orfao_fechado`): não é o produto desta."""
+    return repo.outra_linha_com_seq(env_conn, seq, linha["cadastro_id"], linha["versao"])
+
+
 def _adota_se_bate(fire, seq: int, lido: dict, plano: dict, candidatos: list) -> tuple:
     """-> ("adotar", seq) se os campos e a composição batem; senão ("incerto", ...)."""
-    if not _bate(lido, plano.get("campos") or {}):
+    if confere(lido, plano, None):
         return ("incerto", "produto no ERP com campo diferente ou ilegível", candidatos)
-    esperada = _composicao_do_plano(plano)
-    if esperada is None:
+    if _composicao_do_plano(plano) is None:
         return ("incerto", "composição do plano ilegível", candidatos)
-    lida = sorted((f, round(q, 6)) for f, q in cadastro_fire.ler_composicao(fire, seq))
-    if lida != esperada:
+    if confere(lido, plano, cadastro_fire.ler_composicao(fire, seq)):
         return ("incerto", "produto igual no ERP com composição diferente", candidatos)
     return ("adotar", seq)
 
 
-def _confere_seq(fire, seq: int, plano: dict, iniciado: datetime) -> tuple:
+def _confere_seq(fire, seq: int, plano: dict, linha: dict) -> tuple:
     lido = cadastro_fire.ler_produto(fire, seq)
     if lido is None:
         return ("liberar", f"SEQ {seq} não existe no ERP")
-    data_cad = _data(lido.get("DATA_CAD"))
-    if data_cad is None:  # o gravador sempre grava DATA_CAD: nulo ou ilegível = linha mexida
+    antes = cadastrado_antes_da_reserva(lido, linha)
+    if antes is None:  # o gravador sempre grava DATA_CAD: nulo ou ilegível = linha mexida
         return ("incerto", "DATA_CAD ilegível", [seq])
-    if data_cad < _dias_locais(iniciado)[0] - _FOLGA_FUSO:
+    if antes:
         return ("liberar", f"SEQ {seq} tem produto cadastrado antes da reserva")
     return _adota_se_bate(fire, seq, lido, plano, [seq])
 
 
-def _ligado_a_outra_linha(env_conn, linha: dict, seq: int) -> bool:
-    return (
-        repo.seq_criado_pelo_portal(env_conn, str(seq))
-        or str(seq) in repo.seqs_em_aberto(env_conn)
-        or repo.linha_do_produto_com_seq(env_conn, linha["produto_id"], seq) is not None
-    )
-
-
-def _por_nome(fire, env_conn, linha: dict, plano: dict, iniciado: datetime) -> tuple:
+def _por_nome(fire, env_conn, linha: dict, plano: dict) -> tuple:
     """Sem SEQ (o commit de `marcar_seq` se perdeu): o mais conservador possível. Janela
     vazia libera; um único produto na janela, com o nome exato e tudo batendo, adota;
     qualquer outro caso é `incerto`."""
@@ -205,10 +240,8 @@ def _por_nome(fire, env_conn, linha: dict, plano: dict, iniciado: datetime) -> t
     nome, grupo = campos.get("DESCRICAO"), _int(campos.get("GRUPO"))
     if not isinstance(nome, str) or not nome.strip() or grupo is None:
         return ("incerto", "plano sem nome ou grupo para a busca", [])
-    dias = _dias_locais(iniciado)
-    linhas = cadastro_fire.candidatos_por_data(
-        fire, de=dias[0] - _FOLGA_FUSO, ate=dias[-1] + _FOLGA_FUSO
-    )
+    de, ate = janela_da_reserva(linha)
+    linhas = cadastro_fire.candidatos_por_data(fire, de=de, ate=ate)
     if not linhas:
         return ("liberar", "nenhum produto cadastrado na janela da reserva")
     seqs = sorted(r["SEQ"] for r in linhas)
@@ -220,7 +253,7 @@ def _por_nome(fire, env_conn, linha: dict, plano: dict, iniciado: datetime) -> t
         return ("incerto", "produto sem descrição legível na janela da reserva", seqs)
     if _txt(descricao) != _txt(nome):
         return ("incerto", "produto com outro nome na janela da reserva", seqs)
-    if _ligado_a_outra_linha(env_conn, linha, lido["SEQ"]):
+    if ligado_a_outra_linha(env_conn, lido["SEQ"], linha):
         return ("incerto", "produto com o nome já ligado a outra linha do livro", seqs)
     return _adota_se_bate(fire, int(lido["SEQ"]), lido, plano, seqs)
 
@@ -246,8 +279,8 @@ def _decidir(fire, env_conn, linha: dict, iniciado: datetime | None) -> tuple:
     if not isinstance(plano, dict) or not isinstance(plano.get("campos"), dict):
         return ("incerto", "plano ilegível no livro", seqs)
     if seq is not None:
-        return _confere_seq(fire, int(seq), plano, iniciado)
-    return _por_nome(fire, env_conn, linha, plano, iniciado)
+        return _confere_seq(fire, int(seq), plano, linha)
+    return _por_nome(fire, env_conn, linha, plano)
 
 
 def _a_recuperar(env_conn, agora: datetime) -> list[tuple[dict, datetime | None, bool]]:
@@ -267,7 +300,7 @@ def ha_o_que_recuperar(env_conn, *, agora: datetime) -> bool:
     return bool(_a_recuperar(env_conn, agora))
 
 
-def _motor_sem_bloqueio(slug: str, fire) -> bool:
+def motor_sem_bloqueio(slug: str, fire) -> bool:
     """True = a recuperação não roda: motor 4.0+ (ReadConsistency faz o read committed
     ignorar o NO_REC_VERSION), versão ilegível ou leitura da versão que falha."""
     detalhe = ""
@@ -356,8 +389,8 @@ def recuperar(slug: str, env_conn, fire_conn, *, agora: datetime) -> dict:
     exceção) quando uma falha de conexão ou de lock para a recuperação neste ciclo:
     as linhas que faltam ficam como estão. Outra falha de leitura vira `incerto` só
     naquela linha. Motor sem leitura bloqueante: `{"parado": "motor_sem_bloqueio"}`."""
-    fire = _SoSelect(fire_conn)
-    if _motor_sem_bloqueio(slug, fire):
+    fire = SoSelect(fire_conn)
+    if motor_sem_bloqueio(slug, fire):
         return {"parado": "motor_sem_bloqueio"}
     contagem: dict = dict.fromkeys(_CONTAGENS, 0)
     for linha, iniciado, transitorio in _a_recuperar(env_conn, agora):

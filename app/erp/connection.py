@@ -141,7 +141,7 @@ class FirebirdConnection:
         tratada pelo servidor como pré-comitada e ler a última versão comitada,
         ignorando o NO_REC_VERSION (não provado no Firebird 2.5 do Fire: fica para a
         P0). Nada é escrito por dois caminhos: quem lê passa pelo guarda de SELECT
-        (`cadastro_recuperacao._SoSelect`), e a saída é SEMPRE rollback, nunca commit.
+        (`cadastro_recuperacao.SoSelect`), e a saída é SEMPRE rollback, nunca commit.
         """
         import struct
 

@@ -546,7 +546,7 @@ class _Sonda(FireLeitura):
                                  "SELECT 1 FROM RDB$DATABASE -- x"])
 def test_guarda_da_recuperacao_so_deixa_passar_select(sql):
     fire = _Sonda()
-    guardada = rec._SoSelect(fire)
+    guardada = rec.SoSelect(fire)
     with pytest.raises(RuntimeError, match="só SELECT"):
         guardada.cursor().execute(sql, (1,))
     with pytest.raises(RuntimeError, match="só SELECT"):

@@ -520,6 +520,10 @@ def _linha_em(estado, seq):
     return c
 
 
+def _seq(c):
+    return repo.buscar(c, "c1", 1)["seq_reservado"]
+
+
 def _no(c):
     r = repo.buscar(c, "c1", 1)
     return (r["estado"], r["seq_reservado"])
@@ -542,7 +546,7 @@ _OPERACOES = {
     "retomar_transitorio_com_seq": lambda c: repo.retomar_transitorio_com_seq(c, "c1", 1),
     "fechar_orfao": lambda c: repo.fechar_orfao(c, "c1", 1, operador="o", nota="n"),
     "adotar_manual": lambda c: repo.adotar_manual(c, "c1", 1, seq=4001, operador="o", corpo_json="{}"),
-    "liberar_manual": lambda c: repo.liberar_manual(c, "c1", 1, operador="o"),
+    "liberar_manual": lambda c: repo.liberar_manual(c, "c1", 1, seq=_seq(c), operador="o"),
     "adiar": lambda c: repo.adiar(c, "c1", 1, ate="2099-01-01T00:00:00"),
     "registrar": lambda c: repo.registrar(
         c, cadastro_id="c1", versao=1, estado="transitorio", acao="criar", tipo="simples",
@@ -626,7 +630,7 @@ _FORA_DAS_PORTAS_MANUAIS = [
 def test_portas_manuais_recusam_e_nao_mudam_nada(estado, seq):
     for op in (
         lambda c: repo.adotar_manual(c, "c1", 1, seq=4001, operador="o", corpo_json="{}"),
-        lambda c: repo.liberar_manual(c, "c1", 1, operador="o"),
+        lambda c: repo.liberar_manual(c, "c1", 1, seq=_seq(c), operador="o"),
     ):
         c = _linha_em(estado, seq)
         antes = repo.buscar(c, "c1", 1)
@@ -634,7 +638,8 @@ def test_portas_manuais_recusam_e_nao_mudam_nada(estado, seq):
         assert repo.buscar(c, "c1", 1) == antes
 
 
-@pytest.mark.parametrize(("estado", "seq"), _FORA_DAS_PORTAS_MANUAIS[:4])
+@pytest.mark.parametrize(("estado", "seq"), [(e, 4001 if e == "gravado_sem_volta" else None)
+                                              for e in repo._JA_NO_ERP])
 def test_com_as_portas_manuais_como_operacao_comum_nada_no_erp_volta_a_reservar(estado, seq):
     """`liberar_manual` solto na busca: não pode abrir caminho a partir de quem já gravou.
     (De `em_andamento`/`erro_a_enviar` com SEQ ele É a porta: lá a prova é do operador.)"""
@@ -675,7 +680,7 @@ def test_adotar_manual_trunca_alerta_em_64():
                                              ("liberado", 4001), ("transitorio", 4001)])
 def test_liberar_manual_zera_seq_e_fica_reservavel(estado, seq):
     c = _linha_em(estado, seq)
-    assert repo.liberar_manual(c, "c1", 1, operador="ana") is True
+    assert repo.liberar_manual(c, "c1", 1, seq=seq, operador="ana") is True
     r = repo.buscar(c, "c1", 1)
     assert (r["estado"], r["seq_reservado"], r["alerta"]) == ("liberado", None, "liberado_manual:ana")
     assert repo.reservar(c, cadastro_id="c1", versao=1, produto_id="p1", acao="criar",
@@ -684,5 +689,38 @@ def test_liberar_manual_zera_seq_e_fica_reservavel(estado, seq):
 
 def test_liberar_manual_trunca_alerta_em_64():
     c = _linha_em("incerto", None)
-    assert repo.liberar_manual(c, "c1", 1, operador="x" * 200)
+    assert repo.liberar_manual(c, "c1", 1, seq=None, operador="x" * 200)
     assert len(repo.buscar(c, "c1", 1)["alerta"]) == 64
+
+
+def test_liberar_manual_com_seq_diferente_do_conferido_nao_libera():
+    c = _linha_em("incerto", 4001)
+    assert repo.liberar_manual(c, "c1", 1, seq=4002, operador="o") is False
+    assert repo.liberar_manual(c, "c1", 1, seq=None, operador="o") is False
+    assert _no(c) == ("incerto", 4001)
+
+
+def test_liberar_manual_nao_libera_linha_com_erp_produto_id():
+    c = _linha_em("incerto", None)
+    c.execute("UPDATE cadastro_volta SET erp_produto_id = '4001'")
+    assert repo.liberar_manual(c, "c1", 1, seq=None, operador="o") is False
+
+
+def test_adotar_manual_limpa_erro_e_tentativas():
+    c = _linha_em("incerto", None)
+    c.execute("UPDATE cadastro_volta SET erro_codigo = 'X', erro_mensagem = 'm', tentativas = 4")
+    assert repo.adotar_manual(c, "c1", 1, seq=1, operador="o", corpo_json="{}")
+    r = repo.buscar(c, "c1", 1)
+    assert (r["erro_codigo"], r["erro_mensagem"], r["tentativas"]) == (None, None, 0)
+
+
+def test_outra_linha_com_seq_em_qualquer_estado_e_exclui_a_propria():
+    c = _linha_em("incerto", 4001)
+    assert repo.outra_linha_com_seq(c, 4001, "c1", 1) is False
+    for estado in ("orfao", "orfao_fechado", "superado"):
+        c.execute("DELETE FROM cadastro_volta WHERE cadastro_id = 'c2'")
+        c.execute("INSERT INTO cadastro_volta (cadastro_id, versao, estado, acao, tipo, produto_id, "
+                  "modo, plano_json, erp_produto_id) VALUES ('c2', 1, ?, 'criar', 's', 'p2', 'criar', "
+                  "'{}', '4001')", (estado,))
+        assert repo.outra_linha_com_seq(c, 4001, "c1", 1) is True
+    assert repo.outra_linha_com_seq(c, 4002, "c1", 1) is False
