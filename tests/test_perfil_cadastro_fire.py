@@ -95,10 +95,10 @@ def test_nome_de_tabela_invalido_e_recusado(nome):
 
 def test_so_select_passa():
     rastro.so_select("  select 1 from rdb$database")
-    with pytest.raises(AssertionError):
+    with pytest.raises(RuntimeError):
         rastro.so_select("DELETE FROM PRODUTOS")
     perfil_tool.so_select("SELECT 1 FROM RDB$DATABASE")
-    with pytest.raises(AssertionError):
+    with pytest.raises(RuntimeError):
         perfil_tool.so_select("UPDATE PRODUTOS SET GRUPO = 1")
 
 

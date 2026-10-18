@@ -38,7 +38,9 @@ SQL_CATALOGO = (
 
 
 def so_select(sql: str) -> str:
-    assert _SO_SELECT.match(sql), "ferramenta só leitura: apenas SELECT"
+    # `raise`, não `assert`: com `python -O` o assert some e a guarda junto.
+    if not _SO_SELECT.match(sql):
+        raise RuntimeError("ferramenta só leitura: apenas SELECT")
     return sql
 
 
