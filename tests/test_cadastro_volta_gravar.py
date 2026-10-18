@@ -1,0 +1,968 @@
+"""Volta Flow -> Fire nos modos de gravação. Flow e Fire falsos; SQLite do ambiente real.
+
+O gravador real (`app/erp/cadastro_fire.py`) roda sobre o `FireGravavel`: nada é mockado
+entre o ciclo e o SQL.
+"""
+
+import copy
+import re
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from app.integrations.flowpcp import cadastro_volta as cv
+from app.integrations.flowpcp.cadastro_resultado import mensagem_para_flow
+from app.integrations.flowpcp.cadastro_schema import PendentesResposta
+from app.integrations.flowpcp.client import RespostaResultado
+from app.persistence import cadastro_volta_repo as repo
+from app.persistence import router
+from app.utils.logger import logger
+
+PROD = "77777777-7777-4777-8777-777777777771"
+PAR = {
+    "cadastroId": "22222222-2222-4222-8222-222222222222", "produtoId": PROD, "versao": 1,
+    "acao": "criar", "erpProdutoId": None, "tipo": "simples", "nome": "MEIA SOQUETE",
+    "unidadeErp": "PAR", "ean": None, "ncm": "61159500", "tipoItemSped": 3,
+    "grupoErp": {"codigo": "8"}, "codigoNfe": None, "cor": None, "componentes": None,
+    "marcaErp": {"codigo": 17}, "codigoMes": None, "aprovadoEm": "2026-10-17T13:00:00.123Z",
+}
+JARGAO = ("Fire", "SEQ", "erpProdutoId", "componentes[")
+
+_FLOWS: list = []
+
+
+class Flow:
+    def __init__(self, itens, caps=("cadastros.v1",), respostas=None):
+        self.itens, self.caps = itens, list(caps)
+        self.respostas = list(respostas or [])
+        self.gets, self.posts = [], []
+        _FLOWS.append(self)
+
+    def list_cadastros_pendentes(self, limite=20, **kw):
+        self.gets.append({"limite": limite, **kw})
+        return PendentesResposta(cadastros=self.itens, capacidades=self.caps)
+
+    def post_cadastro_resultado(self, cadastro_id, corpo):
+        self.posts.append((cadastro_id, corpo))
+        if self.respostas:
+            return self.respostas.pop(0)
+        if corpo["resultado"] == "gravado":
+            status = "gravado"
+        elif corpo["erro"]["tipo"] == "transitorio":
+            return RespostaResultado(200, {"status": "transitorio_registrado", "tentativas": 1}, None)
+        else:
+            status = "erro_registrado"
+        return RespostaResultado(200, {"status": status}, None)
+
+    def close(self):
+        pass
+
+
+class FdbError(Exception):
+    """Como o fdb monta: args = (mensagem, sqlcode, gdscode). A mensagem traz valor do usuário."""
+
+
+def _erro(sqlcode, gds):
+    return FdbError("erro do driver com VALOR-DO-USUARIO", sqlcode, gds)
+
+
+def LOCK():  # noqa: N802
+    return _erro(-913, 335544345)
+
+
+def RECUSA():  # noqa: N802
+    return _erro(-530, 335544466)
+
+
+def CONEXAO():  # noqa: N802
+    return _erro(-902, 335544721)
+
+
+def COLISAO():  # noqa: N802
+    return _erro(-803, 335544665)
+
+
+class _Cur:
+    def __init__(self, fire):
+        self.fire, self.rows, self.rowcount = fire, [], 0
+
+    def execute(self, sql, params=()):
+        self.rows, self.rowcount = self.fire.executar(" ".join(sql.split()), tuple(params))
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+    def fetchall(self):
+        return list(self.rows)
+
+    def close(self):
+        pass
+
+
+class FireGravavel:
+    """Fire em memória: PRODUTOS {seq: dict}, PRODUTOS_KIT [(CODIGO, PAI, FILHO, QTD)],
+    PRODUTOS_MARCA {codigo: nome}. Transação de verdade: rollback desfaz as escritas.
+
+    `falhas`: prefixo do SQL -> lista de exceções levantadas em ordem (uma por execução).
+    `lento`: cada INSERT em PRODUTOS avança `relogio.agora` nesse tanto.
+    `antes_do_insert(seq)`: chamado no INSERT em PRODUTOS, antes de gravar.
+    """
+
+    def __init__(self, produtos=None, marcas=None, lento=timedelta(0), relogio=None,
+                 falhas=None, antes_do_insert=None):
+        base = {3170: {"DESCRICAO": "PAR BASE", "BLOQUEADO": "Nao"}}
+        self.produtos = copy.deepcopy(produtos if produtos is not None else base)
+        self.marcas = marcas if marcas is not None else {17: "Kolosh"}
+        self.kit, self.commits, self.rollbacks, self.escritas = [], 0, 0, []
+        self.lento, self.relogio = lento, relogio
+        self.falhas = {k: list(v) for k, v in (falhas or {}).items()}
+        self.antes_do_insert = antes_do_insert
+        self._foto = None
+
+    def cursor(self):
+        return _Cur(self)
+
+    def commit(self):
+        self.commits += 1
+        self._foto = None
+
+    def rollback(self):
+        self.rollbacks += 1
+        if self._foto is not None:
+            self.produtos, self.kit = self._foto
+            self._foto = None
+
+    def executar(self, sql, params):
+        if sql.split(" ", 1)[0] in ("INSERT", "UPDATE", "DELETE"):
+            self.escritas.append((sql, params))
+            if self._foto is None:
+                self._foto = (copy.deepcopy(self.produtos), list(self.kit))
+        for prefixo, fila in self.falhas.items():
+            if sql.startswith(prefixo) and fila:
+                raise fila.pop(0)
+        return self._responder(sql, params)
+
+    def _responder(self, sql, params):  # noqa: C901 — um ramo por SQL que o Portal manda
+        if sql == "SELECT SEQ, DESCRICAO FROM PRODUTOS":
+            return [(s, p.get("DESCRICAO")) for s, p in self.produtos.items()], 0
+        if sql == "SELECT CODIGO, MARCA FROM PRODUTOS_MARCA":
+            return list(self.marcas.items()), 0
+        if sql == "SELECT 1 FROM RDB$DATABASE":
+            return [(1,)], 1
+        if sql == "SELECT MAX(SEQ) FROM PRODUTOS":
+            return [(max(self.produtos, default=None),)], 1
+        if sql == "SELECT MAX(CODIGO) FROM PRODUTOS_KIT":
+            return [(max((k[0] for k in self.kit), default=None),)], 1
+        m = re.fullmatch(r"SELECT (.+) FROM PRODUTOS WHERE SEQ = \?", sql)
+        if m:
+            p = self.produtos.get(params[0])
+            if p is None:
+                return [], 0
+            cols = [c.strip() for c in m.group(1).split(",")]
+            return [tuple(params[0] if c == "SEQ" else p.get(c) for c in cols)], 1
+        m = re.fullmatch(r"INSERT INTO PRODUTOS \((.+)\) VALUES \(.+\)", sql)
+        if m:
+            if self.antes_do_insert:
+                self.antes_do_insert(params[0])
+            if self.relogio is not None:
+                self.relogio.agora += self.lento
+            linha = dict(zip([c.strip() for c in m.group(1).split(",")], params, strict=True))
+            seq = linha.pop("SEQ")
+            if seq in self.produtos:
+                raise COLISAO()
+            self.produtos[seq] = linha
+            return [], 1
+        if sql.startswith("INSERT INTO PRODUTOS_KIT (CODIGO, CODPRODUTO_PAI, CODPRODUTO, QTD)"):
+            self.kit.append(params)
+            return [], 1
+        if sql == "DELETE FROM PRODUTOS_KIT WHERE CODPRODUTO_PAI = ?":
+            antes = len(self.kit)
+            self.kit = [k for k in self.kit if k[1] != params[0]]
+            return [], antes - len(self.kit)
+        if sql == "UPDATE PRODUTOS SET BLOQUEADO = 'Sim' WHERE SEQ = ?":
+            if params[0] not in self.produtos:
+                return [], 0
+            self.produtos[params[0]]["BLOQUEADO"] = "Sim"
+            return [], 1
+        m = re.fullmatch(r"UPDATE PRODUTOS SET (.+) WHERE SEQ = \?", sql)
+        if m:
+            cols = [c.split("=")[0].strip() for c in m.group(1).split(",")]
+            seq = params[-1]
+            if seq not in self.produtos:
+                return [], 0
+            self.produtos[seq].update(dict(zip(cols, params[:-1], strict=True)))
+            return [], 1
+        raise AssertionError(f"SQL inesperado no Fire: {sql}")
+
+
+class Relogio:
+    def __init__(self):
+        self.agora = datetime(2026, 10, 17, 13, 0, tzinfo=UTC)
+
+    def __call__(self):
+        return self.agora
+
+
+@pytest.fixture(autouse=True)
+def _limpo(monkeypatch):
+    for var in (cv.VAR_MODO, cv.VAR_P0, cv.VAR_INATIVAR):
+        monkeypatch.delenv(var, raising=False)
+    cv._avisados.clear()
+    monkeypatch.setattr(cv, "_ultima_volta", None)
+    monkeypatch.setattr(cv, "_ultimo_ciclo", {})
+
+
+@pytest.fixture(autouse=True)
+def _sem_jargao_nos_erros():
+    """Toda mensagem de erro que vai ao Flow, em todo teste deste arquivo, é para gente."""
+    _FLOWS.clear()
+    yield
+    for flow in _FLOWS:
+        for _, corpo in flow.posts:
+            if corpo["resultado"] == "erro":
+                msg = corpo["erro"]["mensagem"]
+                assert not any(j in msg for j in JARGAO), msg
+                assert "VALOR-DO-USUARIO" not in msg
+
+
+@pytest.fixture
+def env_slug():
+    return "mm"
+
+
+@pytest.fixture
+def env_conn(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    router.reset_init_cache()
+    with router.shared_connect():
+        pass
+    with router.env_connect("mm") as conn:
+        yield conn
+
+
+@pytest.fixture
+def modo(monkeypatch, env_slug):
+    def _set(m, p0=True, inativar=False):
+        monkeypatch.setenv(cv.VAR_MODO, f"{env_slug}:{m}")
+        if p0:
+            monkeypatch.setenv(cv.VAR_P0, env_slug)
+        else:
+            monkeypatch.delenv(cv.VAR_P0, raising=False)
+        if inativar:
+            monkeypatch.setenv(cv.VAR_INATIVAR, env_slug)
+        else:
+            monkeypatch.delenv(cv.VAR_INATIVAR, raising=False)
+    return _set
+
+
+def _log(nivel):
+    msgs: list[str] = []
+    hid = logger.add(lambda m: msgs.append(str(m)), level=nivel,
+                     filter=lambda r: r["level"].name == nivel)
+    return msgs, hid
+
+
+@pytest.fixture
+def erros():
+    msgs, hid = _log("ERROR")
+    yield msgs
+    logger.remove(hid)
+
+
+@pytest.fixture
+def avisos():
+    msgs, hid = _log("WARNING")
+    yield msgs
+    logger.remove(hid)
+
+
+def _rodar(env_slug, flow, fire, env_conn, relogio=None):
+    return cv.processar_ambiente(env_slug, _client=flow, _fire_conn=fire, _env_conn=env_conn,
+                                 _relogio=relogio or Relogio())
+
+
+def _mais(horas=2):
+    r = Relogio()
+    r.agora += timedelta(hours=horas)
+    return r
+
+
+def _no_catalogo(env_conn, seq):
+    env_conn.execute(
+        "INSERT INTO catalogo_fire (fire_produto_id, codigo, nome, extraido_em) "
+        "VALUES (?, ?, 'X', '2026-10-16')",
+        (seq, seq),
+    )
+
+
+def _outro(n, **kw):
+    """Outro produto do Flow (cadastroId e produtoId próprios)."""
+    return {**PAR, "cadastroId": f"5555555{n}-5555-4555-8555-555555555555",
+            "produtoId": f"6666666{n}-6666-4666-8666-666666666666", **kw}
+
+
+def _atualizar(seq, **kw):
+    return {**PAR, "cadastroId": "44444444-4444-4444-8444-444444444444", "versao": 2,
+            "acao": "atualizar", "erpProdutoId": seq, "marcaErp": None, **kw}
+
+
+# --- brief ---------------------------------------------------------------
+
+
+def test_sem_p0_recusa_iniciar(modo, env_slug, env_conn, erros):
+    modo("criar", p0=False)
+    flow = Flow([PAR])
+    r = _rodar(env_slug, flow, FireGravavel(), env_conn)
+    assert "recusado" in r and flow.gets == []
+    _rodar(env_slug, flow, FireGravavel(), env_conn)
+    assert sum(cv.VAR_P0 in e for e in erros) == 1  # uma vez por motivo
+
+
+def test_criar_grava_e_confirma(modo, env_slug, env_conn):
+    modo("criar")
+    flow, fire = Flow([PAR]), FireGravavel()
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.gets[0]["acoes"] == ("criar",) and flow.gets[0]["limite"] == cv.LIMITE_GRAVACAO
+    assert "simular" not in flow.gets[0]
+    assert 3171 in fire.produtos
+    assert fire.produtos[3171]["MARCA"] == "Kolosh" and fire.produtos[3171]["GRUPO"] == 8
+    assert "DESCRICAO2" not in fire.produtos[3171]
+    cid, corpo = flow.posts[0]
+    assert cid == PAR["cadastroId"]
+    assert corpo["erpProdutoId"] == "3171" and corpo["gravadoEm"].endswith("Z")
+    linha = repo.buscar(env_conn, PAR["cadastroId"], 1)
+    assert (linha["estado"], linha["erp_produto_id"], linha["produto_id"]) == (
+        "confirmado", "3171", PROD)
+
+
+def test_sem_capacidade_nao_grava(modo, env_slug, env_conn):
+    modo("criar")
+    flow, fire = Flow([PAR], caps=()), FireGravavel()
+    r = _rodar(env_slug, flow, fire, env_conn)
+    assert fire.escritas == [] and flow.posts == []
+    assert r["capacidade_ok"] is False
+    assert repo.buscar(env_conn, PAR["cadastroId"], 1) is None
+
+
+def test_criar_reprocessa_item_simulado(modo, env_slug, env_conn):
+    repo.registrar(env_conn, cadastro_id=PAR["cadastroId"], versao=1, estado="simulado",
+                   acao="criar", tipo="simples", erro_codigo=None, erro_mensagem=None,
+                   plano_json="{}")
+    modo("criar")
+    flow, fire = Flow([PAR]), FireGravavel()
+    _rodar(env_slug, flow, fire, env_conn)
+    assert 3171 in fire.produtos
+
+
+def test_post_perdido_vira_gravado_sem_volta_e_reenvia_sem_fire(modo, env_slug, env_conn):
+    modo("criar")
+    flow = Flow([PAR], respostas=[RespostaResultado(None, None, None)])
+    fire = FireGravavel()
+    _rodar(env_slug, flow, fire, env_conn)
+    assert repo.buscar(env_conn, PAR["cadastroId"], 1)["estado"] == "gravado_sem_volta"
+    escritas = len(fire.escritas)
+    flow2 = Flow([])
+    _rodar(env_slug, flow2, fire, env_conn, _mais())
+    assert flow2.posts[0][1]["erpProdutoId"] == "3171"
+    assert len(fire.escritas) == escritas
+    assert repo.buscar(env_conn, PAR["cadastroId"], 1)["estado"] == "confirmado"
+
+
+def test_pendencia_reenviada_com_modo_desligado(modo, monkeypatch, env_slug, env_conn):
+    modo("criar")
+    _rodar(env_slug, Flow([PAR], respostas=[RespostaResultado(503, None, None)]),
+           FireGravavel(), env_conn)
+    monkeypatch.setenv(cv.VAR_MODO, f"{env_slug}:desligado")
+    flow2 = Flow([])
+    cv.processar_ambiente(env_slug, _client=flow2, _fire_conn=None, _env_conn=env_conn,
+                          _relogio=_mais())
+    assert len(flow2.posts) == 1 and flow2.gets == []
+    assert repo.buscar(env_conn, PAR["cadastroId"], 1)["estado"] == "confirmado"
+
+
+def test_pendencia_reenviada_com_modo_simular(modo, monkeypatch, env_slug, env_conn):
+    modo("criar")
+    _rodar(env_slug, Flow([PAR], respostas=[RespostaResultado(503, None, None)]),
+           FireGravavel(), env_conn)
+    monkeypatch.setenv(cv.VAR_MODO, f"{env_slug}:simular")
+    flow2 = Flow([])
+    cv.processar_ambiente(env_slug, _client=flow2, _fire_conn=None, _env_conn=env_conn,
+                          _relogio=_mais())
+    assert len(flow2.posts) == 1 and flow2.gets[0].get("simular") is True
+
+
+def test_9b_criar_repetido_reenvia_v1_e_cala_v2(modo, env_slug, env_conn):
+    modo("criar")
+    _rodar(env_slug, Flow([PAR], respostas=[RespostaResultado(None, None, None)]),
+           FireGravavel(), env_conn)
+    v2 = {**PAR, "cadastroId": "33333333-3333-4333-8333-333333333333", "versao": 2}
+    flow, fire = Flow([v2]), FireGravavel()
+    _rodar(env_slug, flow, fire, env_conn, _mais())
+    assert [p[0] for p in flow.posts] == [PAR["cadastroId"]]
+    assert flow.posts[0][1]["versao"] == 1
+    assert fire.escritas == []
+    assert repo.buscar(env_conn, v2["cadastroId"], 2) is None
+
+
+def test_9b_v1_ainda_em_espera_nao_reenvia_nem_responde_v2(modo, env_slug, env_conn):
+    modo("criar")
+    _rodar(env_slug, Flow([PAR], respostas=[RespostaResultado(None, None, None)]),
+           FireGravavel(), env_conn)
+    v2 = {**PAR, "cadastroId": "33333333-3333-4333-8333-333333333333", "versao": 2}
+    flow, fire = Flow([v2]), FireGravavel()
+    _rodar(env_slug, flow, fire, env_conn)  # mesma hora: a espera da v1 não venceu
+    assert flow.posts == [] and fire.escritas == []
+    assert repo.buscar(env_conn, PAR["cadastroId"], 1)["estado"] == "gravado_sem_volta"
+
+
+def test_nome_existe_vai_com_codigo_na_mensagem(modo, env_slug, env_conn):
+    modo("criar")
+    fire = FireGravavel(produtos={3100: {"DESCRICAO": "meia soquete", "BLOQUEADO": "Nao"}})
+    flow = Flow([PAR])
+    _rodar(env_slug, flow, fire, env_conn)
+    erro = flow.posts[0][1]["erro"]
+    assert erro == {"tipo": "definitivo", "codigo": "nome_existe",
+                    "mensagem": "Já existe produto com esse nome no ERP (código 3100)"}
+    assert fire.escritas == []
+    assert repo.buscar(env_conn, PAR["cadastroId"], 1)["estado"] == "erro_registrado"
+
+
+def test_marca_ausente_vai_como_definitivo(modo, env_slug, env_conn):
+    modo("criar")
+    flow = Flow([{**PAR, "marcaErp": {"codigo": 99}}])
+    fire = FireGravavel()
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts[0][1]["erro"]["tipo"] == "definitivo"
+    assert flow.posts[0][1]["erro"]["codigo"] == "marca_ausente_erp"
+    assert fire.escritas == []
+    assert repo.buscar(env_conn, PAR["cadastroId"], 1)["estado"] == "erro_registrado"
+
+
+def test_orfao_em_conflito_codigo(modo, env_slug, env_conn, erros):
+    modo("criar")
+    flow = Flow([PAR], respostas=[RespostaResultado(409, {"error": "conflito_codigo"}, None)])
+    _rodar(env_slug, flow, FireGravavel(), env_conn)
+    assert repo.buscar(env_conn, PAR["cadastroId"], 1)["estado"] == "orfao"
+    assert any("3171" in e for e in erros)
+
+
+def test_atualizar_de_seq_criado_pelo_portal_esta_no_escopo(modo, env_slug, env_conn):
+    modo("criar")
+    _rodar(env_slug, Flow([PAR]), FireGravavel(), env_conn)
+    modo("criar_e_atualizar")
+    fire = FireGravavel(produtos={3171: {"DESCRICAO": "MEIA SOQUETE", "BLOQUEADO": "Nao"}})
+    flow = Flow([_atualizar("3171", unidadeErp="PR")])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts[0][1]["resultado"] == "gravado"
+    assert flow.posts[0][1]["erpProdutoId"] == "3171"
+    assert fire.produtos[3171]["UNIDADE"] == "PR"
+    assert "MARCA" not in fire.produtos[3171]  # marcaErp null = não mexer
+
+
+def test_inativar_so_com_portao(modo, env_slug, env_conn):
+    modo("criar_e_atualizar")
+    flow = Flow([])
+    _rodar(env_slug, flow, FireGravavel(), env_conn)
+    assert flow.gets[0]["acoes"] == ("criar", "atualizar")
+    modo("criar_e_atualizar", inativar=True)
+    flow = Flow([])
+    _rodar(env_slug, flow, FireGravavel(), env_conn)
+    assert flow.gets[0]["acoes"] == ("criar", "atualizar", "inativar")
+
+
+def test_prazo_do_lote_para_de_iniciar_itens(modo, env_slug, env_conn):
+    modo("criar")
+    relogio = Relogio()
+    itens = [_outro(i, nome=f"MEIA {i}") for i in range(3)]
+    fire = FireGravavel(lento=timedelta(minutes=5), relogio=relogio)
+    flow = Flow(itens)
+    _rodar(env_slug, flow, fire, env_conn, relogio)
+    assert len(flow.posts) == 2  # o 3º começaria depois de 10 min do GET
+    assert repo.buscar(env_conn, itens[2]["cadastroId"], 1) is None
+
+
+def test_fire_fora_responde_transitorio(modo, env_slug, env_conn, monkeypatch):
+    modo("criar")
+    flow = Flow([PAR])
+
+    def _falha(*a, **k):
+        raise cv.FirebirdConnectionError("recusou")
+
+    monkeypatch.setattr(cv, "_abrir_fire_escrita", _falha)
+    cv.processar_ambiente(env_slug, _client=flow, _fire_conn=None, _env_conn=env_conn,
+                          _relogio=Relogio())
+    assert flow.posts[0][1]["erro"] == {"tipo": "transitorio", "codigo": "conexao_recusada",
+                                        "mensagem": "O ERP recusou a conexão."}
+    assert repo.buscar(env_conn, PAR["cadastroId"], 1)["estado"] == "transitorio"
+
+
+# --- Emenda 1 ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("resposta", [None, RespostaResultado(None, None, None)])
+def test_erp_fora_com_item_gravado_sem_volta_reentregue_so_reenvia_o_gravado(
+    modo, env_slug, env_conn, monkeypatch, resposta
+):
+    modo("criar")
+    _rodar(env_slug, Flow([PAR], respostas=[RespostaResultado(None, None, None)]),
+           FireGravavel(), env_conn)
+
+    def _falha(*a, **k):
+        raise cv.FirebirdConnectionError("recusou")
+
+    monkeypatch.setattr(cv, "_abrir_fire_escrita", _falha)
+    flow = Flow([PAR], respostas=[resposta] if resposta else None)
+    cv.processar_ambiente(env_slug, _client=flow, _fire_conn=None, _env_conn=env_conn,
+                          _relogio=_mais())
+    assert len(flow.posts) == 1
+    assert flow.posts[0][1]["resultado"] == "gravado"
+    assert repo.buscar(env_conn, PAR["cadastroId"], 1)["estado"] in (
+        "gravado_sem_volta", "confirmado")
+
+
+def test_bug_corpo_mantem_gravado_sem_volta(modo, env_slug, env_conn, erros):
+    modo("criar")
+    flow = Flow([PAR], respostas=[RespostaResultado(400, {"error": "payload inválido"}, None)])
+    _rodar(env_slug, flow, FireGravavel(), env_conn)
+    linha = repo.buscar(env_conn, PAR["cadastroId"], 1)
+    assert (linha["estado"], linha["alerta"]) == ("gravado_sem_volta", "bug_corpo")
+    assert linha["proxima_tentativa_em"] == "2026-10-17T14:00:00"
+    assert erros
+
+
+def test_pendencias_antes_da_p0(modo, env_slug, env_conn):
+    modo("criar")
+    _rodar(env_slug, Flow([PAR], respostas=[RespostaResultado(None, None, None)]),
+           FireGravavel(), env_conn)
+    modo("criar", p0=False)
+    flow = Flow([PAR])
+    r = _rodar(env_slug, flow, FireGravavel(), env_conn, _mais())
+    assert len(flow.posts) == 1 and "recusado" in r and flow.gets == []
+
+
+def test_9b_orfao_responde_ja_criado_no_erp(modo, env_slug, env_conn):
+    modo("criar")
+    _rodar(env_slug, Flow([PAR], respostas=[RespostaResultado(409, {"error": "conflito_codigo"},
+                                                              None)]),
+           FireGravavel(), env_conn)
+    v2 = {**PAR, "cadastroId": "33333333-3333-4333-8333-333333333333", "versao": 2}
+    flow, fire = Flow([v2]), FireGravavel()
+    _rodar(env_slug, flow, fire, env_conn)
+    assert fire.escritas == []
+    (cid, corpo), = flow.posts
+    assert cid == v2["cadastroId"] and corpo["versao"] == 2
+    assert corpo["erro"]["tipo"] == "definitivo"
+    assert corpo["erro"]["codigo"] == "ja_criado_no_erp"
+    assert "(código 3171)" in corpo["erro"]["mensagem"]
+
+
+def _incerto_v1(env_conn):
+    repo.reservar(env_conn, cadastro_id=PAR["cadastroId"], versao=1, produto_id=PROD,
+                  acao="criar", tipo="simples", modo="criar", plano_json="{}")
+    repo.marcar_seq(env_conn, PAR["cadastroId"], 1, 3171)
+    repo.marcar_desfecho(env_conn, PAR["cadastroId"], 1, "incerto")
+
+
+def test_9b_incerto_nao_grava_nem_responde(modo, env_slug, env_conn, erros):
+    _incerto_v1(env_conn)
+    modo("criar")
+    v2 = {**PAR, "cadastroId": "33333333-3333-4333-8333-333333333333", "versao": 2}
+    flow, fire = Flow([v2]), FireGravavel()
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts == [] and fire.escritas == []
+    assert repo.buscar(env_conn, v2["cadastroId"], 2) is None
+    assert erros
+
+
+def test_9b_liberado_com_seq_nao_grava_nem_responde(modo, env_slug, env_conn, erros):
+    repo.reservar(env_conn, cadastro_id=PAR["cadastroId"], versao=1, produto_id=PROD,
+                  acao="criar", tipo="simples", modo="criar", plano_json="{}")
+    repo.marcar_seq(env_conn, PAR["cadastroId"], 1, 3171)
+    env_conn.execute("UPDATE cadastro_volta SET estado = 'liberado'")  # cenário legado
+    modo("criar")
+    flow, fire = Flow([PAR]), FireGravavel()
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts == [] and fire.escritas == []
+    assert erros
+
+
+def test_9b_em_andamento_pula(modo, env_slug, env_conn):
+    repo.reservar(env_conn, cadastro_id=PAR["cadastroId"], versao=1, produto_id=PROD,
+                  acao="criar", tipo="simples", modo="criar", plano_json="{}")
+    modo("criar")
+    v2 = {**PAR, "cadastroId": "33333333-3333-4333-8333-333333333333", "versao": 2}
+    flow, fire = Flow([v2]), FireGravavel()
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts == [] and fire.escritas == []
+
+
+def test_nome_existe_do_proprio_produto_vai_para_recuperacao(modo, env_slug, env_conn, erros):
+    # O produto já existe no ERP como 3100, por uma linha do livro que não é `criar`.
+    repo.reservar(env_conn, cadastro_id="99999999-9999-4999-8999-999999999999", versao=1,
+                  produto_id=PROD, acao="atualizar", tipo="simples", modo="criar_e_atualizar",
+                  plano_json="{}")
+    repo.marcar_gravado(env_conn, "99999999-9999-4999-8999-999999999999", 1,
+                        erp_produto_id="3100", corpo_json="{}")
+    repo.marcar_desfecho(env_conn, "99999999-9999-4999-8999-999999999999", 1, "confirmado")
+    modo("criar")
+    fire = FireGravavel(produtos={3100: {"DESCRICAO": "MEIA SOQUETE", "BLOQUEADO": "Nao"}})
+    flow = Flow([PAR])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts == [] and fire.escritas == []  # nem nome_existe, nem gravação
+    linha = repo.buscar(env_conn, PAR["cadastroId"], 1)
+    assert linha["estado"] == "incerto"
+    assert any("3100" in e for e in erros)
+
+
+def test_erro_recusa_do_erp_vira_definitivo_erp_recusou(modo, env_slug, env_conn):
+    modo("criar")
+    fire = FireGravavel(falhas={"INSERT INTO PRODUTOS (": [RECUSA()]})
+    flow = Flow([PAR])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert 3171 not in fire.produtos and fire.rollbacks == 1
+    erro = flow.posts[0][1]["erro"]
+    assert (erro["tipo"], erro["codigo"]) == ("definitivo", "erp_recusou")
+    linha = repo.buscar(env_conn, PAR["cadastroId"], 1)
+    assert linha["estado"] == "erro_registrado" and linha["seq_reservado"] is None
+    assert "VALOR-DO-USUARIO" not in (linha["erro_mensagem"] or "")
+
+
+def test_lock_do_erp_vira_transitorio(modo, env_slug, env_conn):
+    modo("criar")
+    fire = FireGravavel(falhas={"INSERT INTO PRODUTOS (": [LOCK()]})
+    flow = Flow([PAR])
+    _rodar(env_slug, flow, fire, env_conn)
+    erro = flow.posts[0][1]["erro"]
+    assert (erro["tipo"], erro["codigo"]) == ("transitorio", "erp_ocupado")
+    linha = repo.buscar(env_conn, PAR["cadastroId"], 1)
+    assert linha["estado"] == "transitorio" and linha["seq_reservado"] is None
+    # O item volta no próximo GET e grava.
+    flow2 = Flow([PAR])
+    _rodar(env_slug, flow2, fire, env_conn)
+    assert flow2.posts[0][1]["resultado"] == "gravado" and 3171 in fire.produtos
+
+
+def test_seq_tomado_vira_transitorio_erp_ocupado(modo, env_slug, env_conn):
+    modo("criar")
+    fire = FireGravavel(falhas={"INSERT INTO PRODUTOS (": [COLISAO(), COLISAO(), COLISAO()]})
+    flow = Flow([PAR])
+    _rodar(env_slug, flow, fire, env_conn)
+    erro = flow.posts[0][1]["erro"]
+    assert (erro["tipo"], erro["codigo"]) == ("transitorio", "erp_ocupado")
+    linha = repo.buscar(env_conn, PAR["cadastroId"], 1)
+    assert linha["estado"] == "transitorio" and linha["seq_reservado"] is None
+
+
+def test_conexao_caida_na_gravacao_deixa_em_andamento_e_para_o_lote(modo, env_slug, env_conn,
+                                                                     erros):
+    modo("criar")
+    fire = FireGravavel(falhas={"INSERT INTO PRODUTOS (": [CONEXAO()]})
+    dois = _outro(1, nome="MEIA OUTRA")
+    flow = Flow([PAR, dois])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts == []
+    linha = repo.buscar(env_conn, PAR["cadastroId"], 1)
+    assert (linha["estado"], linha["seq_reservado"]) == ("em_andamento", 3171)
+    assert repo.buscar(env_conn, dois["cadastroId"], 1) is None
+    assert erros
+
+
+def test_seq_no_disco_antes_do_insert(modo, env_slug, env_conn):
+    modo("criar")
+    vistos = []
+
+    def _confere(seq):
+        with router.env_connect("mm") as outra:  # outra conexão só vê o que foi commitado
+            vistos.append(outra.execute(
+                "SELECT seq_reservado FROM cadastro_volta WHERE cadastro_id = ?",
+                (PAR["cadastroId"],)).fetchone()[0])
+
+    fire = FireGravavel(antes_do_insert=_confere)
+    _rodar(env_slug, Flow([PAR]), fire, env_conn)
+    assert vistos == [3171]
+
+
+def test_atualizar_ean_null_limpa_no_erp(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3170")
+    modo("criar_e_atualizar")
+    fire = FireGravavel(produtos={3170: {
+        "DESCRICAO": "MEIA SOQUETE", "BLOQUEADO": "Nao", "CODIGO_EAN13": "7891234567895",
+        "CODPARANFE": "NFE-1", "CLASSIF_FISCAL": "61159500", "CODITEMSPED": 4}})
+    item = _atualizar("3170", ean=None, codigoNfe=None, ncm=None, tipoItemSped=None)
+    flow = Flow([item])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts[0][1]["resultado"] == "gravado"
+    p = fire.produtos[3170]
+    assert p["CODIGO_EAN13"] is None and p["CODPARANFE"] is None
+    assert p["CLASSIF_FISCAL"] == "61159500" and p["CODITEMSPED"] == 4  # null = não mexer
+    (update,) = [s for s, _ in fire.escritas if s.startswith("UPDATE")]
+    assert "CLASSIF_FISCAL" not in update and "CODITEMSPED" not in update
+
+
+def test_atualizar_kit_troca_a_composicao(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3990")
+    modo("criar_e_atualizar")
+    fire = FireGravavel(produtos={
+        3170: {"DESCRICAO": "PAR", "BLOQUEADO": "Nao"},
+        3990: {"DESCRICAO": "KIT", "BLOQUEADO": "Nao"}})
+    fire.kit = [(1, 3990, 3100, 2.0)]
+    item = _atualizar("3990", tipo="kit", unidadeErp="KIT",
+                      componentes=[{"erpProdutoId": "3170", "quantidade": 3}])
+    _rodar(env_slug, Flow([item]), fire, env_conn)
+    assert fire.kit == [(1, 3990, 3170, 3.0)]  # só a composição do pai foi trocada
+
+
+def test_atualizar_no_modo_criar_e_processado(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3170")
+    modo("criar")
+    fire = FireGravavel()
+    flow = Flow([_atualizar("3170", marcaErp={"codigo": 17})])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.gets[0]["acoes"] == ("criar",)
+    assert flow.posts[0][1]["resultado"] == "gravado"
+    assert fire.produtos[3170]["DESCRICAO"] == "MEIA SOQUETE"
+    assert fire.produtos[3170]["MARCA"] == "Kolosh"
+
+
+def test_mesmo_nome_duas_vezes_no_lote(modo, env_slug, env_conn):
+    modo("criar")
+    fire = FireGravavel()
+    segundo = _outro(1)
+    flow = Flow([PAR, segundo])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert [s for s in fire.produtos if s > 3170] == [3171]
+    assert flow.posts[0][1]["resultado"] == "gravado"
+    erro = flow.posts[1][1]["erro"]
+    assert erro["codigo"] == "nome_existe" and "(código 3171)" in erro["mensagem"]
+
+
+def test_kit_criado_com_composicao(modo, env_slug, env_conn):
+    modo("criar")
+    fire = FireGravavel()
+    kit = _outro(1, tipo="kit", nome="KIT 3 PARES", unidadeErp="KIT",
+                 componentes=[{"erpProdutoId": "3170", "quantidade": 3}])
+    _rodar(env_slug, Flow([kit]), fire, env_conn)
+    assert fire.kit == [(1, 3171, 3170, 3.0)] and fire.commits == 1
+
+
+def test_componente_ausente_e_definitivo(modo, env_slug, env_conn):
+    modo("criar")
+    fire = FireGravavel()
+    kit = _outro(1, tipo="kit", nome="KIT", unidadeErp="KIT",
+                 componentes=[{"erpProdutoId": "4000", "quantidade": 3}])
+    flow = Flow([kit])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts[0][1]["erro"]["codigo"] == "componente_ausente"
+    assert fire.escritas == []
+
+
+def test_item_invalido_responde_definitivo(modo, env_slug, env_conn):
+    modo("criar")
+    flow, fire = Flow([{**PAR, "ncm": "123"}]), FireGravavel()
+    _rodar(env_slug, flow, fire, env_conn)
+    erro = flow.posts[0][1]["erro"]
+    assert (erro["tipo"], erro["codigo"]) == ("definitivo", "contrato_invalido")
+    linha = repo.buscar(env_conn, PAR["cadastroId"], 1)
+    assert linha["estado"] == "erro_registrado" and "ncm" in linha["erro_mensagem"]
+    assert fire.escritas == []
+
+
+def test_componente_invalido_vai_com_frase_de_contrato(modo, env_slug, env_conn):
+    modo("criar")
+    kit = {**PAR, "tipo": "kit", "componentes": []}
+    flow = Flow([kit])
+    _rodar(env_slug, flow, FireGravavel(), env_conn)
+    erro = flow.posts[0][1]["erro"]
+    assert erro["codigo"] == "componente_invalido"
+    assert erro["mensagem"] == mensagem_para_flow("contrato_invalido")
+
+
+def test_item_sem_id_legivel_so_loga(modo, env_slug, env_conn, avisos):
+    modo("criar")
+    flow = Flow([{"cadastroId": "<b>x</b>", "versao": 1}])
+    _rodar(env_slug, flow, FireGravavel(), env_conn)
+    assert flow.posts == [] and repo.listar(env_conn) == []
+    assert avisos and not any("<b>" in a for a in avisos)
+
+
+def test_material_nao_e_gravado(modo, env_slug, env_conn):
+    modo("criar")
+    flow, fire = Flow([{**PAR, "tipo": "material"}]), FireGravavel()
+    _rodar(env_slug, flow, fire, env_conn)
+    erro = flow.posts[0][1]["erro"]
+    assert (erro["tipo"], erro["codigo"]) == ("definitivo", "tipo_nao_suportado")
+    assert fire.escritas == []
+
+
+def test_atualizar_fora_do_escopo(modo, env_slug, env_conn):
+    modo("criar_e_atualizar")
+    flow, fire = Flow([_atualizar("3170")]), FireGravavel()
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts[0][1]["erro"]["codigo"] == "seq_fora_do_escopo"
+    assert fire.escritas == []
+
+
+def test_atualizar_seq_que_sumiu_do_fire(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3500")
+    modo("criar_e_atualizar")
+    flow = Flow([_atualizar("3500")])
+    _rodar(env_slug, flow, FireGravavel(), env_conn)
+    erro = flow.posts[0][1]["erro"]
+    assert (erro["tipo"], erro["codigo"]) == ("definitivo", "seq_inexistente")
+
+
+def test_inativar_com_portao_bloqueia(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3170")
+    modo("criar_e_atualizar", inativar=True)
+    fire = FireGravavel()
+    item = _atualizar("3170", acao="inativar", versao=3)
+    flow = Flow([item])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert fire.produtos[3170]["BLOQUEADO"] == "Sim"
+    assert flow.posts[0][1]["resultado"] == "gravado"
+
+
+def test_inativar_sem_portao_nao_processa_nem_responde(modo, env_slug, env_conn, avisos):
+    _no_catalogo(env_conn, "3170")
+    modo("criar_e_atualizar")
+    fire = FireGravavel()
+    flow = Flow([_atualizar("3170", acao="inativar", versao=3)])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts == [] and fire.escritas == []
+    assert repo.listar(env_conn) == []
+    assert any("inativar" in a for a in avisos)
+
+
+def test_credencial_para_os_posts_do_ciclo(modo, env_slug, env_conn, erros):
+    modo("criar")
+    ruins = [_outro(1, ncm="1"), _outro(2, ncm="2")]
+    flow = Flow(ruins, respostas=[RespostaResultado(401, {"error": "unauthorized"}, None)])
+    fire = FireGravavel()
+    _rodar(env_slug, flow, fire, env_conn)
+    assert len(flow.posts) == 1 and fire.escritas == []
+    linha = repo.buscar(env_conn, ruins[0]["cadastroId"], 1)
+    assert (linha["estado"], linha["proxima_tentativa_em"]) == (
+        "erro_a_enviar", "2026-10-17T13:05:00")
+    assert erros
+
+
+def test_espera_crescente_e_retry_after(modo, env_slug, env_conn):
+    modo("criar")
+    flow = Flow([PAR], respostas=[RespostaResultado(429, None, 600)])
+    _rodar(env_slug, flow, FireGravavel(), env_conn)
+    linha = repo.buscar(env_conn, PAR["cadastroId"], 1)
+    assert linha["proxima_tentativa_em"] == "2026-10-17T13:10:00"  # 10 min > 1 min
+    assert cv.reenviar_pendencias(env_slug, env_conn, Flow([]), agora=Relogio()()) == {}
+
+
+def test_chave_desconhecida_avisa_uma_vez_no_modo_de_gravacao(modo, env_slug, env_conn, avisos):
+    modo("criar")
+    for _ in range(2):
+        _rodar(env_slug, Flow([{**PAR, "campoNovo": 1}]), FireGravavel(), env_conn)
+    assert sum("'campoNovo'" in a for a in avisos) == 1
+
+
+def test_mensagem_ao_flow_sem_jargao(modo, env_slug, env_conn):
+    """Um lote com um erro de cada classe; o fixture autouse confere todos os POSTs."""
+    _no_catalogo(env_conn, "3500")
+    modo("criar_e_atualizar")
+    fire = FireGravavel(produtos={3100: {"DESCRICAO": "MEIA 9", "BLOQUEADO": "Nao"},
+                                  3170: {"DESCRICAO": "PAR", "BLOQUEADO": "Sim"}})
+    itens = [
+        _outro(1, ncm="1"),
+        _outro(2, tipo="material"),
+        _outro(3, marcaErp={"codigo": 99}),
+        _outro(4, tipo="kit", unidadeErp="KIT", componentes=[{"erpProdutoId": "3170",
+                                                                "quantidade": 1}]),
+        _outro(5, tipo="kit", unidadeErp="KIT", componentes=[{"erpProdutoId": "4999",
+                                                                "quantidade": 1}]),
+        _outro(6, acao="atualizar", erpProdutoId="2000", marcaErp=None),
+        _outro(7, acao="atualizar", erpProdutoId="3500", marcaErp=None),
+        _outro(9, nome="MEIA 9"),
+    ]
+    flow = Flow(itens)
+    _rodar(env_slug, flow, fire, env_conn)
+    assert len(flow.posts) == len(itens)
+    assert all(c["resultado"] == "erro" for _, c in flow.posts)
+
+
+# --- rodar() --------------------------------------------------------------
+
+
+def test_rodar_visita_ambiente_com_pendencia_mesmo_sem_variavel(monkeypatch, env_conn):
+    repo.reservar(env_conn, cadastro_id=PAR["cadastroId"], versao=1, produto_id=PROD,
+                  acao="criar", tipo="simples", modo="criar", plano_json="{}")
+    repo.marcar_gravado(env_conn, PAR["cadastroId"], 1, erp_produto_id="3171", corpo_json="{}")
+    env_conn.commit()
+    monkeypatch.setattr(cv, "_slugs_flowpcp", lambda: ["mm", "nasmar"])
+    visitados = []
+    monkeypatch.setattr(cv, "processar_ambiente",
+                        lambda slug, **k: visitados.append(slug) or {"modo": "desligado"})
+    monkeypatch.setattr(cv, "enabled_flowpcp_envs",
+                        lambda: pytest.fail("sem variável não decifra token"))
+    cv.rodar()
+    assert visitados == ["mm"]
+
+
+def test_rodar_sem_variavel_e_sem_pendencia_nao_processa(monkeypatch, env_conn):
+    monkeypatch.setattr(cv, "_slugs_flowpcp", lambda: ["mm"])
+    monkeypatch.setattr(cv, "processar_ambiente",
+                        lambda slug, **k: pytest.fail("não podia abrir token"))
+    monkeypatch.setattr(cv, "enabled_flowpcp_envs", lambda: pytest.fail("token"))
+    assert cv.rodar() == {}
+
+
+def test_rodar_com_variavel_inclui_desligado_com_pendencia(monkeypatch, env_conn):
+    repo.reservar(env_conn, cadastro_id=PAR["cadastroId"], versao=1, produto_id=PROD,
+                  acao="criar", tipo="simples", modo="criar", plano_json="{}")
+    repo.marcar_gravado(env_conn, PAR["cadastroId"], 1, erp_produto_id="3171", corpo_json="{}")
+    env_conn.commit()
+    monkeypatch.setenv(cv.VAR_MODO, "nasmar:simular")
+    monkeypatch.setattr(cv, "enabled_flowpcp_envs", lambda: {"mm": object(), "nasmar": object()})
+    visitados = []
+    monkeypatch.setattr(cv, "processar_ambiente",
+                        lambda slug, **k: visitados.append(slug) or {"modo": "x"})
+    cv.rodar()
+    assert sorted(visitados) == ["mm", "nasmar"]
+
+
+def test_recusa_sem_rollback_comprovado_fica_para_a_recuperacao(modo, env_slug, env_conn, erros):
+    """O ERP recusou o kit, o rollback falhou e o PRODUTOS ficou visível: sem prova
+    de que nada comitou, a linha fica em_andamento (nem erro, nem resposta)."""
+
+    class _SemRollback(FireGravavel):
+        def rollback(self):
+            self.rollbacks += 1
+            raise OSError("rollback caiu")
+
+    modo("criar")
+    fire = _SemRollback(falhas={"INSERT INTO PRODUTOS_KIT": [RECUSA()]})
+    kit = _outro(1, tipo="kit", nome="KIT", unidadeErp="KIT",
+                 componentes=[{"erpProdutoId": "3170", "quantidade": 3}])
+    flow = Flow([kit, _outro(2, nome="OUTRO")])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert flow.posts == []
+    linha = repo.buscar(env_conn, kit["cadastroId"], 1)
+    assert (linha["estado"], linha["seq_reservado"]) == ("em_andamento", 3171)
+    assert repo.buscar(env_conn, _outro(2)["cadastroId"], 1) is None  # lote parado
+    assert erros
+
+
+def test_duas_versoes_criar_do_mesmo_produto_no_mesmo_lote(modo, env_slug, env_conn):
+    modo("criar")
+    v2 = {**PAR, "cadastroId": "33333333-3333-4333-8333-333333333333", "versao": 2}
+    fire = FireGravavel()
+    flow = Flow([PAR, v2])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert [s for s in fire.produtos if s > 3170] == [3171]
+    assert [p[0] for p in flow.posts] == [PAR["cadastroId"]]
+    assert repo.buscar(env_conn, v2["cadastroId"], 2) is None
+
+
+def test_item_repetido_no_mesmo_get_grava_uma_vez(modo, env_slug, env_conn):
+    modo("criar")
+    fire = FireGravavel()
+    flow = Flow([PAR, dict(PAR)])
+    _rodar(env_slug, flow, fire, env_conn)
+    assert len([s for s, _ in fire.escritas if s.startswith("INSERT INTO PRODUTOS (")]) == 1
+    assert len(flow.posts) == 1

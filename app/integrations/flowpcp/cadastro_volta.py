@@ -1,9 +1,10 @@
-"""Volta Flow -> Fire dos cadastros aprovados, em modo `simular` (Etapa 1).
+"""Volta Flow -> Fire dos cadastros aprovados.
 
-Regra da Etapa 1: este módulo só LÊ (a fila do Flow com `simular=1`, que não
-reserva, a cópia local e o Fire por conexão somente leitura); nunca grava no
-Fire nem confirma no Flow, e os modos de escrita (`criar`, `criar_e_atualizar`)
-se recusam a iniciar até a Etapa 3.
+Em `simular` este módulo só LÊ (a fila do Flow com `simular=1`, que não reserva,
+a cópia local e o Fire por conexão somente leitura). Os modos de gravação
+(`criar`, `criar_e_atualizar`) só iniciam em ambiente com a P0 concluída
+(`PORTAL_FLOWPCP_CADASTRO_P0`) e rodam em `cadastro_gravacao`; em qualquer modo,
+resultado que ainda não voltou ao Flow é reenviado antes de tudo.
 
 Cada item da fila é validado à parte (`cadastro_schema.validar_item`), conferido
 contra a cópia local e contra o Fire (só SELECT, sempre parametrizado) e vira uma
@@ -23,6 +24,7 @@ from contextlib import ExitStack, nullcontext
 from datetime import UTC, datetime, timedelta
 
 from app.erp.connection import FirebirdConnection
+from app.erp.exceptions import FirebirdConnectionError  # noqa: F401 — reexportado
 from app.integrations.flowpcp import capacidades
 from app.integrations.flowpcp.cadastro_schema import (
     CadastroPendente,
@@ -41,7 +43,12 @@ INTERVALO = timedelta(minutes=5)
 # Máximo do Flow. A fila não tem cursor (só o confirmar a anda) e `simular` não
 # confirma: em simulação a volta só enxerga os LIMITE_FILA mais antigos.
 LIMITE_FILA = 50
-_RECUSA_ESCRITA = "gravação exige P0 e cadastros.v1 (Etapa 3)"
+VAR_P0 = "PORTAL_FLOWPCP_CADASTRO_P0"
+VAR_INATIVAR = "PORTAL_FLOWPCP_CADASTRO_VOLTA_INATIVAR"
+LIMITE_GRAVACAO = 20
+LIMITE_PENDENCIAS = 20
+PRAZO_LOTE = timedelta(minutes=8)  # a reserva do Flow dura 10 min (regra de ouro 4)
+_RECUSA_P0 = f"gravação exige a P0 concluída neste ambiente ({VAR_P0})"
 _SLUG_SEGURO = re.compile(r"^[a-z0-9_-]{1,32}$")
 
 _avisados: set[str] = set()
@@ -100,6 +107,58 @@ def modo(slug: str) -> str:
         if nome == slug.lower():
             achado = valor
     return achado
+
+
+def _lista_var(nome: str) -> set[str]:
+    return {s.strip().lower() for s in os.environ.get(nome, "").split(",") if s.strip()}
+
+
+def p0_ok(slug: str) -> bool:
+    return slug.lower() in _lista_var(VAR_P0)
+
+
+def inativar_ligado(slug: str) -> bool:
+    return slug.lower() in _lista_var(VAR_INATIVAR)
+
+
+def _acoes(slug: str, m: str) -> tuple[str, ...]:
+    if m == "criar":
+        return ("criar",)
+    return ("criar", "atualizar", "inativar") if inativar_ligado(slug) else ("criar", "atualizar")
+
+
+def _abrir_fire_escrita(slug: str):
+    env = environments_repo.get_by_slug(slug)
+    return FirebirdConnection().connect_escrita_cadastro(environments_repo.to_fb_config(env))
+
+
+def _env(slug: str, env_conn):
+    return nullcontext(env_conn) if env_conn is not None else router.env_connect(slug)
+
+
+def _avisa_chaves(slug: str, brutos: list) -> None:
+    # Chave nova do Flow é ignorada, mas precisa aparecer no log (uma vez por ambiente e nome).
+    for nome in {n for b in brutos for n in chaves_desconhecidas(b)}:
+        _avisa_uma_vez(
+            f"chave-desconhecida:{slug}:{nome}",
+            f"flowpcp.cadastro_volta env={slug}: chave desconhecida no item da fila: {nome!r}",
+            nivel="WARNING",
+        )
+
+
+def reenviar_pendencias(slug: str, env_conn, client, *, agora: datetime) -> dict:
+    """Reenvia ao Flow os resultados guardados (`gravado_sem_volta`, `erro_a_enviar`)."""
+    from app.integrations.flowpcp import cadastro_gravacao
+
+    return cadastro_gravacao.reenviar_pendencias(slug, env_conn, client, agora=agora)
+
+
+def _processar_gravacao(slug, m, client, env_conn, fire_conn, *, relogio) -> dict:
+    from app.integrations.flowpcp import cadastro_gravacao
+
+    return cadastro_gravacao.processar_gravacao(
+        slug, m, client, env_conn, fire_conn, relogio=relogio
+    )
 
 
 def _select(conn, sql: str, params: tuple):
@@ -290,10 +349,18 @@ def ultimo_ciclo(slug: str) -> dict | None:
     return {"em": u["em"], "resumo": dict(u["resumo"])} if u else None
 
 
-def processar_ambiente(slug: str, *, _client=None, _fire_conn=None, _env_conn=None) -> dict:
+def processar_ambiente(
+    slug: str, *, _client=None, _fire_conn=None, _env_conn=None, _relogio=None
+) -> dict:
     """Um ciclo do ambiente; o resumo saneado fica em `ultimo_ciclo(slug)`."""
     try:
-        r = _processar_ambiente(slug, _client=_client, _fire_conn=_fire_conn, _env_conn=_env_conn)
+        r = _processar_ambiente(
+            slug,
+            _client=_client,
+            _fire_conn=_fire_conn,
+            _env_conn=_env_conn,
+            _relogio=_relogio or (lambda: datetime.now(UTC)),
+        )
     except Exception as exc:
         _guardar_ciclo(slug, {"modo": modo(slug), "erro": type(exc).__name__})
         raise
@@ -302,13 +369,14 @@ def processar_ambiente(slug: str, *, _client=None, _fire_conn=None, _env_conn=No
     return r
 
 
-def _processar_ambiente(slug: str, *, _client, _fire_conn, _env_conn) -> dict:
+def _processar_ambiente(slug: str, *, _client, _fire_conn, _env_conn, _relogio) -> dict:
     m = modo(slug)
-    if m == "desligado":
-        return {"modo": m}
-    if m != "simular":
-        logger.error(f"flowpcp.cadastro_volta env={slug}: modo {m!r} recusado: {_RECUSA_ESCRITA}")
-        return {"modo": m, "recusado": _RECUSA_ESCRITA}
+    pendencia = False
+    if m in ("desligado", "simular"):
+        with _env(slug, _env_conn) as env_conn:
+            pendencia = cadastro_volta_repo.tem_pendencia(env_conn)
+        if m == "desligado" and not pendencia:
+            return {"modo": m}
 
     cfg = None
     if _client is None:
@@ -317,6 +385,26 @@ def _processar_ambiente(slug: str, *, _client, _fire_conn, _env_conn) -> dict:
             return {"modo": m, "ignorado": "FlowPCP não habilitado"}
     client = _client or _build_client(cfg)
     try:
+        if m not in ("desligado", "simular"):
+            with _env(slug, _env_conn) as env_conn:
+                # Regra de ouro 2: o resultado guardado sai antes de tudo, até sem a P0.
+                reenvio = reenviar_pendencias(slug, env_conn, client, agora=_relogio())
+                if not p0_ok(slug):
+                    _avisa_uma_vez(
+                        f"recusa-p0:{slug}",
+                        f"flowpcp.cadastro_volta env={slug}: modo {m!r} recusado: {_RECUSA_P0}",
+                    )
+                    return {"modo": m, "recusado": _RECUSA_P0, "reenvio": reenvio}
+                if "credencial" in reenvio:
+                    return {"modo": m, "erro": "credencial", "reenvio": reenvio}
+                r = _processar_gravacao(slug, m, client, env_conn, _fire_conn, relogio=_relogio)
+                return {**r, "reenvio": reenvio}
+        reenvio = None
+        if pendencia:
+            with _env(slug, _env_conn) as env_conn:
+                reenvio = reenviar_pendencias(slug, env_conn, client, agora=_relogio())
+        if m == "desligado":
+            return {"modo": m, "reenvio": reenvio}
         try:
             resp = client.list_cadastros_pendentes(limite=LIMITE_FILA, simular=True)
         except ValueError as exc:  # JSON ou envelope inválido (`cadastros` não é lista)
@@ -331,13 +419,7 @@ def _processar_ambiente(slug: str, *, _client, _fire_conn, _env_conn) -> dict:
             )
             return {"modo": m, "erro_transitorio": f"fila do Flow: {type(exc).__name__}"}
         brutos = list(resp.cadastros)
-        # Chave nova do Flow é ignorada, mas a simulação é onde ela precisa aparecer.
-        for nome in {n for b in brutos for n in chaves_desconhecidas(b)}:
-            _avisa_uma_vez(
-                f"chave-desconhecida:{slug}:{nome}",
-                f"flowpcp.cadastro_volta env={slug}: chave desconhecida no item da fila: {nome!r}",
-                nivel="WARNING",
-            )
+        _avisa_chaves(slug, brutos)
         resumo = {
             "modo": m,
             "lidos": len(brutos),
@@ -346,6 +428,8 @@ def _processar_ambiente(slug: str, *, _client, _fire_conn, _env_conn) -> dict:
             "erros": 0,
             "ja_no_livro": 0,
         }
+        if reenvio is not None:
+            resumo["reenvio"] = reenvio
         metrics.cadastro_volta_pendentes.labels(env=slug).set(len(brutos))
         metrics.cadastro_volta_mais_antigo.labels(env=slug).set(_idade_mais_antiga(brutos))
         if not brutos:
@@ -365,9 +449,7 @@ def _processar_ambiente(slug: str, *, _client, _fire_conn, _env_conn) -> dict:
 
 def _processar_fila(slug, brutos, resumo, _fire_conn, _env_conn) -> dict:
     with ExitStack() as stack:
-        env_conn = stack.enter_context(
-            nullcontext(_env_conn) if _env_conn is not None else router.env_connect(slug)
-        )
+        env_conn = stack.enter_context(_env(slug, _env_conn))
         # Fase 0: o que já está no livro não abre o Fire (simular nunca anda a fila).
         triagem = []
         for bruto in brutos:
@@ -441,20 +523,40 @@ def _processar_fila(slug, brutos, resumo, _fire_conn, _env_conn) -> dict:
     return resumo
 
 
+def _slugs_flowpcp() -> list[str]:
+    """Ambientes ativos com FlowPCP ligado, sem decifrar o token de nenhum."""
+    return [e["slug"] for e in environments_repo.list_active() if e.get("flowpcp_enabled")]
+
+
+def _com_pendencia(slugs: list[str]) -> list[str]:
+    """Os que têm resultado guardado para o Flow (só o SQLite do ambiente, sem token)."""
+    achados = []
+    for slug in slugs:
+        try:
+            with router.env_connect(slug) as conn:
+                if cadastro_volta_repo.tem_pendencia(conn):
+                    achados.append(slug)
+        except Exception as exc:  # noqa: BLE001 — um ambiente não derruba os outros
+            logger.error(f"flowpcp.cadastro_volta env={slug}: livro ilegível: {type(exc).__name__}")
+    return achados
+
+
 def rodar() -> dict[str, dict]:
-    """Todos os ambientes com a volta ligada. Nunca levanta."""
+    """Ambientes com a volta ligada e, em qualquer modo, os que têm resultado
+    guardado para o Flow (R6). Sem modo e sem pendência, não abre token. Nunca levanta."""
     resultado: dict[str, dict] = {}
-    if not _entradas():
-        return resultado  # volta desligada: nem lista ambientes nem abre token
     try:
-        ambientes = list(enabled_flowpcp_envs())
+        if _entradas():
+            ambientes = list(enabled_flowpcp_envs())
+            _avisa_slugs_desconhecidos(set(ambientes))
+        else:
+            ambientes = _slugs_flowpcp()
     except Exception as exc:  # noqa: BLE001
         logger.error(f"flowpcp.cadastro_volta: listar ambientes falhou: {type(exc).__name__}")
         return resultado
-    _avisa_slugs_desconhecidos(set(ambientes))
-    for slug in ambientes:
-        if modo(slug) == "desligado":
-            continue
+    ligados = [s for s in ambientes if modo(s) != "desligado"]
+    visitar = ligados + _com_pendencia([s for s in ambientes if s not in ligados])
+    for slug in visitar:
         try:
             resultado[slug] = processar_ambiente(slug)
         except Exception as exc:  # noqa: BLE001 — um ambiente não derruba os outros

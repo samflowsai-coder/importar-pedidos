@@ -96,6 +96,8 @@ def _limpo(monkeypatch):
     cv._avisados.clear()
     monkeypatch.setattr(cv, "_ultima_volta", None)
     monkeypatch.setattr(cv, "_ultimo_ciclo", {})
+    # rodar() abre o SQLite de cada ambiente desligado atrás de pendência: aqui não há.
+    monkeypatch.setattr(cv, "_com_pendencia", lambda slugs: [])
 
 
 @pytest.fixture
@@ -306,11 +308,12 @@ def test_lease_nao_reprocessa(env_conn, monkeypatch):
 
 
 @pytest.mark.parametrize("m", ["criar", "criar_e_atualizar"])
-def test_modos_de_escrita_recusam(env_conn, monkeypatch, erros, m):
+def test_modos_de_escrita_recusam_sem_p0(env_conn, monkeypatch, erros, m):
     monkeypatch.setenv(cv.VAR_MODO, f"mm:{m}")
+    monkeypatch.delenv(cv.VAR_P0, raising=False)
     cliente = _Client([BOM])
     r = cv.processar_ambiente("mm", _client=cliente, _env_conn=env_conn)
-    assert r == {"modo": m, "recusado": "gravação exige P0 e cadastros.v1 (Etapa 3)"}
+    assert r == {"modo": m, "recusado": cv._RECUSA_P0, "reenvio": {}}
     assert cliente.limites == [] and erros
 
 
@@ -608,12 +611,12 @@ def test_rodar_guarda_ultimo_ciclo_do_ambiente_que_explode(monkeypatch):
 
 
 @pytest.mark.parametrize("valor", [None, ""])
-def test_rodar_sem_variavel_nao_lista_ambientes(monkeypatch, valor):
+def test_rodar_sem_variavel_nao_abre_token(monkeypatch, valor):
     if valor is not None:
         monkeypatch.setenv(cv.VAR_MODO, valor)
-    monkeypatch.setattr(
-        cv, "enabled_flowpcp_envs", lambda: pytest.fail("não podia listar ambientes")
-    )
+    monkeypatch.setattr(cv, "enabled_flowpcp_envs", lambda: pytest.fail("não podia abrir token"))
+    monkeypatch.setattr(cv, "_slugs_flowpcp", lambda: ["mm"])
+    monkeypatch.setattr(cv, "processar_ambiente", lambda s, **k: pytest.fail("sem pendência"))
     assert cv.rodar() == {}
 
 
