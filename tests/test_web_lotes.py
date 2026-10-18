@@ -443,3 +443,27 @@ def test_rotas_de_lote_sem_sessao_dao_401(real_client, real_auth):
     assert real_client.post("/api/lotes/1/fechar").status_code == 401
     r = real_client.post("/api/lotes/1/fator", json={"fator": 0.07, "modo": "desconto"})
     assert r.status_code == 401
+
+
+# --- página ----------------------------------------------------------------------------------
+
+
+def test_pagina_lotes_responde_200_autenticado(real_client, real_auth):
+    _como_operador(real_client)
+    r = real_client.get("/lotes")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert "/api/lotes" in r.text
+
+
+def test_pagina_lotes_sem_sessao_vai_para_o_login(real_client, real_auth):
+    r = real_client.get("/lotes", follow_redirects=False)
+    assert r.status_code in (302, 303, 307)
+    assert r.headers["location"] == "/login"
+
+
+def test_pagina_lotes_com_sessao_invalida_vai_para_o_login(real_client, real_auth):
+    real_client.cookies.set("portal_session", "nao-existe")
+    r = real_client.get("/lotes", follow_redirects=False)
+    assert r.status_code in (302, 303, 307)
+    assert r.headers["location"] == "/login"

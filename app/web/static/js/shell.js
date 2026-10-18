@@ -30,11 +30,14 @@
     chevron: '<svg class="app-nav-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>',
     logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
     update: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>',
+    // Pilha de caixas: várias pernas viram um pedido só no lote da semana.
+    lotes: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="13" width="8" height="7" rx="1.5"/><rect x="13" y="13" width="8" height="7" rx="1.5"/><rect x="8" y="4" width="8" height="7" rx="1.5"/></svg>',
     routing: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="5"/><circle cx="8" cy="12" r="3"/></svg>',
   };
 
   const NAV_DEF = {
     pedidos: { label: 'Pedidos', href: '/', icon: ICONS.pedidos, route: 'pedidos' },
+    lotes:   { label: 'Lotes', href: '/lotes', icon: ICONS.lotes, route: 'lotes' },
     config:  { label: 'Configurações', icon: ICONS.settings, route: 'config', adminOnly: true,
       children: [
         { label: 'Ambientes',      href: '/admin/ambientes',         icon: ICONS.db, route: 'admin-ambientes' },
@@ -48,6 +51,7 @@
 
   const ACTIVE_BY_PATH = {
     '/':                          'pedidos',
+    '/lotes':                     'lotes',
     '/admin/ambientes':           'admin-ambientes',
     '/admin/ambientes/novo':      'admin-ambientes',
     '/configuracoes/diretorios':  'config-diretorios',
@@ -128,6 +132,13 @@
       <a class="app-nav-link ${active === 'pedidos' ? 'active' : ''}"
          href="${NAV_DEF.pedidos.href}" data-route="pedidos">
         ${NAV_DEF.pedidos.icon}<span>${NAV_DEF.pedidos.label}</span>
+      </a>`);
+    // Lotes é do operador (informar fator, fechar agora); só a configuração
+    // dentro da tela é de admin — a própria tela esconde e a API recusa.
+    links.push(`
+      <a class="app-nav-link ${active === 'lotes' ? 'active' : ''}"
+         href="${NAV_DEF.lotes.href}" data-route="lotes">
+        ${NAV_DEF.lotes.icon}<span>${NAV_DEF.lotes.label}</span>
       </a>`);
 
     if (showConfig) {

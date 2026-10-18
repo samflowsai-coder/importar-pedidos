@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import (
     BaseModel,
     Field,
@@ -29,13 +31,14 @@ from app.persistence import context as env_context
 from app.persistence import db, environments_repo, lotes_repo, repo
 from app.persistence import router as db_router
 from app.utils.logger import logger
-from app.web.auth import User, require_admin, require_user
+from app.web.auth import COOKIE_NAME, User, current_user, require_admin, require_user
 
 router = APIRouter()
 
 _EXEMPLO = Decimal("16.12")
 _CENTAVO = Decimal("0.01")
 _LIMITE_FORA = 20
+_PAGINA = Path(__file__).parent / "static" / "lotes.html"
 
 
 def _fator_decimal(v: Any) -> Decimal:
@@ -223,6 +226,18 @@ def _fora_do_lote(cfg: dict, inicio: str, fim: str, conn) -> dict:
             for r in fora[:_LIMITE_FORA]
         ],
     }
+
+
+@router.get("/lotes")
+def pagina_lotes(
+    request: Request,
+    portal_session: str | None = Cookie(default=None, alias=COOKIE_NAME),
+):
+    """Tela do lote. Sessão válida exigida (não só o cookie presente); sem ela,
+    login. O que é de admin a própria API recusa com 403."""
+    if current_user(request, portal_session) is None:
+        return RedirectResponse(url="/login")
+    return FileResponse(str(_PAGINA))
 
 
 @router.get("/api/lotes")

@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portal de Pedidos — Lotes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=2">
+  <link rel="stylesheet" href="/static/css/shell.css?v=3">
+  <script src="/static/js/shell.js?v=4" defer></script>
+  <style>
+    .main { padding: 32px 32px 96px; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 880px; min-width: 0; }
+    @media (max-width: 640px) { .main { padding: 24px 16px 72px; } }
+
+    .breadcrumb {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--text-muted); margin-bottom: 12px;
+    }
+    .breadcrumb a { color: var(--text-muted); }
+    .breadcrumb a:hover { color: var(--text-secondary); }
+
+    .page-title { font-size: 24px; font-weight: 600; letter-spacing: -.02em; margin-bottom: 6px; }
+    .page-subtitle { font-size: 13.5px; color: var(--text-muted); margin-bottom: 28px; line-height: 1.6; max-width: 62ch; }
+
+    .section-label {
+      font-size: 10.5px; font-weight: 600; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: .06em; margin: 32px 0 10px;
+    }
+
+    .card {
+      background: var(--surface); border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg); padding: 24px 26px; box-shadow: var(--shadow-md);
+      min-width: 0;
+    }
+    @media (max-width: 640px) { .card { padding: 18px 16px; } }
+    .card + .card { margin-top: 14px; }
+    .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .card-head > :first-child { flex: 1 1 auto; min-width: 0; }
+    .card-head > .chip { flex-shrink: 0; }
+    .card-title { font-size: 14px; font-weight: 600; }
+    .card-desc { font-size: 12.5px; color: var(--text-muted); margin-top: 4px; line-height: 1.55; }
+
+    /* Cartão que pede ação: borda e faixa âmbar à esquerda, legível num relance. */
+    .card.needs-action { border-color: rgba(217,119,6,.35); box-shadow: inset 3px 0 0 var(--warn), var(--shadow-md); }
+
+    .mono { font-family: var(--font-mono); font-size: 12px; }
+
+    .err-banner, .info-banner, .warn-banner {
+      font-size: 13px; border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px; line-height: 1.55;
+    }
+    .err-banner { color: var(--error-strong); background: var(--error-bg); border: 1px solid rgba(220,38,38,.18); }
+    .info-banner { color: var(--text-secondary); background: var(--surface); border: 1px solid var(--border); }
+    .warn-banner { color: var(--warn-ink); background: var(--warn-bg); border: 1px solid rgba(217,119,6,.25); }
+    .warn-banner b, .info-banner b { font-weight: 600; }
+
+    /* ── Chips de estado ── */
+    .chip {
+      display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+      font-size: 11.5px; font-weight: 600; line-height: 1; padding: 5px 9px; border-radius: 999px;
+      background: var(--surface-hover); color: var(--text-secondary);
+    }
+    .chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .85; }
+    .chip.accent  { background: var(--accent-bg);  color: var(--accent-hover); }
+    .chip.warn    { background: var(--warn-bg);    color: var(--warn-ink); }
+    .chip.success { background: var(--success-bg); color: var(--success-strong); }
+    .chip.error   { background: var(--error-bg);   color: var(--error-strong); }
+
+    /* ── Lote da semana ── */
+    .lote-key { font-family: var(--font-mono); font-size: 13px; font-weight: 600; letter-spacing: .01em; }
+    .lote-when { font-size: 22px; font-weight: 600; letter-spacing: -.02em; margin-top: 14px; line-height: 1.25; }
+    .lote-when-sub { font-size: 12.5px; color: var(--text-muted); margin-top: 4px; }
+
+    .stats {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px;
+      background: var(--border-subtle); border: 1px solid var(--border-subtle);
+      border-radius: var(--radius); overflow: hidden; margin-top: 20px;
+    }
+    /* Celular: o total (o número que importa e o mais largo) ganha a linha
+       de cima inteira; as três contagens dividem a de baixo. Valor em BRL
+       nunca quebra no meio. */
+    @media (max-width: 640px) {
+      .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .stat-total { grid-column: 1 / -1; order: -1; }
+    }
+    .stat { background: var(--bg); padding: 12px 14px; min-width: 0; }
+    .stat-label { font-size: 11px; color: var(--text-muted); }
+    .stat-value { font-size: 18px; font-weight: 600; letter-spacing: -.01em; margin-top: 2px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+    .conta {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      margin-top: 16px; padding: 12px 14px; border-radius: var(--radius);
+      background: var(--bg); border: 1px solid var(--border-subtle); font-size: 13px;
+    }
+    .conta-fator { font-weight: 600; }
+    .conta-modo { color: var(--text-muted); }
+    .conta-eq { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+    .conta-eq b { color: var(--text); font-weight: 600; }
+    .conta-sep { width: 1px; align-self: stretch; background: var(--border); }
+    @media (max-width: 640px) { .conta-sep { display: none; } .conta-eq { flex-basis: 100%; } }
+
+    .actions { display: flex; gap: 10px 14px; flex-wrap: wrap; align-items: center; margin-top: 18px; }
+    .actions-hint { font-size: 12px; color: var(--text-muted); line-height: 1.5; flex: 1 1 240px; }
+
+    /* ── Tabelas ── */
+    .table-wrap { overflow-x: auto; margin-top: 14px; -webkit-overflow-scrolling: touch; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: .6rem .5rem; text-align: left; border-bottom: 1px solid var(--border-subtle); font-size: 12.5px; font-variant-numeric: tabular-nums; vertical-align: top; }
+    th { font-weight: 600; color: var(--text-muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+    th:first-child, td:first-child { padding-left: 0; }
+    th:last-child, td:last-child { padding-right: 0; }
+    td.r, th.r { text-align: right; white-space: nowrap; }
+    tfoot td { font-weight: 600; border-bottom: none; }
+    .sub { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+    .sub.mono { white-space: nowrap; }
+
+    /* ≤640px: cada linha vira um bloco com rótulo à esquerda e valor à
+       direita (data-label). Rolagem horizontal escondia justamente Valor e
+       Nº no Fire, as colunas que o operador confere. */
+    @media (max-width: 640px) {
+      table.stack thead { display: none; }
+      table.stack, table.stack tbody, table.stack tfoot { display: block; }
+      table.stack tr { display: block; padding: 10px 0; border-bottom: 1px solid var(--border-subtle); }
+      table.stack td { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 3px 0; border: 0; text-align: right; }
+      table.stack td::before { content: attr(data-label); flex-shrink: 0; font-size: 11.5px; color: var(--text-muted); text-align: left; font-family: var(--font-sans); font-weight: 400; }
+      table.stack td:first-child { font-weight: 600; text-align: left; }
+      table.stack td.wrap { display: block; text-align: left; }
+      table.stack td.wrap::before { display: block; margin-bottom: 2px; }
+      table.stack tfoot tr { border-bottom: 0; }
+      table.stack tfoot td::before { content: none; }
+      table.stack tfoot td[colspan] { display: none; }
+      table.stack tfoot td.r::before { content: attr(data-label); font-weight: 600; color: var(--text); font-size: 12.5px; }
+    }
+
+    details.previa { margin-top: 16px; border-top: 1px solid var(--border-subtle); padding-top: 12px; }
+    details.previa > summary {
+      cursor: pointer; font-size: 13px; font-weight: 600; list-style: none;
+      display: inline-flex; align-items: center; gap: 6px; padding: 4px 0; border-radius: var(--radius-sm);
+    }
+    details.previa > summary::-webkit-details-marker { display: none; }
+    details.previa > summary svg { transition: transform 120ms; color: var(--text-muted); }
+    details.previa[open] > summary svg { transform: rotate(90deg); }
+    details.previa > summary .summary-meta { font-weight: 400; color: var(--text-muted); }
+
+    .block-title { font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-top: 22px; }
+
+    /* ── Formulários ── */
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; margin-top: 16px; }
+    @media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } }
+    .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    .field > span { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+    .field small { font-size: 11.5px; color: var(--text-muted); line-height: 1.45; }
+    input[type="text"], select {
+      width: 100%; font: inherit; font-size: 13.5px; color: var(--text);
+      background: var(--bg); border: 1px solid var(--border-control); border-radius: var(--radius);
+      padding: 0 11px; height: 38px; transition: border-color 120ms, box-shadow 120ms;
+    }
+    input[type="text"]:hover, select:hover { border-color: var(--text-secondary); }
+    input[type="text"]:focus-visible, select:focus-visible { outline: none; border-color: var(--accent-hover); box-shadow: 0 0 0 3px rgba(99,102,241,.25); }
+    input[aria-invalid="true"] { border-color: var(--error); }
+    @media (max-width: 640px) { input[type="text"], select { height: 44px; font-size: 16px; } }
+    .input-suffix { position: relative; display: block; }
+    .input-suffix input { padding-right: 32px; }
+    .input-suffix::after { content: '%'; position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 13px; color: var(--text-muted); pointer-events: none; }
+
+    .check { display: flex; align-items: center; gap: 10px; font-size: 13.5px; cursor: pointer; min-height: 38px; }
+    .check input { width: 16px; height: 16px; accent-color: var(--accent-hover); }
+
+    .fator-row { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 14px 16px; margin-top: 16px; align-items: end; }
+    @media (max-width: 640px) { .fator-row { grid-template-columns: 1fr; } }
+    .preview-line {
+      margin-top: 12px; font-size: 13px; color: var(--text-secondary); min-height: 20px;
+      font-variant-numeric: tabular-nums;
+    }
+    .preview-line b { color: var(--text); font-weight: 600; }
+    .preview-line.invalid { color: var(--error-strong); }
+
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      height: 38px; padding: 0 16px; border-radius: var(--radius); font: inherit; font-size: 13px; font-weight: 600;
+      cursor: pointer; border: 1px solid transparent; transition: background 120ms, border-color 120ms, transform 80ms;
+      white-space: nowrap;
+    }
+    /* Branco sobre --accent mede 4.47:1 (abaixo de AA em 13px); --accent-hover mede 6.29:1. */
+    .btn-primary { background: var(--accent-hover); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #4338CA; }
+    .btn-secondary { background: var(--bg); color: var(--text); border-color: var(--border-control); }
+    .btn-secondary:hover:not(:disabled) { border-color: var(--text-secondary); background: var(--surface-hover); }
+    .btn:active:not(:disabled) { transform: scale(.98); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn[aria-busy="true"] { cursor: progress; }
+    @media (max-width: 640px) {
+      .btn { height: 44px; }
+      .check { min-height: 44px; }
+      details.previa > summary { min-height: 44px; }
+    }
+
+    a:focus-visible, button:focus-visible, summary:focus-visible, .check input:focus-visible {
+      outline: 2px solid var(--accent-hover); outline-offset: 2px; border-radius: var(--radius-sm);
+    }
+    a.link { color: var(--accent-hover); font-weight: 600; }
+    a.link:hover { text-decoration: underline; }
+
+    .link-btn {
+      background: none; border: none; padding: 0; color: var(--accent-hover);
+      font: inherit; font-weight: 600; cursor: pointer;
+    }
+    .link-btn:hover { text-decoration: underline; }
+
+    .empty-state { font-size: 13px; color: var(--text-muted); line-height: 1.6; }
+    .muted { color: var(--text-muted); }
+    .erro-motivo { display: block; font-size: 12px; color: var(--error-strong); margin-top: 4px; line-height: 1.45; }
+    .rastro-ok { display: block; font-size: 11.5px; color: var(--success-strong); margin-top: 4px; }
+
+    .fora-list { margin-top: 8px; padding-left: 0; list-style: none; }
+    .fora-list li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid rgba(217,119,6,.18); font-size: 12.5px; }
+    .fora-list li span:last-child { white-space: nowrap; }
+
+    .page-loading { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-muted); padding: 24px 0; }
+
+    .vigencia { font-size: 12.5px; color: var(--text-secondary); margin-top: 10px; line-height: 1.7; }
+    .vigencia b { font-weight: 600; color: var(--text); }
+
+    @media (prefers-reduced-motion: reduce) {
+      .btn, input, select, details.previa > summary svg { transition: none; }
+      .btn:active:not(:disabled) { transform: none; }
+    }
+
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+
+<div id="app-shell"></div>
+
+<main class="main">
+  <div class="container">
+    <nav class="breadcrumb" aria-label="Trilha">
+      <a href="/">Pedidos</a>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      <span>Lotes</span>
+    </nav>
+
+    <h1 class="page-title" id="page-title">Lote semanal</h1>
+    <p class="page-subtitle">
+      Os pedidos da revenda cadastrados no Fire durante a semana viram um pedido só para a fábrica.
+      O lote fecha sozinho. Fechar não grava no Fire: o pedido espelho entra pela caixa de entrada,
+      no botão “Cadastrar no Fire” de sempre.
+    </p>
+
+    <div id="err-banner" class="err-banner" role="alert" hidden></div>
+
+    <div id="page-loading" class="page-loading"><span class="spin-dark"></span>Carregando lotes…</div>
+    <p class="err-banner" id="page-error" hidden>Não foi possível carregar os lotes. <button type="button" class="link-btn" data-action="reload">Tentar de novo</button></p>
+
+    <div id="content" hidden>
+      <div id="state-banner"></div>
+
+      <div id="pendentes"></div>
+      <div id="fora"></div>
+
+      <div class="section-label">Lote da semana</div>
+      <div id="aberto"></div>
+
+      <div class="section-label">Recentes</div>
+      <div class="card" id="recentes"></div>
+
+      <div class="card" style="margin-top:14px">
+        <div class="card-title">Pedidos retidos</div>
+        <p class="card-desc">Arquivo que o Portal não soube em qual empresa entrar fica na fila do roteamento, não aqui.
+          <a class="link" href="/admin/roteamento">Ver pendências do roteamento</a></p>
+      </div>
+
+      <div id="config-section" hidden>
+        <div class="section-label">Configuração · só administradores</div>
+        <div class="card" id="config-card"></div>
+        <div class="card" id="fator-card"></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+  const API = '/api/lotes';
+  const EXEMPLO_PRECO = '16.12'; // mesmo preço de exemplo da API (routes_lotes._EXEMPLO)
+  const DIAS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+  // dia_inicio da API: 0 = segunda … 6 = domingo (datetime.weekday do Python).
+  const DIAS_PY = ['segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado', 'domingo'];
+  const MODO_DESC = {
+    desconto: 'preço da nota menos o fator',
+    divisor: 'preço da nota ÷ (1 + fator)',
+  };
+  const CHEVRON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"/></svg>';
+
+  let isAdmin = false;
+  let state = null;          // resposta de GET /api/lotes
+  let detalhes = {};         // id -> GET /api/lotes/{id}
+  let envs = [];
+  const envNameBySlug = {};
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // ── Rede ─────────────────────────────────────────────────────────
+  function detailMsg(data, status) {
+    const d = data && data.detail;
+    if (typeof d === 'string') return d;
+    if (Array.isArray(d) && d.length) return String(d[0].msg || '').replace(/^Value error, /, '') || `Erro ${status}`;
+    return `Erro ${status}`;
+  }
+
+  async function api(path, opts = {}) {
+    const r = await fetch(path, {
+      credentials: 'same-origin',
+      ...opts,
+      headers: opts.body ? { 'Content-Type': 'application/json' } : undefined,
+    });
+    if (r.status === 401) { location.href = '/login'; throw new Error('Sessão expirada.'); }
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 403) throw new Error('Apenas administradores podem fazer isso.');
+    if (!r.ok) throw new Error(detailMsg(data, r.status));
+    return data;
+  }
+
+  function showError(msg) {
+    const b = $('err-banner');
+    b.textContent = msg;
+    b.hidden = false;
+    b.scrollIntoView({ block: 'nearest' });
+  }
+  function clearError() { $('err-banner').hidden = true; }
+  function toast(msg) { if (window.appShell) window.appShell.showSuccess(msg); }
+
+  // ── Decimal sem float ───────────────────────────────────────────
+  // Fator e preço são Decimal na API; a prévia ao vivo faz a mesma conta em
+  // BigInt pra bater centavo a centavo com a do servidor: preço quantizado
+  // em 4 casas (ROUND_HALF_UP), depois em 2 — igual a routes_lotes._exemplo.
+  function parseDec(s) {
+    const t = String(s ?? '').trim().replace(',', '.');
+    if (!/^\d+(\.\d+)?$/.test(t)) return null;
+    const [i, f = ''] = t.split('.');
+    return { n: BigInt(i + f), k: f.length };
+  }
+  function decStr(n, k, sep = '.') {
+    const s = n.toString().padStart(k + 1, '0');
+    if (k === 0) return s;
+    const i = s.slice(0, s.length - k), f = s.slice(s.length - k).replace(/0+$/, '');
+    return f ? `${i}${sep}${f}` : i;
+  }
+  const pow10 = (k) => 10n ** BigInt(k);
+  const divHalfUp = (a, b) => (2n * a + b) / (2n * b);
+
+  function fatorDePct(pct) {          // "7,5" -> "0.075" | null (fora de 0 <= x < 100)
+    const d = parseDec(pct);
+    if (!d || d.n >= 100n * pow10(d.k)) return null;
+    return decStr(d.n, d.k + 2);
+  }
+  function pctDeFator(f) {            // "0.07" -> "7"
+    const d = parseDec(f);
+    if (!d) return String(f);
+    return d.k >= 2 ? decStr(d.n, d.k - 2, ',') : decStr(d.n * pow10(2 - d.k), 0, ',');
+  }
+  function contaExemplo(fator, modo) { // -> centavos (BigInt) | null
+    const f = parseDec(fator), p = parseDec(EXEMPLO_PRECO);
+    if (!f || !p || f.n >= pow10(f.k)) return null;
+    const P = p.n * pow10(4 - p.k);   // em décimos de milésimo
+    const D = pow10(f.k);
+    const q4 = modo === 'divisor' ? divHalfUp(P * D, D + f.n) : divHalfUp(P * (D - f.n), D);
+    return divHalfUp(q4, 100n);
+  }
+
+  // ── Formatação ──────────────────────────────────────────────────
+  const BRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+  const BRL4 = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  const QTD = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 3 });
+  const brl = (v) => (v === null || v === undefined || v === '') ? '—' : BRL.format(Number(v));
+  const brlCent = (c) => BRL.format(Number(c) / 100);
+  const cents = (v) => Math.round(Number(v || 0) * 100);
+
+  function dataLocal(iso) {           // "2026-10-12" sem escorregar pro fuso UTC
+    if (!iso) return null;
+    const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }
+  const dd = (n) => String(n).padStart(2, '0');
+  const diaMes = (d) => `${dd(d.getDate())}/${dd(d.getMonth() + 1)}`;
+  function diaSemana(iso) { const d = dataLocal(iso); return d ? `${DIAS[d.getDay()]} ${diaMes(d)}` : '—'; }
+  function fechaEm(iso) {             // "2026-10-19T08:00" -> {txt: "segunda 19/10 às 8h", vencido}
+    if (!iso) return { txt: '—', vencido: false };
+    const [h, m] = iso.slice(11, 16).split(':').map(Number);
+    const d = dataLocal(iso); d.setHours(h, m || 0);
+    return { txt: `${DIAS[d.getDay()]} ${diaMes(d)} às ${m ? `${h}h${dd(m)}` : `${h}h`}`, vencido: d.getTime() <= Date.now() };
+  }
+  function janelaStr(ini, fim) {
+    const a = dataLocal(ini), b = dataLocal(fim);
+    return a && b ? `${diaMes(a)} a ${diaMes(b)}` : '—';
+  }
+  function quando(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+  const envNome = (slug) => envNameBySlug[slug] || slug || '—';
+  const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
+  const fatorTxt = (fator, modo) => `${pctDeFator(fator)}% · ${modo}`;
+  function fmtCnpj(c) {
+    const d = String(c).replace(/\D/g, '');
+    return d.length === 14 ? `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}` : c;
+  }
+  function contaHtml(fator, modo, espelho) {
+    const c = contaExemplo(fator, modo);
+    if (c === null) return '';
+    return `R$ 16,12 na nota → <b>${brlCent(c)}</b> para a ${esc(espelho)}`;
+  }
+
+  function chip(status, lote) {
+    switch (status) {
+      case 'aberto': return '<span class="chip accent">Aberto</span>';
+      case 'aguardando_fator': return '<span class="chip warn">Aguardando fator</span>';
+      case 'fechado': return '<span class="chip warn">Fechado · falta cadastrar no Fire</span>';
+      case 'enviado':
+        return lote && lote.lote_fiscal_ok === false
+          ? '<span class="chip error">No Fire · rastro pendente</span>'
+          : '<span class="chip success">No Fire</span>';
+      case 'erro': return '<span class="chip error">Erro</span>';
+      default: return `<span class="chip">${esc(status)}</span>`;
+    }
+  }
+
+  // ── Render ──────────────────────────────────────────────────────
+  function render() {
+    const cfg = state.config;
+    const origem = cfg ? (cfg.nome_revenda || envNome(cfg.env_origem_slug)) : 'revenda';
+    const espelho = cfg ? envNome(cfg.env_espelho_slug) : 'fábrica';
+    $('page-title').textContent = cfg ? `Lote ${origem} → ${espelho}` : 'Lote semanal';
+
+    renderStateBanner(cfg, origem);
+    renderPendentes(state.pendentes || [], espelho);
+    renderFora(state.fora_do_lote || { total: 0, itens: [] }, origem, espelho);
+    renderAberto(state.aberto, cfg, origem, espelho);
+    renderRecentes(state.recentes || []);
+    $('config-section').hidden = !isAdmin;
+    if (isAdmin) { renderConfig(cfg); renderFatorGlobal(cfg, espelho); }
+  }
+
+  function renderStateBanner(cfg, origem) {
+    const el = $('state-banner');
+    if (!cfg) {
+      el.innerHTML = `<div class="info-banner"><b>O lote ainda não foi configurado.</b> Nada é anexado até um administrador escolher as empresas e ligar${isAdmin ? '. A configuração fica no fim desta página.' : '.'}</div>`;
+    } else if (!cfg.ativo) {
+      el.innerHTML = `<div class="info-banner"><b>Lote desligado.</b> Pedido da ${esc(origem)} enviado ao Fire agora não entra em lote nenhum.${isAdmin ? ' Ligue na configuração, no fim desta página.' : ''}</div>`;
+    } else {
+      el.innerHTML = '';
+    }
+  }
+
+  function pernasTable(det) {
+    if (!det) return '';
+    if (det.erro) return `<p class="erro-motivo" style="margin-top:12px">Não foi possível carregar os pedidos do lote: ${esc(det.erro)}</p>`;
+    const pernas = det.pernas || [];
+    if (!pernas.length) return '<p class="empty-state" style="margin-top:12px">Nenhum pedido ainda.</p>';
+    const origem = envNome(det.env_origem_slug);
+    const temTotal = pernas.every((p) => p.valor !== null && p.valor !== undefined);
+    const total = temTotal ? pernas.reduce((a, p) => a + cents(p.valor), 0) / 100 : null;
+    return `
+      <div class="table-wrap"><table class="stack">
+        <thead><tr><th>Pedido do cliente</th><th>Cliente final</th><th class="r">Nº no Fire ${esc(origem)}</th><th class="r">Valor</th></tr></thead>
+        <tbody>${pernas.map((p) => `
+          <tr>
+            <td class="mono" data-label="Pedido do cliente">${esc(p.pedido || p.import_id)}</td>
+            <td class="wrap" data-label="Cliente final">${esc(p.cliente_final || '—')}${p.cnpj_cliente_final ? `<span class="sub mono">${esc(fmtCnpj(p.cnpj_cliente_final))}</span>` : ''}</td>
+            <td class="r mono" data-label="Nº no Fire ${esc(origem)}">${esc(p.fire_codigo_origem)}</td>
+            <td class="r" data-label="Valor">${brl(p.valor)}</td>
+          </tr>`).join('')}</tbody>
+        ${total !== null ? `<tfoot><tr><td colspan="3">Total na nota da ${esc(origem)}</td><td class="r" data-label="Total na nota da ${esc(origem)}">${brl(total)}</td></tr></tfoot>` : ''}
+      </table></div>`;
+  }
+
+  // `total` vem da API (Decimal no servidor); a soma das linhas arredondadas
+  // aqui pode divergir em centavos, então o rodapé não recalcula.
+  function previaBlock(det, espelho, total) {
+    if (!det || !det.previa) return '';
+    const linhas = det.previa;
+    const linhaTotal = (l) => Math.round(Number(l.quantity || 0) * Number(l.unit_price || 0) * 100);
+    return `
+      <details class="previa">
+        <summary>${CHEVRON}<span>Pedido que vai para a ${esc(espelho)} <span class="summary-meta">· ${plural(linhas.length, 'linha', 'linhas')}</span></span></summary>
+        <div class="table-wrap"><table class="stack">
+          <thead><tr><th>Código</th><th>Descrição</th><th>Entrega</th><th class="r">Qtd</th><th class="r">Preço un.</th><th class="r">Total</th></tr></thead>
+          <tbody>${linhas.map((l) => `
+            <tr>
+              <td class="mono wrap" data-label="Código">${esc(l.product_code || '—')}${l.ean ? `<span class="sub">${esc(l.ean)}</span>` : ''}</td>
+              <td class="wrap" data-label="Descrição">${esc(l.description || '—')}</td>
+              <td data-label="Entrega">${l.delivery_date ? esc(diaMes(dataLocal(l.delivery_date))) : '—'}</td>
+              <td class="r" data-label="Qtd">${QTD.format(l.quantity || 0)}</td>
+              <td class="r" data-label="Preço un.">${l.unit_price === null || l.unit_price === undefined ? '—' : BRL4.format(l.unit_price)}</td>
+              <td class="r" data-label="Total">${brl(linhaTotal(l) / 100)}</td>
+            </tr>`).join('')}</tbody>
+          <tfoot><tr><td colspan="5">Total previsto</td><td class="r" data-label="Total previsto">${brl(total)}</td></tr></tfoot>
+        </table></div>
+      </details>`;
+  }
+
+  function statsHtml(l) {
+    return `
+      <div class="stats">
+        <div class="stat"><div class="stat-label">Pedidos</div><div class="stat-value">${l.pernas}</div></div>
+        <div class="stat"><div class="stat-label">Clientes</div><div class="stat-value">${l.clientes}</div></div>
+        <div class="stat"><div class="stat-label">Linhas previstas</div><div class="stat-value">${l.linhas_previstas ?? '—'}</div></div>
+        <div class="stat stat-total"><div class="stat-label">Total previsto</div><div class="stat-value">${brl(l.total_previsto)}</div></div>
+      </div>`;
+  }
+
+  function fatorFormHtml(id, espelho, modoPadrao) {
+    return `
+      <div class="fator-row">
+        <label class="field"><span>Fator</span>
+          <span class="input-suffix"><input type="text" inputmode="decimal" name="pct" autocomplete="off" placeholder="ex.: 7" aria-describedby="prev-${id}"></span>
+        </label>
+        <label class="field"><span>Modo</span>
+          <select name="modo">
+            <option value="desconto" ${modoPadrao !== 'divisor' ? 'selected' : ''}>Desconto · nota − fator</option>
+            <option value="divisor" ${modoPadrao === 'divisor' ? 'selected' : ''}>Divisor · nota ÷ (1 + fator)</option>
+          </select>
+        </label>
+      </div>
+      <p class="preview-line" id="prev-${id}" aria-live="polite" data-espelho="${esc(espelho)}">Digite o fator para ver a conta.</p>`;
+  }
+
+  // Prévia ao vivo + envio: o mesmo comportamento pro fator de um lote e
+  // pro fator global; muda só o que se manda e o que se diz depois.
+  function bindFatorForm(form, enviar) {
+    const pct = form.querySelector('[name="pct"]');
+    const modo = form.querySelector('[name="modo"]');
+    const prev = form.querySelector('.preview-line');
+    const btn = form.querySelector('button[type="submit"]');
+    const invalido = (msg) => { prev.className = 'preview-line invalid'; prev.textContent = msg; pct.setAttribute('aria-invalid', 'true'); };
+    const upd = () => {
+      const raw = pct.value.trim();
+      pct.removeAttribute('aria-invalid');
+      prev.className = 'preview-line';
+      if (!raw) { prev.textContent = 'Digite o fator para ver a conta.'; return null; }
+      const f = fatorDePct(raw);
+      if (f === null) { invalido('Use um número de 0 a 99,99 (ex.: 7 ou 7,5).'); return null; }
+      prev.innerHTML = contaHtml(f, modo.value, prev.dataset.espelho);
+      return f;
+    };
+    pct.addEventListener('input', upd);
+    modo.addEventListener('change', upd);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = upd();
+      if (f === null) { if (!pct.value.trim()) invalido('Informe o fator.'); pct.focus(); return; }
+      clearError();
+      btn.disabled = true; btn.setAttribute('aria-busy', 'true');
+      try {
+        toast(await enviar(f, modo.value));
+        await load();
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        btn.disabled = false; btn.removeAttribute('aria-busy');
+      }
+    });
+  }
+
+  function renderPendentes(pendentes, espelho) {
+    const host = $('pendentes');
+    if (!pendentes.length) { host.innerHTML = ''; return; }
+    host.innerHTML = `<div class="section-label">Precisa de você</div>` + pendentes.map((l) => {
+      const f = fechaEm(l.fecha_em);
+      return `
+      <div class="card needs-action">
+        <div class="card-head">
+          <div>
+            <div class="card-title">O lote <span class="lote-key">${esc(l.chave)}</span> está esperando o fator</div>
+            <p class="card-desc">Semana de ${janelaStr(l.janela_inicio, l.janela_fim)} · ${plural(l.pernas, 'pedido', 'pedidos')} · ${plural(l.clientes, 'cliente', 'clientes')}.
+              Sem fator não há preço para a ${esc(espelho)}: o lote ${f.vencido ? 'já venceu e' : `fecharia ${esc(f.txt)}, mas`} só fecha depois que alguém informar.</p>
+          </div>
+          ${chip('aguardando_fator')}
+        </div>
+        <form class="fator-form" data-lote="${l.id}" novalidate>
+          ${fatorFormHtml(`lote-${l.id}`, espelho, 'desconto')}
+          <div class="actions"><button type="submit" class="btn btn-primary">Confirmar fator</button>
+            <span class="actions-hint">Vale só para este lote. O fator das próximas semanas fica na configuração.</span></div>
+        </form>
+        <div class="block-title">Pedidos no lote</div>
+        ${pernasTable(detalhes[l.id])}
+      </div>`;
+    }).join('');
+    host.querySelectorAll('.fator-form').forEach((form) => bindFatorForm(form, async (fator, modo) => {
+      const r = await api(`${API}/${form.dataset.lote}/fator`, { method: 'POST', body: JSON.stringify({ fator, modo }) });
+      return `Fator gravado: R$ 16,12 na nota → ${BRL.format(r.exemplo.para)}.`;
+    }));
+  }
+
+  function renderFora(fora, origem, espelho) {
+    const host = $('fora');
+    if (!fora.total) { host.innerHTML = ''; return; }
+    const um = fora.total === 1;
+    const resto = fora.total - fora.itens.length;
+    host.innerHTML = `
+      <div class="warn-banner" style="margin-top:14px" role="status">
+        <b>${um ? `1 pedido da ${esc(origem)} já está` : `${fora.total} pedidos da ${esc(origem)} já estão`} no Fire e não ${um ? 'entra' : 'entram'} no lote.</b>
+        ${um ? 'Chegou' : 'Chegaram'} ao Fire nesta semana por fora do lote e não ${um ? 'será refaturado' : 'serão refaturados'} para a ${esc(espelho)}.
+        <ul class="fora-list">${fora.itens.map((i) => `
+          <li><span><span class="mono">${esc(i.order_number || i.import_id)}</span> · ${esc(i.customer_name || '—')}</span><span>${esc(quando(i.quando))}</span></li>`).join('')}
+        </ul>
+        ${resto > 0 ? `<p style="margin-top:6px">E mais ${resto}.</p>` : ''}
+      </div>`;
+  }
+
+  function renderAberto(l, cfg, origem, espelho) {
+    const host = $('aberto');
+    if (!cfg) { host.innerHTML = '<div class="card"><p class="empty-state">Sem configuração, não há lote.</p></div>'; return; }
+    if (!l) {
+      const vig = state.fator_vigente;
+      host.innerHTML = `<div class="card"><p class="empty-state">Nenhum pedido no lote desta semana ainda. O primeiro pedido da ${esc(origem)} cadastrado no Fire abre o lote${vig ? `, com fator ${esc(fatorTxt(vig.fator, vig.modo))}` : ''}.</p></div>`;
+      return;
+    }
+    const f = fechaEm(l.fecha_em);
+    const det = detalhes[l.id];
+    host.innerHTML = `
+      <div class="card">
+        <div class="card-head">
+          <div><span class="lote-key">${esc(l.chave)}</span> <span class="muted" style="font-size:12.5px">· semana de ${janelaStr(l.janela_inicio, l.janela_fim)}</span></div>
+          ${chip(l.status)}
+        </div>
+        <div class="lote-when">${f.vencido ? `Venceu ${esc(f.txt)}` : `Fecha ${esc(f.txt)}`}</div>
+        <div class="lote-when-sub">${f.vencido ? 'Fecha no próximo ciclo do Portal, em até 5 minutos.' : 'Fecha sozinho. Pedido que chegar depois vai para o lote seguinte.'}</div>
+        ${statsHtml(l)}
+        ${l.fator !== null && l.fator !== undefined ? `
+          <div class="conta">
+            <span><span class="conta-fator">Fator ${esc(pctDeFator(l.fator))}%</span> <span class="conta-modo">· ${esc(MODO_DESC[l.modo] || l.modo)}</span></span>
+            <span class="conta-sep" aria-hidden="true"></span>
+            <span class="conta-eq">${contaHtml(l.fator, l.modo, espelho)}</span>
+          </div>` : ''}
+        <div class="actions">
+          <button type="button" class="btn btn-secondary" data-fechar="${l.id}">Fechar agora</button>
+          <span class="actions-hint">Gera o pedido espelho na caixa de entrada da ${esc(espelho)}. Não grava no Fire e não reabre.</span>
+        </div>
+        <div class="block-title">Pedidos no lote</div>
+        ${pernasTable(det)}
+        ${previaBlock(det, espelho, l.total_previsto)}
+      </div>`;
+    host.querySelector('[data-fechar]').addEventListener('click', (e) => fecharAgora(l, espelho, e.currentTarget));
+  }
+
+  async function fecharAgora(l, espelho, btn) {
+    const ok = confirm(`Fechar o lote ${l.chave} agora?\n\nO pedido espelho vai para a caixa de entrada da ${espelho}. Lote fechado não reabre; pedido que chegar depois entra no próximo.`);
+    if (!ok) return;
+    clearError();
+    btn.disabled = true; btn.setAttribute('aria-busy', 'true');
+    try {
+      await api(`${API}/${l.id}/fechar`, { method: 'POST' });
+      toast(`Lote ${l.chave} fechado. O pedido espelho está na caixa de entrada da ${espelho}.`);
+      await load();
+    } catch (err) {
+      showError(err.message);
+      btn.disabled = false; btn.removeAttribute('aria-busy');
+    }
+  }
+
+  function renderRecentes(lotes) {
+    const host = $('recentes');
+    if (!lotes.length) { host.innerHTML = '<p class="empty-state">Nenhum lote ainda.</p>'; return; }
+    host.innerHTML = `
+      <div class="table-wrap" style="margin-top:0"><table class="stack">
+        <thead><tr><th>Lote</th><th>Semana</th><th>Situação</th><th>Pedido espelho</th></tr></thead>
+        <tbody>${lotes.map((l) => {
+          const esp = envNome(l.env_espelho_slug);
+          let espelhoCol = '<span class="muted">—</span>';
+          if (l.import_id_espelho) {
+            espelhoCol = `<span class="mono">${esc(l.import_id_espelho)}</span>` + (l.fire_codigo_espelho
+              ? `<span class="sub">Nº ${esc(l.fire_codigo_espelho)} no Fire ${esc(esp)}</span>`
+              : `<span class="sub">Na caixa de entrada da ${esc(esp)}</span>`);
+          }
+          let rastro = '';
+          if (l.status === 'enviado' && l.lote_fiscal_ok === true) rastro = '<span class="rastro-ok">Rastro enviado ao Flow</span>';
+          if (l.status === 'enviado' && l.lote_fiscal_ok === false) rastro = '<span class="erro-motivo">Rastro NÃO enviado ao Flow — ver auditoria</span>';
+          return `
+          <tr>
+            <td class="lote-key" style="font-size:12px;white-space:nowrap" data-label="Lote">${esc(l.chave_lote)}</td>
+            <td class="wrap" style="white-space:nowrap" data-label="Semana">${janelaStr(l.janela_inicio, l.janela_fim)}${l.fator_preco_aplicado ? `<span class="sub">${esc(fatorTxt(l.fator_preco_aplicado, l.modo_preco_aplicado))}</span>` : ''}</td>
+            <td class="wrap" data-label="Situação">${chip(l.status, l)}${rastro}${l.erro_motivo ? `<span class="erro-motivo">${esc(l.erro_motivo)}</span>` : ''}</td>
+            <td class="wrap" data-label="Pedido espelho">${espelhoCol}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>`;
+  }
+
+  // ── Configuração (admin) ────────────────────────────────────────
+  function envOptions(sel) {
+    return envs.map((e) => `<option value="${esc(e.slug)}" ${e.slug === sel ? 'selected' : ''}>${esc(e.name)}</option>`).join('');
+  }
+
+  function renderConfig(cfg) {
+    const c = cfg || { env_origem_slug: '', env_espelho_slug: '', nome_revenda: '', janela: 'semanal', dia_inicio: 0, hora_fechamento: 8, ativo: false };
+    $('config-card').innerHTML = `
+      <div class="card-head">
+        <div>
+          <div class="card-title">Janela e empresas</div>
+          <p class="card-desc">${cfg && cfg.ativo && cfg.ativo_desde ? `Ligado desde ${esc(quando(cfg.ativo_desde))}. Só pedido enviado ao Fire depois disso entra em lote.` : 'Desligado: nenhum pedido entra em lote.'}</p>
+        </div>
+        ${cfg ? (cfg.ativo ? '<span class="chip success">Ligado</span>' : '<span class="chip">Desligado</span>') : '<span class="chip">Sem configuração</span>'}
+      </div>
+      <form id="config-form" novalidate>
+        <div class="form-grid">
+          <label class="field"><span>Revenda (origem)</span><select name="env_origem_slug"><option value="">Escolha…</option>${envOptions(c.env_origem_slug)}</select></label>
+          <label class="field"><span>Fábrica (espelho)</span><select name="env_espelho_slug"><option value="">Escolha…</option>${envOptions(c.env_espelho_slug)}</select></label>
+          <label class="field"><span>Nome da revenda</span><input type="text" name="nome_revenda" maxlength="100" value="${esc(c.nome_revenda)}"><small>Aparece nesta tela e no pedido espelho.</small></label>
+          <label class="field"><span>Janela</span><select name="janela">
+            <option value="semanal" ${c.janela === 'semanal' ? 'selected' : ''}>Semanal</option>
+            <option value="quinzenal" ${c.janela === 'quinzenal' ? 'selected' : ''}>Quinzenal</option>
+          </select><small>Não dá para trocar com um lote aberto que já tem pedidos.</small></label>
+          <label class="field"><span>A janela começa na</span><select name="dia_inicio">${DIAS_PY.map((d, i) => `<option value="${i}" ${i === c.dia_inicio ? 'selected' : ''}>${d}</option>`).join('')}</select></label>
+          <label class="field"><span>Fecha às</span><select name="hora_fechamento">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === c.hora_fechamento ? 'selected' : ''}>${h}h</option>`).join('')}</select><small>No dia seguinte ao fim da janela, hora do servidor.</small></label>
+        </div>
+        <label class="check" style="margin-top:14px"><input type="checkbox" name="ativo" ${c.ativo ? 'checked' : ''}> Lote ligado</label>
+        <div class="actions"><button type="submit" class="btn btn-primary">Salvar configuração</button></div>
+      </form>`;
+    $('config-form').addEventListener('submit', salvarConfig);
+  }
+
+  async function salvarConfig(e) {
+    e.preventDefault();
+    const form = e.currentTarget, fd = new FormData(form);
+    const body = {
+      env_origem_slug: fd.get('env_origem_slug'),
+      env_espelho_slug: fd.get('env_espelho_slug'),
+      nome_revenda: String(fd.get('nome_revenda') || '').trim(),
+      janela: fd.get('janela'),
+      dia_inicio: Number(fd.get('dia_inicio')),
+      hora_fechamento: Number(fd.get('hora_fechamento')),
+      ativo: form.querySelector('[name="ativo"]').checked,
+    };
+    if (!body.env_origem_slug || !body.env_espelho_slug) { showError('Escolha a revenda e a fábrica.'); return; }
+    if (body.env_origem_slug === body.env_espelho_slug) { showError('A fábrica (espelho) tem que ser diferente da revenda.'); return; }
+    if (!body.nome_revenda) { showError('Informe o nome da revenda.'); form.querySelector('[name="nome_revenda"]').focus(); return; }
+    clearError();
+    const btn = form.querySelector('button[type="submit"]');
+    btn.disabled = true; btn.setAttribute('aria-busy', 'true');
+    try {
+      await api(`${API}/config`, { method: 'PUT', body: JSON.stringify(body) });
+      toast('Configuração salva.');
+      await load();
+    } catch (err) {
+      showError(err.message);
+    } finally {
+      btn.disabled = false; btn.removeAttribute('aria-busy');
+    }
+  }
+
+  function renderFatorGlobal(cfg, espelho) {
+    const vig = state.fator_vigente, prox = state.proximo_fator;
+    let vigTxt = vig
+      ? `Vigente: <b>${esc(fatorTxt(vig.fator, vig.modo))}</b> · ${contaHtml(vig.fator, vig.modo, espelho)}.`
+      : '<b>Sem fator vigente.</b> Lote que abrir sem fator fica esperando alguém informar.';
+    if (prox) vigTxt += `<br>A partir de ${esc(diaSemana(prox.vigente_desde))}: <b>${esc(fatorTxt(prox.fator, prox.modo))}</b>.`;
+    $('fator-card').innerHTML = `
+      <div class="card-title">Fator das próximas semanas</div>
+      <p class="card-desc">O fator congela quando o lote abre: valor novo vale a partir da próxima janela, nunca no lote em andamento.</p>
+      <p class="vigencia">${vigTxt}</p>
+      ${cfg ? `
+      <form class="fator-form-global" novalidate>
+        ${fatorFormHtml('global', espelho, vig ? vig.modo : 'desconto')}
+        <div class="actions"><button type="submit" class="btn btn-primary">Salvar fator</button></div>
+      </form>` : '<p class="empty-state" style="margin-top:12px">Salve a configuração acima antes de definir o fator.</p>'}`;
+    const form = $('fator-card').querySelector('.fator-form-global');
+    if (form) bindFatorForm(form, async (fator, modo) => {
+      const r = await api(`${API}/fator`, { method: 'POST', body: JSON.stringify({ env_origem_slug: cfg.env_origem_slug, fator, modo }) });
+      return `Fator salvo. Vale a partir de ${diaSemana(r.vigente_desde)}.`;
+    });
+  }
+
+  // ── Carga ───────────────────────────────────────────────────────
+  async function loadDetalhe(id) {
+    try { detalhes[id] = await api(`${API}/${id}`); }
+    catch (err) { detalhes[id] = { erro: err.message, pernas: [] }; }
+  }
+
+  async function load() {
+    $('page-error').hidden = true;
+    try {
+      state = await api(API);
+    } catch (_) {
+      $('page-loading').hidden = true;
+      $('content').hidden = true;
+      $('page-error').hidden = false;
+      return;
+    }
+    const ids = [...(state.pendentes || []).map((l) => l.id), ...(state.aberto ? [state.aberto.id] : [])];
+    detalhes = {};
+    await Promise.all(ids.map(loadDetalhe));
+    $('page-loading').hidden = true;
+    $('content').hidden = false;
+    render();
+  }
+
+  async function loadEnvs() {
+    try {
+      const r = await fetch('/api/env/list', { credentials: 'same-origin' });
+      if (!r.ok) return;
+      envs = await r.json();
+      envs.forEach((e) => { envNameBySlug[e.slug] = e.name; });
+    } catch (_) { /* sem nomes, cai pro slug */ }
+  }
+
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('[data-action="reload"]')) { $('page-loading').hidden = false; load(); }
+  });
+
+  // Leitura e ações do lote valem pra qualquer usuário logado; a seção de
+  // configuração só aparece pro admin (e a API recusa o resto com 403).
+  async function boot() {
+    try {
+      const r = await fetch('/api/auth/me', { credentials: 'same-origin' });
+      if (r.status === 401) { location.href = '/login'; return; }
+      const data = await r.json();
+      if (!data.user) { location.href = '/login'; return; }
+      isAdmin = data.user.role === 'admin';
+    } catch (_) { isAdmin = false; }
+    await loadEnvs();
+    await load();
+  }
+
+  boot();
+</script>
+</body>
+</html>

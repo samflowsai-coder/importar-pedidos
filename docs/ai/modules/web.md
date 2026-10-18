@@ -338,6 +338,24 @@ env["slug"])`. Fábrica `_persist_ctx(env)`, não uma instância guardada: um
 context manager de `@contextmanager` só entra/sai uma vez, e `reimport_file`
 precisa dele nos dois ramos (sucesso e erro).
 
+## Lote semanal intercompany (wiring web)
+
+Rotas em `app/web/routes_lotes.py`; fechamento em `app/consolidators/fechamento`.
+
+- `GET /lotes` → `lotes.html`. Sessão **válida** exigida (`current_user`, não
+  só cookie presente); sem ela, redirect para `/login`. Item "Lotes" na seção
+  Geral do `shell.js` (operador, não admin).
+- `GET /api/lotes` (`require_user`) → `config`, `fator_vigente`,
+  `proximo_fator`, `aberto`, `pendentes` (`aguardando_fator`), `fora_do_lote`,
+  `recentes` (traz `lote_fiscal_ok` e `erro_motivo`).
+- `GET /api/lotes/{id}` (`require_user`) → lote + `pernas` + `previa`.
+- `PUT /api/lotes/config` e `POST /api/lotes/fator` (`require_admin`; o fator
+  global vale da próxima janela, devolve `vigente_desde`).
+- `POST /api/lotes/{id}/fator` e `POST /api/lotes/{id}/fechar` (`require_user`).
+- A tela recebe o fator em **%** e manda o decimal como string (`"7,5"` →
+  `"0.075"`); a prévia ao vivo refaz `preco_espelho` em BigInt (4 casas, depois
+  2, `ROUND_HALF_UP`) para bater centavo a centavo com o `exemplo` da API.
+
 ## Segurança (não relaxar)
 - Whitelist de extensão: `.pdf`, `.xls`, `.xlsx`.
 - Limite de upload: 50 MB.
