@@ -18,11 +18,13 @@ from decimal import Decimal
 from app.consolidators.janela import chave_para, instante_fechamento
 
 _HORA_PADRAO = 8
-_ABERTOS = ("aberto", "aguardando_fator")
+# "Ainda não fechou": 'erro' entra porque o próximo ciclo tenta de novo (dado
+# corrigido fecha; mesmo problema grava o mesmo motivo). Fechado nunca reabre.
+_ABERTOS = ("aberto", "aguardando_fator", "erro")
 
 
 class LoteFechadoError(Exception):
-    """Operação que só vale em lote aberto/aguardando_fator."""
+    """Operação que só vale em lote ainda não fechado (aberto/aguardando_fator/erro)."""
 
 
 class ChaveDeLoteEmUsoError(Exception):
@@ -94,7 +96,7 @@ def save_config(
         com_perna = conn.execute(
             """
             SELECT 1 FROM intercompany_lote l
-            WHERE l.env_origem_slug = ? AND l.status IN ('aberto','aguardando_fator')
+            WHERE l.env_origem_slug = ? AND l.status IN ('aberto','aguardando_fator','erro')
               AND EXISTS (SELECT 1 FROM intercompany_lote_item i WHERE i.lote_id = l.id)
             LIMIT 1
             """,
@@ -269,13 +271,13 @@ def lote_do_espelho(conn: sqlite3.Connection, import_id: str) -> dict | None:
 
 
 def lotes_vencidos(conn: sqlite3.Connection, agora: datetime) -> list[dict]:
-    """Abertos/aguardando_fator cujo instante de fechamento já passou."""
+    """Não fechados (aberto/aguardando_fator/erro) cujo instante de fechamento já passou."""
     rows = _fetch_all(
         conn,
         """
         SELECT l.*, c.hora_fechamento AS _hora FROM intercompany_lote l
         LEFT JOIN lote_config c ON c.env_origem_slug = l.env_origem_slug
-        WHERE l.status IN ('aberto','aguardando_fator')
+        WHERE l.status IN ('aberto','aguardando_fator','erro')
         ORDER BY l.janela_inicio, l.id
         """,
     )
@@ -330,7 +332,7 @@ def anexar_perna(
             razao_cliente_final, created_at)
         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
         WHERE EXISTS (SELECT 1 FROM intercompany_lote
-                      WHERE id = ? AND status IN ('aberto','aguardando_fator'))
+                      WHERE id = ? AND status IN ('aberto','aguardando_fator','erro'))
         """,
         (
             lote_id,
@@ -363,7 +365,8 @@ def pernas_do_lote(conn: sqlite3.Connection, lote_id: int) -> list[dict]:
 
 def marcar_aguardando_fator(conn: sqlite3.Connection, lote_id: int) -> None:
     conn.execute(
-        "UPDATE intercompany_lote SET status = 'aguardando_fator' WHERE id = ? AND status = 'aberto'",
+        "UPDATE intercompany_lote SET status = 'aguardando_fator' "
+        "WHERE id = ? AND status IN ('aberto','erro')",
         (lote_id,),
     )
 
@@ -382,7 +385,7 @@ def informar_fator(
         UPDATE intercompany_lote
         SET fator_preco_aplicado = ?, modo_preco_aplicado = ?, fator_informado_por = ?,
             fator_informado_em = ?, status = 'aberto'
-        WHERE id = ? AND status IN ('aberto','aguardando_fator')
+        WHERE id = ? AND status IN ('aberto','aguardando_fator','erro')
         """,
         (str(fator), modo, por, _ts(agora), lote_id),
     )
@@ -407,8 +410,8 @@ def fechar(
         """
         UPDATE intercompany_lote
         SET status = 'fechado', import_id_espelho = ?, composicao_json = ?,
-            closed_at = ?, closed_by = ?
-        WHERE id = ? AND status IN ('aberto','aguardando_fator')
+            closed_at = ?, closed_by = ?, erro_motivo = NULL
+        WHERE id = ? AND status IN ('aberto','aguardando_fator','erro')
           AND fator_preco_aplicado IS NOT NULL
           AND (SELECT COUNT(*) FROM intercompany_lote_item
                WHERE lote_id = intercompany_lote.id) = ?

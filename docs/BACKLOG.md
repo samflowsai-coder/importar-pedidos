@@ -282,6 +282,21 @@ Itens abaixo foram vistos nas revisões e deixados de fora de propósito; nenhum
 - Arquivo todo pendente conta como comparado na cobertura.
 - Cobertura da Nasmar insuficiente na regressão de 20/10 (48 arquivos sem pedido no Fire na janela de 72h): repetir com cópia mais nova antes de ligar a Nasmar.
 
+### 2.21 Lote: `fora_do_lote` some na semana seguinte
+A tela só mede a janela corrente: na segunda, a lista do que precisa ser faturado à mão na
+MM (pedido da Nasmar que entrou no Fire por fora do portal) desaparece. Gravar a lista no
+lote no fechamento e mostrá-la no lote fechado.
+
+### 2.22 Lote: `lote_fiscal_ok = 0` sem caminho de reenvio do rastro
+Falha no `lote_fiscal` do SP1 fica visível na tela ("Rastro NÃO enviado"), mas não há
+como reenviar. Botão "reenviar rastro" que remonta as pernas a partir da `composicao` do
+lote + `erp_item_vinculo`.
+
+### 2.23 Lote: dois envios simultâneos do mesmo espelho e a reserva do SP1
+A reserva é por `chave_lote`: dois "Cadastrar no Fire" concorrentes do mesmo espelho podem
+apagar a reserva do primeiro (sai `lote_fiscal_ok = 0`, visível). Desabilitar o botão
+durante o envio.
+
 ---
 
 ## 3. Bloqueado em terceiros
@@ -333,6 +348,11 @@ O Fire copia `PEDIDO_CLIENTE` pro xPed da NF-e (15 chars). Pedido sem ordem de c
 passa a sair com `SN-6CF05353` ali, onde hoje já saem `NASMAR`, `STUDIO Z`, nome de loja.
 Confirmar com o Elias (fiscal MM) antes de subir o pacote.
 
+### 3.8 Lote intercompany: portão antes de ligar em produção
+O espelho (preço × 0,93) passa pelo `is_blocking` atual, que dá divergência de preço contra
+`PRECO_VENDA` do Fire e bloqueia o envio. Depende da trava por tabela/rede (outra sessão,
+`feat/tabela-preco-por-rede`) com a isenção intercompany.
+
 ---
 
 ## 4. Decisões pendentes (aguardam o Samuel)
@@ -382,6 +402,11 @@ num caminho que decide se pedido entra ou não, então spec antes de plano.
 - Troca do `preco_trava_modo` só vai pro loguru; falta trilha consultável de quem ligou a trava.
 - Item com vínculo de-para para SEQ diferente do casamento direto (A/B) sai `unidade_divergente` em `ligado` (a unidade do check é a de A); ler a `UNIDADE` do SEQ do vínculo via `find_products_by_seqs_sql` no check ao vivo do portão para o caso A/B parar de bloquear.
 - Paridade do worker docker: `python -m app.worker` não roda `precos.rodar` (sync da tabela, envio, decisões, retenção da trava); só a thread `flowpcp-envio` do processo web. Fora de escopo de propósito: no cliente roda o `ui.py`, onde a thread já existe. Só vira pendência se o deploy docker for usado com a trava ligada.
+
+### 4.4 Lote retroativo
+Perna importada numa semana sem lote e enviada ao Fire semanas depois abre o lote daquela
+janela, já vencida, que fecha no ciclo seguinte com 1 perna. Fiscalmente correto,
+operacionalmente estranho. **Decisão de produto:** aceitar, ou mandar para o lote corrente.
 
 ---
 

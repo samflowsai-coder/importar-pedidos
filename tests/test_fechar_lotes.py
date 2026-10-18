@@ -482,12 +482,12 @@ def test_varredura_sem_vinculo_anexa_com_itens_vazios(portal_lote_com_perna):
     assert {p["import_id"]: p["itens_fire"] for p in pernas}["N2"] == []
 
 
-def test_varredura_ignora_parsed_found_in_fire_e_anterior_ao_primeiro_lote(
+def test_varredura_ignora_parsed_found_in_fire_e_anterior_a_ativacao(
     portal_lote_com_perna,
 ):
     _grava("nasmar", "P1")  # parsed, nunca foi ao Fire
     _grava("nasmar", "F1", portal_status="found_in_fire", fire_codigo=1170)
-    _enviada_sem_lote("V1", fire=1171, sent="2026-08-10T09:00:00")  # antes do 1º lote
+    _enviada_sem_lote("V1", fire=1171, sent="2026-07-30T09:00:00")  # antes da ativação
 
     r = fechamento.fechar_vencidos(agora=SEGUNDA_8H)
 
@@ -559,7 +559,9 @@ def _pernas_de(lote_id: int) -> list[str]:
 def test_varredura_ativacao_no_meio_da_semana_nao_puxa_envios_anteriores(
     portal_lote_com_perna,
 ):
-    """1ª perna anexada em 20/08 10h; envio de 19/08 (mesma janela) é anterior à ativação."""
+    """Lote religado em 20/08 9h; envio de 19/08 (mesma janela) é anterior à ativação."""
+    _salvar_config(ativo=False, agora=datetime(2026, 8, 20, 8, 0))
+    _salvar_config(ativo=True, agora=datetime(2026, 8, 20, 9, 0))
     _enviada_sem_lote("PRE", fire=1001, sent="2026-08-19T09:00:00")
 
     r = fechamento.fechar_vencidos(agora=SEGUNDA_8H)
@@ -568,10 +570,49 @@ def test_varredura_ativacao_no_meio_da_semana_nao_puxa_envios_anteriores(
     assert _pernas_de(portal_lote_com_perna["lote_id"]) == ["N1"]
 
 
+def test_varredura_recupera_envio_depois_da_ativacao_mesmo_com_perna_posterior_anexada(
+    portal_lote_com_perna,
+):
+    """Ativado em 01/08; o anexo do envio de 19/08 falhou e a perna N1 (20/08 10h)
+    anexou depois. O piso é a ativação, não a 1ª perna anexada: PRE volta."""
+    _enviada_sem_lote("PRE", fire=1001, sent="2026-08-19T09:00:00")
+
+    r = fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+
+    assert r["recuperadas"] == 1
+    assert _pernas_de(portal_lote_com_perna["lote_id"]) == ["N1", "PRE"]
+
+
+def test_varredura_sem_ativo_desde_usa_a_primeira_perna_como_piso(portal_lote_com_perna):
+    """Config sem o carimbo (build antigo): o piso cai na 1ª perna anexada (20/08 10h)."""
+    with router.shared_connect() as conn:
+        conn.execute("UPDATE lote_config SET ativo_desde = NULL")
+    _enviada_sem_lote("PRE", fire=1001, sent="2026-08-19T09:00:00")
+    _enviada_sem_lote("POS", fire=1002, sent="2026-08-21T09:00:00")
+
+    r = fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+
+    assert r["recuperadas"] == 1
+    assert _pernas_de(portal_lote_com_perna["lote_id"]) == ["N1", "POS"]
+
+
+def test_fechar_agora_por_pessoa_roda_a_varredura_antes(portal_lote_com_perna):
+    _enviada_sem_lote("N2", fire=1160)
+
+    r = fechamento.fechar_lote(
+        portal_lote_com_perna["lote_id"], por="operador@mm", agora=SEGUNDA_8H
+    )
+
+    assert r["resultado"] == "fechado"
+    assert _pernas_de(portal_lote_com_perna["lote_id"]) == ["N1", "N2"]
+    composicao = _lote(portal_lote_com_perna["lote_id"])["composicao"]
+    assert {o["import_id"] for linha in composicao for o in linha} == {"N1", "N2"}
+
+
 def test_varredura_lote_de_backlog_nao_recua_o_piso(portal_lote_com_perna):
     """Pedido de backlog (importado em 01/07) cria lote na S27; o piso continua
-    sendo a 1ª perna anexada, não o início da janela mais antiga."""
-    _enviada_sem_lote("PRE", fire=1001, sent="2026-08-05T09:00:00")
+    sendo a ativação (01/08), não o início da janela mais antiga."""
+    _enviada_sem_lote("PRE", fire=1001, sent="2026-07-30T09:00:00")
     _grava("nasmar", "OLD", imported_at="2026-07-01T10:00:00")
     order = Order(header=OrderHeader(order_number="OLD"), items=[])
     res = FirebirdExportResult(order_number="OLD", items_inserted=1, fire_codigo=1002)
@@ -672,3 +713,115 @@ def test_varredura_ignora_espelho_enviado_da_propria_origem(portal_lote_com_pern
             for p in lotes_repo.pernas_do_lote(conn, portal_lote_com_perna["lote_id"])
         }
     assert "lote-NAS-2026-S33" not in ids
+
+
+# --- lote em 'erro' tenta de novo a cada ciclo ------------------------------------
+
+
+def test_lote_em_erro_por_falta_de_config_fecha_depois_de_corrigido(portal_lote_com_perna):
+    lote_id = portal_lote_com_perna["lote_id"]
+    with router.shared_connect() as conn:
+        conn.execute("DELETE FROM lote_config")
+
+    r = fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+    assert r["erros"] == 1
+    assert _lote(lote_id)["status"] == "erro"
+    motivo = _lote(lote_id)["erro_motivo"]
+    assert "lote_config" in motivo
+
+    # mesmo problema: tenta de novo e grava o mesmo motivo
+    r = fechamento.fechar_vencidos(agora=datetime(2026, 8, 24, 8, 5))
+    assert r["erros"] == 1
+    assert _lote(lote_id)["status"] == "erro"
+    assert _lote(lote_id)["erro_motivo"] == motivo
+
+    _config(ativo=True)
+    r = fechamento.fechar_vencidos(agora=datetime(2026, 8, 24, 8, 10))
+
+    assert r["fechados"] == 1
+    lote = _lote(lote_id)
+    assert lote["status"] == "fechado"
+    assert lote["erro_motivo"] is None
+    assert [i["id"] for i in _imports("mm")] == ["lote-NAS-2026-S34"]
+
+
+def test_lote_em_erro_por_ambiente_espelho_ausente_fecha_depois_de_corrigido(
+    portal_lote_com_perna,
+):
+    lote_id = portal_lote_com_perna["lote_id"]
+    with router.shared_connect() as conn:
+        conn.execute(
+            "UPDATE intercompany_lote SET env_espelho_slug = 'xx' WHERE id = ?", (lote_id,)
+        )
+    assert fechamento.fechar_vencidos(agora=SEGUNDA_8H)["erros"] == 1
+    assert _lote(lote_id)["status"] == "erro"
+
+    with router.shared_connect() as conn:
+        conn.execute(
+            "UPDATE intercompany_lote SET env_espelho_slug = 'mm' WHERE id = ?", (lote_id,)
+        )
+    assert fechamento.fechar_vencidos(agora=datetime(2026, 8, 24, 8, 5))["fechados"] == 1
+    assert _lote(lote_id)["status"] == "fechado"
+
+
+def test_perna_anexa_em_lote_em_erro(portal_lote_com_perna):
+    lote_id = portal_lote_com_perna["lote_id"]
+    with router.shared_connect() as conn:
+        lotes_repo.marcar_erro(conn, lote_id=lote_id, motivo="x", agora=SEGUNDA_8H)
+    _grava("nasmar", "N9", imported_at="2026-08-21T15:00:00")
+    order = Order(header=OrderHeader(order_number="N9"), items=[])
+    result = FirebirdExportResult(order_number="N9", items_inserted=1, fire_codigo=1190)
+
+    novo_id = integracao.anexar_perna_de_origem(
+        "N9",
+        {"imported_at": "2026-08-21T15:00:00"},
+        order,
+        result,
+        {"slug": "nasmar"},
+        agora=datetime(2026, 8, 21, 16, 0),
+    )
+
+    assert novo_id == lote_id
+    assert _pernas_de(lote_id) == ["N1", "N9"]
+
+
+# --- reparo: espelho que já foi ao Fire -------------------------------------------
+
+
+def _espelho_no_fire(fire: int) -> None:
+    with router.env_connect("mm") as conn:
+        conn.execute(
+            "UPDATE imports SET portal_status = 'sent_to_fire', fire_codigo = ?, "
+            "sent_to_fire_at = '2026-08-24T09:00:00' WHERE id = 'lote-NAS-2026-S34'",
+            (fire,),
+        )
+
+
+def test_reparo_marca_enviado_o_espelho_que_ja_foi_ao_fire_com_rastro(portal_lote_com_perna):
+    fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+    _espelho_no_fire(5083)
+    with router.env_connect("mm") as conn:
+        conn.execute(
+            "INSERT INTO erp_lote_perna (base_origem, erp_item_codigo_origem, erp_codigo_origem, "
+            "chave_lote, produto_produtor, quantidade, linha_lote, criado_em) "
+            "VALUES ('nasmar', 9001, 1157, 'NAS-2026-S34', 77, '2', 900011, 't')"
+        )
+
+    fechamento.fechar_vencidos(agora=datetime(2026, 8, 24, 9, 5))
+
+    lote = _lote(portal_lote_com_perna["lote_id"])
+    assert lote["status"] == "enviado"
+    assert lote["fire_codigo_espelho"] == 5083
+    assert lote["lote_fiscal_ok"] is True
+
+
+def test_reparo_marca_enviado_sem_rastro_com_lote_fiscal_ok_falso(portal_lote_com_perna):
+    fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+    _espelho_no_fire(5084)
+
+    fechamento.fechar_vencidos(agora=datetime(2026, 8, 24, 9, 5))
+
+    lote = _lote(portal_lote_com_perna["lote_id"])
+    assert lote["status"] == "enviado"
+    assert lote["fire_codigo_espelho"] == 5084
+    assert lote["lote_fiscal_ok"] is False

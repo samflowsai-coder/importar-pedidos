@@ -159,6 +159,33 @@ def _previa(lote: dict) -> list[dict] | None:
     ]
 
 
+def _marcar_espelho_existe(lotes: list[dict]) -> None:
+    """`espelho_existe` = a linha `import_id_espelho` está no ambiente espelho.
+    Fechado sem ela = aguardando o reparo criar o pedido. Ambiente ilegível = False."""
+    por_env: dict[str, set[str]] = {}
+    for lt in lotes:
+        if lt.get("import_id_espelho"):
+            por_env.setdefault(lt["env_espelho_slug"], set()).add(lt["import_id_espelho"])
+    existentes: set[tuple[str, str]] = set()
+    for slug, ids in por_env.items():
+        env = environments_repo.get_by_slug(slug)
+        if env is None:
+            continue
+        try:
+            with env_context.active_env(env["id"], env["slug"]), db.connect() as econn:
+                marcas = ",".join("?" * len(ids))
+                rows = econn.execute(
+                    f"SELECT id FROM imports WHERE id IN ({marcas})",  # só placeholders
+                    tuple(ids),
+                ).fetchall()
+        except Exception as exc:  # noqa: BLE001 — tela degrada, não cai
+            logger.warning(f"lotes: espelhos de {slug} ilegíveis: {type(exc).__name__}")
+            continue
+        existentes |= {(slug, r[0]) for r in rows}
+    for lt in lotes:
+        lt["espelho_existe"] = (lt["env_espelho_slug"], lt.get("import_id_espelho")) in existentes
+
+
 def _resumo_aberto(lote: dict, cfg: dict, pernas: list[dict]) -> dict:
     previa = _previa(lote)
     total = None
@@ -184,6 +211,7 @@ def _resumo_aberto(lote: dict, cfg: dict, pernas: list[dict]) -> dict:
         "total_previsto": total,
         "fator": lote["fator_preco_aplicado"],
         "modo": lote["modo_preco_aplicado"],
+        "espelho_existe": lote.get("espelho_existe", False),
     }
 
 
@@ -246,6 +274,7 @@ def get_lotes(_=Depends(require_user)):
     with db_router.shared_connect() as conn:
         cfg = _config_da_tela(conn)
         recentes = lotes_repo.listar(conn, limite=20)
+        _marcar_espelho_existe(recentes)
         out: dict[str, Any] = {
             "config": cfg,
             "fator_vigente": None,

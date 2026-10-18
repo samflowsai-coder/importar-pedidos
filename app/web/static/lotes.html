@@ -678,7 +678,9 @@
           if (l.import_id_espelho) {
             espelhoCol = `<span class="mono">${esc(l.import_id_espelho)}</span>` + (l.fire_codigo_espelho
               ? `<span class="sub">Nº ${esc(l.fire_codigo_espelho)} no Fire ${esc(esp)}</span>`
-              : `<span class="sub">Na caixa de entrada da ${esc(esp)}</span>`);
+              : l.espelho_existe
+                ? `<span class="sub">Na caixa de entrada da ${esc(esp)}</span>`
+                : `<span class="sub">Aguardando criação do pedido na ${esc(esp)}</span>`);
           }
           let rastro = '';
           if (l.status === 'enviado' && l.lote_fiscal_ok === true) rastro = '<span class="rastro-ok">Rastro enviado ao Flow</span>';

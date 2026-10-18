@@ -356,3 +356,85 @@ def test_ativo_desde_grava_na_ativacao_e_mantem_se_segue_ativo(conn):
 
 def test_ativo_desde_de_config_nascida_desligada_e_none(conn):
     assert _config(conn, ativo=False)["ativo_desde"] is None
+
+
+# --- lote em 'erro' não está fechado: o próximo ciclo tenta de novo -------------
+
+
+def _em_erro(conn, inicio=date(2026, 8, 17)):
+    lote = _lote(conn, inicio)
+    lotes_repo.marcar_erro(conn, lote_id=lote["id"], motivo="sem lote_config", agora=AGORA)
+    return lote
+
+
+def test_lote_em_erro_aceita_perna(conn):
+    _fator(conn)
+    lote = _em_erro(conn)
+    _perna(conn, lote["id"])
+    assert [p["import_id"] for p in lotes_repo.pernas_do_lote(conn, lote["id"])] == ["imp-1"]
+
+
+def test_lote_em_erro_entra_nos_vencidos(conn):
+    _fator(conn)
+    lote = _em_erro(conn)
+    v = lotes_repo.lotes_vencidos(conn, datetime(2026, 8, 24, 8, 0))
+    assert [x["id"] for x in v] == [lote["id"]]
+
+
+def test_lote_em_erro_fecha_e_limpa_o_motivo(conn):
+    _fator(conn)
+    lote = _em_erro(conn)
+    assert _fechar(conn, lote["id"]) is True
+    g = lotes_repo.get(conn, lote["id"])
+    assert g["status"] == "fechado" and g["erro_motivo"] is None
+
+
+def test_lote_em_erro_aceita_fator(conn):
+    lote = _em_erro(conn)
+    g = lotes_repo.informar_fator(
+        conn, lote_id=lote["id"], fator=Decimal("0.07"), modo="desconto", por="s", agora=AGORA
+    )
+    assert g["status"] == "aberto" and g["fator_preco_aplicado"] == "0.07"
+
+
+def test_trocar_janela_com_lote_em_erro_com_perna_levanta(conn):
+    _config(conn)
+    lote = _em_erro(conn)
+    _perna(conn, lote["id"])
+    with pytest.raises(lotes_repo.JanelaComLoteAbertoError):
+        _config(conn, janela="quinzenal")
+
+
+# --- migração de coluna ------------------------------------------------------------
+
+
+def test_ativo_desde_entra_por_migracao_em_banco_antigo(tmp_path, monkeypatch):
+    """Banco compartilhado criado por um build anterior da branch, sem `ativo_desde`."""
+    from app.persistence import router
+
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    router.reset_init_cache()
+    legado = sqlite3.connect(router.shared_db_path())
+    legado.executescript(
+        """
+        CREATE TABLE lote_config (
+            env_origem_slug  TEXT PRIMARY KEY,
+            env_espelho_slug TEXT NOT NULL,
+            cnpj_revenda     TEXT NOT NULL,
+            nome_revenda     TEXT NOT NULL,
+            janela           TEXT NOT NULL DEFAULT 'semanal',
+            dia_inicio       INTEGER NOT NULL DEFAULT 0,
+            hora_fechamento  INTEGER NOT NULL DEFAULT 8,
+            ativo            INTEGER NOT NULL DEFAULT 0,
+            alterado_por     TEXT,
+            created_at       TEXT NOT NULL,
+            updated_at       TEXT NOT NULL
+        );
+        """
+    )
+    legado.close()
+
+    with router.shared_connect() as c:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(lote_config)")}
+    assert "ativo_desde" in cols
+    router.reset_init_cache()

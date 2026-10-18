@@ -467,3 +467,24 @@ def test_pagina_lotes_com_sessao_invalida_vai_para_o_login(real_client, real_aut
     r = real_client.get("/lotes", follow_redirects=False)
     assert r.status_code in (302, 303, 307)
     assert r.headers["location"] == "/login"
+
+
+def test_recentes_dizem_se_o_espelho_existe_no_ambiente_espelho(lote_com_pernas):
+    c = lote_com_pernas["client"]
+    assert c.post(f"/api/lotes/{lote_com_pernas['lote_id']}/fechar").status_code == 200
+    (lt,) = c.get("/api/lotes").json()["recentes"]
+    assert lt["espelho_existe"] is True
+
+    with router.env_connect("mm") as conn:
+        conn.execute("DELETE FROM imports WHERE id = ?", (lt["import_id_espelho"],))
+    (lt,) = c.get("/api/lotes").json()["recentes"]
+    assert lt["espelho_existe"] is False
+
+
+def test_lote_sem_espelho_e_pendente_dizem_espelho_existe_falso(lote_sem_fator):
+    c = lote_sem_fator["client"]
+    with router.shared_connect() as conn:
+        lotes_repo.marcar_aguardando_fator(conn, lote_sem_fator["lote_id"])
+    body = c.get("/api/lotes").json()
+    assert body["recentes"][0]["espelho_existe"] is False
+    assert body["pendentes"][0]["espelho_existe"] is False

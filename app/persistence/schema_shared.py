@@ -442,4 +442,8 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # porque `roteamento_pendencia` já existia sem esta coluna antes do fix.
     ("roteamento_pendencia", "motivo",
      "ALTER TABLE roteamento_pendencia ADD COLUMN motivo TEXT"),
+    # Piso da varredura de recuperação do lote. Migração porque `lote_config`
+    # já existia sem a coluna em bancos de builds anteriores da branch.
+    ("lote_config", "ativo_desde",
+     "ALTER TABLE lote_config ADD COLUMN ativo_desde TEXT"),
 )

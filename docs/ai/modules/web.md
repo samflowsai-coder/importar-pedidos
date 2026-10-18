@@ -347,7 +347,8 @@ Rotas em `app/web/routes_lotes.py`; fechamento em `app/consolidators/fechamento`
   Geral do `shell.js` (operador, não admin).
 - `GET /api/lotes` (`require_user`) → `config`, `fator_vigente`,
   `proximo_fator`, `aberto`, `pendentes` (`aguardando_fator`), `fora_do_lote`,
-  `recentes` (traz `lote_fiscal_ok` e `erro_motivo`).
+  `recentes` (traz `lote_fiscal_ok`, `erro_motivo` e `espelho_existe`: a linha
+  do espelho está no ambiente espelho; `pendentes` também trazem o campo).
 - `GET /api/lotes/{id}` (`require_user`) → lote + `pernas` + `previa`.
 - `PUT /api/lotes/config` e `POST /api/lotes/fator` (`require_admin`; o fator
   global vale da próxima janela, devolve `vigente_desde`).

@@ -82,15 +82,24 @@ Tomadas na execução:
   tenta no próximo ciclo) e só depois cria a linha `lote-<chave>` no MM. Se a
   escrita no MM falhar, `_reparar_espelhos` refaz a cada ciclo (idempotente; não
   sobrescreve edição feita na revisão). Espelho órfão é impossível por construção.
-- **Varredura de recuperação.** Antes de fechar, para cada config ativa, pernas da
+  Lote `fechado` cujo espelho já tem `fire_codigo` no MM (a conclusão do envio não
+  marcou) vira `enviado` no reparo, com `lote_fiscal_ok` = há `erp_lote_perna` da
+  chave no banco do MM.
+- **`erro` não é fechado.** `lotes_vencidos`, `fechar`, `informar_fator`,
+  `anexar_perna` e `_fechar_lote` tratam `erro` como ainda aberto: cada ciclo tenta
+  de novo; dado corrigido fecha (e limpa `erro_motivo`), mesmo problema grava o
+  mesmo motivo. Perna nova ainda anexa em lote `erro`.
+- **Varredura de recuperação.** Antes de fechar (no ciclo, e no "fechar agora" de
+  uma pessoa para a config do lote), para cada config ativa, pernas da
   origem enviadas ao Fire pelo Portal (`sent_to_fire`, com `fire_codigo`) que não
   estão em lote nenhum são anexadas pela mesma regra (`anexar_na_janela`). Os
   `itens_fire` vêm de `erp_item_vinculo` (`origem='insert'`); sem vínculo, anexa
   com `[]` e o `lote_fiscal` dessa perna falha de forma visível.
-- **Piso da varredura** = o mais recente entre a 1ª anexação real
-  (`MIN(intercompany_lote_item.created_at)`) e `lote_config.ativo_desde` (carimbado
-  quando `ativo` vira 0→1; desligar não apaga). Envio feito com o lote desligado
-  não entra. Carência de 10 min em `sent_to_fire_at` para não disputar com o
+- **Piso da varredura** = `lote_config.ativo_desde` (carimbado quando `ativo` vira
+  0→1; desligar não apaga). Envio feito com o lote desligado não entra. Não é o
+  máximo com a 1ª anexação: toda perna anexa depois da ativação, e um anexo que
+  falhou logo após ligar ficaria abaixo do piso para sempre. Config sem o carimbo
+  cai na 1ª anexação real (`MIN(intercompany_lote_item.created_at)`). Carência de 10 min em `sent_to_fire_at` para não disputar com o
   request path.
 - **Espelho nunca é perna** (anexo e varredura pulam imports que são espelho) e a
   API recusa config com origem = espelho.
@@ -108,7 +117,8 @@ Tomadas na execução:
   maior id.
 - **`intercompany_lote`** — um por janela, `chave_lote` UNIQUE
   (`NAS-2026-S34` / `NAS-2026-Q17`, ≤ 20 caracteres, vai em `PEDIDO_CLIENTE`).
-  Status `aberto → (aguardando_fator) → fechado → enviado`, ou `erro`. Guarda
+  Status `aberto → (aguardando_fator) → fechado → enviado`, ou `erro` (não
+  fechado: o próximo ciclo tenta de novo). Guarda
   fator/modo congelados, `import_id_espelho` (`lote-<chave>`), `composicao_json`,
   `fire_codigo_espelho`, `lote_fiscal_ok`, `erro_motivo`.
 - **`intercompany_lote_item`** — as pernas: `fire_codigo_origem`,
@@ -148,8 +158,8 @@ Tomadas na execução:
   (`lote_invalido`) sem orientação ao operador na tela.
 - **Exceção em `concluir_envio_espelho` antes de `marcar_enviado`** deixa o lote
   `fechado` com o espelho já no Fire: auditado (`lote_fiscal_falhou`), correção manual.
-- **`app_shared.db` de dev criado antes de `ativo_desde`** precisa ser recriado
-  (tabela nova, sem migration).
+- **`app_shared.db` de dev criado antes de `ativo_desde`** ganha a coluna pela
+  `COLUMN_MIGRATIONS` de `schema_shared.py`.
 
 ## Testes
 

@@ -35,7 +35,8 @@ from app.state import EventSource, LifecycleEvent, transition
 from app.utils.logger import logger
 
 INTERVALO_S = 300.0
-_ABERTOS = ("aberto", "aguardando_fator")
+# 'erro' não é fechado: cada ciclo tenta de novo (dado corrigido fecha).
+_ABERTOS = ("aberto", "aguardando_fator", "erro")
 _FECHADOS = ("fechado", "enviado")
 _CARENCIA = timedelta(minutes=10)
 # Serializa a thread e o botão "fechar agora" dentro do processo. Reentrante
@@ -62,10 +63,24 @@ def _resultado(
 
 def fechar_lote(lote_id: int, *, por: str, agora: datetime | None = None) -> dict:
     """Fecha um lote. Erro de dado vira `erro` com o lote marcado; falha de
-    infraestrutura (SQLite) propaga e o próximo ciclo tenta de novo."""
+    infraestrutura (SQLite) propaga e o próximo ciclo tenta de novo.
+
+    Fechado por uma pessoa ("fechar agora", `por != "sistema"`): roda antes a
+    varredura de recuperação da config do lote, como o ciclo faz."""
     agora = agora or datetime.now()
     with _LOCK:
+        if por != "sistema":
+            _recuperar_do_lote(lote_id, agora)
         return _fechar_lote(lote_id, por=por, agora=agora)
+
+
+def _recuperar_do_lote(lote_id: int, agora: datetime) -> int:
+    with db.connect_shared() as conn:
+        lote = lotes_repo.get(conn, lote_id)
+        cfg = lotes_repo.get_config(conn, lote["env_origem_slug"]) if lote else None
+    if cfg is None or not cfg["ativo"]:
+        return 0
+    return _recuperar(cfg, agora)
 
 
 def _fechar_lote(lote_id: int, *, por: str, agora: datetime) -> dict:
@@ -306,17 +321,20 @@ def _recuperar(cfg: dict, agora: datetime) -> int:
     slug = cfg["env_origem_slug"]
     try:
         with db.connect_shared() as conn:
-            # Piso = o mais recente entre a 1ª perna anexada de verdade (não o início
-            # da janela mais antiga: backlog recuaria o piso) e o último religamento
-            # do lote (envio feito com o lote desligado não entra).
-            primeira = conn.execute(
-                "SELECT MIN(created_at) FROM intercompany_lote_item WHERE env_origem_slug = ?",
-                (slug,),
-            ).fetchone()[0]
-            pisos = [p for p in (primeira, cfg.get("ativo_desde")) if p]
-            if not pisos:
+            # Piso = o último religamento do lote (envio feito com o lote desligado
+            # não entra). Não o máximo com a 1ª perna anexada: toda perna anexa
+            # depois da ativação, e o anexo que falhou logo após ligar ficaria
+            # abaixo do piso para sempre. A 1ª perna anexada (não o início da
+            # janela mais antiga: backlog recuaria o piso) só vale para config
+            # sem o carimbo.
+            desde = cfg.get("ativo_desde")
+            if not desde:
+                desde = conn.execute(
+                    "SELECT MIN(created_at) FROM intercompany_lote_item WHERE env_origem_slug = ?",
+                    (slug,),
+                ).fetchone()[0]
+            if not desde:
                 return 0
-            desde = max(pisos)
             no_lote = {
                 r[0]
                 for r in conn.execute(
@@ -451,8 +469,46 @@ def fechar_vencidos(agora: datetime | None = None) -> dict:
     return out
 
 
+def _enviado_por_fora(lote: dict, agora: datetime) -> bool:
+    """Lote `fechado` cujo espelho já está no Fire (a conclusão do envio não marcou
+    o lote): marca `enviado`, com `lote_fiscal_ok` = o rastro do SP1 existe."""
+    import_id = lote.get("import_id_espelho")
+    env = environments_repo.get_by_slug(lote["env_espelho_slug"])
+    if env is None or not import_id:
+        return False
+    with env_context.active_env(env["id"], env["slug"]), db.connect() as conn:
+        row = conn.execute(
+            "SELECT fire_codigo FROM imports WHERE id = ? AND fire_codigo IS NOT NULL",
+            (import_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        rastro = (
+            conn.execute(
+                "SELECT 1 FROM erp_lote_perna WHERE chave_lote = ? LIMIT 1",
+                (lote["chave_lote"],),
+            ).fetchone()
+            is not None
+        )
+    with db.connect_shared() as conn:
+        marcou = lotes_repo.marcar_enviado(
+            conn,
+            lote_id=lote["id"],
+            fire_codigo_espelho=int(row[0]),
+            lote_fiscal_ok=rastro,
+            agora=agora,
+        )
+    if marcou:
+        logger.warning(
+            f"lote: {lote['chave_lote']} já estava no Fire (nº {row[0]}): marcado enviado "
+            f"no reparo, rastro {'ok' if rastro else 'ausente'}"
+        )
+    return marcou
+
+
 def _reparar_espelhos(agora: datetime, *, ja_fechados: set[int]) -> int:
-    """Lote `fechado` sem a linha do espelho (ou sem o evento `imported`) no MM."""
+    """Lote `fechado` sem a linha do espelho (ou sem o evento `imported`) no MM;
+    espelho que já foi ao Fire marca o lote `enviado`."""
     with db.connect_shared() as conn:
         fechados = [
             lotes_repo.get(conn, r[0])
@@ -464,6 +520,8 @@ def _reparar_espelhos(agora: datetime, *, ja_fechados: set[int]) -> int:
     feitos = 0
     for lote in fechados:
         try:
+            if _enviado_por_fora(lote, agora):
+                continue
             if materializar_espelho(lote, agora=agora):
                 feitos += 1
                 logger.warning(f"lote: espelho {lote['import_id_espelho']} materializado no reparo")
