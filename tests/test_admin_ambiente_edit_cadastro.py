@@ -53,7 +53,7 @@ def _bloco_js() -> str:
         "volta-n-incertos",
         "volta-n-sem-volta",
         "volta-n-aguardando",
-        "Órfãos: produto gravado no Fire que o Flow não vinculou. Avise a área de cadastro com o código.",
+        "Órfãos: produto criado no Fire que o Flow não vinculou. Avise a área de cadastro com o código.",
         "Incertos: cadastro interrompido sem prova do que aconteceu. Confira no Fire antes de qualquer ação.",
         "Sem volta: gravado no Fire, resultado ainda não aceito pelo Flow. O Portal reenvia sozinho.",
         "Aguardando outro modo: ",

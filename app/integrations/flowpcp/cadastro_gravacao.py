@@ -109,13 +109,37 @@ def _resposta(status_http: int | None, corpo: dict | None) -> str:
     return str(status_http)
 
 
+def _orfao_ou_superado(lote: _Lote, cid: str, versao: int, corpo_resposta) -> tuple:
+    """409 de um `gravado`: órfão só se o Portal CRIOU o produto (contrato §5). Decide
+    pela `acao` que o livro guardou (o que o Portal fez de fato): em `atualizar`/`inativar`
+    o produto já existia no ERP e o 409 fecha como `superado`."""
+    linha = repo.buscar(lote.env_conn, cid, versao)
+    if (linha or {}).get("acao") not in ("atualizar", "inativar"):
+        return Desfecho.ORFAO, None
+    erro = corpo_resposta.get("error") if isinstance(corpo_resposta, dict) else None
+    if erro == "conflito_codigo":
+        logger.error(lote.log(
+            cid, versao,
+            f"o Flow recusou o código {linha.get('erp_produto_id')} deste {linha['acao']} "
+            "(conflito_codigo): a gravação no ERP ficou; a área de cadastro do Flow confere "
+            "qual produto tem esse código",
+        ))
+        return Desfecho.SUPERADO, "conflito_codigo"
+    return Desfecho.SUPERADO, None
+
+
 def _enviar(lote: _Lote, cid: str, versao: int, corpo: dict, tentativas: int) -> Desfecho:
-    """POST do resultado e o estado que a resposta dá (pelo `status`, nunca pela `acao`)."""
+    """POST do resultado e o estado que a resposta dá: pelo `status`, nunca pela `acao`
+    que o item supõe; só o 409 de um `gravado` olha a `acao` do livro (`_orfao_ou_superado`)."""
     r = lote.client.post_cadastro_resultado(cid, corpo)
     d = ler_resposta(corpo["resultado"], r.status_http, r.corpo)
     conn, agora, resposta = lote.env_conn, lote.relogio(), _resposta(r.status_http, r.corpo)
+    alerta_fecho = None
+    if d is Desfecho.ORFAO:
+        d, alerta_fecho = _orfao_ou_superado(lote, cid, versao, r.corpo)
     if d in _FECHA:
-        if not repo.marcar_desfecho(conn, cid, versao, _FECHA[d], resposta=resposta):
+        if not repo.marcar_desfecho(conn, cid, versao, _FECHA[d], alerta=alerta_fecho,
+                                    resposta=resposta):
             logger.warning(lote.log(cid, versao, f"desfecho {d.value} não aplicado no livro"))
         if d is Desfecho.ORFAO:
             logger.error(lote.log(

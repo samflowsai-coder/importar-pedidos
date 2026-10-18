@@ -55,9 +55,12 @@ TRANSICOES: dict[str, frozenset[str]] = {
     "orfao": frozenset({"gravado_sem_volta"}),
     "erro_registrado": frozenset({"erro_a_enviar"}),
     "transitorio": frozenset({"erro_a_enviar"}),
-    "superado": frozenset({"erro_a_enviar"}),
+    # `gravado_sem_volta` só de `atualizar`/`inativar` (409 do Flow, contrato §5): o
+    # produto já existia no ERP. O `criar` que gravou vira `orfao`, nunca `superado`.
+    "superado": frozenset({"erro_a_enviar", "gravado_sem_volta"}),
     "incerto": frozenset({"em_andamento"}),
 }
+_SO_SEM_CRIAR = {"superado": "gravado_sem_volta"}
 _RESPOSTA_MAX = 64
 _NOTA_MAX = 500
 _DESCARTAVEIS_SQL = ", ".join(f"'{e}'" for e in ESTADOS_DESCARTAVEIS)
@@ -254,6 +257,7 @@ def marcar_desfecho(
     """True se mudou. Só vale a lista branca `TRANSICOES` (destino -> origens):
     o que pode ter comitado no ERP (`incerto`, `liberado` com SEQ, `gravado_sem_volta`,
     `confirmado`, `orfao`) nunca volta a um estado reaproveitável por aqui.
+    `gravado_sem_volta` -> `superado` só vale para `atualizar`/`inativar`.
     `em_andamento` com SEQ só chega a `transitorio` (reaproveitável) se o SEQ foi
     zerado antes por `marcar_erro_a_enviar(rollback_comprovado=True)`; sem isso,
     `reservar` recusa `transitorio` com SEQ.
@@ -263,11 +267,17 @@ def marcar_desfecho(
         raise ValueError("destino não permitido em marcar_desfecho")
     resposta = resposta[:_RESPOSTA_MAX] if resposta is not None else None
     marcas = ", ".join("?" for _ in origens)
+    sem_criar = _SO_SEM_CRIAR.get(estado)
+    filtro = (
+        " AND NOT (estado = ? AND COALESCE(acao, '') NOT IN ('atualizar', 'inativar'))"
+        if sem_criar else ""
+    )
     cur = conn.execute(
         "UPDATE cadastro_volta SET estado = ?, alerta = ?, resposta_flow = ?, "
         "proxima_tentativa_em = NULL, atualizado_em = datetime('now') "
-        f"WHERE cadastro_id = ? AND versao = ? AND estado IN ({marcas})",
-        (estado, alerta, resposta, cadastro_id, versao, *sorted(origens)),
+        f"WHERE cadastro_id = ? AND versao = ? AND estado IN ({marcas}){filtro}",
+        (estado, alerta, resposta, cadastro_id, versao, *sorted(origens),
+         *((sem_criar,) if sem_criar else ())),
     )
     return cur.rowcount == 1
 

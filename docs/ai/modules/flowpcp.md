@@ -311,7 +311,7 @@ passo anterior parar o ciclo):
 2. **Resultado guardado sai antes de tudo**, até sem a P0.
 3. **Timeout incerto**: conexão que cai depois do comando de escrita nunca vira erro nem resposta. A linha fica `em_andamento` com o SEQ, o lote para e a recuperação confere no Fire. Erro só é respondido ao Flow com o rollback provado (`rollback_comprovado=True`: o Fire respondeu erro e desfez, ou nenhum comando de escrita saiu); sem a prova a linha fica `em_andamento` e o lote para.
 4. **Lote < 10 min** (a reserva do Flow dura 10): `PRAZO_LOTE` = 8 min, checado antes de cada item; o que sobra fica para a reentrega do Flow. Rede travada no meio de um item ainda passa do prazo (o `fdb` não tem timeout de socket).
-5. **Decisão pelo status** da resposta, nunca pela `acao`: `cadastro_resultado.ler_resposta` devolve um `Desfecho` (`confirmado`, `erro_registrado`, `transitorio_registrado`, `orfao`, `superado`, `repetir` com espera crescente, `bug_corpo` com espera de 60 min e alerta, `credencial` que para os envios do ciclo). Mapa (`cadastro_resultado.ler_resposta`):
+5. **Decisão pelo status** da resposta, nunca pela `acao` que o item supõe (a única exceção é o 409 de um `gravado`, abaixo): `cadastro_resultado.ler_resposta` devolve um `Desfecho` (`confirmado`, `erro_registrado`, `transitorio_registrado`, `orfao`, `superado`, `repetir` com espera crescente, `bug_corpo` com espera de 60 min e alerta, `credencial` que para os envios do ciclo). Mapa (`cadastro_resultado.ler_resposta`):
 
 | Resposta do Flow | Desfecho |
 |---|---|
@@ -320,9 +320,11 @@ passo anterior parar o ciclo):
 | 200 `erro_registrado` | `erro_registrado` para `erro`; `bug_corpo` para `gravado` |
 | 200 `transitorio_registrado` | `transitorio_registrado` para `erro`; `bug_corpo` para `gravado` |
 | 200 sem `status` texto, ou status desconhecido | `repetir` |
-| 409 `versao_superada` | `orfao` para `gravado`; `superado` para `erro` |
-| 409 `conflito_codigo` | `orfao` para `gravado`; `bug_corpo` para `erro` |
+| 409 `versao_superada` | `orfao` para `gravado` de `criar`; `superado` para `gravado` de `atualizar`/`inativar` (o caso comum, contrato §5) e para `erro` |
+| 409 `conflito_codigo` | `orfao` para `gravado` de `criar`; `superado` com alerta `conflito_codigo` para `gravado` de `atualizar`/`inativar`; `bug_corpo` para `erro` |
 | outro 409 | `bug_corpo` |
+
+No 409 de um `gravado`, `ler_resposta` devolve `orfao` e `cadastro_gravacao._orfao_ou_superado` decide pela `acao` que o livro guardou (o que o Portal fez de fato): órfão só se o Portal **criou** o produto. Em `atualizar`/`inativar` o produto já existia no ERP; a gravação fica e a linha fecha `superado`.
 | 401 | `credencial` |
 | 429 | `repetir` |
 | outros 4xx | `bug_corpo` |
@@ -335,7 +337,8 @@ passo anterior parar o ciclo):
 | Destino | Origem permitida |
 |---|---|
 | `confirmado`, `orfao` | `gravado_sem_volta` |
-| `erro_registrado`, `transitorio`, `superado` | `erro_a_enviar` |
+| `erro_registrado`, `transitorio` | `erro_a_enviar` |
+| `superado` | `erro_a_enviar`; `gravado_sem_volta` só de `atualizar`/`inativar` (o `criar` que gravou nunca vira `superado`) |
 | `incerto` | `em_andamento` |
 
 O resto tem porta própria, de propósito: `reservar` (cria/reaproveita `em_andamento`), `marcar_gravado`
@@ -350,10 +353,10 @@ o SEQ só é zerado com `True`), `liberar_comprovado` (`em_andamento` → `liber
 | `em_andamento` | lease de um item em gravação (ou de um processo que caiu) | nada nos primeiros 15 min; depois a recuperação resolve |
 | `gravado_sem_volta` | gravado no Fire, o Flow ainda não aceitou | nada, reenvio automático; olhar se o alerta for `bug_corpo` |
 | `erro_a_enviar` | erro definido, ainda não aceito pelo Flow | idem |
-| `confirmado`, `erro_registrado`, `superado` | finais | nada |
+| `confirmado`, `erro_registrado`, `superado` | finais | nada; `superado` com alerta `conflito_codigo` (um `atualizar`/`inativar` gravado no Fire cujo código o Flow recusou): avisar a área de cadastro do Flow |
 | `transitorio` | erro passageiro (`erp_ocupado`, `conexao_recusada`...); o item volta no GET | nada se sem SEQ; **com SEQ** a recuperação o retoma; passado o prazo aparece como incerto na tela |
 | `liberado` | voltou para a fila (recuperação ou operador); as portas zeram o SEQ, então o item é reservado de novo na reentrega do Flow | nada |
-| `orfao` | produto no Fire que o Flow não vinculou (`versao_superada`, `conflito_codigo`) | avisar a área de cadastro com o código; depois `fechar-orfao` com nota |
+| `orfao` | produto que o Portal **criou** no Fire e o Flow não vinculou (`versao_superada`, `conflito_codigo` de um `criar`) | avisar a área de cadastro com o código; depois `fechar-orfao` com nota |
 | `orfao_fechado` | final: `orfao` fechado por uma pessoa (`nota_operador`). Não vira `superado` para não apagar a prova de que o produto existe | nada |
 | `incerto` | sem prova do que aconteceu; nem grava nem responde | `adotar` ou `liberar` pela ferramenta do operador |
 

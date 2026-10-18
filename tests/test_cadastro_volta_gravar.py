@@ -451,6 +451,37 @@ def test_orfao_em_conflito_codigo(modo, env_slug, env_conn, erros):
     assert any("3171" in e for e in erros)
 
 
+def test_versao_superada_em_criar_vira_orfao(modo, env_slug, env_conn, erros):
+    modo("criar")
+    flow = Flow([PAR], respostas=[RespostaResultado(409, {"error": "versao_superada",
+                                                          "versaoAtual": 2}, None)])
+    _rodar(env_slug, flow, FireGravavel(), env_conn)
+    assert repo.buscar(env_conn, PAR["cadastroId"], 1)["estado"] == "orfao"
+    assert any("órfão" in e and "3171" in e for e in erros)
+
+
+@pytest.mark.parametrize("erro", ["versao_superada", "conflito_codigo"])
+@pytest.mark.parametrize("acao", ["atualizar", "inativar"])
+def test_409_em_atualizar_ou_inativar_fecha_superado_sem_orfao(modo, env_slug, env_conn, erros,
+                                                                acao, erro):
+    """Contrato §5: órfão só se o Portal CRIOU o produto; em atualizar/inativar o 409
+    `versao_superada` é o caso comum, e `conflito_codigo` ganha alerta próprio."""
+    _no_catalogo(env_conn, "3170")
+    modo("criar_e_atualizar", inativar=True)
+    item = _atualizar("3170", acao=acao, versao=3)
+    flow = Flow([item], respostas=[RespostaResultado(409, {"error": erro, "versaoAtual": 4}, None)])
+    antes = _amostra("portal_flowpcp_cadastro_volta_total", resultado="superado")
+    _rodar(env_slug, flow, FireGravavel(), env_conn)
+    linha = repo.buscar(env_conn, item["cadastroId"], 3)
+    assert linha["estado"] == "superado"
+    assert linha["alerta"] == ("conflito_codigo" if erro == "conflito_codigo" else None)
+    assert linha["resposta_flow"] == f"409:{erro}"
+    assert not any("órfão" in e for e in erros)
+    assert (erro == "conflito_codigo") == any("conflito_codigo" in e for e in erros)
+    assert _amostra("portal_flowpcp_cadastro_volta_total", resultado="superado") == antes + 1
+    assert repo.listar_por_estado(env_conn, "orfao") == []
+
+
 def test_atualizar_de_seq_criado_pelo_portal_esta_no_escopo(modo, env_slug, env_conn):
     modo("criar")
     _rodar(env_slug, Flow([PAR]), FireGravavel(), env_conn)

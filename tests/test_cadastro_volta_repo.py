@@ -308,7 +308,9 @@ def test_matriz_marcar_desfecho(conn, origem, destino):
         esperado, mudou = origem, None
     else:
         mudou = repo.marcar_desfecho(conn, "c1", 1, destino)
-        permitido = origem in repo.TRANSICOES[destino]
+        # A linha é de `criar`: o `criar` que gravou nunca vira `superado`.
+        permitido = origem in repo.TRANSICOES[destino] and not (
+            (destino, origem) == ("superado", "gravado_sem_volta"))
         assert mudou is permitido
         esperado = destino if permitido else origem
     assert repo.buscar(conn, "c1", 1)["estado"] == esperado
@@ -320,9 +322,30 @@ def test_tabela_de_transicoes_e_a_combinada():
         "orfao": {"gravado_sem_volta"},
         "erro_registrado": {"erro_a_enviar"},
         "transitorio": {"erro_a_enviar"},
-        "superado": {"erro_a_enviar"},
+        "superado": {"erro_a_enviar", "gravado_sem_volta"},
         "incerto": {"em_andamento"},
     }
+
+
+@pytest.mark.parametrize("acao", ["atualizar", "inativar"])
+def test_gravado_de_atualizar_ou_inativar_vira_superado_e_nao_reserva(conn, acao):
+    _reservar(conn, acao=acao)
+    repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3170", corpo_json="{}")
+    assert repo.marcar_desfecho(conn, "c1", 1, "superado", alerta="conflito_codigo") is True
+    linha = repo.buscar(conn, "c1", 1)
+    assert (linha["estado"], linha["alerta"], linha["erp_produto_id"]) == (
+        "superado", "conflito_codigo", "3170")
+    assert _reservar(conn, acao=acao) is False
+    assert repo.buscar(conn, "c1", 1)["estado"] == "superado"
+
+
+def test_gravado_de_criar_nunca_vira_superado(conn):
+    """O produto que o Portal criou e o Flow não vinculou é órfão, nunca `superado`:
+    o rótulo é a prova para a operação."""
+    _reservar(conn)
+    repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
+    assert repo.marcar_desfecho(conn, "c1", 1, "superado") is False
+    assert repo.buscar(conn, "c1", 1)["estado"] == "gravado_sem_volta"
 
 
 def test_cadeia_incerto_nao_chega_a_reservar(conn):
@@ -507,15 +530,15 @@ def test_retomar_transitorio_so_de_transitorio_com_seq(conn, estado):
     assert repo.buscar(conn, "c1", 1)["estado"] == estado
 
 
-def _linha_em(estado, seq):
+def _linha_em(estado, seq, acao="criar"):
     c = sqlite3.connect(":memory:")
     c.executescript(schema_env.TABLES_SQL)
     router._apply_column_migrations(c, schema_env.COLUMN_MIGRATIONS)
     c.executescript(schema_env.INDEXES_SQL)
     c.execute(
         "INSERT INTO cadastro_volta (cadastro_id, versao, estado, acao, tipo, produto_id, modo, "
-        "plano_json, seq_reservado) VALUES ('c1', 1, ?, 'criar', 'simples', 'p1', 'criar', '{}', ?)",
-        (estado, seq),
+        "plano_json, seq_reservado) VALUES ('c1', 1, ?, ?, 'simples', 'p1', 'criar', '{}', ?)",
+        (estado, acao, seq),
     )
     return c
 
@@ -567,19 +590,21 @@ _PODE_TER_GRAVADO = [
 ]
 
 
+@pytest.mark.parametrize("acao", ["criar", "atualizar", "inativar"])
 @pytest.mark.parametrize(("estado", "seq"), _PODE_TER_GRAVADO)
-def test_sem_as_portas_nada_que_pode_ter_gravado_volta_a_reservar(estado, seq):
-    """Busca em largura sobre as funções públicas, sem as portas declaradas."""
+def test_sem_as_portas_nada_que_pode_ter_gravado_volta_a_reservar(estado, seq, acao):
+    """Busca em largura sobre as funções públicas, sem as portas declaradas. Por `acao`:
+    algumas transições (`gravado_sem_volta` -> `superado`) dependem dela."""
     vistos, fila = {(estado, seq)}, [(estado, seq)]
     while fila:
         no = fila.pop(0)
-        c = _linha_em(*no)
-        assert not repo.reservar(c, cadastro_id="c1", versao=1, produto_id="p1", acao="criar",
+        c = _linha_em(*no, acao=acao)
+        assert not repo.reservar(c, cadastro_id="c1", versao=1, produto_id="p1", acao=acao,
                                  tipo="simples", modo="criar", plano_json="{}"), no
         for nome, op in _OPERACOES.items():
             if nome in _PORTAS:
                 continue
-            c = _linha_em(*no)
+            c = _linha_em(*no, acao=acao)
             if op(c) and _no(c) not in vistos:
                 vistos.add(_no(c))
                 fila.append(_no(c))
