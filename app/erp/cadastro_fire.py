@@ -59,7 +59,8 @@ _GDS = {
     335544741: "conexao",  # isc_lost_db_connection
     335544466: "recusa",  # isc_foreign_key
 }
-_SQLCODE = {-803: "colisao", -913: "lock", -902: "conexao", -530: "recusa"}
+# -902 fica de fora: balde genérico (login inválido e I/O também caem nele).
+_SQLCODE = {-803: "colisao", -913: "lock", -530: "recusa"}
 
 # Colunas que o gravador monta sozinho ou que não são do Flow: nunca em PADROES_P0.
 _RESERVADAS = frozenset({"SEQ", "BLOQUEADO", "DATA_CAD"})
@@ -115,8 +116,8 @@ def classificar_erro(exc: BaseException) -> Literal["colisao", "lock", "conexao"
     if len(args) == 3 and isinstance(args[1], int) and isinstance(args[2], int):
         if args[2] in _GDS:
             return _GDS[args[2]]
-        if args[1] in _SQLCODE:
-            return _SQLCODE[args[1]]
+        # Com os números do driver, o texto não decide: ele repete o valor do usuário.
+        return _SQLCODE.get(args[1], "recusa")
     texto = str(exc).lower()
     if any(t in texto for t in _TEXTOS_COLISAO):
         return "colisao"
@@ -131,12 +132,15 @@ def _colisao(exc: BaseException) -> bool:
     return classificar_erro(exc) == "colisao"
 
 
-def _desfaz(conn) -> None:
-    """Rollback que nunca mascara a exceção original: se falhar, só loga."""
+def _desfaz(conn) -> bool:
+    """Rollback que nunca mascara a exceção original: se falhar, só loga e
+    devolve False (quem chama relança a original, sem nova tentativa)."""
     try:
         conn.rollback()
+        return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("cadastro_fire: rollback falhou ({})", type(exc).__name__)
+        return False
 
 
 def _insere_composicao(cur, pai: int, componentes: list[tuple[int, float]]) -> None:
@@ -154,12 +158,14 @@ def criar(conn, *, campos, componentes, hoje: date, ao_reservar: Callable[[int],
     with _lock:
         for _ in range(TENTATIVAS_SEQ):
             cur = conn.cursor()
+            insercao = False  # só colisão do INSERT (MAX+1) se repete
             try:
                 seq = int(_um(cur, "SELECT MAX(SEQ) FROM PRODUTOS") or 0) + 1
                 try:
                     ao_reservar(seq)
                 except Exception as exc:
                     raise ReservaFalhouError("reserva do SEQ no livro falhou") from exc
+                insercao = True
                 colunas = ["SEQ", "BLOQUEADO", "DATA_CAD", *linha]
                 valores = (seq, "Nao", hoje, *linha.values())
                 cur.execute(
@@ -172,15 +178,14 @@ def criar(conn, *, campos, componentes, hoje: date, ao_reservar: Callable[[int],
                 conn.commit()
                 return Gravacao(seq=seq, acao="criar")
             except BaseException as exc:
-                _desfaz(conn)
-                if isinstance(exc, ReservaFalhouError) or not _colisao(exc):
+                if not _desfaz(conn) or not insercao or not _colisao(exc):
                     raise
             finally:
                 cur.close()
     raise SeqTomadoError(f"SEQ tomado {TENTATIVAS_SEQ} vezes seguidas")
 
 
-def _atualizar_uma_vez(conn, seq: int, campos, componentes) -> Gravacao:
+def _atualizar_uma_vez(conn, seq: int, campos, componentes, estado: dict) -> Gravacao:
     cur = conn.cursor()
     try:
         if campos:
@@ -191,12 +196,13 @@ def _atualizar_uma_vez(conn, seq: int, campos, componentes) -> Gravacao:
         elif _um(cur, "SELECT SEQ FROM PRODUTOS WHERE SEQ = ?", (seq,)) is None:
             raise LookupError(f"SEQ {seq} não existe no Fire")
         if componentes is not None:
+            estado["composicao"] = True
             cur.execute("DELETE FROM PRODUTOS_KIT WHERE CODPRODUTO_PAI = ?", (seq,))
             _insere_composicao(cur, seq, componentes)
         conn.commit()
         return Gravacao(seq=seq, acao="atualizar")
     except BaseException:
-        _desfaz(conn)
+        estado["rollback_ok"] = _desfaz(conn)
         raise
     finally:
         cur.close()
@@ -205,14 +211,16 @@ def _atualizar_uma_vez(conn, seq: int, campos, componentes) -> Gravacao:
 def atualizar(conn, *, seq: int, campos, componentes) -> Gravacao:
     _checa_colunas(campos)
     if componentes is None:
-        return _atualizar_uma_vez(conn, seq, campos, componentes)
+        return _atualizar_uma_vez(conn, seq, campos, componentes, {})
     # Composição usa MAX(CODIGO)+1: mesmo lock e nova tentativa do criar.
     with _lock:
         for _ in range(TENTATIVAS_SEQ):
+            estado: dict = {}
             try:
-                return _atualizar_uma_vez(conn, seq, campos, componentes)
+                return _atualizar_uma_vez(conn, seq, campos, componentes, estado)
             except Exception as exc:
-                if not _colisao(exc):
+                # só colisão da composição (MAX+1) se repete; a do UPDATE sai como veio
+                if not estado.get("rollback_ok") or not estado.get("composicao") or not _colisao(exc):
                     raise
     raise SeqTomadoError(f"CODIGO de composição tomado {TENTATIVAS_SEQ} vezes seguidas")
 

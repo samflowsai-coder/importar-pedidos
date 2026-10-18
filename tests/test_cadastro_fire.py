@@ -208,7 +208,7 @@ def test_classificar_erro_por_gdscode(gds, classe):
 
 
 @pytest.mark.parametrize(
-    ("sqlcode", "classe"), [(-803, "colisao"), (-913, "lock"), (-902, "conexao"), (-530, "recusa")]
+    ("sqlcode", "classe"), [(-803, "colisao"), (-913, "lock"), (-530, "recusa")]
 )
 def test_classificar_erro_por_sqlcode_quando_gdscode_nao_decide(sqlcode, classe):
     assert cf.classificar_erro(_fdb(sqlcode, 1)) == classe
@@ -290,3 +290,72 @@ def test_padroes_p0_validos():
     for ruim in ({"seq": 1}, {"SEQ": 1}, {"DATA_CAD": 1}, {"DESCRICAO": "x"}):
         with pytest.raises(ValueError):
             cf._valida_padroes(ruim)
+
+
+def test_numeros_do_driver_sem_mapa_nao_caem_no_texto():
+    for valor in ("DEADLOCK", "violation of PRIMARY or UNIQUE KEY constraint"):
+        exc = _DbError(f'conversion error from string "{valor}"', -413, 335544334)
+        assert cf.classificar_erro(exc) == "recusa"
+
+
+def test_sqlcode_902_generico_e_recusa():
+    assert cf.classificar_erro(_DbError("login", -902, 335544472)) == "recusa"
+
+
+class _FireUpdateColide(_Fire):
+    def responder(self, sql, params):
+        if sql.lstrip().upper().startswith("UPDATE PRODUTOS SET"):
+            raise Exception("violation of PRIMARY or UNIQUE KEY constraint")
+        return super().responder(sql, params)
+
+
+def test_colisao_no_update_do_atualizar_nao_repete():
+    fire = _FireUpdateColide()
+    with pytest.raises(Exception, match="violation"):
+        cf.atualizar(fire, seq=3990, campos={"UNIDADE": "KIT"}, componentes=[(3170, 1.0)])
+    assert fire.rollbacks == 1 and fire.commits == 0
+    assert sum(q.startswith("UPDATE") for q, _ in fire.sqls) == 1
+
+
+def test_criar_com_rollback_que_falha_relanca_a_original_sem_repetir():
+    fire = _Fire(colide=1)
+
+    def quebra():
+        raise RuntimeError("rollback quebrou")
+
+    fire.rollback = quebra
+    with pytest.raises(Exception, match="violation"):
+        cf.criar(fire, campos=CAMPOS, componentes=None, hoje=date(2026, 10, 17), ao_reservar=lambda s: None)
+    assert sum("MAX(SEQ)" in q for q, _ in fire.sqls) == 1
+
+
+def test_atualizar_com_rollback_que_falha_relanca_a_original_sem_repetir():
+    fire = _Fire(colide_kit=1)
+
+    def quebra():
+        raise RuntimeError("rollback quebrou")
+
+    fire.rollback = quebra
+    with pytest.raises(Exception, match="violation"):
+        cf.atualizar(fire, seq=3990, campos={}, componentes=[(3170, 2.0)])
+    assert sum(q.startswith("DELETE") for q, _ in fire.sqls) == 1
+
+
+def test_interrupcao_no_criar_faz_rollback_e_relanca():
+    fire = _Fire()
+
+    def reservar(seq):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        cf.criar(fire, campos=CAMPOS, componentes=None, hoje=date(2026, 10, 17), ao_reservar=reservar)
+    assert fire.rollbacks == 1 and fire.commits == 0
+
+
+def test_atualizar_repete_o_delete_na_segunda_tentativa():
+    fire = _Fire(colide_kit=1)
+    cf.atualizar(fire, seq=3990, campos={}, componentes=[(3170, 2.0)])
+    tipos = [q.split(" (")[0].split(" WHERE")[0] for q, _ in fire.sqls]
+    um = ["SELECT SEQ FROM PRODUTOS", "DELETE FROM PRODUTOS_KIT", "SELECT MAX(CODIGO) FROM PRODUTOS_KIT",
+          "INSERT INTO PRODUTOS_KIT"]
+    assert [t.split(" WHERE")[0] for t in tipos] == um + um
