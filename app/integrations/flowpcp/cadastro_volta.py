@@ -250,27 +250,12 @@ def _contra_o_fire(
 
 
 def _plano(item: CadastroPendente, marcas: dict) -> dict:
-    campos = {
-        coluna: getattr(item, wire)
-        for wire, coluna in COLUNAS.items()
-        if getattr(item, wire) is not None
-    }
-    campos["GRUPO"] = int(item.grupoErp.codigo)  # como no gravador (a recuperação compara)
-    if item.marcaErp is not None:
-        campos["MARCA"] = marcas[item.marcaErp.codigo]
-    return {
-        "acao": item.acao,
-        "tabela": "PRODUTOS",
-        "tipo": item.tipo,
-        "seq": item.erpProdutoId,
-        "campos": {} if item.acao == "inativar" else campos,
-        # None = não mexer na composição (atualizar sem lista, inativar, simples).
-        "componentes": None
-        if item.componentes is None
-        else [
-            {"erpProdutoId": c.erpProdutoId, "quantidade": c.quantidade} for c in item.componentes
-        ],
-    }
+    """O mesmo plano da gravação (`cadastro_gravacao._campos`/`_plano`): o simulado
+    mostra exatamente o que seria gravado, inclusive `ean`/`codigoNfe` null = limpar."""
+    from app.integrations.flowpcp import cadastro_gravacao
+
+    campos = cadastro_gravacao._campos(item, marcas)
+    return cadastro_gravacao._plano(item, campos, cadastro_gravacao._componentes(item))
 
 
 _ID_SEGURO = re.compile(r"^[0-9A-Fa-f-]{1,64}$")

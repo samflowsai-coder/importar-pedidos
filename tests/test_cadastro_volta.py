@@ -5,8 +5,9 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from app.integrations.flowpcp import cadastro_gravacao
 from app.integrations.flowpcp import cadastro_volta as cv
-from app.integrations.flowpcp.cadastro_schema import PendentesResposta
+from app.integrations.flowpcp.cadastro_schema import PendentesResposta, validar_item
 from app.persistence import cadastro_volta_repo, router
 from app.utils.logger import logger
 
@@ -653,6 +654,24 @@ def test_atualizar_kit_sem_componentes_nao_consulta_componentes(env_conn, monkey
     assert linha["estado"] == "simulado"
     assert json.loads(linha["plano_json"])["componentes"] is None
     assert not any("BLOQUEADO" in sql for sql, _ in fire.executados)
+
+
+def test_simular_atualizar_plano_igual_ao_da_gravacao(env_conn, monkeypatch):
+    """`ean`/`codigoNfe` null num `atualizar` limpam no ERP: o plano simulado mostra isso."""
+    _simular(monkeypatch)
+    env_conn.execute(
+        "INSERT INTO catalogo_fire (fire_produto_id, codigo, nome, extraido_em) "
+        "VALUES ('2645', '2645', 'X', '2026-10-16')"
+    )
+    item = dict(BOM, acao="atualizar", erpProdutoId="2645", ean=None, codigoNfe=None)
+    cv.processar_ambiente("mm", _client=_Client([item]), _fire_conn=_Fire(), _env_conn=env_conn)
+    plano = json.loads(_livro(env_conn)[(BOM["cadastroId"], 1)]["plano_json"])
+    assert plano["campos"]["CODIGO_EAN13"] is None and plano["campos"]["CODPARANFE"] is None
+    valido = validar_item(item)[0]
+    marcas = {17: "Kolosh"}
+    campos = cadastro_gravacao._campos(valido, marcas)
+    gravacao = cadastro_gravacao._plano(valido, campos, cadastro_gravacao._componentes(valido))
+    assert plano == json.loads(json.dumps(gravacao))
 
 
 def test_inativar_kit_com_componentes_lixo_simula_sem_composicao(env_conn, monkeypatch):
