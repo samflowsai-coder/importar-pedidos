@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 
 _ATIVAS = ("pendente_envio", "enviada", "recusada_flow")
 _ATIVAS_SQL = "('pendente_envio', 'enviada', 'recusada_flow')"
+# Revisão que o Flow pode conhecer: o POST saiu (`tentada_em`, resposta talvez
+# perdida) ou voltou 201/200 (`enviada_em`).
+_CONHECIDA_SQL = "(enviada_em IS NOT NULL OR tentada_em IS NOT NULL)"
 
 
 def _linha(r: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -155,6 +158,42 @@ def pendentes_envio(conn: sqlite3.Connection, limite: int) -> list[dict[str, Any
     return [_linha(r) for r in rows]
 
 
+def marcar_tentada(conn: sqlite3.Connection, import_id: str, revisao: int, *, em: datetime) -> bool:
+    """Chamar logo ANTES do POST da rota (b). Marca a revisão como possivelmente
+    conhecida pelo Flow (resposta perdida, timeout). False = ela não está mais
+    em `pendente_envio` (substituída ou retirada): não enviar."""
+    with conn:
+        cur = conn.execute(
+            "UPDATE preco_revisao SET tentada_em = COALESCE(tentada_em, ?)"
+            " WHERE import_id = ? AND revisao = ? AND situacao = 'pendente_envio'",
+            (em.isoformat(), import_id, revisao),
+        )
+    return cur.rowcount > 0
+
+
+def _garantir_retirada_da_conhecida(conn: sqlite3.Connection, import_id: str) -> None:
+    """Dentro de transação: pedido retirado (última revisão `retirada`, nenhuma
+    ativa) cuja última revisão conhecida pelo Flow ainda não está `retirada`
+    (o 201 dela chegou depois do cancel) → ela passa a `retirada`, com o motivo
+    da retirada, e entra na fila."""
+    ultima = conn.execute(
+        "SELECT situacao, retirada_em, retirada_motivo FROM preco_revisao"
+        " WHERE import_id = ? ORDER BY revisao DESC LIMIT 1",
+        (import_id,),
+    ).fetchone()
+    if ultima is None or ultima["situacao"] != "retirada":
+        return
+    conn.execute(
+        f"""
+        UPDATE preco_revisao SET situacao = 'retirada', retirada_em = ?, retirada_motivo = ?
+         WHERE import_id = ? AND situacao = 'substituida'
+           AND revisao = (SELECT MAX(revisao) FROM preco_revisao
+                           WHERE import_id = ? AND {_CONHECIDA_SQL})
+        """,  # noqa: S608 — constante
+        (ultima["retirada_em"], ultima["retirada_motivo"], import_id, import_id),
+    )
+
+
 def marcar_enviada(
     conn: sqlite3.Connection,
     import_id: str,
@@ -173,11 +212,13 @@ def marcar_enviada(
             " WHERE import_id = ? AND revisao = ? AND enviada_em IS NULL",
             (em.isoformat(), json.dumps(resposta, ensure_ascii=False), import_id, revisao),
         )
-        conn.execute(
+        cur = conn.execute(
             "UPDATE preco_revisao SET situacao = 'enviada'"
             " WHERE import_id = ? AND revisao = ? AND situacao = 'pendente_envio'",
             (import_id, revisao),
         )
+        if cur.rowcount == 0:
+            _garantir_retirada_da_conhecida(conn, import_id)
 
 
 def marcar_recusa_flow(
@@ -216,6 +257,14 @@ def gravar_decisao(
             if atual is not None and int(atual["revisao"]) == int(d["revisao"])
             else "descartada"
         )
+        if confirmacao == "aplicada" and not _decisao_bate_com_o_corpo(d, atual["corpo"] or {}):
+            from app.utils.logger import logger
+
+            logger.warning(
+                f"decisão de preço {d['decisaoId']} não bate com o corpo da revisão "
+                f"{d['externalId']}/{d['revisao']} (produto, item ou empresa): descartada"
+            )
+            confirmacao = "descartada"
         conn.execute(
             "INSERT INTO preco_decisao (decisao_id, import_id, revisao, item_chave, resultado,"
             " preco_aprovado_centavos, motivo_recusa, observacao, decidido_em, recebida_em,"
@@ -237,13 +286,24 @@ def gravar_decisao(
     return confirmacao
 
 
+def _decisao_bate_com_o_corpo(d: dict[str, Any], corpo: dict[str, Any]) -> bool:
+    """A decisão é do item e da empresa que a revisão mandou."""
+    if d.get("empresaFaturadoraCnpj") != corpo.get("empresaFaturadoraCnpj"):
+        return False
+    for item in corpo.get("itens") or []:
+        if item.get("itemChave") == d.get("itemChave"):
+            return item.get("erpProdutoId") == d.get("erpProdutoId")
+    return False
+
+
 def _instante(texto: str) -> datetime:
     return datetime.fromisoformat(texto)
 
 
 def decisoes_da_vigente(conn: sqlite3.Connection, import_id: str) -> dict[str, dict[str, Any]]:
     """Decisões aplicadas da revisão vigente, por `item_chave`. Duas para a
-    mesma chave → vence a de maior `decidido_em` (instante)."""
+    mesma chave → vence a de maior `decidido_em` (instante); empate → maior
+    `decisao_id` (independe da ordem de chegada)."""
     atual = vigente(conn, import_id)
     if atual is None:
         return {}
@@ -256,7 +316,10 @@ def decisoes_da_vigente(conn: sqlite3.Connection, import_id: str) -> dict[str, d
     for r in rows:
         d = dict(r)
         antes = out.get(d["item_chave"])
-        if antes is None or _instante(d["decidido_em"]) > _instante(antes["decidido_em"]):
+        if antes is None or (_instante(d["decidido_em"]), d["decisao_id"]) > (
+            _instante(antes["decidido_em"]),
+            antes["decisao_id"],
+        ):
             out[d["item_chave"]] = d
     return out
 
@@ -285,8 +348,9 @@ def marcar_confirmada(conn: sqlite3.Connection, ids: list[str], *, em: datetime)
 def retirar(conn: sqlite3.Connection, import_id: str, motivo: str, *, em: datetime) -> None:
     """Pedido sai da fila (cancelado, reimportado, liberado pela tabela depois
     de ir ao Flow). Toda revisão ativa vira `retirada`; a retirada vai ao
-    Flow só para a última revisão que ele conhece (`enviada_em`), mesmo que
-    ela já estivesse substituída aqui. Nunca enviada → nada vai ao Flow.
+    Flow só para a última revisão que ele pode conhecer (`enviada_em` ou
+    `tentada_em`), mesmo que ela já estivesse substituída aqui. Nunca tentada
+    → nada vai ao Flow.
     Idempotente."""
     with conn:
         conn.execute(
@@ -295,27 +359,29 @@ def retirar(conn: sqlite3.Connection, import_id: str, motivo: str, *, em: dateti
             (em.isoformat(), motivo, import_id),
         )
         conn.execute(
-            """
+            f"""
             UPDATE preco_revisao SET situacao = 'retirada', retirada_em = ?, retirada_motivo = ?
              WHERE import_id = ? AND situacao = 'substituida'
                AND revisao = (SELECT MAX(revisao) FROM preco_revisao
-                               WHERE import_id = ? AND enviada_em IS NOT NULL)
-            """,
+                               WHERE import_id = ? AND {_CONHECIDA_SQL})
+            """,  # noqa: S608 — constante
             (em.isoformat(), motivo, import_id, import_id),
         )
 
 
 def retiradas_pendentes(conn: sqlite3.Connection, limite: int) -> list[dict[str, Any]]:
-    """Retiradas a enviar: a última revisão que o Flow conhece, `retirada` e
+    """Retiradas a enviar: a última revisão que o Flow pode conhecer, `retirada` e
     ainda não avisada, sem revisão ativa mais nova (pedido reaberto: a revisão
     nova já substitui a velha no Flow)."""
     rows = conn.execute(
         f"""
         SELECT r.* FROM preco_revisao r
-         WHERE r.situacao = 'retirada' AND r.enviada_em IS NOT NULL
+         WHERE r.situacao = 'retirada'
+           AND (r.enviada_em IS NOT NULL OR r.tentada_em IS NOT NULL)
            AND r.retirada_enviada_em IS NULL
            AND r.revisao = (SELECT MAX(r2.revisao) FROM preco_revisao r2
-                             WHERE r2.import_id = r.import_id AND r2.enviada_em IS NOT NULL)
+                             WHERE r2.import_id = r.import_id
+                               AND (r2.enviada_em IS NOT NULL OR r2.tentada_em IS NOT NULL))
            AND NOT EXISTS (SELECT 1 FROM preco_revisao r3
                             WHERE r3.import_id = r.import_id AND r3.revisao > r.revisao
                               AND r3.situacao IN {_ATIVAS_SQL})

@@ -550,7 +550,8 @@ chama `aplicar_precos(order, precos_aplicar)` antes de exportar e `registrar_apl
   Senão calcula corpo e `conteudo_hash` **sempre** (`montar_corpo`) e compara com a vigente
   (`_acao_revisao`): com fila, hash novo (ou vigente `recusada_flow`) → corpo validado
   (`precos_schema.validar_envio`; inválido = bloqueio local, nada gravado) e
-  `garantir_revisao`; sem fila, vigente obsoleta → `retirar` e segue pela regra local; sem
+  `garantir_revisao`; sem fila, vigente obsoleta (ou `pendente_envio` nunca tentada) →
+  `retirar` e segue pela regra local; pedido que virou intercompany retira a vigente; sem
   fila e sem vigente → segue sem falar com o Flow, preço intocado. Com revisão vigente, todo
   item precisa da decisão da sua `itemChave` (`f"{import_id}:{i}"`), inclusive os `ok`.
 - `registrar_aplicados` roda depois da transição `SEND_TO_FIRE_SUCCEEDED` / do push do
@@ -570,13 +571,19 @@ chama `aplicar_precos(order, precos_aplicar)` antes de exportar e `registrar_apl
   (vai a **todo** item, Fire e XLSX, via `precos_aplicar`; `aplicados[].flow_id` =
   `decisaoId`), sem decisão→aguardando; revisão `recusada_flow`→todos recusados. No portão,
   a vigente `recusada_flow` dá lugar à revisão seguinte com o mesmo corpo (novo envio).
-- `retirar` (cancel, reimport do mesmo arquivo, fila zerada depois do envio): ativas viram
-  `retirada`; a retirada vai ao Flow só para a última revisão que ele conhece (`enviada_em`).
-  `marcar_enviada` grava `enviada_em` mesmo em revisão já substituída, mas só muda a situação
-  de `pendente_envio` (o 201 de uma revisão em voo não a ressuscita).
+- `retirar` (cancel, reimport dos mesmos bytes por `imports.file_sha256`, fila zerada,
+  intercompany): ativas viram `retirada`; a retirada vai ao Flow só para a última revisão que
+  ele pode conhecer (`enviada_em` ou `tentada_em`; `marcar_tentada` roda logo antes do POST e
+  devolve False se a revisão não está mais `pendente_envio`). `marcar_enviada` grava
+  `enviada_em` mesmo em revisão já substituída, mas só muda a situação de `pendente_envio`;
+  se o pedido já foi retirado, a revisão que chegou vira a retirada pendente.
+- `gravar_decisao` descarta (com log) decisão cujo `erpProdutoId`/`itemChave` ou
+  `empresaFaturadoraCnpj` não bate com o corpo da revisão vigente.
 - Corpo: `externalId` = `import_id`; `empresaFaturadoraCnpj` = `environments.cnpj`
   normalizado; `cliente` = {nome do override/cabeçalho/razão do Fire, CNPJ que resolveu a
-  rede}; `codigo` cai no `erpProdutoId`, `descricao` na do Fire; `emitidoEm` = `issue_date`
+  rede}; `codigo` cai no `erpProdutoId`, `descricao` na do Fire, no código e no
+  `erpProdutoId` (textos truncados em unidades UTF-16); número do pedido ausente/acima de 64
+  ou quantidade com mais de 2 casas → bloqueio local com texto legível; `emitidoEm` = `issue_date`
   00:00 em São Paulo em UTC (`.000Z`); `recebidoEm` = `imported_at` (hora de São Paulo).
 
 ### Razões de 409 (envio ao Fire / export)

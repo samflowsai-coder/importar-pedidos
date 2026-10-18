@@ -399,6 +399,7 @@ CREATE TABLE IF NOT EXISTS preco_revisao (
     situacao            TEXT NOT NULL CHECK (situacao IN
                             ('pendente_envio', 'enviada', 'recusada_flow',
                              'substituida', 'retirada')),
+    tentada_em          TEXT,
     enviada_em          TEXT,
     resposta_json       TEXT,
     erro_definitivo     TEXT,
@@ -488,4 +489,6 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("flowpcp_decisoes_mapping", "erp_codigos_json", "ALTER TABLE flowpcp_decisoes_mapping ADD COLUMN erp_codigos_json TEXT"),
     ("flowpcp_decisoes_mapping", "nova_data", "ALTER TABLE flowpcp_decisoes_mapping ADD COLUMN nova_data TEXT"),
     ("flowpcp_decisoes_mapping", "aplicada_em", "ALTER TABLE flowpcp_decisoes_mapping ADD COLUMN aplicada_em TEXT"),
+    # Trava de preço: revisão cujo POST saiu (o Flow pode conhecê-la sem 201).
+    ("preco_revisao", "tentada_em", "ALTER TABLE preco_revisao ADD COLUMN tentada_em TEXT"),
 )

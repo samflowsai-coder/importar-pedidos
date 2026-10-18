@@ -46,6 +46,7 @@ from app.persistence import db, environments_repo, precos_repo, repo
 from app.persistence import preco_revisao_repo as revs
 
 MOTIVO_RETIRADA_LOCAL = "pedido liberado pela tabela de preço no Portal"
+MOTIVO_RETIRADA_INTERCOMPANY = "pedido intercompany, fora da trava de preço"
 
 _MOTIVO_LEGIVEL: dict[str, str] = {
     "produto_nao_identificado": "produto não identificado no Fire",
@@ -298,10 +299,19 @@ def recebido_em_do_pedido(recebido_em: str | datetime | None, agora: datetime) -
     return _instante_z(dt)
 
 
+def _utf16(texto: str) -> int:
+    return len(texto.encode("utf-16-le")) // 2
+
+
 def _texto(*candidatos: object, maximo: int) -> str | None:
+    """Primeiro texto não vazio, truncado a `maximo` unidades UTF-16 (como o
+    `.max()` do zod), sem partir um caractere."""
     for c in candidatos:
         if isinstance(c, str) and c.strip():
-            return c.strip()[:maximo]
+            t = c.strip()[:maximo]
+            while _utf16(t) > maximo:
+                t = t[:-1]
+            return t
     return None
 
 
@@ -350,7 +360,13 @@ def montar_corpo(
                 "linha": i,
                 "erpProdutoId": it.fire_produto_id,
                 "codigo": _texto(oi.product_code, it.fire_produto_id, maximo=128),
-                "descricao": _texto(oi.description, fire.get("fire_description"), maximo=512),
+                "descricao": _texto(
+                    oi.description,
+                    fire.get("fire_description"),
+                    oi.product_code,
+                    it.fire_produto_id,
+                    maximo=512,
+                ),
                 "unidadeErp": it.unidade_erp,
                 "quantidade": float(q) if q is not None and q > 0 else oi.quantity,
                 "precoPedidoCentavos": it.preco_pedido_centavos,
@@ -386,7 +402,29 @@ def _acao_revisao(vig: dict | None, h: str, tem_fila: bool) -> str:
         return "nova" if vig is None or obsoleta else "vigente"
     if vig is None:
         return "local"
-    return "retirar" if obsoleta else "vigente"
+    nunca_tentada = (
+        vig["situacao"] == "pendente_envio"
+        and vig.get("enviada_em") is None
+        and vig.get("tentada_em") is None
+    )
+    # Sem fila, uma revisão que o Flow nunca viu não espera nada: sai local.
+    return "retirar" if obsoleta or nunca_tentada else "vigente"
+
+
+def _bloqueio_do_corpo(order: Order) -> str | None:
+    """Texto legível para o que o schema do envio recusaria no pedido."""
+    numero = order.header.order_number
+    if not isinstance(numero, str) or not numero.strip():
+        return "número do pedido ausente"
+    if _utf16(numero) > 64:
+        return "número do pedido com mais de 64 caracteres"
+    for i, it in enumerate(order.items):
+        q = it.quantity
+        if q is None or not math.isfinite(q) or q <= 0:
+            return f"item {i + 1} sem quantidade maior que zero"
+        if _quantidade_2(q) != Decimal(str(q)):
+            return f"item {i + 1} com quantidade de mais de 2 casas decimais ({q})"
+    return None
 
 
 def _vai_ao_flow(av: Avaliacao) -> bool:
@@ -630,6 +668,9 @@ def _revisao_do_envio(
             return None, {}, None, None
         erro_anterior = None
         if acao == "nova":
+            legivel = _bloqueio_do_corpo(order)
+            if legivel is not None:
+                return None, {}, legivel, None
             try:
                 precos_schema.validar_envio({**corpo, "revisao": 1})
             except ValueError as exc:
@@ -686,6 +727,11 @@ def _decidir_ligado(
                 {},
             )
         av = _avaliar_local(order, check, entry, agora, env)
+        if any(it.situacao == "fora_intercompany" for it in av.itens):
+            # Fora da trava agora (override para empresa do grupo): sai da fila do Flow.
+            with db.connect() as conn:
+                if revs.vigente(conn, import_id) is not None:
+                    revs.retirar(conn, import_id, MOTIVO_RETIRADA_INTERCOMPANY, em=agora)
         if _vai_ao_flow(av):
             revisao, decisoes, corpo_invalido, erro_anterior = _revisao_do_envio(
                 import_id, order, entry, check, av, agora, env

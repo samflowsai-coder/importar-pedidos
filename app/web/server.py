@@ -1686,23 +1686,33 @@ class ReimportRequest(BaseModel):
     env_slug: str | None = None
 
 
-def _retirar_preco_do_reimportado(source_filename: str, novo_id: str) -> None:
-    """O reimport cria `import_id` novo: as importações anteriores do mesmo
-    arquivo (ainda fora do Fire) saem da fila de aprovação de preço do Flow
-    (contrato precos v1 §4.3). Sem revisão é no-op. Nunca derruba o reimport."""
+def _retirar_preco_do_reimportado(src: Path, novo_id: str) -> None:
+    """O reimport cria `import_id` novo: as importações anteriores dos MESMOS
+    bytes (`imports.file_sha256`; o nome não serve, homônimo é outro arquivo e
+    o nome muda com o carimbo), ainda fora do Fire, saem da fila de aprovação
+    de preço do Flow (contrato precos v1 §4.3). Sem sha, nada é retirado.
+    Sem revisão é no-op. Nunca derruba o reimport."""
+    from app.utils.logger import logger
+
     try:
+        import hashlib
         from datetime import UTC
 
         from app.persistence import db as _db
         from app.persistence import preco_revisao_repo
 
+        try:
+            sha = hashlib.sha256(src.read_bytes()).hexdigest()
+        except OSError as exc:
+            logger.warning(f"reimport: sem sha256 do arquivo ({type(exc).__name__}); nada retirado")
+            return
         with _db.connect() as conn:
             antigos = [
                 r[0]
                 for r in conn.execute(
-                    "SELECT id FROM imports WHERE source_filename = ? AND id != ?"
+                    "SELECT id FROM imports WHERE file_sha256 = ? AND id != ?"
                     " AND COALESCE(portal_status, '') NOT IN ('sent_to_fire', 'found_in_fire')",
-                    (source_filename, novo_id),
+                    (sha, novo_id),
                 )
             ]
             for antigo in antigos:
@@ -1710,8 +1720,6 @@ def _retirar_preco_do_reimportado(source_filename: str, novo_id: str) -> None:
                     conn, antigo, "pedido reimportado no Portal", em=datetime.now(UTC)
                 )
     except Exception as exc:  # noqa: BLE001
-        from app.utils.logger import logger
-
         logger.warning(f"retirar revisão de preço do reimport falhou ({type(exc).__name__}): {exc}")
 
 
@@ -1771,7 +1779,7 @@ def reimport_file(
                     db_result=result.get("db_result"),
                 )
                 _append_log(cfg, entry)
-                _retirar_preco_do_reimportado(name, entry["id"])
+                _retirar_preco_do_reimportado(src, entry["id"])
                 return JSONResponse(
                     {
                         "source": name,

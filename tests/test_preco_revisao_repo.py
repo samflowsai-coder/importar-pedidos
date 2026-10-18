@@ -25,7 +25,14 @@ def conn(tmp_path, monkeypatch):
 
 
 def _corpo(tag="a"):
-    return {"schema": "precos.aprovacao.v1", "tipo": "pedido", "externalId": IMP, "tag": tag}
+    return {
+        "schema": "precos.aprovacao.v1",
+        "tipo": "pedido",
+        "externalId": IMP,
+        "empresaFaturadoraCnpj": "11111111000191",
+        "tag": tag,
+        "itens": [{"itemChave": f"{IMP}:0", "erpProdutoId": "123"}],
+    }
 
 
 def _decisao(decisao_id, revisao, item=0, *, resultado="acordo_comercial", preco=5400, em=None):
@@ -240,3 +247,61 @@ def test_reaberto_depois_da_retirada_nao_manda_retirada_velha(conn):
     # a revisão 2 substitui a 1 no Flow: a retirada da 1 retiraria a 2 (409 → vigente)
     assert rev.retiradas_pendentes(conn, 10) == []
     assert [p["revisao"] for p in rev.pendentes_envio(conn, 10)] == [2]
+
+
+# ── Fix round 1 ──────────────────────────────────────────────────────────────
+
+
+def test_rev1_em_voo_rev2_cancel_201_da_rev1_deixa_retirada_da_rev1(conn):
+    rev.garantir_revisao(conn, IMP, _corpo("a"), "sha256:a", agora=AGORA)
+    rev.garantir_revisao(conn, IMP, _corpo("b"), "sha256:b", agora=AGORA)
+    rev.retirar(conn, IMP, "pedido cancelado", em=AGORA)
+    assert rev.retiradas_pendentes(conn, 10) == []  # o Flow ainda não conhece nenhuma
+
+    rev.marcar_enviada(conn, IMP, 1, {"situacao": "pendente"}, em=DEPOIS)  # 201 atrasado
+
+    pend = rev.retiradas_pendentes(conn, 10)
+    assert [(p["revisao"], p["retirada_motivo"]) for p in pend] == [(1, "pedido cancelado")]
+    assert rev.vigente(conn, IMP) is None
+
+
+def test_rev1_tentada_sem_resposta_cancel_enfileira_retirada(conn):
+    rev.garantir_revisao(conn, IMP, _corpo("a"), "sha256:a", agora=AGORA)
+    assert rev.marcar_tentada(conn, IMP, 1, em=AGORA) is True  # POST sai, resposta perdida
+    rev.retirar(conn, IMP, "pedido cancelado", em=DEPOIS)
+    assert [p["revisao"] for p in rev.retiradas_pendentes(conn, 10)] == [1]
+
+
+def test_tentada_em_voo_substituida_e_a_ultima_conhecida_no_cancel(conn):
+    rev.garantir_revisao(conn, IMP, _corpo("a"), "sha256:a", agora=AGORA)
+    rev.marcar_tentada(conn, IMP, 1, em=AGORA)
+    rev.garantir_revisao(conn, IMP, _corpo("b"), "sha256:b", agora=AGORA)  # rev 2 nunca tentada
+    rev.retirar(conn, IMP, "x", em=DEPOIS)
+    assert [p["revisao"] for p in rev.retiradas_pendentes(conn, 10)] == [1]
+
+
+def test_marcar_tentada_so_em_pendente_envio(conn):
+    rev.garantir_revisao(conn, IMP, _corpo("a"), "sha256:a", agora=AGORA)
+    rev.retirar(conn, IMP, "x", em=AGORA)
+    assert rev.marcar_tentada(conn, IMP, 1, em=AGORA) is False  # não envia o retirado
+
+
+def test_decisao_de_outro_produto_ou_empresa_descartada(conn):
+    rev.garantir_revisao(conn, IMP, _corpo(), "sha256:a", agora=AGORA)
+    d = _decisao("d1", 1)
+    d["erpProdutoId"] = "999"
+    assert rev.gravar_decisao(conn, d, agora=AGORA) == "descartada"
+    d = _decisao("d2", 1)
+    d["empresaFaturadoraCnpj"] = "22222222000182"
+    assert rev.gravar_decisao(conn, d, agora=AGORA) == "descartada"
+    d = _decisao("d3", 1, item=7)  # itemChave fora do corpo
+    assert rev.gravar_decisao(conn, d, agora=AGORA) == "descartada"
+    assert rev.decisoes_da_vigente(conn, IMP) == {}
+
+
+def test_empate_de_decidido_em_vence_o_maior_decisao_id(conn):
+    rev.garantir_revisao(conn, IMP, _corpo(), "sha256:a", agora=AGORA)
+    rev.gravar_decisao(conn, _decisao("d-a", 1, preco=5400), agora=AGORA)
+    rev.gravar_decisao(conn, _decisao("d-b", 1, preco=5500), agora=AGORA)
+    rev.gravar_decisao(conn, _decisao("d-0", 1, preco=5300), agora=AGORA)
+    assert rev.decisoes_da_vigente(conn, IMP)[f"{IMP}:0"]["decisao_id"] == "d-b"

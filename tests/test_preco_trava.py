@@ -171,8 +171,14 @@ def _decidir(
 ):
     """Decisão do Flow para a `itemChave` na revisão vigente (ou na dada)."""
     with db.connect() as conn:
+        vig = revs.vigente(conn, import_id)
         if revisao is None:
-            revisao = revs.vigente(conn, import_id)["revisao"]
+            revisao = vig["revisao"]
+        produto = next(
+            i["erpProdutoId"]
+            for i in vig["corpo"]["itens"]
+            if i["itemChave"] == f"{import_id}:{item_index}"
+        )
         decisao_id = decisao_id or str(uuid.uuid4())
         d = {
             "decisaoId": decisao_id,
@@ -180,7 +186,7 @@ def _decidir(
             "empresaFaturadoraCnpj": EMPRESA,
             "revisao": revisao,
             "itemChave": f"{import_id}:{item_index}",
-            "erpProdutoId": "123",
+            "erpProdutoId": produto,
             "resultado": resultado,
             "precoAprovadoCentavos": None if resultado == "recusado" else preco,
             "precoTabelaNoMomentoCentavos": 5000,
@@ -568,8 +574,9 @@ def test_corpo_invalido_bloqueia_local_e_nao_grava_revisao(monkeypatch):
 
     assert d.bloqueado is True
     assert d.reason == "preco_nao_avaliado"
-    assert d.detalhe.startswith("Pedido não pode ir ao Flow para aprovação de preço: ")
-    assert "pedidoNumero" in d.detalhe
+    assert d.detalhe == (
+        "Pedido não pode ir ao Flow para aprovação de preço: número do pedido ausente."
+    )
     assert _revisoes(import_id) == []
 
 
@@ -1491,3 +1498,120 @@ def test_cnpjs_grupo_avisa_cnpj_fora_do_contrato_sem_o_valor(monkeypatch):
     assert len(mensagens) == 1
     assert "intercompany_cnpj" in mensagens[0] and "nasmar" in mensagens[0]
     assert "99887766" not in mensagens[0]
+
+
+# ── Task 7.3, fix round 1 ────────────────────────────────────────────────────
+
+
+def _tabela_passa_a_bater():
+    _copia(5400)  # mesmo precoId, preço novo: o pedido de 54,00 fica ok
+
+
+def test_sem_fila_e_vigente_nunca_tentada_retira_local_e_libera(monkeypatch):
+    _copia(5000)
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())
+    preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+    _tabela_passa_a_bater()
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.bloqueado is False
+    assert d.precos_aplicar == {}
+    with db.connect() as conn:
+        assert revs.vigente(conn, import_id) is None
+        assert revs.retiradas_pendentes(conn, 10) == []  # nada vai ao Flow
+
+
+def test_sem_fila_e_vigente_ja_tentada_espera_a_decisao(monkeypatch):
+    _copia(5000)
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())
+    preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+    with db.connect() as conn:
+        assert revs.marcar_tentada(conn, import_id, 1, em=AGORA)
+    _tabela_passa_a_bater()
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.reason == "preco_aguardando"
+
+
+def test_pedido_que_vira_intercompany_retira_a_vigente(monkeypatch):
+    _copia(5000)
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())
+    preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+    with db.connect() as conn:
+        revs.marcar_enviada(conn, import_id, 1, {}, em=AGORA)
+    _env_grupo("nasmar", intercompany=CNPJ_REDE)
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.avaliacao.itens[0].situacao == "fora_intercompany"
+    with db.connect() as conn:
+        assert revs.vigente(conn, import_id) is None
+        assert [p["revisao"] for p in revs.retiradas_pendentes(conn, 10)] == [1]
+
+
+def test_descricao_cai_no_codigo(monkeypatch):
+    _copia(5000)
+    order = _order((54.0,))
+    order.items[0].description = " "
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())  # check sem fire_description
+
+    preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert _corpo(import_id)["itens"][0]["descricao"] == "C0"
+
+
+def test_numero_do_pedido_longo_bloqueia_com_texto_legivel(monkeypatch):
+    _copia(5000)
+    order = _order((54.0,))
+    order.header.order_number = "9" * 65
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.detalhe == (
+        "Pedido não pode ir ao Flow para aprovação de preço: "
+        "número do pedido com mais de 64 caracteres."
+    )
+    assert _revisoes(import_id) == []
+
+
+def test_quantidade_com_mais_de_duas_casas_bloqueia_local(monkeypatch):
+    _copia(5000)
+    order = _order((54.0,))
+    order.items[0].quantity = 10.555
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.detalhe == (
+        "Pedido não pode ir ao Flow para aprovação de preço: "
+        "item 1 com quantidade de mais de 2 casas decimais (10.555)."
+    )
+    assert _revisoes(import_id) == []
+
+
+def test_nome_longo_e_truncado_em_unidades_utf16(monkeypatch):
+    _copia(5000)
+    order = _order((54.0,))
+    order.header.customer_name = "\U0001f600" * 200  # 400 unidades UTF-16
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check())
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.reason == "preco_aguardando"
+    nome = _corpo(import_id)["cliente"]["nome"]
+    assert len(nome.encode("utf-16-le")) // 2 <= 255

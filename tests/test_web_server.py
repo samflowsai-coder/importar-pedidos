@@ -2670,7 +2670,7 @@ def test_import_direto_em_modo_db_nunca_chama_firebird(monkeypatch, tmp_path, mo
         assert out["output_files"] == []
 
 
-def _import_parsed(entry_id, *, source_filename="x.pdf"):
+def _import_parsed(entry_id, *, source_filename="x.pdf", file_sha256=None):
     from datetime import datetime
 
     from app.persistence import repo
@@ -2679,6 +2679,7 @@ def _import_parsed(entry_id, *, source_filename="x.pdf"):
         {
             "id": entry_id,
             "source_filename": source_filename,
+            "file_sha256": file_sha256,
             "imported_at": datetime.now().isoformat(timespec="seconds"),
             "order_number": "TEST-PRECO",
             "customer": "ACME",
@@ -2738,11 +2739,16 @@ def test_reimport_retira_a_revisao_do_pedido_antigo(monkeypatch, tmp_path):
     imp = tmp_path / "in" / "Pedidos importados"
     imp.mkdir(parents=True)
     shutil.copy(pdf, imp / pdf.name)
+    import hashlib
+
+    sha = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    # mesmos bytes com o nome carimbado de quando foi importado → é o antigo
     antigo = str(uuid.uuid4())
-    _import_parsed(antigo, source_filename=pdf.name)
+    _import_parsed(antigo, source_filename=f"20261017-1015_{pdf.name}", file_sha256=sha)
     _revisao_enviada(antigo)
+    # homônimo com outro conteúdo → NÃO é o antigo
     outro = str(uuid.uuid4())
-    _import_parsed(outro, source_filename="outro.pdf")
+    _import_parsed(outro, source_filename=pdf.name, file_sha256="0" * 64)
     _revisao_enviada(outro)
 
     client.cookies.set("portal_env", env["id"])
@@ -2961,6 +2967,8 @@ def _decisao_flow(entry_id, resultado, centavos=None, motivo=None):
             {
                 "decisaoId": did,
                 "externalId": entry_id,
+                "empresaFaturadoraCnpj": _EMPRESA_TRAVA,
+                "erpProdutoId": "123",
                 "revisao": vig["revisao"],
                 "itemChave": f"{entry_id}:0",
                 "resultado": resultado,
@@ -3262,8 +3270,13 @@ def _revisao_preview(entry_id):
     agora = _dt.now(UTC)
     av = preco_trava.avaliar_entry(entry, order, env=env, agora=agora)
     h = preco_trava.conteudo_hash(order, av, cliente_cnpj=av.cnpj_rede, empresa_cnpj=_EMPRESA_TRAVA)
+    corpo = {
+        "externalId": entry_id,
+        "empresaFaturadoraCnpj": _EMPRESA_TRAVA,
+        "itens": [{"itemChave": f"{entry_id}:0", "erpProdutoId": "123"}],
+    }
     with db.connect() as conn:
-        revs.garantir_revisao(conn, entry_id, {"externalId": entry_id}, h, agora=agora)
+        revs.garantir_revisao(conn, entry_id, corpo, h, agora=agora)
 
 
 def test_detalhe_mostra_decisao_do_item(tmp_path):
