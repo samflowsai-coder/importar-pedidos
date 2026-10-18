@@ -644,3 +644,31 @@ def test_primeira_anexacao_falhou_e_recuperada_pelo_ativo_desde(portal_lote):
     with router.shared_connect() as conn:
         todas = [p for lt in lotes_repo.listar(conn) for p in _pernas_de(lt["id"])]
     assert todas == ["N2"]
+
+
+def test_varredura_ignora_espelho_enviado_da_propria_origem(portal_lote_com_perna):
+    _enviada_sem_lote("lote-NAS-2026-S33", fire=1170)
+    with router.shared_connect() as conn:
+        velho = lotes_repo.lote_para(
+            conn,
+            env_origem_slug="nasmar",
+            env_espelho_slug="nasmar",
+            inicio=date(2026, 8, 10),
+            fim=date(2026, 8, 16),
+            modo_janela="semanal",
+            agora=datetime(2026, 8, 10, 9, 0),
+        )
+        conn.execute(
+            "UPDATE intercompany_lote SET status = 'fechado', import_id_espelho = ? WHERE id = ?",
+            ("lote-NAS-2026-S33", velho["id"]),
+        )
+
+    r = fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+
+    assert r["recuperadas"] == 0
+    with router.shared_connect() as conn:
+        ids = {
+            p["import_id"]
+            for p in lotes_repo.pernas_do_lote(conn, portal_lote_com_perna["lote_id"])
+        }
+    assert "lote-NAS-2026-S33" not in ids

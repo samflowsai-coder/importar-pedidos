@@ -12,7 +12,14 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    StrictBool,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 from app.consolidators import fechamento
 from app.consolidators.janela import MODOS, instante_fechamento, janela_de, proxima_janela
@@ -71,11 +78,16 @@ class FatorLoteRequest(_ComFator):
 class ConfigRequest(BaseModel):
     env_origem_slug: str
     env_espelho_slug: str
-    nome_revenda: str = Field(min_length=1)
+    nome_revenda: str = Field(min_length=1, max_length=100)
     janela: str
-    dia_inicio: int = Field(ge=0, le=6)
-    hora_fechamento: int = Field(ge=0, le=23)
-    ativo: bool
+    dia_inicio: StrictInt = Field(ge=0, le=6)
+    hora_fechamento: StrictInt = Field(ge=0, le=23)
+    ativo: StrictBool
+
+    @field_validator("nome_revenda", mode="before")
+    @classmethod
+    def _nome(cls, v: Any) -> Any:
+        return v.strip() if isinstance(v, str) else v
 
     @field_validator("janela")
     @classmethod
@@ -83,6 +95,12 @@ class ConfigRequest(BaseModel):
         if v not in MODOS:
             raise ValueError(f"janela deve ser uma de {MODOS}")
         return v
+
+    @model_validator(mode="after")
+    def _origem_diferente_do_espelho(self) -> ConfigRequest:
+        if self.env_origem_slug == self.env_espelho_slug:
+            raise ValueError("o ambiente espelho deve ser diferente do de origem")
+        return self
 
 
 def _exemplo(fator: Decimal, modo: str) -> dict:
@@ -218,6 +236,7 @@ def get_lotes(_=Depends(require_user)):
             "fator_vigente": None,
             "proximo_fator": None,
             "aberto": None,
+            "pendentes": [],
             "fora_do_lote": {"total": 0, "itens": []},
             "recentes": recentes,
         }
@@ -239,21 +258,27 @@ def get_lotes(_=Depends(require_user)):
                 "modo": prox[1],
                 "vigente_desde": inicio_prox.isoformat(),
             }
+        j_hoje = janela_de(hoje, modo=cfg["janela"], dia_inicio=cfg["dia_inicio"])
+        da_origem = [lt for lt in recentes if lt["env_origem_slug"] == slug]
         aberto = next(
             (
                 lt
-                for lt in recentes
-                if lt["env_origem_slug"] == slug and lt["status"] in ("aberto", "aguardando_fator")
+                for lt in da_origem
+                if lt["status"] == "aberto" and lt["janela_inicio"] == j_hoje[0].isoformat()
             ),
             None,
         )
+        out["pendentes"] = [
+            _resumo_aberto(lt, cfg, lotes_repo.pernas_do_lote(conn, lt["id"]))
+            for lt in da_origem
+            if lt["status"] == "aguardando_fator"
+        ]
         if aberto is not None:
             pernas = lotes_repo.pernas_do_lote(conn, aberto["id"])
             out["aberto"] = _resumo_aberto(aberto, cfg, pernas)
             ini, fim = aberto["janela_inicio"], aberto["janela_fim"]
         else:
-            j = janela_de(hoje, modo=cfg["janela"], dia_inicio=cfg["dia_inicio"])
-            ini, fim = j[0].isoformat(), j[1].isoformat()
+            ini, fim = j_hoje[0].isoformat(), j_hoje[1].isoformat()
         out["fora_do_lote"] = _fora_do_lote(cfg, ini, fim, conn)
     return out
 

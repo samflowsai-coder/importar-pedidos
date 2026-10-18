@@ -324,6 +324,14 @@ def _recuperar(cfg: dict, agora: datetime) -> int:
                     (slug,),
                 )
             }
+            # Espelho nunca é perna (config torta com origem == espelho fecharia o laço).
+            no_lote |= {
+                r[0]
+                for r in conn.execute(
+                    "SELECT import_id_espelho FROM intercompany_lote "
+                    "WHERE import_id_espelho IS NOT NULL"
+                )
+            }
         env = environments_repo.get_by_slug(slug)
         if env is None:
             return 0

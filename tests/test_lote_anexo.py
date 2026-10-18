@@ -226,3 +226,37 @@ def test_sem_lote_aberto_em_8_janelas_desiste_sem_deixar_lote_vazio(portal_lote,
     assert lote_id is None
     with router.shared_connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM intercompany_lote").fetchone()[0] == 0
+
+
+def test_espelho_nunca_e_anexado_como_perna(portal_lote):
+    from datetime import date
+
+    _grava("nasmar", "lote-NAS-2026-S33")
+    with router.shared_connect() as conn:
+        lote = lotes_repo.lote_para(
+            conn,
+            env_origem_slug="nasmar",
+            env_espelho_slug="nasmar",
+            inicio=date(2026, 8, 10),
+            fim=date(2026, 8, 16),
+            modo_janela="semanal",
+            agora=datetime(2026, 8, 10, 9, 0),
+        )
+        conn.execute(
+            "UPDATE intercompany_lote SET status = 'fechado', import_id_espelho = ? WHERE id = ?",
+            ("lote-NAS-2026-S33", lote["id"]),
+        )
+
+    from app.consolidators import integracao
+    from app.models.order import Order, OrderHeader
+
+    entry = {"imported_at": "2026-08-12T10:00:00"}
+    order = Order(header=OrderHeader(order_number="E", customer_name="X"), items=[])
+    result = FirebirdExportResult("E", 1, fire_codigo=1170, itens=[(9001, 0)])
+
+    lote_id = integracao.anexar_perna_de_origem(
+        "lote-NAS-2026-S33", entry, order, result, {"slug": "nasmar"}
+    )
+
+    assert lote_id is None
+    assert _pernas() == []

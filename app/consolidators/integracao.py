@@ -77,6 +77,8 @@ def _anexar(
         cfg = lotes_repo.get_config(conn, slug)
         if cfg is None or not cfg["ativo"]:
             return None
+        if lotes_repo.lote_do_espelho(conn, import_id) is not None:
+            return None  # espelho nunca é perna: fecharia o laço
         importado = date.fromisoformat(str(entry["imported_at"])[:10])
         lote_id = anexar_na_janela(
             conn,

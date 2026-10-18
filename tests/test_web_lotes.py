@@ -99,8 +99,8 @@ def _fator(valor: str = "0.07") -> None:
         )
 
 
-def _perna(ident: str, *, fire: int = 1157, com_fator: bool = True) -> int:
-    _grava(ident)
+def _perna(ident: str, *, fire: int = 1157) -> int:
+    _grava(ident, sent_to_fire_at=datetime.now().isoformat(timespec="seconds"))
     hoje = _hoje()
     inicio = hoje - timedelta(days=hoje.weekday())
     with router.shared_connect() as conn:
@@ -242,16 +242,25 @@ def test_trocar_janela_com_lote_aberto_da_409(lote_com_pernas):
 def test_fator_novo_vale_da_proxima_janela(lote_com_pernas):
     c = lote_com_pernas["client"]
     r = c.post(
-        "/api/lotes/fator", json={"env_origem_slug": "nasmar", "fator": 0.07, "modo": "desconto"}
+        "/api/lotes/fator", json={"env_origem_slug": "nasmar", "fator": 0.08, "modo": "desconto"}
     )
     assert r.status_code == 200, r.text
     hoje = _hoje()
     proxima = hoje - timedelta(days=hoje.weekday()) + timedelta(days=7)
     assert r.json()["vigente_desde"] == proxima.isoformat()
-    assert r.json()["exemplo"] == {"de": 16.12, "para": 14.99}
+    assert r.json()["exemplo"] == {"de": 16.12, "para": 14.83}  # 16.12 x 0.92
+    body = c.get("/api/lotes").json()
+    assert body["fator_vigente"]["fator"] == "0.07"
+    assert body["proximo_fator"] == {
+        "fator": "0.08",
+        "modo": "desconto",
+        "vigente_desde": proxima.isoformat(),
+    }
     # o lote da semana corrente continua com o fator congelado
     with router.shared_connect() as conn:
         assert lotes_repo.fator_vigente(conn, "nasmar", hoje)[0] == Decimal("0.07")
+        lote = lotes_repo.get(conn, lote_com_pernas["lote_id"])
+    assert lote["fator_preco_aplicado"] == "0.07"
 
 
 def test_fator_global_sem_config_da_404(portal):
@@ -372,3 +381,65 @@ def test_config_e_fator_global_exigem_admin(real_client, real_auth):
 
 def test_lotes_sem_sessao_da_401(real_client, real_auth):
     assert real_client.get("/api/lotes").status_code == 401
+
+
+def test_config_recusa_origem_igual_ao_espelho(portal):
+    r = portal.put("/api/lotes/config", json=_body_config(env_espelho_slug="nasmar"))
+    assert r.status_code == 422
+
+
+def test_config_valida_tipos_estritos_e_nome(portal):
+    assert portal.put("/api/lotes/config", json=_body_config(ativo="sim")).status_code == 422
+    assert portal.put("/api/lotes/config", json=_body_config(dia_inicio=1.5)).status_code == 422
+    assert (
+        portal.put("/api/lotes/config", json=_body_config(hora_fechamento="8")).status_code == 422
+    )
+    assert portal.put("/api/lotes/config", json=_body_config(nome_revenda="   ")).status_code == 422
+    assert (
+        portal.put("/api/lotes/config", json=_body_config(nome_revenda="x" * 101)).status_code
+        == 422
+    )
+    r = portal.put("/api/lotes/config", json=_body_config(nome_revenda="  Nasmar  "))
+    assert r.json()["nome_revenda"] == "Nasmar"
+
+
+@pytest.mark.parametrize("fator", ["NaN", "Infinity", True, "abc", None])
+def test_fator_nao_numerico_e_rejeitado(lote_sem_fator, fator):
+    c = lote_sem_fator["client"]
+    r = c.post(
+        f"/api/lotes/{lote_sem_fator['lote_id']}/fator", json={"fator": fator, "modo": "desconto"}
+    )
+    assert r.status_code == 422
+
+
+def test_aberto_nao_esconde_o_lote_aguardando_fator(portal):
+    _config()
+    _fator()
+    hoje = _hoje()
+    inicio = hoje - timedelta(days=hoje.weekday())
+    antigo = inicio - timedelta(days=7)
+    with router.shared_connect() as conn:
+        velho = lotes_repo.lote_para(
+            conn,
+            env_origem_slug="nasmar",
+            env_espelho_slug="mm",
+            inicio=antigo,
+            fim=antigo + timedelta(days=6),
+            modo_janela="semanal",
+            agora=datetime.now(),
+        )
+        lotes_repo.marcar_aguardando_fator(conn, velho["id"])
+    atual = _perna("N1")
+    body = portal.get("/api/lotes").json()
+    assert body["aberto"]["id"] == atual
+    assert [p["id"] for p in body["pendentes"]] == [velho["id"]]
+    assert body["pendentes"][0]["status"] == "aguardando_fator"
+    assert body["aberto"]["janela_inicio"] == inicio.isoformat()
+    # fora_do_lote mede a janela do aberto, não a do pendente
+    assert body["fora_do_lote"]["total"] == 0
+
+
+def test_rotas_de_lote_sem_sessao_dao_401(real_client, real_auth):
+    assert real_client.post("/api/lotes/1/fechar").status_code == 401
+    r = real_client.post("/api/lotes/1/fator", json={"fator": 0.07, "modo": "desconto"})
+    assert r.status_code == 401
