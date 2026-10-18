@@ -25,6 +25,15 @@ def _reservar(conn, cid="c1", versao=1, produto="p1", acao="criar", modo="criar"
     )
 
 
+def _forcar(conn, cid, estado, versao=1, seq=None):
+    """Põe a linha num estado qualquer (cenário que a API pública não alcança)."""
+    conn.execute(
+        "UPDATE cadastro_volta SET estado = ?, seq_reservado = COALESCE(?, seq_reservado) "
+        "WHERE cadastro_id = ? AND versao = ?",
+        (estado, seq, cid, versao),
+    )
+
+
 def _simulado(conn, cid="v1", versao=1):
     repo.registrar(conn, cadastro_id=cid, versao=versao, estado="simulado", acao="criar",
                    tipo="simples", erro_codigo=None, erro_mensagem=None, plano_json="{}")
@@ -43,7 +52,8 @@ def test_reservar_retoma_linha_simulada(conn):
 
 def test_reservar_retoma_transitorio_mas_nao_gravado(conn):
     _reservar(conn)
-    repo.marcar_desfecho(conn, "c1", 1, "transitorio")
+    repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}")
+    assert repo.marcar_desfecho(conn, "c1", 1, "transitorio") is True
     assert _reservar(conn) is True
     repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
     assert _reservar(conn) is False
@@ -87,13 +97,13 @@ def test_criar_do_produto_acha_incerto(conn):
 def test_criar_do_produto_acha_liberado_com_seq(conn):
     _reservar(conn)
     repo.marcar_seq(conn, "c1", 1, 4001)
-    repo.marcar_desfecho(conn, "c1", 1, "liberado")
+    _forcar(conn, "c1", "liberado")
     assert repo.criar_do_produto(conn, "p1")["estado"] == "liberado"
 
 
 def test_criar_do_produto_ignora_liberado_sem_seq(conn):
     _reservar(conn)
-    repo.marcar_desfecho(conn, "c1", 1, "liberado")
+    assert repo.liberar_comprovado(conn, "c1", 1) is True
     assert repo.criar_do_produto(conn, "p1") is None
 
 
@@ -111,17 +121,6 @@ def test_seq_criado_pelo_portal(conn):
     repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
     assert repo.seq_criado_pelo_portal(conn, "3992") is True
     assert repo.seq_criado_pelo_portal(conn, "3993") is False
-
-
-def test_gravado_sem_volta_nao_vira_transitorio(conn):
-    _reservar(conn)
-    repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
-    for estado in (
-        "transitorio", "liberado", "erro_registrado", "incerto", "em_andamento",
-        "simulado", "erro_definitivo", "superado", "erro_a_enviar",
-    ):
-        assert repo.marcar_desfecho(conn, "c1", 1, estado) is False
-        assert repo.buscar(conn, "c1", 1)["estado"] == "gravado_sem_volta"
 
 
 def test_gravado_sem_volta_vira_confirmado(conn):
@@ -162,19 +161,19 @@ def test_seqs_em_aberto(conn):
     repo.marcar_desfecho(conn, "c", 1, "incerto")
     _reservar(conn, cid="d", produto="pd")
     repo.marcar_seq(conn, "d", 1, 400)
-    repo.marcar_desfecho(conn, "d", 1, "liberado")
+    _forcar(conn, "d", "liberado")
     _reservar(conn, cid="e", produto="pe")
-    repo.marcar_desfecho(conn, "e", 1, "liberado")  # sem SEQ: fora
+    repo.liberar_comprovado(conn, "e", 1)  # sem SEQ: fora
     _reservar(conn, cid="f", produto="pf")
     repo.marcar_seq(conn, "f", 1, 500)
-    repo.marcar_desfecho(conn, "f", 1, "transitorio")  # fora
+    _forcar(conn, "f", "transitorio")  # fora
     assert repo.seqs_em_aberto(conn) == {"100", "200", "300", "400"}
 
 
 def test_reservar_nao_reaproveita_liberado_com_seq(conn):
     _reservar(conn)
     repo.marcar_seq(conn, "c1", 1, 4001)
-    repo.marcar_desfecho(conn, "c1", 1, "liberado")
+    _forcar(conn, "c1", "liberado")
     assert _reservar(conn) is False
     linha = repo.buscar(conn, "c1", 1)
     assert (linha["estado"], linha["seq_reservado"]) == ("liberado", 4001)
@@ -183,8 +182,8 @@ def test_reservar_nao_reaproveita_liberado_com_seq(conn):
 def test_reservar_zera_rastros_ao_reaproveitar(conn):
     _reservar(conn)
     repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
-    conn.execute("UPDATE cadastro_volta SET estado = 'transitorio' WHERE cadastro_id = 'c1'")
-    repo.adiar(conn, "c1", 1, ate="2026-10-17T13:00:00", alerta="a", resposta="r")
+    assert repo.adiar(conn, "c1", 1, ate="2026-10-17T13:00:00", alerta="a", resposta="r") is True
+    _forcar(conn, "c1", "transitorio")
     assert _reservar(conn) is True
     linha = repo.buscar(conn, "c1", 1)
     assert linha["erp_produto_id"] is None
@@ -209,7 +208,7 @@ def test_confirmado_nao_tem_saida(conn):
     _reservar(conn)
     repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
     repo.marcar_desfecho(conn, "c1", 1, "confirmado")
-    for estado in ("transitorio", "orfao", "liberado", "erro_registrado"):
+    for estado in ("transitorio", "orfao", "erro_registrado", "incerto", "superado"):
         assert repo.marcar_desfecho(conn, "c1", 1, estado) is False
     assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}") is False
     assert repo.buscar(conn, "c1", 1)["estado"] == "confirmado"
@@ -252,10 +251,10 @@ def test_marcar_seq_so_em_andamento(conn):
 
 
 def test_criar_do_produto_desempate_andamento_vs_incerto(conn):
-    _reservar(conn, cid="a", versao=1)
-    repo.marcar_desfecho(conn, "a", 1, "incerto")
+    _reservar(conn, cid="a", versao=1)  # em_andamento primeiro
     _reservar(conn, cid="b", versao=2)
-    assert repo.criar_do_produto(conn, "p1")["cadastro_id"] == "b"
+    repo.marcar_desfecho(conn, "b", 2, "incerto")  # incerto depois
+    assert repo.criar_do_produto(conn, "p1")["cadastro_id"] == "a"
 
 
 def test_criar_do_produto_mais_recente_no_mesmo_estado(conn):
@@ -291,3 +290,94 @@ def test_ensure_schema_migra_banco_antigo(tmp_path):
     finally:
         c.close()
         router.reset_init_cache()
+
+
+@pytest.mark.parametrize("origem", sorted(repo.ESTADOS))
+@pytest.mark.parametrize("destino", sorted(repo.ESTADOS))
+def test_matriz_marcar_desfecho(conn, origem, destino):
+    _reservar(conn)
+    _forcar(conn, "c1", origem)
+    if destino not in repo.TRANSICOES:
+        with pytest.raises(ValueError):
+            repo.marcar_desfecho(conn, "c1", 1, destino)
+        esperado, mudou = origem, None
+    else:
+        mudou = repo.marcar_desfecho(conn, "c1", 1, destino)
+        permitido = origem in repo.TRANSICOES[destino]
+        assert mudou is permitido
+        esperado = destino if permitido else origem
+    assert repo.buscar(conn, "c1", 1)["estado"] == esperado
+
+
+def test_tabela_de_transicoes_e_a_combinada():
+    assert repo.TRANSICOES == {
+        "confirmado": {"gravado_sem_volta"},
+        "orfao": {"gravado_sem_volta"},
+        "erro_registrado": {"erro_a_enviar"},
+        "transitorio": {"erro_a_enviar"},
+        "superado": {"erro_a_enviar"},
+        "incerto": {"em_andamento"},
+    }
+
+
+def test_cadeia_incerto_nao_chega_a_reservar(conn):
+    _reservar(conn)
+    repo.marcar_seq(conn, "c1", 1, 4001)
+    repo.marcar_desfecho(conn, "c1", 1, "incerto")
+    assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}") is False
+    for destino in ("transitorio", "superado", "erro_registrado"):
+        assert repo.marcar_desfecho(conn, "c1", 1, destino) is False
+    assert repo.adiar(conn, "c1", 1, ate="2026-10-17T13:00:00") is False
+    assert _reservar(conn) is False
+    assert repo.buscar(conn, "c1", 1)["estado"] == "incerto"
+
+
+def test_cadeia_liberado_com_seq_nao_chega_a_reservar(conn):
+    _reservar(conn)
+    repo.marcar_seq(conn, "c1", 1, 4001)
+    _forcar(conn, "c1", "liberado")
+    assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}") is False
+    assert repo.marcar_desfecho(conn, "c1", 1, "transitorio") is False
+    assert repo.liberar_comprovado(conn, "c1", 1) is False
+    assert _reservar(conn) is False
+    assert repo.buscar(conn, "c1", 1)["seq_reservado"] == 4001
+
+
+def test_cadeia_orfao_fechado_nao_chega_a_reservar(conn):
+    _reservar(conn)
+    repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
+    repo.marcar_desfecho(conn, "c1", 1, "orfao")
+    assert repo.fechar_orfao(conn, "c1", 1, operador="samuel", nota="conferido") is True
+    linha = repo.buscar(conn, "c1", 1)
+    assert (linha["estado"], linha["alerta"]) == ("orfao_fechado", "fechado_manual:samuel")
+    assert repo.marcar_erro_a_enviar(conn, "c1", 1, codigo="X", mensagem="m", corpo_json="{}") is False
+    for destino in repo.TRANSICOES:
+        assert repo.marcar_desfecho(conn, "c1", 1, destino) is False
+    assert repo.fechar_orfao(conn, "c1", 1, operador="x", nota="y") is False
+    assert _reservar(conn) is False
+    assert repo.buscar(conn, "c1", 1)["estado"] == "orfao_fechado"
+
+
+def test_fechar_orfao_so_de_orfao(conn):
+    _reservar(conn)
+    repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
+    assert repo.fechar_orfao(conn, "c1", 1, operador="s", nota="n") is False
+
+
+def test_liberar_comprovado_zera_seq_e_reservar_reaproveita(conn):
+    _reservar(conn)
+    repo.marcar_seq(conn, "c1", 1, 4001)
+    assert repo.liberar_comprovado(conn, "c1", 1) is True
+    linha = repo.buscar(conn, "c1", 1)
+    assert (linha["estado"], linha["seq_reservado"]) == ("liberado", None)
+    assert _reservar(conn) is True
+    assert repo.buscar(conn, "c1", 1)["estado"] == "em_andamento"
+
+
+def test_adiar_so_em_pendente(conn):
+    _reservar(conn)
+    repo.marcar_gravado(conn, "c1", 1, erp_produto_id="3992", corpo_json="{}")
+    repo.marcar_desfecho(conn, "c1", 1, "confirmado")
+    assert repo.adiar(conn, "c1", 1, ate="2026-10-17T13:00:00") is False
+    linha = repo.buscar(conn, "c1", 1)
+    assert (linha["tentativas"], linha["proxima_tentativa_em"]) == (0, None)

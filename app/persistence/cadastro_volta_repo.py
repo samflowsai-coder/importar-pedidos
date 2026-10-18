@@ -30,8 +30,7 @@ _COLS = (
 ESTADOS_DESCARTAVEIS = ("simulado", "erro_definitivo", "transitorio", "liberado")
 _PENDENTES = ("gravado_sem_volta", "erro_a_enviar")
 # O produto existe no ERP: nenhuma transição daqui pode levar a gravar de novo.
-_JA_NO_ERP = ("gravado_sem_volta", "confirmado", "orfao")
-_JA_NO_ERP_SQL = ", ".join(f"'{e}'" for e in _JA_NO_ERP)
+_JA_NO_ERP = ("gravado_sem_volta", "confirmado", "orfao", "orfao_fechado")
 ESTADOS = frozenset(
     {
         "simulado",
@@ -46,8 +45,19 @@ ESTADOS = frozenset(
         "orfao",
         "superado",
         "incerto",
+        "orfao_fechado",
     }
 )
+# Lista branca de `marcar_desfecho`: destino -> origens permitidas. `liberado`,
+# `erro_a_enviar` e `gravado_sem_volta` têm porta própria; `orfao_fechado` também.
+TRANSICOES: dict[str, frozenset[str]] = {
+    "confirmado": frozenset({"gravado_sem_volta"}),
+    "orfao": frozenset({"gravado_sem_volta"}),
+    "erro_registrado": frozenset({"erro_a_enviar"}),
+    "transitorio": frozenset({"erro_a_enviar"}),
+    "superado": frozenset({"erro_a_enviar"}),
+    "incerto": frozenset({"em_andamento"}),
+}
 _RESPOSTA_MAX = 64
 _DESCARTAVEIS_SQL = ", ".join(f"'{e}'" for e in ESTADOS_DESCARTAVEIS)
 _PENDENTES_SQL = ", ".join(f"'{e}'" for e in _PENDENTES)
@@ -169,12 +179,12 @@ def marcar_erro_a_enviar(
     mensagem: str,
     corpo_json: str,
 ) -> bool:
-    """Nunca toca linha que já está no ERP (`_JA_NO_ERP`). True se mudou."""
+    """Só age em `em_andamento` (nunca em linha que já está no ERP). True se mudou."""
     cur = conn.execute(
         "UPDATE cadastro_volta SET estado = 'erro_a_enviar', erro_codigo = ?, "
         "erro_mensagem = ?, corpo_json = ?, proxima_tentativa_em = NULL, "
         "atualizado_em = datetime('now') "
-        f"WHERE cadastro_id = ? AND versao = ? AND estado NOT IN ({_JA_NO_ERP_SQL})",
+        "WHERE cadastro_id = ? AND versao = ? AND estado = 'em_andamento'",
         (codigo, mensagem, corpo_json, cadastro_id, versao),
     )
     return cur.rowcount == 1
@@ -189,19 +199,46 @@ def marcar_desfecho(
     alerta: str | None = None,
     resposta: str | None = None,
 ) -> bool:
-    """True se mudou. `gravado_sem_volta` só sai para `confirmado` ou `orfao`;
-    `confirmado` e `orfao` não saem por aqui (o produto existe no ERP: qualquer
-    outro estado faria o Portal gravar de novo). Estado desconhecido: ValueError."""
-    if estado not in ESTADOS:
-        raise ValueError("estado desconhecido no livro da volta")
+    """True se mudou. Só vale a lista branca `TRANSICOES` (destino -> origens):
+    o que pode ter comitado no ERP (`incerto`, `liberado` com SEQ, `gravado_sem_volta`,
+    `confirmado`, `orfao`) nunca volta a um estado reaproveitável por aqui.
+    Destino fora da tabela: ValueError."""
+    origens = TRANSICOES.get(estado)
+    if origens is None:
+        raise ValueError("destino não permitido em marcar_desfecho")
     resposta = resposta[:_RESPOSTA_MAX] if resposta is not None else None
+    marcas = ", ".join("?" for _ in origens)
     cur = conn.execute(
         "UPDATE cadastro_volta SET estado = ?, alerta = ?, resposta_flow = ?, "
         "proxima_tentativa_em = NULL, atualizado_em = datetime('now') "
-        "WHERE cadastro_id = ? AND versao = ? "
-        "AND (estado NOT IN (" + _JA_NO_ERP_SQL + ") "
-        "OR (estado = 'gravado_sem_volta' AND ? IN ('confirmado', 'orfao')))",
-        (estado, alerta, resposta, cadastro_id, versao, estado),
+        f"WHERE cadastro_id = ? AND versao = ? AND estado IN ({marcas})",
+        (estado, alerta, resposta, cadastro_id, versao, *sorted(origens)),
+    )
+    return cur.rowcount == 1
+
+
+def liberar_comprovado(conn: sqlite3.Connection, cadastro_id: str, versao: int) -> bool:
+    """`em_andamento` -> `liberado`, zerando o SEQ na mesma instrução. Única porta
+    para `liberado`: só quem comprovou a ausência do SEQ no ERP chama."""
+    cur = conn.execute(
+        "UPDATE cadastro_volta SET estado = 'liberado', seq_reservado = NULL, "
+        "atualizado_em = datetime('now') "
+        "WHERE cadastro_id = ? AND versao = ? AND estado = 'em_andamento'",
+        (cadastro_id, versao),
+    )
+    return cur.rowcount == 1
+
+
+def fechar_orfao(
+    conn: sqlite3.Connection, cadastro_id: str, versao: int, *, operador: str, nota: str
+) -> bool:
+    """`orfao` -> `orfao_fechado` (final). Não vira `superado`: um estado reaproveitável
+    apagaria a prova de que o produto existe no ERP. A nota fica em `erro_mensagem`."""
+    cur = conn.execute(
+        "UPDATE cadastro_volta SET estado = 'orfao_fechado', alerta = ?, erro_mensagem = ?, "
+        "atualizado_em = datetime('now') "
+        "WHERE cadastro_id = ? AND versao = ? AND estado = 'orfao'",
+        (f"fechado_manual:{operador}"[:_RESPOSTA_MAX], nota, cadastro_id, versao),
     )
     return cur.rowcount == 1
 
@@ -214,15 +251,17 @@ def adiar(
     ate: str,
     alerta: str | None = None,
     resposta: str | None = None,
-) -> None:
+) -> bool:
+    """Só age em linha pendente de envio. True se adiou."""
     resposta = resposta[:_RESPOSTA_MAX] if resposta is not None else None
-    conn.execute(
+    cur = conn.execute(
         "UPDATE cadastro_volta SET tentativas = tentativas + 1, proxima_tentativa_em = ?, "
         "alerta = COALESCE(?, alerta), resposta_flow = COALESCE(?, resposta_flow), "
         "atualizado_em = datetime('now') "
-        "WHERE cadastro_id = ? AND versao = ?",
+        f"WHERE cadastro_id = ? AND versao = ? AND estado IN ({_PENDENTES_SQL})",
         (ate, alerta, resposta, cadastro_id, versao),
     )
+    return cur.rowcount == 1
 
 
 def _dicts(cur: sqlite3.Cursor) -> list[dict[str, Any]]:
