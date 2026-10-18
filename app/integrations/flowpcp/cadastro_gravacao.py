@@ -6,7 +6,8 @@ conferiu a P0. Segue as regras de ouro do contrato P4a (rev. 4):
 - `(cadastroId, versao)` no livro decide antes do ERP: o que já tem resultado só
   reenvia o corpo guardado, e só quando a espera venceu; o ERP não é chamado de novo.
 - A triagem (validação, livro, 9b, escopo) roda para todos os itens sem abrir o
-  ERP; a conexão de escrita só abre se algum item sair "a gravar".
+  ERP; a conexão de escrita só abre se algum item sair "a gravar" (ou, antes do
+  GET, se há linha interrompida para `cadastro_recuperacao`, que só lê).
 - O SEQ reservado vai ao disco (commit do SQLite) antes do INSERT (`ao_reservar`).
 - Resultado incerto (conexão caída depois do comando, livro que não aceitou a
   reserva) fica `em_andamento` para a recuperação; nunca vira erro nem resposta.
@@ -26,8 +27,8 @@ from typing import Any
 from uuid import UUID
 
 from app.erp import cadastro_fire
+from app.integrations.flowpcp import cadastro_recuperacao, capacidades
 from app.integrations.flowpcp import cadastro_volta as cv
-from app.integrations.flowpcp import capacidades
 from app.integrations.flowpcp.cadastro_resultado import (
     Desfecho,
     corpo_erro,
@@ -584,9 +585,26 @@ def _recusar_conexao(lote: _Lote, itens: list[CadastroPendente], exc: BaseExcept
                   f"conexão com o ERP falhou ({type(exc).__name__})", rollback_comprovado=True)
 
 
+def _recuperar(slug: str, env_conn, fire_conn, agora: datetime) -> dict | None:
+    """Antes do GET: linhas que um processo caído deixou no meio (só lê o ERP)."""
+    if not cadastro_recuperacao.ha_o_que_recuperar(env_conn, agora=agora):
+        return None
+    try:
+        with ExitStack() as stack:
+            fire = fire_conn if fire_conn is not None else stack.enter_context(
+                cv._abrir_fire_escrita(slug)
+            )
+            return cadastro_recuperacao.recuperar(slug, env_conn, fire, agora=agora)
+    except Exception as exc:  # noqa: BLE001 — as linhas ficam para o próximo ciclo
+        logger.error(f"flowpcp.cadastro_volta env={slug}: recuperação adiada, ERP indisponível "
+                     f"({type(exc).__name__})")
+        return {"erro": type(exc).__name__}
+
+
 def processar_gravacao(slug: str, m: str, client, env_conn, fire_conn, *,
                        relogio: Callable[[], datetime]) -> dict:
     inicio = relogio()
+    recuperacao = _recuperar(slug, env_conn, fire_conn, inicio)
     try:
         resp = client.list_cadastros_pendentes(limite=cv.LIMITE_GRAVACAO, acoes=cv._acoes(slug, m))
     except ValueError as exc:  # JSON ou envelope inválido
@@ -608,6 +626,8 @@ def processar_gravacao(slug: str, m: str, client, env_conn, fire_conn, *,
         "ja_no_livro": 0,
         "pulados": 0,
     }
+    if recuperacao is not None:
+        resumo["recuperacao"] = recuperacao
     metrics.cadastro_volta_pendentes.labels(env=slug).set(len(brutos))
     metrics.cadastro_volta_mais_antigo.labels(env=slug).set(cv._idade_mais_antiga(brutos))
     if not resumo["capacidade_ok"]:
