@@ -270,16 +270,16 @@ def ler_composicao(conn, seq: int) -> list[tuple[int, float]]:
         cur.close()
 
 
-def candidatos_por_data(conn, *, grupo: int, de: date, ate: date) -> list[dict]:
-    """Produtos do grupo cadastrados entre `de` e `ate` (inclusive), com as colunas de
-    `ler_produto`. Recuperação sem `seq_reservado`: o nome é comparado em Python (o
-    UPPER do Firebird não é confiável em WIN1252, e um nome renomeado tem que aparecer)."""
+def candidatos_por_data(conn, *, de: date, ate: date) -> list[dict]:
+    """Produtos cadastrados entre `de` e `ate` (inclusive), de qualquer grupo, com as
+    colunas de `ler_produto`. Recuperação sem `seq_reservado`: todo produto da janela é
+    candidato (um nome renomeado ou um GRUPO trocado na tela tem que aparecer)."""
     cur = conn.cursor()
     try:
         cur.execute(
             f"SELECT {', '.join(_CONFERENCIA)} FROM PRODUTOS "
-            "WHERE GRUPO = ? AND DATA_CAD BETWEEN ? AND ?",
-            (grupo, de, ate),
+            "WHERE DATA_CAD BETWEEN ? AND ?",
+            (de, ate),
         )
         return [dict(zip(_CONFERENCIA, linha, strict=True)) for linha in cur.fetchall()]
     finally:

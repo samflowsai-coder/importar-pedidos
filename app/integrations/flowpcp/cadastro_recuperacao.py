@@ -12,9 +12,9 @@ linha sai por uma das portas do livro:
 
 Nunca grava no ERP e nunca adota no chute. Liberar um produto que existe faz ele ser
 gravado de novo, então a liberação só vale com prova: o SEQ não existe, ou o produto
-no SEQ foi cadastrado com folga antes da reserva, ou (sem SEQ) nenhum nome parecido
-foi cadastrado no grupo na janela da reserva. Descrição diferente não prova nada
-(renomeado na tela, trigger).
+no SEQ foi cadastrado com folga antes da reserva, ou (sem SEQ) nenhum produto, de
+qualquer grupo, foi cadastrado na janela da reserva. Descrição diferente não prova
+nada (renomeado na tela, trigger).
 
 A leitura corre em `connect_leitura_bloqueante` (NO_REC_VERSION): um INSERT pendente
 de outro processo vira conflito de lock, a recuperação para e nada é marcado. Por
@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import json
 import re
-import unicodedata
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -124,13 +123,6 @@ def _data(valor: object) -> date | None:
     return valor if isinstance(valor, date) else None
 
 
-def _parecido(nome: str) -> str:
-    """Caixa, acentos (NFKD) e espaços fora: o que um renomear na tela costuma mudar."""
-    sem_acento = "".join(c for c in unicodedata.normalize("NFKD", nome)
-                         if not unicodedata.combining(c))
-    return " ".join(sem_acento.casefold().split())
-
-
 def _bate(lido: dict, plano: dict) -> bool:
     """As cinco colunas conferidas, aparadas (`None` = vazio); `GRUPO` como inteiro;
     `DESCRICAO` só como texto não vazio."""
@@ -205,28 +197,28 @@ def _ligado_a_outra_linha(env_conn, linha: dict, seq: int) -> bool:
 
 
 def _por_nome(fire, env_conn, linha: dict, plano: dict, iniciado: datetime) -> tuple:
+    """Sem SEQ (o commit de `marcar_seq` se perdeu): o mais conservador possível. Janela
+    vazia libera; um único produto na janela, com o nome exato e tudo batendo, adota;
+    qualquer outro caso é `incerto`."""
     campos = plano["campos"]
     nome, grupo = campos.get("DESCRICAO"), _int(campos.get("GRUPO"))
     if not isinstance(nome, str) or not nome.strip() or grupo is None:
         return ("incerto", "plano sem nome ou grupo para a busca", [])
     dias = _dias_locais(iniciado)
     linhas = cadastro_fire.candidatos_por_data(
-        fire, grupo=grupo, de=dias[0] - _FOLGA_FUSO, ate=dias[-1] + _FOLGA_FUSO
+        fire, de=dias[0] - _FOLGA_FUSO, ate=dias[-1] + _FOLGA_FUSO
     )
-    ilegiveis = sorted(r["SEQ"] for r in linhas
-                       if not isinstance(r["DESCRICAO"], str) or not r["DESCRICAO"].strip())
-    if ilegiveis:
-        seqs = ilegiveis
+    if not linhas:
+        return ("liberar", "nenhum produto cadastrado na janela da reserva")
+    seqs = sorted(r["SEQ"] for r in linhas)
+    if len(linhas) > 1:
+        return ("incerto", "mais de um produto cadastrado na janela da reserva", seqs)
+    (lido,) = linhas
+    descricao = lido["DESCRICAO"]
+    if not isinstance(descricao, str) or not descricao.strip():
         return ("incerto", "produto sem descrição legível na janela da reserva", seqs)
-    parecidos = [r for r in linhas if _parecido(r["DESCRICAO"]) == _parecido(nome)]
-    seqs = sorted(r["SEQ"] for r in parecidos)
-    if not parecidos:
-        return ("liberar", "nenhum produto com nome parecido na janela da reserva")
-    if len(parecidos) > 1:
-        return ("incerto", "mais de um produto com nome parecido na janela da reserva", seqs)
-    (lido,) = parecidos
-    if _txt(lido["DESCRICAO"]) != _txt(nome):
-        return ("incerto", "produto com nome parecido, mas não igual, na janela", seqs)
+    if _txt(descricao) != _txt(nome):
+        return ("incerto", "produto com outro nome na janela da reserva", seqs)
     if _ligado_a_outra_linha(env_conn, linha, lido["SEQ"]):
         return ("incerto", "produto com o nome já ligado a outra linha do livro", seqs)
     return _adota_se_bate(fire, int(lido["SEQ"]), lido, plano, seqs)

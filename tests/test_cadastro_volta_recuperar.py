@@ -70,14 +70,13 @@ class FireLeitura:
             return [tuple(params[0] if c == "SEQ" else p.get(c) for c in cols)] if p else []
         if sql.startswith("SELECT CODPRODUTO, QTD FROM PRODUTOS_KIT WHERE CODPRODUTO_PAI = ?"):
             return sorted(self.kit.get(params[0], []))
-        m = re.fullmatch(r"SELECT (.+) FROM PRODUTOS WHERE GRUPO = \? "
-                         r"AND DATA_CAD BETWEEN \? AND \?", sql)
+        m = re.fullmatch(r"SELECT (.+) FROM PRODUTOS WHERE DATA_CAD BETWEEN \? AND \?", sql)
         if m:
-            grupo, de, ate = params
+            de, ate = params
             cols = [c.strip() for c in m.group(1).split(",")]
             return [tuple(s if c == "SEQ" else p.get(c) for c in cols)
                     for s, p in sorted(self.produtos.items())
-                    if p.get("GRUPO") == grupo and isinstance(p.get("DATA_CAD"), date)
+                    if isinstance(p.get("DATA_CAD"), date)
                     and de <= p["DATA_CAD"] <= ate]  # BETWEEN do SQL: nulo fica de fora
         raise AssertionError(f"SQL inesperado na recuperação: {sql}")
 
@@ -284,9 +283,19 @@ def test_incerto_quando_simples_tem_composicao_no_erp(env_conn):
 
 def test_adota_por_nome_com_um_candidato(env_conn):
     _linha(env_conn)
-    fire = FireLeitura(produtos={4001: _no_erp(), 4002: _no_erp(DESCRICAO="OUTRA")})
+    fire = FireLeitura(produtos={4001: _no_erp(),
+                                 4002: _no_erp(DESCRICAO="OUTRA", DATA_CAD=date(2026, 10, 15))})
     assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["adotado"] == 1
     assert _estado(env_conn) == ("gravado_sem_volta", None, "4001")
+
+
+def test_exato_ao_lado_de_outro_produto_na_janela_fica_incerto(env_conn, erros):
+    """Sem SEQ, só um candidato na janela inteira adota: o outro pode ser o nosso renomeado."""
+    _linha(env_conn)
+    fire = FireLeitura(produtos={4001: _no_erp(), 4002: _no_erp(DESCRICAO="OUTRA", GRUPO=9)})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+    assert _estado(env_conn)[0] == "incerto"
+    assert any("[4001, 4002]" in e for e in erros)
 
 
 def test_incerto_com_dois_candidatos_por_nome(env_conn, erros):
@@ -297,13 +306,38 @@ def test_incerto_com_dois_candidatos_por_nome(env_conn, erros):
     assert any("[4001, 4002]" in e for e in erros)
 
 
-def test_libera_sem_candidato_por_nome(env_conn):
+def test_libera_com_a_janela_vazia(env_conn):
     _linha(env_conn)
-    fire = FireLeitura(produtos={4001: _no_erp(DATA_CAD=date(2026, 10, 15)),  # fora da janela
-                                 4002: _no_erp(GRUPO=9),  # outro grupo
-                                 4003: _no_erp(DESCRICAO="MEIA CANO ALTO")})
+    fire = FireLeitura(produtos={4001: _no_erp(DATA_CAD=date(2026, 10, 15)),  # antes da janela
+                                 4002: _no_erp(DATA_CAD=date(2026, 10, 19))})  # depois
     assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["liberado"] == 1
     assert _estado(env_conn) == ("liberado", None, None)
+
+
+def test_outros_produtos_na_janela_ficam_incerto(env_conn, erros):
+    """Qualquer produto na janela pode ser o nosso mexido na tela: sem SEQ, não libera."""
+    _linha(env_conn)
+    fire = FireLeitura(produtos={4002: _no_erp(GRUPO=9), 4003: _no_erp(DESCRICAO="MEIA CANO ALTO")})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+    assert any("[4002, 4003]" in e for e in erros)
+
+
+@pytest.mark.parametrize("nome", ["MEIA SOQUETE BRANCA", "MEIA-SOQUETE", "MEIA\u200bSOQUETE",
+                                  "MEIA SOQUETE\u200b"])
+def test_renomeado_alem_do_parecido_fica_incerto(env_conn, erros, nome):
+    _linha(env_conn)
+    fire = FireLeitura(produtos={4001: _no_erp(DESCRICAO=nome)})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+    assert _estado(env_conn)[0] == "incerto"
+    assert any("SEQs candidatos [4001]" in e for e in erros)
+
+
+def test_mesmo_nome_com_grupo_trocado_fica_incerto(env_conn, erros):
+    _linha(env_conn)
+    fire = FireLeitura(produtos={4001: _no_erp(GRUPO=9)})
+    assert rec.recuperar("mm", env_conn, fire, agora=AGORA)["incerto"] == 1
+    assert _estado(env_conn)[0] == "incerto"
+    assert any("SEQs candidatos [4001]" in e for e in erros)
 
 
 def test_um_candidato_por_nome_com_campo_diferente_e_incerto(env_conn):
@@ -324,7 +358,7 @@ def test_busca_por_nome_atravessa_a_meia_noite_local(env_conn, fuso_sp):
     fire = FireLeitura(produtos={4001: _no_erp(DATA_CAD=date(2026, 10, 18))})
     agora = datetime(2026, 10, 18, 4, 0, tzinfo=UTC)
     assert rec.recuperar("mm", env_conn, fire, agora=agora)["adotado"] == 1
-    assert _janela(fire) == (8, date(2026, 10, 16), date(2026, 10, 19))
+    assert _janela(fire) == (date(2026, 10, 16), date(2026, 10, 19))
 
 
 def test_busca_por_nome_usa_a_data_local_com_um_dia_de_folga(env_conn, fuso_sp):
@@ -333,7 +367,7 @@ def test_busca_por_nome_usa_a_data_local_com_um_dia_de_folga(env_conn, fuso_sp):
     fire = FireLeitura(produtos={4001: _no_erp(DATA_CAD=date(2026, 10, 19))})
     agora = datetime(2026, 10, 18, 4, 0, tzinfo=UTC)
     assert rec.recuperar("mm", env_conn, fire, agora=agora)["liberado"] == 1
-    assert _janela(fire) == (8, date(2026, 10, 16), date(2026, 10, 18))
+    assert _janela(fire) == (date(2026, 10, 16), date(2026, 10, 18))
 
 
 @pytest.mark.parametrize("nome", ["Meia  Soquete", "MÉIA SOQUETE", " meia soquete "])
