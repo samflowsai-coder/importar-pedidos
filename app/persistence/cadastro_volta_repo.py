@@ -312,6 +312,45 @@ def fechar_orfao(
     return cur.rowcount == 1
 
 
+def adotar_manual(
+    conn: sqlite3.Connection,
+    cadastro_id: str,
+    versao: int,
+    *,
+    seq: int,
+    operador: str,
+    corpo_json: str,
+) -> bool:
+    """Operador adota um SEQ que ele viu no ERP: `incerto`, ou `liberado`/`transitorio`
+    com SEQ (os que podem ter gravado), -> `gravado_sem_volta`. Fora de `TRANSICOES`:
+    o envio ao Flow fica com o ciclo normal. Quem chama conferiu a linha no ERP."""
+    cur = conn.execute(
+        "UPDATE cadastro_volta SET estado = 'gravado_sem_volta', erp_produto_id = ?, "
+        "corpo_json = ?, alerta = ?, proxima_tentativa_em = NULL, "
+        "atualizado_em = datetime('now') "
+        "WHERE cadastro_id = ? AND versao = ? AND (estado = 'incerto' "
+        "OR (estado IN ('liberado', 'transitorio') AND seq_reservado IS NOT NULL))",
+        (str(seq), corpo_json, f"adotado_manual:{operador}"[:_RESPOSTA_MAX], cadastro_id, versao),
+    )
+    return cur.rowcount == 1
+
+
+def liberar_manual(
+    conn: sqlite3.Connection, cadastro_id: str, versao: int, *, operador: str
+) -> bool:
+    """`incerto`, ou `transitorio`/`liberado` com SEQ, -> `liberado`, zerando o SEQ.
+    Porta declarada, como `liberar_comprovado`: só a ferramenta do operador chama, e só
+    depois de provar no ERP que o produto não está lá."""
+    cur = conn.execute(
+        "UPDATE cadastro_volta SET estado = 'liberado', seq_reservado = NULL, alerta = ?, "
+        "atualizado_em = datetime('now') "
+        "WHERE cadastro_id = ? AND versao = ? AND (estado = 'incerto' "
+        "OR (estado IN ('transitorio', 'liberado') AND seq_reservado IS NOT NULL))",
+        (f"liberado_manual:{operador}"[:_RESPOSTA_MAX], cadastro_id, versao),
+    )
+    return cur.rowcount == 1
+
+
 def adiar(
     conn: sqlite3.Connection,
     cadastro_id: str,

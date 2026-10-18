@@ -541,6 +541,8 @@ _OPERACOES = {
     "liberar_comprovado": lambda c: repo.liberar_comprovado(c, "c1", 1),
     "retomar_transitorio_com_seq": lambda c: repo.retomar_transitorio_com_seq(c, "c1", 1),
     "fechar_orfao": lambda c: repo.fechar_orfao(c, "c1", 1, operador="o", nota="n"),
+    "adotar_manual": lambda c: repo.adotar_manual(c, "c1", 1, seq=4001, operador="o", corpo_json="{}"),
+    "liberar_manual": lambda c: repo.liberar_manual(c, "c1", 1, operador="o"),
     "adiar": lambda c: repo.adiar(c, "c1", 1, ate="2099-01-01T00:00:00"),
     "registrar": lambda c: repo.registrar(
         c, cadastro_id="c1", versao=1, estado="transitorio", acao="criar", tipo="simples",
@@ -548,7 +550,7 @@ _OPERACOES = {
     **{f"desfecho({d})": (lambda d: lambda c: repo.marcar_desfecho(c, "c1", 1, d))(d)
        for d in repo.TRANSICOES},
 }
-_PORTAS = {"liberar_comprovado", "erro_a_enviar(rb=True)"}
+_PORTAS = {"liberar_comprovado", "erro_a_enviar(rb=True)", "liberar_manual"}
 # Estados de onde o produto pode estar (ou já está) no ERP. `em_andamento` sem SEQ
 # fica de fora desta busca, mas pode ter gravado: com WAL e `synchronous=NORMAL`, uma
 # queda de energia pode perder o commit de `marcar_seq` e manter o INSERT no Fire.
@@ -608,3 +610,79 @@ def test_contar_e_recentes_de_transitorios_com_seq(conn):
         conn.execute("UPDATE cadastro_volta SET iniciado_em = ? WHERE cadastro_id = ?", (ini, f"c{i}"))
     assert repo.contar_transitorios_com_seq(conn) == 2
     assert repo.transitorios_com_seq_recentes(conn, "2026-10-17 12:30:00") == {("c1", 1)}
+
+
+# Estados em que o produto já está no ERP ou a linha já terminou: as portas manuais
+# não podem tocar neles. `liberar_manual` entra na busca como operação comum.
+_FORA_DAS_PORTAS_MANUAIS = [
+    ("gravado_sem_volta", 4001), ("confirmado", None), ("orfao", None), ("orfao_fechado", None),
+    ("em_andamento", 4001), ("em_andamento", None), ("erro_a_enviar", 4001), ("erro_registrado", 4001),
+    ("simulado", None), ("superado", None), ("erro_definitivo", None),
+    ("liberado", None), ("transitorio", None),
+]
+
+
+@pytest.mark.parametrize(("estado", "seq"), _FORA_DAS_PORTAS_MANUAIS)
+def test_portas_manuais_recusam_e_nao_mudam_nada(estado, seq):
+    for op in (
+        lambda c: repo.adotar_manual(c, "c1", 1, seq=4001, operador="o", corpo_json="{}"),
+        lambda c: repo.liberar_manual(c, "c1", 1, operador="o"),
+    ):
+        c = _linha_em(estado, seq)
+        antes = repo.buscar(c, "c1", 1)
+        assert op(c) is False
+        assert repo.buscar(c, "c1", 1) == antes
+
+
+@pytest.mark.parametrize(("estado", "seq"), _FORA_DAS_PORTAS_MANUAIS[:4])
+def test_com_as_portas_manuais_como_operacao_comum_nada_no_erp_volta_a_reservar(estado, seq):
+    """`liberar_manual` solto na busca: não pode abrir caminho a partir de quem já gravou.
+    (De `em_andamento`/`erro_a_enviar` com SEQ ele É a porta: lá a prova é do operador.)"""
+    ops = {k: v for k, v in _OPERACOES.items() if k not in
+           {"liberar_comprovado", "erro_a_enviar(rb=True)"}}
+    vistos, fila = {(estado, seq)}, [(estado, seq)]
+    while fila:
+        no = fila.pop(0)
+        c = _linha_em(*no)
+        assert not repo.reservar(c, cadastro_id="c1", versao=1, produto_id="p1", acao="criar",
+                                 tipo="simples", modo="criar", plano_json="{}"), no
+        for op in ops.values():
+            c = _linha_em(*no)
+            if op(c) and _no(c) not in vistos:
+                vistos.add(_no(c))
+                fila.append(_no(c))
+
+
+@pytest.mark.parametrize(("estado", "seq"), [("incerto", None), ("incerto", 4001),
+                                             ("liberado", 4001), ("transitorio", 4001)])
+def test_adotar_manual_grava_seq_corpo_e_alerta(estado, seq):
+    c = _linha_em(estado, seq)
+    assert repo.adotar_manual(c, "c1", 1, seq=4002, operador="ana", corpo_json='{"k": 1}') is True
+    r = repo.buscar(c, "c1", 1)
+    assert r["estado"] == "gravado_sem_volta"
+    assert r["erp_produto_id"] == "4002" and r["corpo_json"] == '{"k": 1}'
+    assert r["alerta"] == "adotado_manual:ana"
+    assert r["seq_reservado"] == seq  # o SEQ reservado fica como prova
+
+
+def test_adotar_manual_trunca_alerta_em_64():
+    c = _linha_em("incerto", None)
+    assert repo.adotar_manual(c, "c1", 1, seq=1, operador="x" * 200, corpo_json="{}")
+    assert len(repo.buscar(c, "c1", 1)["alerta"]) == 64
+
+
+@pytest.mark.parametrize(("estado", "seq"), [("incerto", None), ("incerto", 4001),
+                                             ("liberado", 4001), ("transitorio", 4001)])
+def test_liberar_manual_zera_seq_e_fica_reservavel(estado, seq):
+    c = _linha_em(estado, seq)
+    assert repo.liberar_manual(c, "c1", 1, operador="ana") is True
+    r = repo.buscar(c, "c1", 1)
+    assert (r["estado"], r["seq_reservado"], r["alerta"]) == ("liberado", None, "liberado_manual:ana")
+    assert repo.reservar(c, cadastro_id="c1", versao=1, produto_id="p1", acao="criar",
+                         tipo="simples", modo="criar", plano_json="{}") is True
+
+
+def test_liberar_manual_trunca_alerta_em_64():
+    c = _linha_em("incerto", None)
+    assert repo.liberar_manual(c, "c1", 1, operador="x" * 200)
+    assert len(repo.buscar(c, "c1", 1)["alerta"]) == 64
