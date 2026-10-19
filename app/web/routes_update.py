@@ -124,6 +124,17 @@ async def upload(file: UploadFile = File(...), _=Depends(require_admin)):
             )
         except package.PackageError as e:
             raise HTTPException(422, e.reason) from None
+        # O corpo pode levar minutos: um /apply pode ter entrado desde os guards
+        # do início. Repete-os antes de tocar no staging/status do update em uso.
+        try:
+            if state.is_locked(updates_dir()):
+                raise HTTPException(409, "há um update em andamento")
+            _reject_if_update_running()
+        except HTTPException:
+            import shutil
+
+            shutil.rmtree(sd / res.update_id, ignore_errors=True)
+            raise
         # só depois de validar com sucesso: limpa staging anterior (um staged
         # por vez), preservando o pacote recém-validado
         import shutil
