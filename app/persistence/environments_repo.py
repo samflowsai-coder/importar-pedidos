@@ -24,6 +24,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from loguru import logger
+
 from app.erp.cnpj import cnpj_digits
 from app.persistence import router
 from app.security import secret_store
@@ -61,7 +63,11 @@ _PUBLIC_FIELDS = (
     "intercompany_env_slug",
     # Perfil fiscal do ambiente (CODFIGFISCAL).
     "fiscal_codfigfiscal",
+    # Trava de preço por rede (desligado | observando | ligado) e ambiente-fonte da tabela.
+    "preco_trava_modo",
+    "preco_fonte_slug",
 )
+PRECO_MODOS = ("desligado", "observando", "ligado")
 
 
 class SlugTaken(Exception):
@@ -353,6 +359,57 @@ def set_intercompany_config(
         conn.execute(f"UPDATE environments SET {sets} WHERE id = ?", [*fields.values(), env_id])
     limpar_cache()
     return get(env_id)
+
+
+def set_preco_trava_modo(env_id: str, valor: str, *, por: str) -> None:
+    """Troca o interruptor da trava de preço do ambiente.
+
+    `valor` fora de `PRECO_MODOS` levanta ValueError sem tocar no banco.
+    `por` (quem mudou) vai pro log: não existe audit de mudança de ambiente.
+    """
+    if valor not in PRECO_MODOS:
+        raise ValueError(f"modo inválido: {valor!r} — use um de {PRECO_MODOS}")
+    with router.shared_connect() as conn:
+        conn.execute(
+            "UPDATE environments SET preco_trava_modo = ?, updated_at = ? WHERE id = ?",
+            (valor, _now(), env_id),
+        )
+    logger.info("preco_trava_modo env_id={} -> {} por={}", env_id, valor, por)
+
+
+def set_preco_fonte_slug(env_id: str, slug: str | None, *, por: str) -> None:
+    """Ambiente cuja config do Flow e cujo Fire dão a chave do produto na
+    trava de preço (Nasmar → `"mm"`). Vazio ou igual ao próprio grava None
+    (= o próprio ambiente). Igual ao já salvo = nada a fazer, sem revalidar
+    (desligar a trava nunca falha por uma fonte que perdeu o Flow depois).
+    Slug inexistente, inativo, que tem fonte própria (sem cadeia) ou sem config
+    do Flow completa (ligada, url, tenant e token) levanta ValueError sem
+    tocar no banco."""
+    from app.integrations.flowpcp.config import flowpcp_config_for_slug  # evita ciclo
+
+    valor = (slug or "").strip().lower() or None
+    atual = get(env_id)
+    if atual is not None and valor == atual["slug"]:
+        valor = None
+    if atual is not None and valor == (atual.get("preco_fonte_slug") or None):
+        return
+    if valor is not None:
+        fonte = get_by_slug(valor)
+        if fonte is None:
+            raise ValueError(f"ambiente {valor!r} não existe")
+        if not fonte.get("is_active"):
+            raise ValueError(f"ambiente {valor!r} está inativo")
+        if (fonte.get("preco_fonte_slug") or valor) != valor:
+            raise ValueError(f"ambiente {valor!r} já usa a chave de outro ambiente")
+        cfg = flowpcp_config_for_slug(valor)
+        if cfg is None or not (cfg.base_url and cfg.tenant_id and cfg.service_token):
+            raise ValueError(f"ambiente {valor!r} sem integração com o Flow configurada")
+    with router.shared_connect() as conn:
+        conn.execute(
+            "UPDATE environments SET preco_fonte_slug = ?, updated_at = ? WHERE id = ?",
+            (valor, _now(), env_id),
+        )
+    logger.info("preco_fonte_slug env_id={} -> {} por={}", env_id, valor, por)
 
 
 def get_flowpcp_token(env_id: str) -> str | None:

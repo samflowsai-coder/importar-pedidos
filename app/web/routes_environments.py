@@ -17,13 +17,20 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from app.erp_eventos.canonico import formatar_instante
 from app.erp_eventos.foto import dia_local
-from app.persistence import environments_repo, erp_bases_repo, erp_estado_repo, erp_foto_repo
+from app.persistence import (
+    environments_repo,
+    erp_bases_repo,
+    erp_estado_repo,
+    erp_foto_repo,
+    precos_repo,
+)
 from app.persistence import router as db_router
 from app.web.auth import require_admin
 
@@ -166,6 +173,46 @@ def set_environment_intercompany(
     if data["revenda_slug"]:
         data["revenda_slug"] = data["revenda_slug"].strip().lower()
     return environments_repo.set_intercompany_config(env_id, **data)
+
+
+class PrecoTravaRequest(BaseModel):
+    modo: Literal["desligado", "observando", "ligado"]
+    # Ausente = não muda; None/"" = o próprio ambiente (ver set_preco_fonte_slug).
+    preco_fonte_slug: str | None = Field(default=None, max_length=64)
+
+
+@router.patch("/{env_id}/preco-trava")
+def set_environment_preco_trava(
+    env_id: str, payload: PrecoTravaRequest, user=Depends(require_admin)
+):
+    """Troca o interruptor da trava de preço (desligado | observando | ligado)
+    e, quando `preco_fonte_slug` vem no corpo, o ambiente fonte da chave do
+    produto (Nasmar avalia pela MM).
+
+    `ligado` só depois da 1ª sync da tabela com o Flow: sem ela todo pedido de
+    rede externa sai `copia_desatualizada` e a empresa para de faturar."""
+    env = environments_repo.get(env_id)
+    if env is None:
+        raise HTTPException(status_code=404, detail="Ambiente não encontrado")
+    if payload.modo == "ligado":
+        with db_router.env_connect(env["slug"]) as conn:
+            sincronizada = precos_repo.ultima_sync_ok(conn) is not None
+        if not sincronizada:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Não dá para ligar: a tabela de preço desta empresa ainda não foi "
+                    "sincronizada com o Flow."
+                ),
+            )
+    # Fonte antes do modo: fonte inválida recusa sem mudar nada.
+    if "preco_fonte_slug" in payload.model_fields_set:
+        try:
+            environments_repo.set_preco_fonte_slug(env_id, payload.preco_fonte_slug, por=user.email)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+    environments_repo.set_preco_trava_modo(env_id, payload.modo, por=user.email)
+    return environments_repo.get(env_id)
 
 
 class ErpBaseRequest(BaseModel):

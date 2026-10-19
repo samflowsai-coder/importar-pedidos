@@ -46,6 +46,10 @@ CREATE TABLE IF NOT EXISTS environments (
     flowpcp_catalogo_apenas_meias INTEGER NOT NULL DEFAULT 0,
     flowpcp_clientes_push     INTEGER NOT NULL DEFAULT 0,
     fiscal_codfigfiscal       INTEGER,
+    -- Trava de preço por rede: desligado | observando | ligado.
+    preco_trava_modo          TEXT NOT NULL DEFAULT 'desligado',
+    -- Slug do ambiente cuja cópia de tabela de preço vale para este. NULL = o próprio.
+    preco_fonte_slug          TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -251,6 +255,12 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # 5 na Nasmar. NULL = usa o default de app/erp/fiscal.py.
     ("environments", "fiscal_codfigfiscal",
      "ALTER TABLE environments ADD COLUMN fiscal_codfigfiscal INTEGER"),
+    # Trava de preço por rede (interruptor de 3 estados) + de qual ambiente
+    # vem a cópia da tabela de preço (NULL = o próprio).
+    ("environments", "preco_trava_modo",
+     "ALTER TABLE environments ADD COLUMN preco_trava_modo TEXT NOT NULL DEFAULT 'desligado'"),
+    ("environments", "preco_fonte_slug",
+     "ALTER TABLE environments ADD COLUMN preco_fonte_slug TEXT"),
     # CNPJ da empresa do ambiente, só dígitos — chave de `find_by_cnpj`.
     ("environments", "cnpj",
      "ALTER TABLE environments ADD COLUMN cnpj TEXT"),

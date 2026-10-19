@@ -461,7 +461,6 @@ def _run_exporters(order, output_path: Path, *, env: dict | None = None) -> dict
     """
     from app import config as app_config
     from app.exporters.erp_exporter import ERPExporter
-    from app.exporters.firebird_exporter import FirebirdExporter
 
     cfg = app_config.load()
     export_mode = cfg.get("export_mode", "xlsx")
@@ -470,22 +469,36 @@ def _run_exporters(order, output_path: Path, *, env: dict | None = None) -> dict
     db_result_dict: dict | None = None
     fire_codigo: int | None = None
 
-    if export_mode in ("xlsx", "both"):
+    # Trava de preço ativa (observando/ligado): o XLSX não nasce na importação.
+    # O pedido fica em revisão e só sai pelo preview → exportar/enviar, que
+    # passa por `preco_trava.decidir_envio`.
+    from app.erp import preco_trava
+
+    adiado = preco_trava.trava_ativa(env)
+    if export_mode in ("xlsx", "both") and not adiado:
         exporter = ERPExporter()
         paths = exporter.export(order, str(output_path))
         output_files = [{"name": p.name, "path": str(p)} for p in paths]
 
     if export_mode in ("db", "both"):
-        db_exp = FirebirdExporter(env=env)
-        db_result = db_exp.export(order)
-        db_result_dict = db_result.to_dict()
-        fire_codigo = db_result.fire_codigo
+        # Gravação no Fire só pelo preview → enviar (preço, de-para e cliente
+        # checados em `_send_one_to_fire`). Este caminho legado nunca grava.
+        db_result_dict = {"skipped": True, "skip_reason": "USE_PREVIEW"}
 
-    return {
+    out = {
         "output_files": output_files,
         "db_result": db_result_dict,
         "fire_codigo": fire_codigo,
     }
+    if adiado and export_mode in ("xlsx", "both"):
+        out["xlsx_adiado"] = "trava_de_preco"
+    return out
+
+
+def _marca_xlsx_adiado(result: dict) -> dict:
+    """`{"xlsx_adiado": ...}` só quando a trava adiou o XLSX; senão nada (a
+    resposta de hoje fica igual)."""
+    return {"xlsx_adiado": result["xlsx_adiado"]} if result.get("xlsx_adiado") else {}
 
 
 def _guardar_original(raw: bytes, nome: str):
@@ -1493,6 +1506,7 @@ def import_files(
                             "files": result["output_files"],
                             "fire_codigo": result.get("fire_codigo"),
                             "entry_id": entry["id"],
+                            **_marca_xlsx_adiado(result),
                         }
                     )
 
@@ -1672,6 +1686,47 @@ class ReimportRequest(BaseModel):
     env_slug: str | None = None
 
 
+def _retirar_preco_do_reimportado(src: Path, novo_id: str) -> None:
+    """O reimport cria `import_id` novo: as importações anteriores dos MESMOS
+    bytes (`imports.file_sha256`; o nome não serve, homônimo é outro arquivo e
+    o nome muda com o carimbo), ainda fora do Fire, saem da fila de aprovação
+    de preço do Flow (contrato precos v1 §4.3). A entrada de um reimport não
+    grava sha (o sinal de duplicata de `leituras` depende disso): ela casa por
+    `file_sha256 IS NULL` + o nome do arquivo reimportado. Sem sha do
+    arquivo, nada é retirado. Sem revisão é no-op. Nunca derruba o reimport."""
+    from app.utils.logger import logger
+
+    try:
+        import hashlib
+        from datetime import UTC
+
+        from app.persistence import db as _db
+        from app.persistence import preco_revisao_repo
+
+        try:
+            sha = hashlib.sha256(src.read_bytes()).hexdigest()
+        except OSError as exc:
+            logger.warning(f"reimport: sem sha256 do arquivo ({type(exc).__name__}); nada retirado")
+            return
+        with _db.connect() as conn:
+            antigos = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT id FROM imports"
+                    " WHERE (file_sha256 = ? OR (file_sha256 IS NULL AND source_filename = ?))"
+                    " AND id != ?"
+                    " AND COALESCE(portal_status, '') NOT IN ('sent_to_fire', 'found_in_fire')",
+                    (sha, src.name, novo_id),
+                )
+            ]
+            for antigo in antigos:
+                preco_revisao_repo.retirar(
+                    conn, antigo, "pedido reimportado no Portal", em=datetime.now(UTC)
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"retirar revisão de preço do reimport falhou ({type(exc).__name__}): {exc}")
+
+
 @app.post("/api/reimport")
 def reimport_file(
     body: ReimportRequest,
@@ -1728,6 +1783,7 @@ def reimport_file(
                     db_result=result.get("db_result"),
                 )
                 _append_log(cfg, entry)
+                _retirar_preco_do_reimportado(src, entry["id"])
                 return JSONResponse(
                     {
                         "source": name,
@@ -1736,6 +1792,7 @@ def reimport_file(
                         "files": result["output_files"],
                         "fire_codigo": result.get("fire_codigo"),
                         "entry_id": entry["id"],
+                        **_marca_xlsx_adiado(result),
                     }
                 )
         except Exception as exc:
@@ -2196,6 +2253,11 @@ def commit_preview(
             log_entry["check"] = entry.check
             if env_alvo is not None:
                 log_entry["environment_id"] = env_alvo["id"]
+            # Trava de preço com ambiente fonte (Nasmar → MM): o check do Fire da
+            # fonte fica salvo para o preview. Desligado/sem fonte: None, sem I/O.
+            from app.erp import preco_trava
+
+            log_entry["check_preco"] = preco_trava.check_preco_para_gravar(order, env_alvo)
 
             # DB first — if this fails, the file stays in the watch folder and user
             # can retry without losing the original document.
@@ -2313,6 +2375,40 @@ class _FireSendOutcome:
         self.detail = detail
 
 
+def _vinculos_de_para(order, caminho: str) -> tuple[list[dict], dict[int, int]]:
+    """Vínculos de-para do pedido, consultados UMA vez antes do portão de preço.
+
+    O portão avalia o SEQ do vínculo (`produtos_por_item`), o exporter grava
+    esse mesmo SEQ e o XLSX leva o código dele (`depara_apply.aplicar`). Falha
+    aqui não derruba o envio: sem vínculo, portão e exporter caem juntos na
+    busca normal por EAN/código (e, sem match, o exporter recusa o pedido)."""
+    from app.erp import depara_apply
+    from app.persistence import db
+
+    try:
+        with db.connect() as sconn:
+            vinculos = depara_apply.resolver(order, conn=sconn)
+        return vinculos, depara_apply.produtos_por_item(vinculos)
+    except Exception as exc:  # noqa: BLE001
+        from app.utils.logger import logger
+
+        logger.warning(f"de-para pulado no {caminho}: {type(exc).__name__}: {exc}")
+        return [], {}
+
+
+def _registrar_aplicados(import_id: str, decisao) -> None:
+    """Audit `preco_aplicado` depois que o pedido saiu. Nunca derruba um envio
+    que já deu certo (o Fire já tem o pedido / o XLSX já existe)."""
+    from app.erp import preco_trava
+
+    try:
+        preco_trava.registrar_aplicados(import_id, decisao)
+    except Exception as exc:  # noqa: BLE001
+        from app.utils.logger import logger
+
+        logger.warning(f"audit preco_aplicado falhou ({type(exc).__name__}): {exc}")
+
+
 def _send_one_to_fire(
     import_id: str, cfg: dict, *, request_env: dict | None = None
 ) -> _FireSendOutcome:
@@ -2356,67 +2452,43 @@ def _send_one_to_fire(
             False, reason="invalid_snapshot", http_status=422, detail=f"Snapshot inválido: {exc}"
         )
 
-    # Defesa em profundidade: re-checar preço contra o Fire antes de enviar.
-    # Se Fire offline, segue (best-effort).
-    from app.erp.product_check import check_order, is_blocking
+    # Portão único de preço (regra de hoje em `desligado`; trava por rede em
+    # `ligado`). Preço aprovado no Flow entra antes do de-para e do exporter.
+    from datetime import UTC
+
+    from app.erp import preco_trava
     from app.observability import metrics
 
-    check = check_order(order, env=request_env)
-    ack_items = entry.get("sem_preco_ack_items") or []
-    blocked, block_detail = is_blocking(check, ack_items=ack_items)
-    if blocked:
-        repo.append_audit(import_id, "send_to_fire_blocked", block_detail)
-        if block_detail["items_mismatch"]:
-            metrics.price_check_blocks_total.labels(reason="price_mismatch").inc()
-        if block_detail["items_no_order_price"]:
-            metrics.price_check_blocks_total.labels(reason="missing_order_price").inc()
-        if block_detail["items_no_price_unacked"]:
-            metrics.price_check_blocks_total.labels(reason="no_price_unacked").inc()
-
-        parts = []
-        if block_detail["items_mismatch"]:
-            parts.append(
-                f"{len(block_detail['items_mismatch'])} item(ns) com preço divergente do Fire"
-            )
-        if block_detail["items_no_order_price"]:
-            parts.append(
-                f"{len(block_detail['items_no_order_price'])} item(ns) sem preço no pedido"
-            )
-        if block_detail["items_no_price_unacked"]:
-            parts.append(
-                f"{len(block_detail['items_no_price_unacked'])} item(ns) sem preço no cadastro do Fire (sem confirmação)"
-            )
+    vinculos, produtos_por_item = _vinculos_de_para(order, "envio")
+    decisao = preco_trava.decidir_envio(
+        import_id,
+        order,
+        entry,
+        env=request_env,
+        agora=datetime.now(UTC),
+        produtos_por_item=produtos_por_item,
+    )
+    if decisao.bloqueado:
+        repo.append_audit(import_id, "send_to_fire_blocked", decisao.block_detail)
+        for label in decisao.metric_labels:
+            metrics.price_check_blocks_total.labels(reason=label).inc()
         return _FireSendOutcome(
-            False,
-            reason="price_check_failed",
-            http_status=409,
-            detail="Pedido bloqueado: " + "; ".join(parts) + ".",
+            False, reason=decisao.reason, http_status=409, detail=decisao.detalhe
         )
+    preco_trava.aplicar_precos(order, decisao.precos_aplicar)
 
     # Reuse the trace_id minted on commit so logs across commit→send-to-fire
     # are correlated for the same pedido.
     with with_trace_id(entry.get("trace_id")):
-        # De-para antes do XLS (modo both) e do insert. Item vinculado entra no
-        # Fire pelo SEQ do vínculo: o `fire_codigo` é str(SEQ) e relido como
-        # CODPROD_ALTERN casaria outro produto (BACKLOG §2.1). Falha aqui não
-        # derruba o envio — o item sem SEQ cai na busca normal e, sem match,
-        # o exporter recusa o pedido (PRODUCT_NOT_FOUND).
+        # De-para antes do XLS (modo both) e do insert, com os MESMOS vínculos
+        # que o portão avaliou. Item vinculado entra no Fire pelo SEQ do vínculo:
+        # o `fire_codigo` é str(SEQ) e relido como CODPROD_ALTERN casaria outro
+        # produto (BACKLOG §2.1).
         from app.erp import depara_apply
-        from app.persistence import db
 
-        produtos_por_item: dict[int, int] = {}
-        try:
-            with db.connect() as sconn:
-                dep_changed = depara_apply.apply(order, conn=sconn)
-            if dep_changed:
-                produtos_por_item = {
-                    c["item_index"]: int(c["fire_produto_id"]) for c in dep_changed
-                }
-                repo.append_audit(import_id, "depara_aplicado_no_fire", {"itens": dep_changed})
-        except Exception as exc:  # noqa: BLE001
-            from app.utils.logger import logger
-
-            logger.warning(f"de-para apply pulado no envio: {type(exc).__name__}: {exc}")
+        dep_changed = depara_apply.aplicar(order, vinculos)
+        if dep_changed:
+            repo.append_audit(import_id, "depara_aplicado_no_fire", {"itens": dep_changed})
 
         output_path = Path(cfg["output_dir"]).expanduser().resolve()
         output_path.mkdir(parents=True, exist_ok=True)
@@ -2499,6 +2571,7 @@ def _send_one_to_fire(
                 "cliente_override_codigo": override,
             },
         )
+        _registrar_aplicados(import_id, decisao)
 
         # SP1: vínculo exato item do ERP ↔ posição em order.items (best-effort).
         if request_env:
@@ -2612,57 +2685,40 @@ def _export_one_xlsx(
             False, reason="invalid_snapshot", http_status=422, detail=f"Snapshot inválido: {exc}"
         )
 
-    # Defesa em profundidade: re-checar preço — mesma lógica de _send_one_to_fire.
-    # Usa o ambiente da request (multi-ambiente); cai pra env vars FB_* só quando
-    # request_env é None (deploy single-DB legado).
-    from app.erp.product_check import check_order, is_blocking
+    # Portão único de preço — o mesmo de _send_one_to_fire. Usa o ambiente da
+    # request (multi-ambiente); cai pra env vars FB_* só quando request_env é
+    # None (deploy single-DB legado).
+    from datetime import UTC
+
+    from app.erp import preco_trava
     from app.observability import metrics
 
-    check = check_order(order, env=request_env)
-    ack_items = entry.get("sem_preco_ack_items") or []
-    blocked, block_detail = is_blocking(check, ack_items=ack_items)
-    if blocked:
-        repo.append_audit(import_id, "xlsx_export_blocked", block_detail)
-        if block_detail["items_mismatch"]:
-            metrics.price_check_blocks_total.labels(reason="price_mismatch").inc()
-        if block_detail["items_no_order_price"]:
-            metrics.price_check_blocks_total.labels(reason="missing_order_price").inc()
-        if block_detail["items_no_price_unacked"]:
-            metrics.price_check_blocks_total.labels(reason="no_price_unacked").inc()
-        parts = []
-        if block_detail["items_mismatch"]:
-            parts.append(
-                f"{len(block_detail['items_mismatch'])} item(ns) com preço divergente do Fire"
-            )
-        if block_detail["items_no_order_price"]:
-            parts.append(
-                f"{len(block_detail['items_no_order_price'])} item(ns) sem preço no pedido"
-            )
-        if block_detail["items_no_price_unacked"]:
-            parts.append(
-                f"{len(block_detail['items_no_price_unacked'])} item(ns) sem preço no cadastro do Fire (sem confirmação)"
-            )
+    vinculos, produtos_por_item = _vinculos_de_para(order, "export")
+    decisao = preco_trava.decidir_envio(
+        import_id,
+        order,
+        entry,
+        env=request_env,
+        agora=datetime.now(UTC),
+        produtos_por_item=produtos_por_item,
+    )
+    if decisao.bloqueado:
+        repo.append_audit(import_id, "xlsx_export_blocked", decisao.block_detail)
+        for label in decisao.metric_labels:
+            metrics.price_check_blocks_total.labels(reason=label).inc()
         return _XlsxExportOutcome(
-            False,
-            reason="price_check_failed",
-            http_status=409,
-            detail="Pedido bloqueado: " + "; ".join(parts) + ".",
+            False, reason=decisao.reason, http_status=409, detail=decisao.detalhe
         )
+    preco_trava.aplicar_precos(order, decisao.precos_aplicar)
 
     with with_trace_id(entry.get("trace_id")):
-        # Enriquecer com a identidade do Fire onde há vínculo de-para (SQLite local).
+        # Identidade do Fire onde há vínculo de-para: os MESMOS vínculos que o
+        # portão avaliou (o XLSX leva o código do SEQ avaliado).
         from app.erp import depara_apply
-        from app.persistence import db
 
-        try:
-            with db.connect() as sconn:
-                dep_changed = depara_apply.apply(order, conn=sconn)
-            if dep_changed:
-                repo.append_audit(import_id, "depara_aplicado_no_xls", {"itens": dep_changed})
-        except Exception as exc:  # noqa: BLE001 — enriquecimento é best-effort; XLS não pode falhar por isso
-            from app.utils.logger import logger
-
-            logger.warning(f"de-para apply pulado no export: {type(exc).__name__}: {exc}")
+        dep_changed = depara_apply.aplicar(order, vinculos)
+        if dep_changed:
+            repo.append_audit(import_id, "depara_aplicado_no_xls", {"itens": dep_changed})
 
         output_path = Path(cfg["output_dir"]).expanduser().resolve()
         output_path.mkdir(parents=True, exist_ok=True)
@@ -2681,6 +2737,7 @@ def _export_one_xlsx(
         if slug:
             pushed = push_new_order(order, import_id=import_id, slug=slug)
             repo.append_audit(import_id, "flowpcp_push", {"ok": pushed})
+        _registrar_aplicados(import_id, decisao)
 
         return _XlsxExportOutcome(True, output_files=output_files)
 
@@ -3124,6 +3181,19 @@ def cancel_import(
         except InvalidTransitionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         repo.append_audit(import_id, "cancelled", {"reason": reason})
+    try:
+        from datetime import UTC
+
+        from app.persistence import db as _db
+        from app.persistence import preco_revisao_repo
+
+        motivo = ((reason or "").strip() or "pedido cancelado no Portal")[:500]
+        with _db.connect() as _pconn:
+            preco_revisao_repo.retirar(_pconn, import_id, motivo, em=datetime.now(UTC))
+    except Exception as exc:  # cancelar nunca falha por causa da trava de preço
+        from app.utils.logger import logger
+
+        logger.warning(f"retirar revisão de preço falhou ({type(exc).__name__}): {exc}")
     return JSONResponse(
         {
             "entry_id": import_id,
@@ -3257,6 +3327,7 @@ def override_cliente(
             codigo=int(row[0]),
             razao=razao,
             user=actor,
+            cnpj=row[2] if len(row) > 2 else None,
         )
         repo.append_audit(
             import_id,
@@ -3458,6 +3529,13 @@ def vincular_produto(
     # com um "indisponível".
     if check.get("available"):
         repo.update_fire_metadata(import_id, check=check)
+    # Trava de preço com ambiente fonte: o check da fonte é refeito também
+    # (o vínculo pode ter mudado o produto). Desligado/sem fonte: None, sem I/O.
+    from app.erp import preco_trava
+
+    check_preco = preco_trava.check_preco_para_gravar(order, _request_environment(request), entry)
+    if check_preco is not None:
+        repo.update_fire_metadata(import_id, check_preco=check_preco)
     return JSONResponse({"entry_id": import_id, "vinculos": gravou, "check": check})
 
 
@@ -3577,6 +3655,28 @@ def rehydrate_preview(
     payload["fire_codigo"] = entry.get("fire_codigo")
     payload["fire_status_last_seen"] = entry.get("fire_status_last_seen")
     payload["arquivo_original"] = _arquivo_original_info(entry)
+    # Situação de preço por item (trava). Só leitura; ausente em `desligado` e
+    # em qualquer falha — o preview sempre renderiza.
+    try:
+        from datetime import UTC, datetime
+
+        from app.erp import preco_trava
+
+        _, produtos_por_item = _vinculos_de_para(order, "preview")
+        preco = preco_trava.preview_preco(
+            import_id,
+            entry,
+            order,
+            env=_request_environment(request),
+            agora=datetime.now(UTC),
+            produtos_por_item=produtos_por_item,
+        )
+        if preco is not None:
+            payload["preco"] = preco
+    except Exception as exc:  # noqa: BLE001
+        from app.utils.logger import logger
+
+        logger.warning(f"preview: avaliação de preço indisponível ({type(exc).__name__}): {exc}")
     # Só existe quando a empresa foi RESOLVIDA pelo pedido (roteamento
     # 'ligado', via `env_do_pedido`) — fora dali nada muda: o selo já existe
     # na linha da caixa somada, mas some ao abrir o modal, que é a tela onde
@@ -3639,12 +3739,22 @@ def rehydrate_preview(
 # Keep /api/process for backward compat (drag-drop upload flow)
 @app.post("/api/process")
 async def process_files(
+    request: Request,
     _user: User = Depends(require_user),
     files: list[UploadFile] = File(...),
     output_dir: str = Form("output"),
 ) -> JSONResponse:
+    from app.erp import preco_trava
     from app.exporters.erp_exporter import ERPExporter
     from app.ingestion.file_loader import LoadedFile
+
+    # Caminho legado: gera XLSX sem o portão de preço. Com a trava ativa, a
+    # planilha só sai pela revisão (preview → exportar/enviar).
+    if preco_trava.trava_ativa(_request_environment(request)):
+        raise HTTPException(
+            status_code=409,
+            detail="Com a trava de preço ativa, use a revisão do pedido para exportar.",
+        )
 
     output_path = Path(output_dir).expanduser().resolve()
     try:

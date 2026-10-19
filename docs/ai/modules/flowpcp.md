@@ -34,6 +34,7 @@ acontece — uma falha aqui vira outbox/retry e **nunca** pode derrubar o fluxo 
 | `cadastro_recuperacao.py` | resolve o que um processo caído deixou `em_andamento` (§5) |
 | `cadastro_resultado.py` | corpo do `POST .../gravado`, leitura da resposta do Flow, `mensagem_para_flow` |
 | `catalogo_marcas.py` | `marcasErp` do catálogo: filtro das regras do Flow e interruptores de marcas e nota (§4) |
+| `precos.py` / `precos_schema.py` | trava de preço (contrato precos v1): cópia da tabela, envio de revisões/retiradas, decisões |
 
 ## Configuração — por ambiente, não global
 
@@ -59,6 +60,7 @@ Variáveis de ambiente do processo (todas **ausentes = desligado**; `slug` em mi
 | `PORTAL_FLOWPCP_MATERIAIS` | `mm` (lista por vírgula) | envio da carga de material ao Flow; desligada, só atualiza a cópia local `materiais_fire` e `apply` dá 422 |
 | `PORTAL_FLOWPCP_MATERIAIS_GRUPOS_PRODUCAO_<SLUG>` | `1,4,5,...` | grupos que exigem aprovação (slug em maiúsculas, não alfanumérico vira `_`); padrão `1,4,5,6,11,13,19`; inválido loga ERROR e usa o padrão |
 | `PORTAL_FLOWPCP_CADASTRO_VOLTA` | `mm:simular,nas:desligado` | modo da volta por ambiente: `desligado` (padrão), `simular`, `criar`, `criar_e_atualizar`; entrada inválida = desligado, com ERROR uma vez |
+| `PORTAL_FLOWPCP_PRECOS` | `0` | **exceção: ausente = ligado.** `0` desliga a conversa da trava de preço com o Flow; ligada, só age em ambiente com `preco_trava_modo` ≠ `desligado` |
 | `PORTAL_FLOWPCP_CADASTRO_P0` | `mm` (lista por vírgula) | portão da gravação: sem o slug aqui, `criar`/`criar_e_atualizar` são recusados (o resultado já guardado ainda é reenviado). Só liga depois da P0 (diff da tela do Fire numa cópia do `.fdb`) |
 | `PORTAL_FLOWPCP_CADASTRO_VOLTA_INATIVAR` | `mm` (lista por vírgula) | portão da ação `inativar` (só em `criar_e_atualizar`); sem ele o item `inativar` é pulado com WARNING |
 | `PORTAL_FLOWPCP_CATALOGO_MARCAS` | `mm` (lista por vírgula) | catálogo manda `marcasErp` (PRODUTOS_MARCA filtrada); exige `marcas.v1` na resposta do Flow |
@@ -444,6 +446,69 @@ erro, em memória: some quando o portal reinicia.
 - **Trava entre processos por ambiente: backlog** (`docs/BACKLOG.md`). A spec garante um consumidor por ambiente; dois processos no mesmo ambiente não são impedidos por código, só mitigados pela idade mínima de 15 min e pela leitura bloqueante.
 - **`PADROES_P0` preenchido** (18/10/2026, `app/erp/cadastro_fire.py`): `EST_MINIMO_GERENCIA='Nao'`, `PRODUZIDO='Nao'`, `CODORIG_MERC=0`, `PRE_CADASTRO='Nao'`. Diff de par e kit cadastrados pela tela (3566, 3382) contra par e kit gravados pelo Portal (3567, 3568) numa cópia da MM; bate com o perfil da parte A. `CODSUBGRUPO=1` ficou de fora (amostras da tela nulas). No cadastro, a tela só grava em `PRODUTOS`/`PRODUTOS_KIT` (`produto_no_fire.py`: o resto é estoque, entrada/saída e nota, de operações posteriores). **Falta** abrir na tela do Fire um par e um kit gravados pelo Portal (Step 8, com o Samuel).
 - Caminhos residuais de liberação com produto no ERP (aceitos): exigem `DATA_CAD` editado à mão no Fire ou perda do commit do WAL entre duas reservas (a conexão do livro, na volta e na ferramenta do operador, abre com `synchronous=FULL` por `cadastro_volta_repo.duravel`; o resto do router segue `NORMAL`, então só sobra um disco que mente sobre o fsync); o custo é um produto duplicado, visível no Flow como `conflito_codigo`/órfão.
+
+## 6. Trava de preço (contrato precos v1)
+
+`precos.rodar(agora)`, na thread `flowpcp-envio` (`envio_portal.ciclo`), fora das janelas.
+Por ambiente ativo com a trava ≠ `desligado` e `environments.cnpj` válido, com a config do
+Flow de `preco_fonte_slug or slug` (Nasmar: config da MM, `empresaFaturadora` = CNPJ da Nasmar;
+cópia no db do próprio ambiente):
+
+- **Tabela** (`GET /precos/tabela`) a cada 60 s: página em transação até `temMais: false`;
+  `reiniciar` ou cópia de outra empresa → `precos_repo.reiniciar`. Guarda as `capacidades`.
+- **Só em `ligado`**, a cada 30 s e só com `precos.aprovacao.v1` declarado: revisões
+  `pendente_envio` (`marcar_tentada` antes do POST; False = não envia), retiradas, e
+  decisões (lê sem cursor → `gravar_decisao` → confirma com `empresaFaturadoraCnpj`, até vir vazia).
+- Fila em rotação: revisões por `COALESCE(tentada_em, criado_em)` (`marcar_tentada` grava a
+  hora de cada tentativa), lote de 50; retirada que falhou vai para o fim (`_retiradas_presas`,
+  memória do processo, até 1000). Um pedido preso não segura os outros. Mais de 5 falhas passageiras da
+  mesma revisão → aviso único no log. Decisão de revisão acima da maior local → `descartada`
+  e aviso no log (sinal de restore de backup do SQLite).
+- Estado (`gerado_em`, último erro, `pendente_envio`/`bloqueada_local`/`recusada_flow`) no log
+  `flowpcp.precos estado env=…`, só quando muda. Pausas e intervalos vivem na memória do processo.
+
+Quatro rotas do Flow (`/api/portal-pedidos/precos/…`): (a) `GET tabela`, (b) `POST aprovacoes`,
+(c) `GET decisoes` e `POST decisoes/confirmar`. Resumo do tratamento (`precos.py`):
+
+| Resposta | Rota | Efeito |
+|---|---|---|
+| 400 `cursor_invalido` (com cursor salvo) ou `reiniciar: true` | a | reinicia a cópia (máx. 2 por volta; depois pausa tabela e aprovação por 15 min) |
+| 2xx sem objeto JSON (`resposta_sem_json`), 429, 503, rede | a, b, c | transitório: tenta no próximo ciclo, nada muda na revisão; em (b) encerra o envio da volta (retiradas e decisões seguem) |
+| 500, 502, 504 | a, c | transitório: tenta no próximo ciclo |
+| 500, 502, 504 | b | pula só aquele pedido ou retirada; a fila segue e ele vai para o fim. 3 seguidos na volta (revisões e retiradas somadas, zera com qualquer outra resposta) = disjuntor: encerra o envio da volta (decisões seguem) |
+| 201/200 | b (pedido) | `enviada` |
+| 2xx com JSON fora do contrato | b | `enviada`, com o corpo bruto guardado (o Flow gravou) |
+| 2xx com JSON fora do contrato | `POST decisoes/confirmar` | confirmação tida como feita (se não, a decisão volta e é reconfirmada) |
+| 2xx com JSON fora do contrato | `GET decisoes` | pausa a aprovação por 15 min |
+| 2xx com JSON fora do contrato | a | pausa tabela e aprovação por 15 min |
+| 409 `revisao_obsoleta`/`conteudo_divergente` | b | vigente aqui: sobe o piso e reenvia (máx. 3 por pedido na volta); já substituída: não reenvia |
+| 409 `revisao_obsoleta` sem `revisaoVigente` | b (pedido) | pausa só a aprovação por 15 min |
+| 409 `revisao_obsoleta` | b (retirada) | reenvia com `revisaoVigente`; sem revisão nova, loga uma vez e a retirada vai para o fim |
+| 200 com `aprovacaoId` nulo | b (retirada) | retirada feita |
+| 413, 400 `payload_invalido`, corpo inválido local | b | `bloqueio_local`: só conteúdo novo cria nova revisão; não há desbloqueio por clique |
+| 422 `rede_desconhecida`/`produto_desconhecido`/`empresa_faturadora_desconhecida` | b | `recusada_flow`; reenvio do operador cria a revisão seguinte (rev+1) |
+| 403, 400/401/404, outros | b, c | pausa só a aprovação por 15 min (a tabela segue) |
+| demais erros | a | pausa tabela e aprovação por 15 min |
+| decisão de outra empresa faturadora | c | não grava; confirmada `descartada` |
+
+Riscos conhecidos:
+- Uma decisão fora do schema (divergência entre o pydantic daqui e o zod do Flow) recusa a página inteira de `GET decisoes` e pausa a aprovação por 15 min, em laço,
+  até o Flow parar de mandá-la.
+- `reiniciar: true` e `cursor_invalido` apagam a cópia antes de baixá-la de novo: até a última
+  página chegar, a cópia fica sem `completo_em` e a trava bloqueia (`copia_desatualizada`).
+  Autocura na mesma volta ou na seguinte (60 s), se as páginas vierem.
+
+Intervalos: tabela 60 s (trava ≠ `desligado`), envio e decisões 30 s (só `ligado`); independem
+das janelas do Flow. `PORTAL_FLOWPCP_PRECOS=0` desliga tudo.
+
+**Só a thread do processo web roda isso**: `envio_portal.ciclo` chama `precos.rodar`; o worker
+docker (`python -m app.worker`) **não** chama. O deploy Windows roda `ui.py`, então vale.
+Ligar a trava: runbook em `modules/erp.md` ("Trava de preço por rede").
+
+Cliente: `get_precos_tabela`, `post_precos_aprovacao`, `get_precos_decisoes`,
+`post_precos_confirmar` (GET com `read_only_policy`, POST com `idempotent_post_policy`);
+`FlowPCPClientError` carrega `status_code`, `error` e `details` do corpo de erro.
+Testes: `tests/test_flowpcp_precos.py`, `tests/test_flowpcp_precos_schema.py`.
 
 ## Testes
 

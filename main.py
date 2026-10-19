@@ -3,10 +3,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import os
+import sys
 
 from app import config as app_config
 from app.exporters.erp_exporter import ERPExporter
-from app.exporters.firebird_exporter import FirebirdExporter
 from app.ingestion.file_loader import FileLoader
 from app.pipeline import process
 from app.utils.logger import logger
@@ -19,8 +19,10 @@ def main() -> None:
     cfg = app_config.load()
     export_mode = cfg.get("export_mode", "xlsx")
 
+    if export_mode in ("db", "both"):
+        sys.exit("Gravação direta no Fire só pelo portal (preview → enviar).")
+
     xlsx_exporter: ERPExporter | None = ERPExporter() if export_mode in ("xlsx", "both") else None
-    db_exporter: FirebirdExporter | None = FirebirdExporter() if export_mode in ("db", "both") else None
 
     loader = FileLoader()
     files = loader.load_files(INPUT_DIR)
@@ -48,15 +50,6 @@ def main() -> None:
                 logger.info(
                     f"Pedido {order.header.order_number} dividido em {len(paths)} arquivo(s) por local de entrega"
                 )
-
-        if db_exporter:
-            result = db_exporter.export(order)
-            if not result.skipped:
-                logger.info(
-                    f"Firebird: {result.items_inserted} item(s) inserido(s) para pedido {result.order_number!r}"
-                )
-            else:
-                logger.warning(f"Firebird: pedido {result.order_number!r} ignorado ({result.skip_reason})")
 
     logger.info(f"Pipeline concluído: {success}/{len(files)} pedido(s) processado(s) → {OUTPUT_DIR}")
 

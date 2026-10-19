@@ -54,6 +54,7 @@
     label.check > span { margin: 0; color: var(--text); font-size: .9em; }
     .flowpcp-status { font-size: .85em; }
     .row { display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; }
+    .row.row-igual { grid-template-columns: 1fr 1fr; }
     .field-row { display: flex; gap: .5rem; align-items: stretch; }
     .field-row > input { flex: 1; }
     .field-row > .btn { white-space: nowrap; }
@@ -236,6 +237,38 @@
         <p id="figura-fiscal-hint" class="hint" hidden>
           Deixe vazio para usar o padrão; a Nasmar usa 5.
         </p>
+      </fieldset>
+
+      <!-- Trava de preço: só existe na edição (o ambiente precisa existir). Sem
+           `name` no select pra não entrar no payload do formulário principal. -->
+      <fieldset id="preco-trava-fs" hidden>
+        <legend>Trava de preço</legend>
+        <div class="row row-igual">
+          <label>
+            <span>Modo</span>
+            <select id="preco-trava-modo">
+              <option value="desligado">Desligado</option>
+              <option value="observando">Observando</option>
+              <option value="ligado">Ligado</option>
+            </select>
+          </label>
+          <label>
+            <span>Chave do produto</span>
+            <select id="preco-fonte-slug">
+              <option value="">Esta empresa</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint">
+          Desligado: como hoje. Observando: avalia e mostra; não bloqueia o envio, mas a planilha da importação passa a sair só pela revisão. Ligado: pedido só sai com preço da tabela ou aprovado no Flow.
+        </p>
+        <p class="hint">
+          Chave do produto: de qual empresa vêm o Fire que identifica o produto e o Flow que guarda a tabela. A Nasmar usa a MM; a MM usa ela mesma.
+        </p>
+        <div class="actions" style="margin-top:.75rem">
+          <button type="button" id="btn-save-preco-trava" class="btn btn-secondary">Salvar trava de preço</button>
+          <span id="preco-trava-status" class="flowpcp-status"></span>
+        </div>
       </fieldset>
 
       <fieldset>
@@ -589,6 +622,9 @@
       slugInput.setSelectionRange(start, start);
     });
 
+    // Chave do produto salva da trava de preço (preenchida no load da edição).
+    let precoFonteSalva = '';
+
     if (isEdit) {
       document.getElementById('title').textContent = 'Editar ambiente';
       testBtn.hidden = false;
@@ -597,6 +633,7 @@
       // aceita) — esconder na criação evita o campo parecer salvo e não ser.
       document.getElementById('figura-fiscal-label').hidden = false;
       document.getElementById('figura-fiscal-hint').hidden = false;
+      document.getElementById('preco-trava-fs').hidden = false;
       Promise.all([
         fetch('/api/admin/environments/' + envId).then(r => {
           if (r.status === 401) { location.href = '/login'; return; }
@@ -616,6 +653,27 @@
         }
         f.elements['slug'].readOnly = true;
         erpBasePadrao();
+        document.getElementById('preco-trava-modo').value = env.preco_trava_modo || 'desligado';
+        // Chave do produto: só ambientes com FlowPCP ligado (o servidor ainda
+        // confere url/tenant/token). O valor salvo nunca some do <select>.
+        {
+          const fonteSel = document.getElementById('preco-fonte-slug');
+          const fonteSalva = env.preco_fonte_slug || '';
+          const outros = (Array.isArray(allEnvs) ? allEnvs : [])
+            .filter(e => e.slug !== env.slug && e.flowpcp_enabled);
+          let fonteOpts = '<option value="">Esta empresa</option>' + outros
+            .map(e => '<option value="' + escAttr(e.slug) + '">' + escAttr(e.name) +
+              ' (' + escAttr(e.slug) + ')</option>')
+            .join('');
+          if (fonteSalva && !outros.some(e => e.slug === fonteSalva)) {
+            fonteOpts += '<option value="' + escAttr(fonteSalva) + '">' + escAttr(fonteSalva) +
+              (Array.isArray(allEnvs) ? ' — sem Flow ou removido' : ' — lista indisponível, valor preservado') +
+              '</option>';
+          }
+          fonteSel.innerHTML = fonteOpts;
+          fonteSel.value = fonteSalva;
+          precoFonteSalva = fonteSalva;
+        }
         // FlowPCP: prefill (sem o token, que é write-only) e revela a seção.
         fv('flowpcp_enabled').checked = !!env.flowpcp_enabled;
         fv('flowpcp_base_url').value = env.flowpcp_base_url ?? '';
@@ -909,6 +967,43 @@
         erpStatus.className = 'flowpcp-status err';
       } finally {
         erpDesbloquear.disabled = false;
+      }
+    });
+
+    // Trava de preço: PATCH do modo e da chave do produto (selects sem `name`,
+    // fora do payload do form). A chave só vai quando mudou: desligar a trava
+    // não revalida uma fonte salva (`precoFonteSalva`, declarada acima).
+    document.getElementById('btn-save-preco-trava').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const status = document.getElementById('preco-trava-status');
+      status.textContent = '';
+      status.className = 'flowpcp-status';
+      btn.disabled = true;
+      try {
+        const fonteNova = document.getElementById('preco-fonte-slug').value;
+        const r = await fetch('/api/admin/environments/' + envId + '/preco-trava', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(Object.assign(
+            { modo: document.getElementById('preco-trava-modo').value },
+            fonteNova !== precoFonteSalva ? { preco_fonte_slug: fonteNova || null } : {},
+          )),
+        });
+        if (r.ok) {
+          precoFonteSalva = fonteNova;
+          status.textContent = '✓ Trava de preço salva';
+          status.classList.add('ok');
+        } else {
+          const t = await r.text();
+          let msg;
+          try { msg = JSON.parse(t).detail || t; } catch { msg = t || ('Erro ' + r.status); }
+          status.textContent = '✗ ' + (typeof msg === 'string' ? msg : 'Erro ' + r.status);
+          status.classList.add('err');
+        }
+      } catch (err) {
+        status.textContent = '✗ ' + err.message; status.classList.add('err');
+      } finally {
+        btn.disabled = false;
       }
     });
 

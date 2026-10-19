@@ -3,12 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, TypeVar
 
 import httpx
+from pydantic import BaseModel
 
 from app.http.client import HttpError, OutboundClient
-from app.http.policies import apply_post_policy, idempotent_post_policy
+from app.http.policies import apply_post_policy, idempotent_post_policy, read_only_policy
 from app.integrations.flowpcp.cadastro_schema import PendentesResposta
 from app.integrations.flowpcp.catalogo_schema import (
     CatalogoReconciliacaoResponse,
@@ -19,12 +20,20 @@ from app.integrations.flowpcp.clientes_schema import (
     ClientesRequest,
 )
 from app.integrations.flowpcp.materiais_schema import MateriaisRequest, MateriaisResposta
+from app.integrations.flowpcp.precos_schema import (
+    AprovacaoRespostaV1,
+    ConfirmacaoRespostaV1,
+    DecisoesPaginaV1,
+    TabelaPaginaV1,
+)
 from app.integrations.flowpcp.schema import (
     ConfirmarReconciliacaoRequest,
     DecisoesResponse,
     RecebimentoRequest,
 )
 from app.utils.logger import logger
+
+_M = TypeVar("_M", bound=BaseModel)
 
 FLOWPCP_TARGET_NAME = "flowpcp"  # outbox.target identifier
 RECEBIMENTO_PATH = "/api/portal-pedidos/recebimento"
@@ -34,7 +43,13 @@ _CATALOGO_PATH = "/api/portal-pedidos/catalogo"
 _CLIENTES_PATH = "/api/portal-pedidos/clientes"
 _MATERIAIS_PATH = "/api/portal-pedidos/materiais"
 _CADASTROS_PENDENTES_PATH = "/api/portal-pedidos/cadastros/pendentes"
+_PRECOS_TABELA_PATH = "/api/portal-pedidos/precos/tabela"
+_PRECOS_APROVACOES_PATH = "/api/portal-pedidos/precos/aprovacoes"
+_PRECOS_DECISOES_PATH = "/api/portal-pedidos/precos/decisoes"
+_PRECOS_CONFIRMAR_PATH = "/api/portal-pedidos/precos/decisoes/confirmar"
 DEFAULT_TIMEOUT_SECONDS = 30.0
+# Teto do corpo bruto guardado quando um 2xx vem fora do contrato de preço.
+_TETO_BRUTO = 64 * 1024
 # Apply do catálogo: o Flow tem maxDuration 300 s e um apply por vez (409).
 APPLY_TIMEOUT_SECONDS = 300.0
 _ORDEM_ACOES = ("criar", "atualizar", "inativar")
@@ -55,12 +70,22 @@ def _retry_after(resp: httpx.Response) -> int | None:
 
 
 class FlowPCPClientError(Exception):
+    """`error`/`details`: o corpo de erro do Flow (`{error, details?}`), quando veio."""
+
     def __init__(
-        self, message: str, *, status_code: int | None = None, body: str | None = None
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        body: str | None = None,
+        error: str | None = None,
+        details: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.body = body
+        self.error = error
+        self.details = details
 
 
 class FlowPCPApplyEmAndamentoError(FlowPCPClientError):
@@ -87,6 +112,26 @@ def _idem(prefixo: str, request) -> str:
 
 def _idem_catalogo(request: CatalogoRequest) -> str:
     return _idem("catalogo", request)
+
+
+def _query(empresa: str, cursor: str | None, limite: int) -> dict[str, Any]:
+    params: dict[str, Any] = {"empresaFaturadora": empresa, "limite": limite}
+    if cursor:
+        params["cursor"] = cursor
+    return params
+
+
+def _corpo_de_erro(resp: httpx.Response) -> tuple[str | None, dict[str, Any] | None]:
+    """`{error, details?}` do Flow; corpo que não é isso → (None, None)."""
+    try:
+        corpo = resp.json()
+    except ValueError:
+        return None, None
+    if not isinstance(corpo, dict):
+        return None, None
+    erro = corpo.get("error") if isinstance(corpo.get("error"), str) else None
+    detalhes = corpo.get("details") if isinstance(corpo.get("details"), dict) else None
+    return erro, detalhes
 
 
 class FlowPCPClient:
@@ -288,6 +333,106 @@ class FlowPCPClient:
                 body=(resp.text or "")[:500],
             )
         return ClientesReconciliacaoResponse.model_validate(resp.json())
+
+    # ─── contrato precos v1 ────────────────────────────────────────────────
+
+    def get_precos_tabela(
+        self, empresa: str, cursor: str | None = None, limite: int = 500
+    ) -> TabelaPaginaV1:
+        """Rota (a): uma página da tabela, filtrada pela empresa faturadora."""
+        return self._precos(
+            "GET", _PRECOS_TABELA_PATH, TabelaPaginaV1, params=_query(empresa, cursor, limite)
+        )
+
+    def post_precos_aprovacao(self, corpo: dict[str, Any]) -> AprovacaoRespostaV1:
+        """Rota (b): pedido aguardando preço ou retirada. Idempotente no Flow por
+        (empresa, externalId, revisao); a chave do cabeçalho segue a mesma tupla."""
+        chave = (
+            f"precos-{corpo.get('tipo')}-{corpo.get('empresaFaturadoraCnpj')}-"
+            f"{corpo.get('externalId')}-{corpo.get('revisao')}"
+        )
+        return self._precos(
+            "POST", _PRECOS_APROVACOES_PATH, AprovacaoRespostaV1, corpo=corpo, idem=chave
+        )
+
+    def get_precos_decisoes(
+        self, empresa: str, cursor: str | None = None, limite: int = 100
+    ) -> DecisoesPaginaV1:
+        """Rota (c): decisões ainda não confirmadas daquela empresa."""
+        return self._precos(
+            "GET",
+            _PRECOS_DECISOES_PATH,
+            DecisoesPaginaV1,
+            params=_query(empresa, cursor, limite),
+        )
+
+    def post_precos_confirmar(self, corpo: dict[str, Any]) -> ConfirmacaoRespostaV1:
+        """Rota (c): confirma o lote de decisões (resposta sempre 200 por item)."""
+        digest = hashlib.sha256(json.dumps(corpo, sort_keys=True).encode()).hexdigest()[:16]
+        return self._precos(
+            "POST",
+            _PRECOS_CONFIRMAR_PATH,
+            ConfirmacaoRespostaV1,
+            corpo=corpo,
+            idem=f"precos-confirmar-{digest}",
+        )
+
+    def _precos(
+        self,
+        metodo: Literal["GET", "POST"],
+        path: str,
+        modelo: type[_M],
+        *,
+        params: dict[str, Any] | None = None,
+        corpo: dict[str, Any] | None = None,
+        idem: str | None = None,
+    ) -> _M:
+        """GET com `read_only_policy` (429 e 5xx); POST com `idempotent_post_policy`.
+        Falha → `FlowPCPClientError` com `status_code`, `error` e `details`
+        (rede: `status_code` None; resposta fora do schema: `resposta_fora_do_contrato`)."""
+        try:
+            if metodo == "GET":
+                resp = self._client.get(path, params=params, retry_policy=read_only_policy())
+            else:
+                resp = self._client.post_json(
+                    path, json=corpo, idempotency_key=idem, retry_policy=idempotent_post_policy()
+                )
+        except (HttpError, httpx.HTTPError) as exc:
+            raise FlowPCPClientError(
+                f"{metodo} {path} falhou: {exc!r}",
+                status_code=getattr(exc, "status_code", None),
+                body=getattr(exc, "body", None),
+            ) from exc
+        if not resp.is_success:
+            erro, detalhes = _corpo_de_erro(resp)
+            raise FlowPCPClientError(
+                f"{metodo} {path} status {resp.status_code} ({erro})",
+                status_code=resp.status_code,
+                body=(resp.text or "")[:500],
+                error=erro,
+                details=detalhes,
+            )
+        try:
+            dados = resp.json()
+        except ValueError:
+            dados = None
+        if not isinstance(dados, dict):
+            # Proxy, página de manutenção, captive portal: o Flow não recebeu nada.
+            raise FlowPCPClientError(
+                f"{metodo} {path}: 2xx sem objeto JSON",
+                status_code=resp.status_code,
+                body=(resp.text or "")[:500],
+                error="resposta_sem_json",
+            )
+        try:
+            return modelo.model_validate(dados)
+        except ValueError as exc:
+            raise FlowPCPClientError(
+                f"{metodo} {path}: resposta fora do contrato: {str(exc)[:300]}",
+                status_code=resp.status_code,
+                body=(resp.text or "")[:_TETO_BRUTO],  # 2xx fora do contrato é guardado bruto
+                error="resposta_fora_do_contrato",
+            ) from exc
 
     def _post(self, path: str, body: dict[str, Any], *, idempotency_key: str):
         try:

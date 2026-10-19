@@ -170,38 +170,41 @@ FIND_PRODUCT_BY_SEQ = """
 
 
 def find_products_by_eans_sql(n: int) -> str:
-    """SELECT batelado por EAN. Retorna (CODIGO_EAN13_TRIM, SEQ, DESCRICAO, PRECO_VENDA).
+    """SELECT batelado por EAN. Retorna (CODIGO_EAN13_TRIM, SEQ, DESCRICAO, PRECO_VENDA, UNIDADE).
 
     TRIM em ambos os lados (SELECT e WHERE) — CODIGO_EAN13 é CHAR(n) no Firebird,
     então sem TRIM a chave do map fica blank-padded e o compare em Python
     (`it.ean in ean_map`) nunca bate (EAN do parser vem sem padding). ORDER BY SEQ
     torna o primeiro resultado determinístico quando o catálogo tem EAN duplicado.
 
-    NÃO INTERPERMUTÁVEL com `FIND_PRODUCT_BY_EAN` (singular, acima) — mesma
-    aridade (4 colunas), significado incompatível por posição: aqui col[0] é
-    a chave (string) e col[3] é PRECO_VENDA; lá col[0] é SEQ e col[3] é
-    UNIDADE. Bind posicional confundido lê o campo errado sem erro nenhum.
+    NÃO INTERPERMUTÁVEL com `FIND_PRODUCT_BY_EAN` (singular, acima) — aqui
+    col[0] é a chave (string), col[3] é PRECO_VENDA e col[4] é UNIDADE; lá
+    col[0] é SEQ e col[3] é UNIDADE. Bind posicional confundido lê o campo
+    errado sem erro nenhum. UNIDADE fica no FIM para não deslocar quem lê só
+    col[0]/col[1] (`erp_eventos.produtor._unicos`).
     """
     placeholders = ", ".join(["?"] * n)
     return (
-        "SELECT TRIM(CODIGO_EAN13), SEQ, DESCRICAO, PRECO_VENDA "
+        "SELECT TRIM(CODIGO_EAN13), SEQ, DESCRICAO, PRECO_VENDA, UNIDADE "
         f"FROM PRODUTOS WHERE TRIM(CODIGO_EAN13) IN ({placeholders}) ORDER BY SEQ"
     )
 
 
 def find_products_by_codes_sql(n: int) -> str:
-    """SELECT batelado por CODPROD_ALTERN. Retorna (CODPROD_ALTERN_TRIM, SEQ, DESCRICAO, PRECO_VENDA).
+    """SELECT batelado por CODPROD_ALTERN.
+
+    Retorna (CODPROD_ALTERN_TRIM, SEQ, DESCRICAO, PRECO_VENDA, UNIDADE).
 
     ORDER BY SEQ torna o primeiro resultado determinístico quando o catálogo tem
     CODPROD_ALTERN duplicado (mesmo motivo do find_products_by_eans_sql).
 
     NÃO INTERPERMUTÁVEL com `FIND_PRODUCT_BY_CODE` (singular, acima) — mesmo
-    aviso de `find_products_by_eans_sql`: mesma aridade, col[0]/col[3]
-    trocados de significado.
+    aviso de `find_products_by_eans_sql`: col[0]/col[3] trocados de
+    significado.
     """
     placeholders = ", ".join(["?"] * n)
     return (
-        "SELECT TRIM(CODPROD_ALTERN), SEQ, DESCRICAO, PRECO_VENDA "
+        "SELECT TRIM(CODPROD_ALTERN), SEQ, DESCRICAO, PRECO_VENDA, UNIDADE "
         f"FROM PRODUTOS WHERE TRIM(CODPROD_ALTERN) IN ({placeholders}) ORDER BY SEQ"
     )
 
@@ -222,9 +225,12 @@ def prever_import_fire_sql(n: int) -> str:
 
 
 def find_products_by_seqs_sql(n: int) -> str:
-    """SELECT batelado por SEQ. Retorna (SEQ, DESCRICAO, PRECO_VENDA)."""
+    """SELECT batelado por SEQ. Retorna (SEQ, DESCRICAO, PRECO_VENDA, UNIDADE)."""
     placeholders = ", ".join(["?"] * n)
-    return f"SELECT SEQ, DESCRICAO, PRECO_VENDA FROM PRODUTOS WHERE SEQ IN ({placeholders})"
+    return (
+        "SELECT SEQ, DESCRICAO, PRECO_VENDA, UNIDADE FROM PRODUTOS "
+        f"WHERE SEQ IN ({placeholders})"
+    )
 
 
 # Insert sales order header (CAB_VENDAS).

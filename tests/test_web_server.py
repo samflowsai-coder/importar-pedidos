@@ -2302,6 +2302,60 @@ def test_vincular_produto_422_fire_produto_id_desconhecido():
     assert r.status_code == 422
 
 
+def test_vincular_produto_regrava_o_check_preco(monkeypatch):
+    import uuid
+
+    from app.erp import preco_trava
+    from app.persistence import repo
+
+    entry_id = str(uuid.uuid4())
+    _seed_parsed_import_with_item(
+        entry_id,
+        item={"description": "TENIS", "quantity": 1.0, "product_code": "ABC123", "ean": "789"},
+        customer_cnpj="11.222.333/0001-44",
+    )
+    _seed_catalogo_fire(
+        [{"fire_produto_id": "10", "codigo": "10", "nome": "TENIS AZUL", "ean": "789"}]
+    )
+    monkeypatch.setattr(
+        preco_trava,
+        "check_preco_para_gravar",
+        lambda order, env, entry=None: {"available": True, "items": []},
+    )
+
+    r = client.post(
+        f"/api/imported/{entry_id}/vincular-produto",
+        json={"item_index": 0, "fire_produto_id": "10"},
+    )
+
+    assert r.status_code == 200, r.text
+    assert repo.get_import(entry_id)["check_preco"] == {"available": True, "items": []}
+
+
+def test_vincular_produto_sem_fonte_nao_grava_check_preco():
+    import uuid
+
+    from app.persistence import repo
+
+    entry_id = str(uuid.uuid4())
+    _seed_parsed_import_with_item(
+        entry_id,
+        item={"description": "TENIS", "quantity": 1.0, "product_code": "ABC123", "ean": "789"},
+        customer_cnpj="11.222.333/0001-44",
+    )
+    _seed_catalogo_fire(
+        [{"fire_produto_id": "10", "codigo": "10", "nome": "TENIS AZUL", "ean": "789"}]
+    )
+
+    r = client.post(
+        f"/api/imported/{entry_id}/vincular-produto",
+        json={"item_index": 0, "fire_produto_id": "10"},
+    )
+
+    assert r.status_code == 200, r.text
+    assert repo.get_import(entry_id)["check_preco"] is None
+
+
 def test_delete_depara_desfaz():
     from datetime import datetime
 
@@ -2429,6 +2483,38 @@ def test_commit_grava_sha256_e_caminho_da_copia_no_import(tmp_path, monkeypatch)
     entry = client.get(f"/api/imported/{r2.json()['entry_id']}").json()["entry"]
     assert entry["file_sha256"] == hashlib.sha256(pdf.read_bytes()).hexdigest()
     assert Path(entry["original_path"]) == _arquivos_recebidos()[0]
+
+
+def test_commit_grava_o_check_preco_da_fonte(tmp_path, monkeypatch):
+    from app.erp import preco_trava
+    from app.persistence import repo
+
+    _config_em_tmp(monkeypatch, tmp_path)
+    chamadas = []
+
+    def fake(order, env):
+        chamadas.append((order.header.order_number, env))
+        return {"available": True, "items": [], "fonte": "mm"}
+
+    monkeypatch.setattr(preco_trava, "check_preco_para_gravar", fake)
+    # O env passado é o `env_alvo` do commit (o ambiente onde o pedido é gravado).
+    from app.persistence import context as env_context
+    from app.web import server
+
+    ativo = env_context.current()
+    alvo = {**ativo, "watch_dir": str(tmp_path), "output_dir": str(tmp_path), "marca": "alvo"}
+    monkeypatch.setattr(server, "_resolver_env_alvo", lambda *a, **k: alvo)
+    pdf = _sample_pdf()
+    r = client.post(
+        "/api/preview", files=[("file", (pdf.name, pdf.read_bytes(), "application/pdf"))]
+    )
+
+    r2 = client.post("/api/commit", json={"preview_id": r.json()["preview_id"]})
+
+    assert r2.status_code == 200, r2.text
+    assert len(chamadas) == 1
+    assert chamadas[0][1] is alvo
+    assert repo.get_import(r2.json()["entry_id"])["check_preco"]["fonte"] == "mm"
 
 
 def test_preview_da_pasta_guarda_copia_e_o_move_para_importados_continua(tmp_path, monkeypatch):
@@ -2630,3 +2716,1008 @@ def test_send_to_fire_item_vinculado_vai_pelo_seq_do_depara(monkeypatch):
     r = client.post(f"/api/imported/{entry_id}/send-to-fire")
     assert r.status_code == 200, r.text
     assert recebido["produtos_por_item"] == {0: 77}
+
+
+# ── Caminhos legados nunca gravam no Fire sem o preview ──────────────────────
+
+
+@pytest.mark.parametrize("modo", ["db", "both"])
+def test_import_direto_em_modo_db_nunca_chama_firebird(monkeypatch, tmp_path, modo):
+    from app import config as app_config
+    from app.exporters import firebird_exporter as fb_mod
+    from app.web import server as server_mod
+
+    def _explode(self, *a, **kw):
+        raise AssertionError("FirebirdExporter.export não pode ser chamado fora do preview")
+
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _explode)
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": modo},
+    )
+
+    pdf = SAMPLES / "2600009562-2026-02-25.pdf"
+    if not pdf.exists():
+        pytest.skip("Sample PDF not available")
+    from app.ingestion.file_loader import LoadedFile
+    from app.pipeline import process
+
+    loaded = LoadedFile(path=pdf, extension=".pdf", raw=pdf.read_bytes())
+    order = process(loaded)
+
+    out = server_mod._run_exporters(order, tmp_path)
+
+    assert out["db_result"] == {"skipped": True, "skip_reason": "USE_PREVIEW"}
+    assert out["fire_codigo"] is None
+    if modo == "both":
+        assert out["output_files"], "em both o XLSX ainda precisa ser gerado"
+    else:
+        assert out["output_files"] == []
+
+
+def _import_parsed(entry_id, *, source_filename="x.pdf", file_sha256=None):
+    from datetime import datetime
+
+    from app.persistence import repo
+
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": source_filename,
+            "file_sha256": file_sha256,
+            "imported_at": datetime.now().isoformat(timespec="seconds"),
+            "order_number": "TEST-PRECO",
+            "customer": "ACME",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {"header": {"order_number": "TEST-PRECO"}, "items": []},
+        }
+    )
+
+
+def _revisao_enviada(entry_id):
+    from datetime import UTC, datetime
+
+    from app.persistence import preco_revisao_repo as revs
+
+    with db.connect() as conn:
+        revs.garantir_revisao(conn, entry_id, {"externalId": entry_id}, "sha256:a", agora=datetime.now(UTC))
+        revs.marcar_enviada(conn, entry_id, 1, {}, em=datetime.now(UTC))
+
+
+def test_cancel_grava_retirada_da_revisao_enviada():
+    import uuid
+
+    from app.persistence import preco_revisao_repo as revs
+
+    entry_id = str(uuid.uuid4())
+    _import_parsed(entry_id)
+    _revisao_enviada(entry_id)
+
+    r = client.post(f"/api/imported/{entry_id}/cancel", json={"reason": "duplicado"})
+    assert r.status_code == 200
+
+    with db.connect() as conn:
+        assert revs.vigente(conn, entry_id) is None
+        pend = revs.retiradas_pendentes(conn, 10)
+    assert [(p["import_id"], p["revisao"], p["retirada_motivo"]) for p in pend] == [
+        (entry_id, 1, "duplicado")
+    ]
+
+
+def test_reimport_retira_a_revisao_do_pedido_antigo(monkeypatch, tmp_path):
+    import shutil
+    import uuid
+
+    from app import config as app_config
+    from app.persistence import preco_revisao_repo as revs
+
+    pdf = SAMPLES / "2600009562-2026-02-25.pdf"
+    if not pdf.exists():
+        pytest.skip("Sample PDF not available")
+    env = _env_trava_ligada(tmp_path)
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx"},
+    )
+    imp = tmp_path / "in" / "Pedidos importados"
+    imp.mkdir(parents=True)
+    shutil.copy(pdf, imp / pdf.name)
+    import hashlib
+
+    sha = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    # mesmos bytes com o nome carimbado de quando foi importado → é o antigo
+    antigo = str(uuid.uuid4())
+    _import_parsed(antigo, source_filename=f"20261017-1015_{pdf.name}", file_sha256=sha)
+    _revisao_enviada(antigo)
+    # homônimo com outro conteúdo → NÃO é o antigo
+    outro = str(uuid.uuid4())
+    _import_parsed(outro, source_filename=pdf.name, file_sha256="0" * 64)
+    _revisao_enviada(outro)
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post("/api/reimport", json={"filename": pdf.name})
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 200, r.text
+    with db.connect() as conn:
+        assert revs.vigente(conn, antigo) is None
+        assert revs.vigente(conn, outro) is not None
+        pend = revs.retiradas_pendentes(conn, 10)
+    assert [(p["import_id"], p["retirada_motivo"]) for p in pend] == [
+        (antigo, "pedido reimportado no Portal")
+    ]
+
+
+def test_reimport_em_cadeia_retira_o_reimport_anterior(monkeypatch, tmp_path):
+    import hashlib
+    import shutil
+    import uuid
+
+    from app import config as app_config
+    from app.persistence import preco_revisao_repo as revs
+
+    pdf = SAMPLES / "2600009562-2026-02-25.pdf"
+    if not pdf.exists():
+        pytest.skip("Sample PDF not available")
+    env = _env_trava_ligada(tmp_path)
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx"},
+    )
+    imp = tmp_path / "in" / "Pedidos importados"
+    imp.mkdir(parents=True)
+    shutil.copy(pdf, imp / pdf.name)
+    original = str(uuid.uuid4())
+    sha = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    _import_parsed(original, source_filename=f"20261017-1015_{pdf.name}", file_sha256=sha)
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r1 = client.post("/api/reimport", json={"filename": pdf.name})
+        assert r1.status_code == 200, r1.text
+        reimport_1 = r1.json()["entry_id"]
+        _revisao_enviada(reimport_1)  # sem file_sha256: casa pelo nome guardado
+        r2 = client.post("/api/reimport", json={"filename": pdf.name})
+    finally:
+        client.cookies.clear()
+
+    assert r2.status_code == 200, r2.text
+    reimport_2 = r2.json()["entry_id"]
+    with db.connect() as conn:
+        assert revs.vigente(conn, reimport_1) is None
+        pend = revs.retiradas_pendentes(conn, 10)
+    assert [p["import_id"] for p in pend] == [reimport_1]
+    assert reimport_2 not in {p["import_id"] for p in pend}
+
+
+# ── Trava de preço (preco_trava.decidir_envio) nos dois caminhos de envio ─────
+
+
+_EMPRESA_TRAVA = "11111111000191"  # CNPJ do ambiente "test" = empresa faturadora
+_R1_TRAVA = "a1a1a1a1-0000-4000-8000-000000000001"
+
+
+def _pagina_trava(seq: str, centavos: int, cursor: str) -> None:
+    """Página do contrato precos v1: rede r1 (raiz 11222333) com o produto `seq`."""
+    import uuid
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from app.persistence import precos_repo
+
+    with db.connect() as conn:
+        precos_repo.aplicar_pagina(
+            conn,
+            {
+                "schema": "precos.tabela.v1",
+                "capacidades": ["precos.tabela.v1", "precos.aprovacao.v1"],
+                "geradoEm": _dt.now(UTC).isoformat(),
+                "empresaFaturadoraCnpj": _EMPRESA_TRAVA,
+                "reiniciar": False,
+                "mudancas": [
+                    {
+                        "tipo": "rede",
+                        "redeId": _R1_TRAVA,
+                        "nome": "Rede X",
+                        "ativa": True,
+                        "travada": False,
+                        "raizes": ["11222333"],
+                        "cnpjs": [],
+                    },
+                    {
+                        "tipo": "preco",
+                        "precoId": str(uuid.uuid5(uuid.NAMESPACE_URL, f"r1-{seq}")),
+                        "redeId": _R1_TRAVA,
+                        "empresaFaturadoraCnpj": _EMPRESA_TRAVA,
+                        "erpProdutoId": seq,
+                        "unidadeErp": "KIT",
+                        "precoCentavos": centavos,
+                        "vigenciaInicio": "2026-01-01",
+                        "registradoEm": "2026-01-01T00:00:00.000Z",
+                        "cancelado": False,
+                    },
+                ],
+                "cursor": cursor,
+                "temMais": False,
+            },
+            empresa_cnpj=_EMPRESA_TRAVA,
+        )
+
+
+def _env_trava_ligada(tmp_path):
+    """Ambiente com slug "test" (mesmo SQLite do ambiente ativo dos testes),
+    trava `ligado` e a cópia da tabela da rede 11222333 com o produto 123 a R$ 50,00."""
+    from app.persistence import environments_repo
+
+    env = environments_repo.create(
+        slug="test",
+        name="Teste",
+        watch_dir=str(tmp_path / "in"),
+        output_dir=str(tmp_path / "out"),
+        fb_path=str(tmp_path / "x.fdb"),
+        cnpj=_EMPRESA_TRAVA,
+    )
+    environments_repo.set_preco_trava_modo(env["id"], "ligado", por="teste")
+    _pagina_trava("123", 5000, "c1")
+    return env
+
+
+def _seed_trava(entry_id, unit_price):
+    from datetime import datetime as _dt
+
+    from app.persistence import repo
+
+    item = {"description": "x", "quantity": 10.0, "ean": "7891", "product_code": "C1"}
+    if unit_price is not None:
+        item["unit_price"] = unit_price
+    repo.insert_import(
+        {
+            "id": entry_id,
+            "source_filename": "p.pdf",
+            "imported_at": _dt.now().isoformat(timespec="seconds"),
+            "order_number": "TRAVA-1",
+            "status": "success",
+            "portal_status": "parsed",
+            "snapshot": {
+                "header": {
+                    "order_number": "TRAVA-1",
+                    "customer_name": "Rede X",
+                    "customer_cnpj": "11.222.333/0001-44",
+                },
+                "items": [item],
+                "source_file": "",
+            },
+        }
+    )
+
+
+def _check_trava(monkeypatch, seq=123):
+    from app.erp import product_check as pc_mod
+
+    monkeypatch.setattr(
+        pc_mod,
+        "check_order",
+        lambda order, **kw: {
+            "available": True,
+            "items": [
+                {
+                    "ean": "7891",
+                    "product_code": "C1",
+                    "fire_product_id": seq,
+                    "fire_unidade": "KIT",
+                    "price_status": "mismatch",
+                }
+            ],
+            "summary": {},
+        },
+    )
+
+
+def test_send_to_fire_bloqueado_pela_trava_ligada(monkeypatch, tmp_path):
+    import uuid
+
+    from app.exporters import firebird_exporter as fb_mod
+    from app.persistence import repo
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_trava(entry_id, 54.0)  # 54 ≠ 50 da tabela → fila do Flow
+    _check_trava(monkeypatch)
+    monkeypatch.setattr(
+        fb_mod.FirebirdExporter,
+        "export",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("não pode chamar o Fire")),
+    )
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == (
+        "Pedido aguardando aprovação de preço no Flow: 1 item(ns)."
+    )
+    bloqueios = [a for a in repo.list_audit(entry_id) if a["event_type"] == "send_to_fire_blocked"]
+    assert bloqueios[0]["detail"]["reason"] == "preco_aguardando"
+
+
+def test_export_xlsx_leva_preco_aprovado(monkeypatch, tmp_path):
+    import uuid
+
+    from openpyxl import load_workbook
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_trava(entry_id, None)  # pedido veio sem preço
+    _check_trava(monkeypatch)
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post(f"/api/imported/{entry_id}/export-xlsx")
+        assert r.status_code == 409, r.text
+        did = _aprovar_preco_inicial(entry_id, 4800)
+        r = client.post(f"/api/imported/{entry_id}/export-xlsx")
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 200, r.text
+    path = r.json()["output_files"][0]["path"]
+    ws = load_workbook(path).active
+    valores = [c.value for row in ws.iter_rows() for c in row]
+    assert 48.0 in valores
+    from app.persistence import repo
+
+    aplicados = [a["detail"] for a in repo.list_audit(entry_id) if a["event_type"] == "preco_aplicado"]
+    assert aplicados == [{"item_index": 0, "preco": 48.0, "flow_id": did}]
+
+
+def _decisao_flow(entry_id, resultado, centavos=None, motivo=None):
+    """Decisão do Flow (rota c) para o item 0 na revisão vigente; devolve o decisaoId."""
+    import uuid
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from app.persistence import preco_revisao_repo as revs
+
+    did = str(uuid.uuid4())
+    with db.connect() as conn:
+        vig = revs.vigente(conn, entry_id)
+        assert vig is not None, "o portão ainda não criou a revisão"
+        assert revs.gravar_decisao(
+            conn,
+            {
+                "decisaoId": did,
+                "externalId": entry_id,
+                "empresaFaturadoraCnpj": _EMPRESA_TRAVA,
+                "erpProdutoId": "123",
+                "revisao": vig["revisao"],
+                "itemChave": f"{entry_id}:0",
+                "resultado": resultado,
+                "precoAprovadoCentavos": centavos,
+                "motivoRecusa": motivo,
+                "observacao": None,
+                "decididoEm": "2026-10-18T12:00:00.000Z",
+            },
+            agora=_dt.now(UTC),
+        ) == "aplicada"
+    return did
+
+
+def _aprovar_preco_inicial(entry_id, centavos):
+    return _decisao_flow(entry_id, "acordo_comercial", centavos)
+
+
+def test_send_to_fire_ligado_entrega_o_preco_aprovado_ao_exporter(monkeypatch, tmp_path):
+    import uuid
+
+    from app import config as app_config
+    from app.exporters import firebird_exporter as fb_mod
+    from app.persistence import repo
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_trava(entry_id, None)
+    _check_trava(monkeypatch)
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "db"},
+    )
+    recebidos: list = []
+
+    def _export(self, order, **kw):
+        recebidos.append([it.unit_price for it in order.items])
+        return fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number, items_inserted=1, fire_codigo=777
+        )
+
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _export)
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+        assert r.status_code == 409, r.text
+        assert recebidos == []
+        assert not [a for a in repo.list_audit(entry_id) if a["event_type"] == "preco_aplicado"]
+        _aprovar_preco_inicial(entry_id, 4800)
+        r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 200, r.text
+    assert recebidos == [[48.0]]
+    aplicados = [a["detail"] for a in repo.list_audit(entry_id) if a["event_type"] == "preco_aplicado"]
+    assert [(a["item_index"], a["preco"]) for a in aplicados] == [(0, 48.0)]
+
+
+def test_send_to_fire_que_falha_no_fire_nao_grava_preco_aplicado(monkeypatch, tmp_path):
+    import uuid
+
+    from app import config as app_config
+    from app.exporters import firebird_exporter as fb_mod
+    from app.persistence import repo
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_trava(entry_id, None)
+    _check_trava(monkeypatch)
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "db"},
+    )
+    monkeypatch.setattr(
+        fb_mod.FirebirdExporter,
+        "export",
+        lambda self, order, **kw: fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number,
+            items_inserted=0,
+            skipped=True,
+            skip_reason="PRODUCT_NOT_FOUND",
+        ),
+    )
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        assert client.post(f"/api/imported/{entry_id}/send-to-fire").status_code == 409
+        _aprovar_preco_inicial(entry_id, 4800)  # liberado pela trava...
+        r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 409, r.text  # ...mas o Fire recusou
+    assert "não existe no Fire" in r.json()["detail"]
+    assert not [a for a in repo.list_audit(entry_id) if a["event_type"] == "preco_aplicado"]
+
+
+@pytest.mark.parametrize("modo", ["observando", "ligado"])
+def test_run_exporters_com_trava_ativa_adia_o_xlsx(monkeypatch, tmp_path, modo):
+    from app import config as app_config
+    from app.models.order import Order, OrderHeader, OrderItem
+    from app.web import server as server_mod
+
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx"},
+    )
+    order = Order(
+        header=OrderHeader(order_number="A1"),
+        items=[OrderItem(description="x", quantity=1, unit_price=10.0)],
+    )
+
+    out = server_mod._run_exporters(order, tmp_path, env={"slug": "mm", "preco_trava_modo": modo})
+
+    assert out["output_files"] == []
+    assert out["xlsx_adiado"] == "trava_de_preco"
+    assert list(tmp_path.glob("*.xlsx")) == []
+
+
+@pytest.mark.parametrize("env", [None, {"slug": "mm", "preco_trava_modo": "desligado"}])
+def test_run_exporters_desligado_gera_xlsx_como_hoje(monkeypatch, tmp_path, env):
+    from app import config as app_config
+    from app.models.order import Order, OrderHeader, OrderItem
+    from app.web import server as server_mod
+
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx"},
+    )
+    order = Order(
+        header=OrderHeader(order_number="A1"),
+        items=[OrderItem(description="x", quantity=1, unit_price=10.0)],
+    )
+
+    out = server_mod._run_exporters(order, tmp_path, env=env)
+
+    assert len(out["output_files"]) == 1
+    assert "xlsx_adiado" not in out
+    assert set(out) == {"output_files", "db_result", "fire_codigo"}
+
+
+def test_reimport_com_trava_ligada_nao_gera_xlsx_e_fica_em_revisao(monkeypatch, tmp_path):
+    import shutil
+
+    from app import config as app_config
+    from app.persistence import repo
+
+    pdf = SAMPLES / "2600009562-2026-02-25.pdf"
+    if not pdf.exists():
+        pytest.skip("Sample PDF not available")
+    env = _env_trava_ligada(tmp_path)
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": "xlsx"},
+    )
+    imp = tmp_path / "in" / "Pedidos importados"
+    imp.mkdir(parents=True)
+    shutil.copy(pdf, imp / pdf.name)
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post("/api/reimport", json={"filename": pdf.name})
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["files"] == []
+    assert body["xlsx_adiado"] == "trava_de_preco"
+    assert list((tmp_path / "out").glob("*.xlsx")) == []
+    assert repo.get_import(body["entry_id"])["portal_status"] == "parsed"
+
+
+def test_override_cliente_grava_o_cnpj_do_fire(monkeypatch):
+    from app.persistence import repo
+
+    entry_id = _seed_parsed_entry()
+    _patch_fb_with_rows(monkeypatch, [(4242, "ACME COMERCIO LTDA", "11.222.333/0001-44")])
+
+    r = client.post(f"/api/imported/{entry_id}/override-cliente", json={"cliente_codigo": 4242})
+
+    assert r.status_code == 200, r.text
+    assert repo.get_import(entry_id)["cliente_override_cnpj"] == "11222333000144"
+
+
+# ── Preview: situação de preço por item ──────────────────────────────────────
+
+
+def _seed_preco_preview(entry_id, unit_price=54.0):
+    import json
+    from datetime import datetime as _dt
+
+    from app.persistence import repo
+
+    _seed_trava(entry_id, unit_price)
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE imports SET check_json = ? WHERE id = ?",
+            (
+                json.dumps(
+                    {
+                        "available": True,
+                        "items": [
+                            {
+                                "ean": "7891",
+                                "product_code": "C1",
+                                "fire_product_id": 123,
+                                "fire_unidade": "KIT",
+                                "price_status": "match",
+                            }
+                        ],
+                        "summary": {},
+                    }
+                ),
+                entry_id,
+            ),
+        )
+    assert repo.get_import(entry_id)["check"]["items"], "check não gravado"
+    return _dt.now()
+
+
+def _preview_com_modo(entry_id, env, modo):
+    from app.persistence import environments_repo
+
+    environments_repo.set_preco_trava_modo(env["id"], modo, por="teste")
+    client.cookies.set("portal_env", env["id"])
+    try:
+        return client.get(f"/api/imported/{entry_id}/preview")
+    finally:
+        client.cookies.clear()
+
+
+def test_detalhe_traz_avaliacao_de_preco_em_observando(tmp_path):
+    import uuid
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_preco_preview(entry_id, 54.0)  # 54 ≠ 50 → fila
+
+    r = _preview_com_modo(entry_id, env, "observando")
+
+    assert r.status_code == 200, r.text
+    preco = r.json()["preco"]
+    assert preco["modo"] == "observando"
+    assert preco["itens"] == [
+        {
+            "item_index": 0,
+            "situacao": "fila",
+            "motivo": "preco_acima",
+            "preco_pedido": 54.0,
+            "preco_tabela": 50.0,
+            "decisao": None,
+            "estado": "aguardando",
+        }
+    ]
+    assert preco["bloqueio_pedido"] is None
+    assert preco["resumo"] == {
+        "ok": 0,
+        "fila": 1,
+        "aprovados": 0,
+        "recusados": 0,
+        "nao_avaliados": 0,
+        "intercompany": 0,
+    }
+
+
+def test_detalhe_sem_bloco_preco_em_desligado(tmp_path):
+    import uuid
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_preco_preview(entry_id, 54.0)
+
+    r = _preview_com_modo(entry_id, env, "desligado")
+
+    assert r.status_code == 200, r.text
+    assert "preco" not in r.json()
+
+
+def _revisao_preview(entry_id):
+    """Revisão vigente com o conteúdo atual do pedido (o que o portão criaria)."""
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from app.erp import preco_trava
+    from app.models.order import Order
+    from app.persistence import preco_revisao_repo as revs
+    from app.persistence import repo
+
+    entry = repo.get_import(entry_id)
+    order = Order.model_validate(entry["snapshot"])
+    env = {"preco_trava_modo": "ligado", "cnpj": _EMPRESA_TRAVA}
+    agora = _dt.now(UTC)
+    av = preco_trava.avaliar_entry(entry, order, env=env, agora=agora)
+    h = preco_trava.conteudo_hash(order, av, cliente_cnpj=av.cnpj_rede, empresa_cnpj=_EMPRESA_TRAVA)
+    corpo = {
+        "externalId": entry_id,
+        "empresaFaturadoraCnpj": _EMPRESA_TRAVA,
+        "itens": [{"itemChave": f"{entry_id}:0", "erpProdutoId": "123"}],
+    }
+    with db.connect() as conn:
+        revs.garantir_revisao(conn, entry_id, corpo, h, agora=agora)
+
+
+def test_detalhe_mostra_decisao_do_item(tmp_path):
+    import uuid
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_preco_preview(entry_id, 54.0)
+    _revisao_preview(entry_id)
+    _decisao_flow(entry_id, "acordo_comercial", 5400)
+
+    r = _preview_com_modo(entry_id, env, "ligado")
+
+    preco = r.json()["preco"]
+    assert preco["itens"][0]["decisao"] == "acordo_comercial"
+    assert preco["itens"][0]["estado"] == "aprovado"
+    assert preco["resumo"]["aprovados"] == 1
+    assert preco["resumo"]["fila"] == 0
+    assert preco["revisao"] == {"numero": 1, "situacao": "pendente_envio", "erro_flow": None}
+
+
+def test_detalhe_sem_preco_quando_avaliacao_falha(tmp_path, monkeypatch):
+    import uuid
+
+    from app.erp import preco_trava
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_preco_preview(entry_id, 54.0)
+    monkeypatch.setattr(
+        preco_trava, "avaliar_entry", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+
+    r = _preview_com_modo(entry_id, env, "observando")
+
+    assert r.status_code == 200, r.text
+    assert "preco" not in r.json()
+
+
+def _decidir_web(entry_id, resultado, motivo=None):
+    _revisao_preview(entry_id)
+    _decisao_flow(entry_id, resultado, None if resultado == "recusado" else 5400, motivo)
+
+
+def test_detalhe_ligado_item_recusado(tmp_path):
+    import uuid
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_preco_preview(entry_id, 54.0)
+    _decidir_web(entry_id, "recusado", "preço fora")
+
+    preco = _preview_com_modo(entry_id, env, "ligado").json()["preco"]
+
+    assert preco["itens"][0]["estado"] == "recusado"
+    assert preco["itens"][0]["decisao"] == "recusado"
+    assert preco["resumo"]["recusados"] == 1 and preco["resumo"]["fila"] == 0
+
+
+def test_detalhe_ligado_item_nao_avaliado(tmp_path):
+    import json
+    import uuid
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_preco_preview(entry_id, 54.0)
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE imports SET check_json = ? WHERE id = ?",
+            (json.dumps({"available": False, "reason": "fb", "items": []}), entry_id),
+        )
+
+    preco = _preview_com_modo(entry_id, env, "ligado").json()["preco"]
+
+    assert preco["itens"][0]["estado"] == "nao_avaliado"
+    assert preco["itens"][0]["motivo"] == "produto_nao_identificado"
+    assert preco["resumo"]["nao_avaliados"] == 1
+
+
+def test_detalhe_ligado_item_intercompany(tmp_path):
+    import uuid
+
+    from app.persistence import environments_repo
+
+    env = _env_trava_ligada(tmp_path)
+    outro = environments_repo.create(
+        slug="grupo",
+        name="Grupo",
+        watch_dir=str(tmp_path / "gi"),
+        output_dir=str(tmp_path / "go"),
+        fb_path="",
+    )
+    environments_repo.set_intercompany_config(outro["id"], cnpj="11.222.333/0001-44", revenda_slug="grupo")
+    entry_id = str(uuid.uuid4())
+    _seed_preco_preview(entry_id, 54.0)
+
+    preco = _preview_com_modo(entry_id, env, "ligado").json()["preco"]
+
+    assert preco["itens"][0]["estado"] == "intercompany"
+    assert preco["resumo"]["intercompany"] == 1
+
+
+# ── Revisão final da trava de preço ──────────────────────────────────────────
+
+
+def _vinculo_de_para(seq: str, codigo: str):
+    """Vínculo de-para do EAN 7891 do cliente 11222333000144 para o SEQ `seq`."""
+    from app.persistence import produto_depara_repo
+
+    with db.connect() as conn:
+        produto_depara_repo.upsert(
+            conn,
+            client_key="11222333000144",
+            chave_tipo="ean",
+            chave_valor="7891",
+            fire_produto_id=seq,
+            fire_codigo=codigo,
+            fire_ean=None,
+            fire_nome="Produto B",
+            criado_em="2026-10-18T10:00:00",
+            criado_por="teste",
+        )
+
+
+def _preco_na_tabela(seq: str, centavos: int):
+    _pagina_trava(seq, centavos, "c2")
+
+
+def _cfg_db(monkeypatch, tmp_path, modo="db"):
+    from app import config as app_config
+
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": modo},
+    )
+
+
+@pytest.mark.parametrize("rota", ["send-to-fire", "export-xlsx"])
+def test_trava_avalia_o_produto_do_vinculo_e_bloqueia(monkeypatch, tmp_path, rota):
+    """Item casa por EAN com o SEQ 123 (R$ 50 = preço do pedido), mas o vínculo
+    de-para leva ao SEQ 456 (R$ 60): o Fire/XLSX recebe 456, a trava avalia 456.
+    A unidade do check é a do 123: a do 456 é desconhecida e bloqueia."""
+    import uuid
+
+    from app.exporters import firebird_exporter as fb_mod
+
+    env = _env_trava_ligada(tmp_path)
+    _preco_na_tabela("456", 6000)
+    _vinculo_de_para("456", "B456")
+    entry_id = str(uuid.uuid4())
+    _seed_trava(entry_id, 50.0)
+    _check_trava(monkeypatch)
+    _cfg_db(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        fb_mod.FirebirdExporter,
+        "export",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("não pode chamar o Fire")),
+    )
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post(f"/api/imported/{entry_id}/{rota}")
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 409, r.text
+    assert "unidade do produto no Fire" in r.json()["detail"]
+
+
+def test_trava_libera_pelo_vinculo_e_o_exporter_recebe_o_mesmo_seq(monkeypatch, tmp_path):
+    import uuid
+
+    from app.exporters import firebird_exporter as fb_mod
+
+    env = _env_trava_ligada(tmp_path)
+    _preco_na_tabela("123", 9999)  # A: preço diferente do pedido
+    _preco_na_tabela("456", 5000)  # B: igual ao pedido
+    _vinculo_de_para("456", "B456")
+    entry_id = str(uuid.uuid4())
+    _seed_trava(entry_id, 50.0)
+    _check_trava(monkeypatch, seq=456)  # check_order resolveu pelo degrau de-para
+    _cfg_db(monkeypatch, tmp_path)
+    recebidos: list = []
+
+    def _export(self, order, **kw):
+        recebidos.append(kw.get("produtos_por_item"))
+        return fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number, items_inserted=1, fire_codigo=777
+        )
+
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _export)
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 200, r.text
+    assert recebidos == [{0: 456}]
+
+
+def test_registrar_aplicados_que_falha_nao_derruba_o_envio(monkeypatch, tmp_path):
+    import uuid
+
+    from app.erp import preco_trava
+    from app.exporters import firebird_exporter as fb_mod
+    from app.persistence import repo
+    from app.web import server
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_trava(entry_id, None)
+    _check_trava(monkeypatch)
+    _cfg_db(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        fb_mod.FirebirdExporter,
+        "export",
+        lambda self, order, **kw: fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number, items_inserted=1, fire_codigo=777
+        ),
+    )
+    pushes: list = []
+    monkeypatch.setattr(server, "push_new_order", lambda *a, **kw: pushes.append(kw) or True)
+
+    def _boom(*a, **kw):
+        raise RuntimeError("audit caiu")
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        assert client.post(f"/api/imported/{entry_id}/send-to-fire").status_code == 409
+        _aprovar_preco_inicial(entry_id, 4800)
+        monkeypatch.setattr(preco_trava, "registrar_aplicados", _boom)
+        r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 200, r.text
+    assert repo.get_import(entry_id)["portal_status"] == "sent_to_fire"
+    assert len(pushes) == 1
+
+
+def test_registrar_aplicados_que_falha_nao_pula_o_push_do_xlsx(monkeypatch, tmp_path):
+    import uuid
+
+    from app.erp import preco_trava
+    from app.web import server
+
+    env = _env_trava_ligada(tmp_path)
+    entry_id = str(uuid.uuid4())
+    _seed_trava(entry_id, None)
+    _check_trava(monkeypatch)
+    _cfg_db(monkeypatch, tmp_path, modo="xlsx")
+    pushes: list = []
+    monkeypatch.setattr(server, "push_new_order", lambda *a, **kw: pushes.append(kw) or True)
+
+    def _boom(*a, **kw):
+        raise RuntimeError("audit caiu")
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        assert client.post(f"/api/imported/{entry_id}/export-xlsx").status_code == 409
+        _aprovar_preco_inicial(entry_id, 4800)
+        monkeypatch.setattr(preco_trava, "registrar_aplicados", _boom)
+        r = client.post(f"/api/imported/{entry_id}/export-xlsx")
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 200, r.text
+    assert len(pushes) == 1
+
+
+@pytest.mark.parametrize("modo", ["observando", "ligado"])
+def test_api_process_recusa_com_trava_ativa(tmp_path, modo):
+    from app.persistence import environments_repo
+
+    env = _env_trava_ligada(tmp_path)
+    environments_repo.set_preco_trava_modo(env["id"], modo, por="teste")
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post(
+            "/api/process",
+            data={"output_dir": str(tmp_path)},
+            files=[("files", ("p.pdf", b"%PDF-1.4", "application/pdf"))],
+        )
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == (
+        "Com a trava de preço ativa, use a revisão do pedido para exportar."
+    )
+    assert list(tmp_path.glob("*.xlsx")) == []
+
+
+def test_api_process_desligado_segue_como_hoje(tmp_path):
+    from app.persistence import environments_repo
+
+    env = _env_trava_ligada(tmp_path)
+    environments_repo.set_preco_trava_modo(env["id"], "desligado", por="teste")
+
+    client.cookies.set("portal_env", env["id"])
+    try:
+        r = client.post(
+            "/api/process",
+            data={"output_dir": str(tmp_path)},
+            files=[("files", ("malware.exe", b"MZ", "application/octet-stream"))],
+        )
+    finally:
+        client.cookies.clear()
+
+    assert r.status_code == 200
+    assert any("suportado" in e["error"].lower() for e in r.json()["errors"])

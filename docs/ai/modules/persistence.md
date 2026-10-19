@@ -125,6 +125,39 @@ completo em [`modules/routing.md`](routing.md), aqui só o schema:
   `synchronous=FULL` só na conexão do livro (volta e ferramenta do operador); o router segue `NORMAL`.
   Detalhe de estados, recuperação e métricas em `modules/flowpcp.md` §5.
 
+### Trava de preço (db do ambiente, `schema_env.py`)
+Cópia local da tabela do Flow no formato do contrato precos v1 (rota a); o Portal só aplica
+páginas (`precos_repo.aplicar_pagina`, uma transação por página; `reiniciar` zera tudo). O
+bootstrap derruba as tabelas do modelo anterior (`preco_rede`, `preco_rede_cnpj`, `preco_tabela`,
+`preco_sync`).
+- `preco_rede_v1` — PK `rede_id`; `nome`, `ativa`, `travada` (estado inteiro vindo do Flow).
+- `preco_rede_chave_v1` — PK `(rede_id, tipo, chave)`; `tipo` = `raiz` (8 caracteres) | `cnpj`
+  (14, vence a raiz); substituídas inteiras quando a rede reaparece.
+- `preco_tabela_v1` — PK `preco_id` (append-only; `cancelado` volta pelo mesmo id); `rede_id`
+  (NULL = base), `empresa_cnpj`, `erp_produto_id`, `unidade_erp`, `preco_centavos`,
+  `vigencia_inicio`, `registrado_em` (texto do Flow, comparado como instante).
+- `preco_sync_v1` — linha única: `empresa_cnpj`, `cursor`, `completo_em` (`geradoEm` da última
+  página com `temMais: false`; base da regra de 24 h).
+- `preco_revisao` — PK `(import_id, revisao)`: revisão do pedido na aprovação de preço
+  (contrato precos v1 §4). `conteudo_hash`, `corpo_json` (`aprovacaoEnvioV1` com a revisão),
+  `situacao` (`pendente_envio | enviada | recusada_flow | substituida | retirada`),
+  `tentada_em` (hora da última tentativa do POST; ordena a fila de envio), `enviada_em`/`resposta_json`, `erro_definitivo` (422),
+  `bloqueio_local` (texto do bloqueio: corpo que não pode ir ao Flow; sai da fila de envio e só
+  conteúdo novo cria outra revisão), `retirada_em`/`retirada_motivo`/
+  `retirada_enviada_em`. Repo: `preco_revisao_repo`.
+- `preco_revisao_piso` — PK `import_id`: piso vindo do 409 `revisao_obsoleta` (a próxima
+  revisão nasce acima dele).
+- `preco_decisao` — PK `decisao_id` (idempotente): decisão do Flow por `item_chave`
+  (`resultado`, `preco_aprovado_centavos`, `motivo_recusa`, `decidido_em`) e a `confirmacao`
+  a devolver (`aplicada | descartada`, `confirmada_em`).
+- `preco_aprovacao` (aprovação por item, modelo anterior) saiu: o bootstrap faz `DROP TABLE IF
+  EXISTS` (nunca saiu da branch).
+- `imports.check_preco_json` — check de produto que a trava avalia (gravado no `/api/commit` e
+  regravado no `vincular-produto`); leva a marca `preco_fonte_slug` da fonte que o gerou, e
+  de outra fonte vale como sem avaliação. `repo.get_import` devolve como `check_preco`.
+- `imports.cliente_override_cnpj` — CNPJ do cliente escolhido no override; é o que define a
+  rede quando o pedido veio sem CNPJ. Ver `modules/erp.md` ("Trava de preço por rede").
+
 ## Testes
 - `tests/test_persistence_repo.py` —
   `.venv/bin/pytest tests/test_persistence_repo.py -v`

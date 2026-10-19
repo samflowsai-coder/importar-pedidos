@@ -44,7 +44,7 @@ API pública para páginas-filho:
 - `GET /api/firebird/config` → `{path, host, port, user, charset, configured, passwordSet}` — **nunca** retorna senha (`require_user`).
 - `POST /api/firebird/config` → salva config + chama `apply_to_env` (`require_admin`). Body: `{path, host, port, user, charset, password?}`. Senha omitida = mantém atual; vazia = limpa.
 - `POST /api/firebird/test` → testa conexão com config salva ou payload ad-hoc (`require_admin`). Retorna `{ok: bool, error?, traceId}` (`current_trace_id()` injetado).
-- `POST /api/process` → upload + parse + cache de preview.
+- `POST /api/process` → upload + parse + cache de preview. Legado, gera XLSX sem o portão de preço: com a trava de preço ativa (`observando`/`ligado`) no ambiente da request responde **409** ("Com a trava de preço ativa, use a revisão do pedido para exportar.").
 - `POST /api/imported/{id}/export-xlsx` → gera XLSX do pedido `parsed` **sem** tocar Firebird (`require_user`). Mantém `portal_status='parsed'`. Retorna `{entry_id, output_files, portal_status}`. Usado quando `EXPORT_MODE='xlsx'`. **Também dispara `push_new_order` pro FlowPCP** (gated por `flowpcp_enabled` do ambiente; best-effort; o Flow deduplica por `externalId` — re-export não duplica; audita `flowpcp_push {ok}`).
 - `POST /api/batch/export-xlsx` → versão lote do anterior (mesmo limite 1..100).
 - `GET /api/download?path=` → download xlsx (`require_user`). Só sufixo `.xlsx`
@@ -54,6 +54,7 @@ API pública para páginas-filho:
   parse (`require_user`). Serve só de dentro de `<APP_DATA_DIR>/recebidos/` (403 fora);
   404 amigável em pedido anterior à guarda. Nome do download = `source_filename`.
 - `POST /api/admin/environments/{env_id}/flowpcp/sync-materiais?apply=` → carga de material Fire → Flow (`require_admin`). Padrão dryRun; `apply=true` exige `materiais.v1` do Flow (422 antes de enviar se faltar; 422 também com `PORTAL_FLOWPCP_MATERIAIS` desligado; 409 se o FlowPCP não está habilitado no ambiente ou se o Flow já está gravando; 502 em falha). Sem o interruptor e sem apply, devolve `{local_only, itens, extraido_em}`. Ver `modules/flowpcp.md` §4.
+- `PATCH /api/admin/environments/{env_id}/preco-trava` → troca o interruptor da trava de preço (`require_admin`). Body `{modo: desligado|observando|ligado, preco_fonte_slug?: str|null}` (422 fora disso ou fonte inválida — fonte é gravada antes do modo, então 422 não muda nada; ausente = não muda; 404 ambiente inexistente). `ligado` responde **409** enquanto a tabela de preço da empresa nunca sincronizou com o Flow (`precos_repo.ultima_sync_ok` do db do ambiente = `None`); `observando`/`desligado` sempre passam. Ver `modules/erp.md` §Trava de preço por rede.
 - `GET /api/admin/environments/{env_id}/flowpcp/cadastro-volta` → livro da volta Flow → Fire (`require_admin`, só leitura do SQLite do ambiente): `{modo, por_estado, ultimos, ultimo_ciclo, thread_desligada, p0_ok, inativar_ligado, sem_volta, n_orfaos, n_incertos, orfaos, incertos, n_aguardando_recuperacao, aguardando_recuperacao, sem_volta_itens, n_conflitos_codigo, conflitos_codigo}` (50 últimos, `plano_json` truncado em 2 KB com `plano_truncado`; `ultimo_ciclo` = `{em, resumo}` do último ciclo deste processo ou `null`, com `aguardando_modo` nos modos de gravação; `thread_desligada` = `PORTAL_FLOWPCP_ENVIO=0`; `p0_ok`/`inativar_ligado` = os dois portões do slug; as listas `orfaos`, `incertos`, `sem_volta_itens` e `aguardando_recuperacao` trazem até 50 linhas com colunas permitidas, nunca `corpo_json`/`plano_json`/nota; `incertos` inclui `transitorio` com SEQ já passado de `IDADE_MINIMA_RECUPERACAO`, e os mais novos vão em `aguardando_recuperacao`; `conflitos_codigo` são os `superado` com alerta `conflito_codigo`, um `atualizar`/`inativar` gravado no Fire cujo código o Flow recusou). A tela do ambiente (`admin-ambiente-edit.html`) tem o bloco da volta com contadores de Órfãos, Incertos, Sem volta e Conflito de código, o contador "Aguardando outro modo" (some quando o Flow não respondeu a contagem) e a tabela dos itens por grupo (Órfão, Incerto, Sem volta, Aguardando recuperação, Conflito de código). A tela só mostra: quem resolve incerto e órfão é `tools/cadastro_volta_operar.py`. Ver `modules/flowpcp.md` §5.
 - `GET /api/fs?path=` → listagem de pastas (usado pelo browser de `/configuracoes/diretorios`).
 - `GET /api/clientes/search?q=&limit=` → busca em `CADASTRO` (razão social ou
@@ -236,6 +237,16 @@ precisa dele nos dois ramos (sucesso e erro).
   (`/api/import`, `/api/reimport`, `/api/preview-pending`); prova de que o `env_slug`
   declarado lê a pasta certa mesmo com nome de arquivo repetido entre empresas.
 - Comando: `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py tests/test_firebird_config_api.py tests/test_routing_wiring.py tests/test_routing_modo.py tests/test_env_do_pedido.py tests/test_rotas_por_pedido_cross_env.py tests/test_pasta_cross_env.py -v`
+
+## EXPORT_MODE=db|both não grava mais no Fire pela importação
+
+`/api/import`, `/api/reimport` e `main.py` **nunca** gravam no Fire: `_run_exporters`
+devolve `db_result={"skipped": True, "skip_reason": "USE_PREVIEW"}` e o `main.py` (CLI)
+recusa `db|both` com `sys.exit`. A gravação só ocorre no preview → enviar
+(`_send_one_to_fire`), onde passa por `preco_trava.decidir_envio` (ver `modules/erp.md`,
+"Trava de preço por rede"). Com a trava `observando`/`ligado`, a importação **também não
+gera XLSX** (resposta traz `xlsx_adiado: "trava_de_preco"`); o XLSX sai pelo preview →
+exportar. O payload do preview ganha `preco`.
 
 ## Reatividade de config (exportMode)
 O botão de ação principal (`#pvCommitBtn` no preview e `#batchSendBtn` no log)

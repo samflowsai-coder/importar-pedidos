@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS imports (
     cliente_override_razao   TEXT,
     cliente_override_at      TEXT,
     cliente_override_by      TEXT,
+    cliente_override_cnpj    TEXT,
     fire_status_last_seen    TEXT,
     fire_status_polled_at    TEXT,
     reconciled_at            TEXT,
@@ -44,7 +45,8 @@ CREATE TABLE IF NOT EXISTS imports (
     original_path            TEXT,
     sem_preco_ack_by         TEXT,
     sem_preco_ack_at         TEXT,
-    sem_preco_ack_items      TEXT
+    sem_preco_ack_items      TEXT,
+    check_preco_json         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -329,6 +331,114 @@ CREATE TABLE IF NOT EXISTS erp_lote_perna (
     criado_em               TEXT NOT NULL,
     PRIMARY KEY (base_origem, erp_item_codigo_origem)
 );
+
+-- Cópia local da tabela de preço do Flow no formato do contrato precos v1
+-- (rota a). O Portal nunca edita: só aplica páginas (precos_repo.aplicar_pagina).
+-- As tabelas do modelo anterior nunca saíram da branch: dbs de dev com o shape
+-- velho perdem a cópia (o próximo ciclo reinicia do zero).
+DROP TABLE IF EXISTS preco_rede;
+DROP TABLE IF EXISTS preco_rede_cnpj;
+DROP TABLE IF EXISTS preco_tabela;
+DROP TABLE IF EXISTS preco_sync;
+
+-- Rede = estado inteiro vindo do Flow (upsert por rede_id).
+CREATE TABLE IF NOT EXISTS preco_rede_v1 (
+    rede_id TEXT PRIMARY KEY,
+    nome    TEXT NOT NULL,
+    ativa   INTEGER NOT NULL,
+    travada INTEGER NOT NULL
+);
+
+-- Chaves da rede: tipo 'raiz' (8 caracteres) ou 'cnpj' (14; vence a raiz).
+-- Substituídas inteiras a cada reaparição da rede.
+CREATE TABLE IF NOT EXISTS preco_rede_chave_v1 (
+    rede_id TEXT NOT NULL,
+    tipo    TEXT NOT NULL CHECK (tipo IN ('raiz', 'cnpj')),
+    chave   TEXT NOT NULL,
+    PRIMARY KEY (rede_id, tipo, chave)
+);
+CREATE INDEX IF NOT EXISTS idx_preco_rede_chave_v1 ON preco_rede_chave_v1(tipo, chave);
+
+-- Preço append-only por preco_id (nunca apagado; cancelado volta pelo mesmo id).
+-- rede_id NULL = preço base. Centavos inteiros; vigencia_inicio YYYY-MM-DD;
+-- registrado_em é o texto do Flow (comparado como instante na regra).
+CREATE TABLE IF NOT EXISTS preco_tabela_v1 (
+    preco_id        TEXT PRIMARY KEY,
+    rede_id         TEXT,
+    empresa_cnpj    TEXT NOT NULL,
+    erp_produto_id  TEXT NOT NULL,
+    unidade_erp     TEXT,
+    preco_centavos  INTEGER NOT NULL,
+    vigencia_inicio TEXT NOT NULL,
+    registrado_em   TEXT NOT NULL,
+    cancelado       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_preco_tabela_v1_produto
+    ON preco_tabela_v1(empresa_cnpj, erp_produto_id);
+
+-- Um cursor só (linha única). completo_em = geradoEm da última página com
+-- temMais=false (frescor de 24 h conta daqui).
+CREATE TABLE IF NOT EXISTS preco_sync_v1 (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    empresa_cnpj TEXT,
+    cursor       TEXT,
+    completo_em  TEXT
+);
+
+-- Aprovação por item do modelo anterior (assinatura por linha): nunca saiu da
+-- branch; o contrato precos v1 aprova por revisão do pedido (abaixo).
+DROP TABLE IF EXISTS preco_aprovacao;
+
+-- Revisão do pedido enviada ao Flow (rota b): número monotônico por pedido +
+-- hash do conteúdo que muda a avaliação. corpo_json = aprovacaoEnvioV1 com a
+-- revisão. situacao: pendente_envio | enviada | recusada_flow | substituida | retirada.
+-- bloqueio_local: corpo que não pode ir ao Flow (fora do contrato, 413, 400
+-- payload_invalido); a revisão fica pendente_envio, fora da fila, até o conteúdo mudar.
+CREATE TABLE IF NOT EXISTS preco_revisao (
+    import_id           TEXT NOT NULL,
+    revisao             INTEGER NOT NULL,
+    conteudo_hash       TEXT NOT NULL,
+    corpo_json          TEXT NOT NULL,
+    situacao            TEXT NOT NULL CHECK (situacao IN
+                            ('pendente_envio', 'enviada', 'recusada_flow',
+                             'substituida', 'retirada')),
+    tentada_em          TEXT,
+    enviada_em          TEXT,
+    resposta_json       TEXT,
+    erro_definitivo     TEXT,
+    retirada_em         TEXT,
+    retirada_motivo     TEXT,
+    retirada_enviada_em TEXT,
+    bloqueio_local      TEXT,
+    criado_em           TEXT NOT NULL,
+    PRIMARY KEY (import_id, revisao)
+);
+CREATE INDEX IF NOT EXISTS idx_preco_revisao_situacao ON preco_revisao(situacao);
+
+-- Piso da revisão (409 revisao_obsoleta do Flow): a próxima nasce acima dele.
+CREATE TABLE IF NOT EXISTS preco_revisao_piso (
+    import_id TEXT PRIMARY KEY,
+    piso      INTEGER NOT NULL
+);
+
+-- Decisão do Flow por item (rota c), idempotente por decisao_id.
+-- confirmacao = o que vai ao Flow no confirmar: aplicada | descartada.
+CREATE TABLE IF NOT EXISTS preco_decisao (
+    decisao_id              TEXT PRIMARY KEY,
+    import_id               TEXT NOT NULL,
+    revisao                 INTEGER NOT NULL,
+    item_chave              TEXT NOT NULL,
+    resultado               TEXT NOT NULL,
+    preco_aprovado_centavos INTEGER,
+    motivo_recusa           TEXT,
+    observacao              TEXT,
+    decidido_em             TEXT NOT NULL,
+    recebida_em             TEXT NOT NULL,
+    confirmacao             TEXT NOT NULL CHECK (confirmacao IN ('aplicada', 'descartada')),
+    confirmada_em           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_preco_decisao_revisao ON preco_decisao(import_id, revisao);
+CREATE INDEX IF NOT EXISTS idx_preco_decisao_pendente ON preco_decisao(confirmada_em);
 """
 
 INDEXES_SQL = """
@@ -375,6 +485,11 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # Sem ela, a janela usava `fire_status_polled_at` (que o próprio poll
     # renova a cada tick) e nunca expirava — ver `list_pending_for_fire_poll`.
     ("imports", "reconciled_at", "ALTER TABLE imports ADD COLUMN reconciled_at TEXT"),
+    # Trava de preço: CNPJ do cliente escolhido no override (define a rede da tabela).
+    ("imports", "cliente_override_cnpj", "ALTER TABLE imports ADD COLUMN cliente_override_cnpj TEXT"),
+    # Trava de preço: check do ambiente fonte da chave do produto (Nasmar → MM),
+    # gravado no commit e no vínculo de-para; o preview avalia por ele.
+    ("imports", "check_preco_json", "ALTER TABLE imports ADD COLUMN check_preco_json TEXT"),
     # SP1 — eco: o que a decisão do Flow mudou no ERP. `erp_codigos_json` porque
     # o UPDATE por PEDIDO_CLIENTE + CLIENTE pode tocar mais de um pedido
     # (BACKLOG 1.5); `erp_codigo` só quando tocou exatamente um.
@@ -383,6 +498,10 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("flowpcp_decisoes_mapping", "erp_codigos_json", "ALTER TABLE flowpcp_decisoes_mapping ADD COLUMN erp_codigos_json TEXT"),
     ("flowpcp_decisoes_mapping", "nova_data", "ALTER TABLE flowpcp_decisoes_mapping ADD COLUMN nova_data TEXT"),
     ("flowpcp_decisoes_mapping", "aplicada_em", "ALTER TABLE flowpcp_decisoes_mapping ADD COLUMN aplicada_em TEXT"),
+    # Trava de preço: revisão cujo POST saiu (o Flow pode conhecê-la sem 201).
+    ("preco_revisao", "tentada_em", "ALTER TABLE preco_revisao ADD COLUMN tentada_em TEXT"),
+    # Trava de preço: corpo que não pode ir ao Flow (bloqueio local, não recusa do Flow).
+    ("preco_revisao", "bloqueio_local", "ALTER TABLE preco_revisao ADD COLUMN bloqueio_local TEXT"),
     # Livro da volta v2: gravação no Fire, reenvio do resultado ao Flow e regra 9b.
     ("cadastro_volta", "produto_id", "ALTER TABLE cadastro_volta ADD COLUMN produto_id TEXT"),
     ("cadastro_volta", "modo", "ALTER TABLE cadastro_volta ADD COLUMN modo TEXT"),
