@@ -29,13 +29,17 @@ COLUNAS_PERMITIDAS = frozenset(
      "CODPARANFE", "CODPROD_ALTERN", "GRUPO", "MARCA"}
 )
 # Par 3566 e kit 3382 da tela contra par 3567 e kit 3568 do Portal (cópia de abril);
-# perfil da parte A: 30/30 kits e 11/11 pares nas duas primeiras. CODSUBGRUPO=1 não
-# entrou: as amostras da tela vieram nulas.
+# perfil da parte A: 30/30 kits e 11/11 pares nas duas primeiras. CODSUBGRUPO=1 entrou
+# depois (19/10/2026, MM de produção, só leitura): dos 320 produtos do grupo 8 com
+# SEQ>3566, 253 têm subgrupo 1 (124/136 pares, 129/184 kits); os outros 4 em 100%
+# (CODORIG_MERC 0 em 318/320). Sem ele o produto sai de LIST_PRODUTOS_CATALOGO_MEIAS.
+# O código 1 (MEIAS) é o da MM: em outro ambiente, conferir GRUPO_PRODUTOS_SUB dele.
 PADROES_P0: dict[str, object] = {
     "EST_MINIMO_GERENCIA": "Nao",
     "PRODUZIDO": "Nao",
     "CODORIG_MERC": 0,
     "PRE_CADASTRO": "Nao",
+    "CODSUBGRUPO": 1,
 }
 TENTATIVAS_SEQ = 3
 _lock = threading.Lock()

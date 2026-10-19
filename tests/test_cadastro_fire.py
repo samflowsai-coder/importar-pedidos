@@ -297,7 +297,15 @@ def test_padroes_p0_sao_os_que_a_tela_grava():
     # P0 parte B (18/10): diff tela x Portal numa cópia da MM, igual ao perfil da parte A.
     assert cf.PADROES_P0 == {
         "EST_MINIMO_GERENCIA": "Nao", "PRODUZIDO": "Nao", "CODORIG_MERC": 0, "PRE_CADASTRO": "Nao",
+        "CODSUBGRUPO": 1,
     }
+
+
+def test_atualizar_nao_inclui_padroes_p0_no_set():
+    fire = _Fire()
+    cf.atualizar(fire, seq=3990, campos={"UNIDADE": "KIT"}, componentes=None)
+    sql = [s for s in fire.sqls if s[0].startswith("UPDATE PRODUTOS SET")][0][0]
+    assert not any(col in sql for col in cf.PADROES_P0)
 
 
 def test_criar_grava_os_padroes_p0_junto_dos_campos_do_flow():
