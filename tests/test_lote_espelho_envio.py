@@ -459,7 +459,7 @@ def test_espelho_fora_do_ambiente_espelho_bloqueia(espelho_pronto_sp1):
     env = espelho_pronto_sp1["mm"]
     with env_context.active_env(env["id"], env["slug"]):
         order = Order.model_validate(repo.get_import(ESPELHO)["snapshot"])
-    r = integracao.preparar_envio_espelho(ESPELHO, order, {}, {"slug": "nasmar"})
+    r = integracao.preparar_envio_espelho(ESPELHO, order, {"slug": "nasmar"})
     assert isinstance(r, integracao.BloqueioEspelho)
     assert r.motivo == "ambiente_errado"
     assert _reservas() == []

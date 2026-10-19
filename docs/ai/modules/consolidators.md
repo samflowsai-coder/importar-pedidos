@@ -138,7 +138,8 @@ Tomadas na execução:
    origem, crescente). Sem fator → `aguardando_fator`; dado ruim → `erro` com
    motivo. **Não grava no Fire.**
 3. **Envio** (botão "Cadastrar no Fire" no MM, `_send_one_to_fire`). Depois do
-   `check_order` + `is_blocking` de sempre:
+   portão de preço de sempre (`preco_trava.decidir_envio`; o espelho é
+   intercompany, então em `ligado` cai na regra de hoje, `is_blocking`):
    `preparar_envio_espelho` (ambiente certo, status `fechado`, composição intacta,
    reserva do `lote_fiscal`) → insert com `obs=` → `concluir_envio_espelho`
    (registra o `lote_fiscal`, marca `enviado`). Falha antes do Fire aceitar

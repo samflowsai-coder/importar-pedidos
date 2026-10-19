@@ -349,9 +349,13 @@ passa a sair com `SN-6CF05353` ali, onde hoje já saem `NASMAR`, `STUDIO Z`, nom
 Confirmar com o Elias (fiscal MM) antes de subir o pacote.
 
 ### 3.8 Lote intercompany: portão antes de ligar em produção
-O espelho (preço × 0,93) passa pelo `is_blocking` atual, que dá divergência de preço contra
-`PRECO_VENDA` do Fire e bloqueia o envio. Depende da trava por tabela/rede (outra sessão,
-`feat/tabela-preco-por-rede`) com a isenção intercompany.
+O espelho (preço × 0,93) passa pelo portão de preço (`preco_trava.decidir_envio`). A trava
+por rede (PR #90) deixa intercompany fora da tabela, mas em todos os modos ele cai na regra
+de hoje (`is_blocking`): se o preço do espelho não bater com o preço do Fire da MM, o envio
+é bloqueado (`price_check_failed`) e não há confirmação para divergência. A spec da trava
+deixou o preço da perna intercompany "para o desenho do lote" (§fora de escopo, chamada 8).
+**Decisão pendente:** o que o portão faz com o espelho do lote (aceitar o preço do lote,
+que já é auditável pela composição, ou exigir que bata com o Fire). Medir antes na cópia.
 
 ---
 
