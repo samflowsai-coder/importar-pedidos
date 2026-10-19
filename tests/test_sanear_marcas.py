@@ -118,6 +118,8 @@ class _Fabrica:
     @contextmanager
     def connect_somente_leitura(self, cfg):
         self.usadas.append("leitura")
+        if self.escrita.commits:  # leitura nova depois do commit enxerga o commitado
+            self.leitura.linhas = list(self.escrita.linhas)
         yield self.leitura
 
     @contextmanager
@@ -138,11 +140,14 @@ BASE = [(1, ""), (2, "Forn")]
 CFG = {"host": "h", "port": "3050", "path": "C:\\mm.fdb", "password": "segredo"}
 
 
-def _rodar(fab, gravar, backup=None, desejadas=("Kolosh", "Sam's Club")):
+def _rodar(fab, gravar, backup=None, desejadas=("Kolosh", "Sam's Club"), esperado_max="auto"):
     saida = []
+    if esperado_max == "auto":
+        esperado_max = max((c for c, _ in fab.leitura.linhas), default=0)
     cod = tool.executar(
         CFG, gravar=gravar, backup_servidor="C:\\b.fbk", slug="mm",
         desejadas=list(desejadas), conn_factory=fab, backup=backup, out=saida.append,
+        esperado_max=esperado_max,
     )
     return cod, saida
 
@@ -421,3 +426,82 @@ def test_gbak_backup_levantando_propaga_e_fecha():
 def test_gbak_recusa_embedded():
     with pytest.raises(ValueError):
         backup_mod.gbak({"host": "", "path": "x.fdb"}, "a.fbk", services=_Services())
+
+
+# --- --esperado-max, conferência pós-commit, tamanho da marca ---------------
+
+
+def test_gravar_sem_esperado_max_recusa_antes_de_backup():
+    fab = _Fabrica(BASE)
+    chamou = []
+    cod, saida = _rodar(fab, True, backup=lambda *a: chamou.append(a), esperado_max=None)
+    assert cod == 1 and chamou == [] and fab.usadas == []
+    assert any("--esperado-max" in ln for ln in saida)
+
+
+def test_gravar_com_max_diferente_aborta_antes_do_backup():
+    fab = _Fabrica(BASE)
+    chamou = []
+    cod, saida = _rodar(fab, True, backup=lambda *a: chamou.append(a), esperado_max=7)
+    assert cod == 1 and chamou == [] and fab.usadas == ["leitura"]
+    assert any("nada foi gravado" in ln.lower() and "2" in ln and "7" in ln for ln in saida)
+
+
+def test_dry_run_imprime_max_e_dica():
+    cod, saida = _rodar(_Fabrica(BASE), False, esperado_max=None)
+    assert cod == 0 and any("--esperado-max 2" in ln for ln in saida)
+
+
+def test_gravar_confere_depois_do_commit():
+    fab = _Fabrica(BASE)
+    cod, saida = _rodar(fab, True, backup=_ok)
+    assert cod == 0 and fab.usadas == ["leitura", "escrita", "leitura"]
+    assert "Conferido depois do commit: 2 marca(s)" in saida
+    assert any("3" in ln and "Kolosh" in ln for ln in saida)
+
+
+def test_pos_commit_divergente_nao_finge_sucesso():
+    fab = _Fabrica(BASE)
+    fab.escrita.rollback = lambda: None  # mantém o commit, mas a releitura não o vê
+    original = fab.connect_somente_leitura
+
+    @contextmanager
+    def cego(cfg):
+        with original(cfg) as conn:
+            if len(fab.usadas) > 2:
+                conn.linhas = list(BASE)
+            yield conn
+
+    fab.connect_somente_leitura = cego
+    cod, saida = _rodar(fab, True, backup=_ok)
+    assert cod == 1 and fab.escrita.commits == 1
+    assert any("commit aconteceu" in ln and "conferência não fechou" in ln for ln in saida)
+    assert not any(ln.startswith("Conferido depois do commit") for ln in saida)
+
+
+def test_pos_commit_com_leitura_falhando_retorna_1():
+    fab = _Fabrica(BASE)
+    original = fab.connect_somente_leitura
+
+    @contextmanager
+    def cai_na_segunda(cfg):
+        if "escrita" in fab.usadas:
+            raise ConnectionError("sem rede")
+        with original(cfg) as conn:
+            yield conn
+
+    fab.connect_somente_leitura = cai_na_segunda
+    cod, saida = _rodar(fab, True, backup=_ok)
+    assert cod == 1 and fab.escrita.commits == 1
+    assert any("commit aconteceu" in ln and "conferência não fechou" in ln for ln in saida)
+
+
+def test_nome_com_mais_de_30_caracteres_e_recusado():
+    longo = "X" * 31
+    with pytest.raises(ValueError, match="30"):
+        planejar([(1, "")], [longo])
+    planejar([(1, "")], ["X" * 30])
+    fab = _Fabrica(BASE)
+    chamou = []
+    cod, saida = _rodar(fab, True, backup=lambda *a: chamou.append(a), desejadas=[longo])
+    assert cod == 1 and chamou == [] and fab.usadas == [] and any("30" in ln for ln in saida)

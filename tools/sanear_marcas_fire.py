@@ -3,12 +3,14 @@
 na tabela PRODUTOS_MARCA do Fire.
 
 Compara as marcas ativas do Flow (`MARCAS_FLOW_2026_10_17`) com o Fire. O padrão
-é dry-run: só mostra o plano. Com `--gravar` (exige `--backup-servidor`): refaz o
-plano, recusa se houver grafia parecida, faz o backup gbak, grava numa única
-transação, relê e confere, e só então dá commit.
+é dry-run: só mostra o plano e o MAX(CODIGO) atual. Com `--gravar` (exige
+`--backup-servidor` e `--esperado-max`): aborta se o MAX(CODIGO) lido não for o
+esperado (o dry-run imprime o valor), recusa se houver grafia parecida, faz o
+backup gbak, grava numa única transação, relê e confere, dá commit e confere de
+novo numa conexão nova de leitura.
 
   python tools/sanear_marcas_fire.py <slug>
-  python tools/sanear_marcas_fire.py <slug> --gravar --backup-servidor 'C:\\Fire\\backup\\marcas-20261017.fbk'
+  python tools/sanear_marcas_fire.py <slug> --gravar --esperado-max <MAX> --backup-servidor 'C:\\Fire\\backup\\marcas-20261017.fbk'
 
 Marca nova depois de 17/10/2026 é cadastro manual (decisão do Samuel).
 """
@@ -48,6 +50,17 @@ def chave_solta(nome: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", n)
 
 
+TAMANHO_MAX_MARCA = 30  # PRODUTOS_MARCA.MARCA é VARCHAR(30)
+
+
+def _checa_tamanho(desejadas: list[str]) -> None:
+    longas = [n for n in desejadas if len(n) > TAMANHO_MAX_MARCA]
+    if longas:
+        raise ValueError(
+            f"marca com mais de {TAMANHO_MAX_MARCA} caracteres (coluna VARCHAR({TAMANHO_MAX_MARCA})): {longas}"
+        )
+
+
 @dataclass
 class Plano:
     ja_existem: list[tuple[str, int]] = field(default_factory=list)
@@ -58,6 +71,7 @@ class Plano:
 def planejar(existentes: list[tuple[int, str | None]], desejadas: list[str]) -> Plano:
     """Classifica cada desejada: já existe (regra do Flow), grafia parecida
     (existe só pela chave solta) ou a inserir com código MAX+1 em sequência."""
+    _checa_tamanho(desejadas)
     plano = Plano()
     ordenadas = sorted(existentes, key=lambda e: e[0])
     proximo = max((c for c, _ in existentes), default=0) + 1
@@ -161,11 +175,20 @@ def executar(
     conn_factory=None,
     backup=None,
     out=print,
+    esperado_max: int | None = None,
 ) -> int:
     """Roda o saneamento e devolve o código de saída. Dublês entram por
     `conn_factory` (objeto com connect_somente_leitura/connect_escrita_cadastro) e
     `backup` (callable gbak que devolve a linha de prova)."""
     desejadas = MARCAS_FLOW_2026_10_17 if desejadas is None else desejadas
+    if gravar and esperado_max is None:
+        out("--gravar exige --esperado-max <MAX(CODIGO) de PRODUTOS_MARCA>; rode o dry-run para ver o valor. Nada foi gravado.")
+        return 1
+    try:
+        _checa_tamanho(desejadas)
+    except ValueError as exc:
+        out(f"{exc}. Nada foi gravado.")
+        return 1
     if conn_factory is None:
         from app.erp.connection import FirebirdConnection
 
@@ -176,24 +199,31 @@ def executar(
     out(f"Ambiente {slug} · {cfg.get('host')}:{cfg.get('port')} · {cfg.get('path')}")
     try:
         with conn_factory.connect_somente_leitura(cfg) as conn:
-            plano = planejar(_ler(conn), desejadas)
+            existentes = _ler(conn)
+            plano = planejar(existentes, desejadas)
             triggers, geradores = _ler_automatismos(conn)
     except Exception as exc:  # noqa: BLE001
         out(f"Leitura falhou ({_curta(exc, cfg)}). Nada foi gravado.")
         return 1
+    max_atual = max((c for c, _ in existentes), default=0)
     _imprimir(plano, out)
+    out(f"MAX(CODIGO) atual em PRODUTOS_MARCA: {max_atual}")
     ativos = [n for n, inativo in triggers if not inativo]
     nomes = [f"{n} (inativo)" if inativo else n for n, inativo in triggers]
     out(f"Triggers em PRODUTOS_MARCA: {', '.join(nomes) or 'nenhum'}")
     out(f"Geradores com MARCA no nome: {', '.join(geradores) or 'nenhum'}")
 
     if not gravar:
+        out(f"Para gravar, use --esperado-max {max_atual}.")
         if plano.parecidas:
             out("Atenção: há grafia parecida; o --gravar vai recusar até a revisão.")
         if ativos or geradores:
             out("Atenção: há trigger/gerador; o --gravar vai recusar.")
         out("Dry-run: nada gravado.")
         return 0
+    if max_atual != esperado_max:
+        out(f"MAX(CODIGO) lido é {max_atual}, esperado {esperado_max}. O banco mudou; nada foi gravado.")
+        return 1
     if plano.parecidas:
         out("Há marcas com grafia parecida no Fire. Revise antes de gravar; nada foi gravado.")
         return 1
@@ -223,7 +253,30 @@ def executar(
             return 1
         out(f"Gravação falhou ({_curta(exc, cfg)}). Rode o dry-run para conferir.")
         return 1
-    return resultado
+    if resultado != 0:
+        return resultado
+    return _conferir_depois(conn_factory, cfg, plano, desejadas, out)
+
+
+def _conferir_depois(conn_factory, cfg: dict, plano: Plano, desejadas: list[str], out) -> int:
+    """Depois do commit: conexão nova de leitura, replaneja e exige que nada falte
+    e que cada (código, nome) inserido esteja lido exatamente."""
+    try:
+        with conn_factory.connect_somente_leitura(cfg) as conn:
+            lidas = _ler(conn)
+        ok = not planejar(lidas, desejadas).inserir and all(
+            dict(lidas).get(c) == n for c, n in plano.inserir
+        )
+        motivo = "" if ok else "a releitura não bate com o plano"
+    except Exception as exc:  # noqa: BLE001
+        ok, motivo = False, f"leitura falhou ({_curta(exc, cfg)})"
+    if not ok:
+        out(f"O commit aconteceu, mas a conferência não fechou: {motivo}. Rode o dry-run para conferir.")
+        return 1
+    out(f"Conferido depois do commit: {len(plano.inserir)} marca(s)")
+    for codigo, nome in plano.inserir:
+        out(f"  {codigo:>4} · {nome}")
+    return 0
 
 
 def _gravar(conn, plano: Plano, desejadas: list[str], cfg: dict, out, estado: dict) -> int:
@@ -267,6 +320,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("slug")
     parser.add_argument("--gravar", action="store_true")
     parser.add_argument("--backup-servidor", help="Caminho do .fbk NO servidor do Fire")
+    parser.add_argument("--esperado-max", type=int, help="MAX(CODIGO) esperado em PRODUTOS_MARCA (obrigatório com --gravar)")
     args = parser.parse_args(argv)
     if args.gravar and not args.backup_servidor:
         parser.error("--gravar exige --backup-servidor")
@@ -282,6 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         gravar=args.gravar,
         backup_servidor=args.backup_servidor,
         slug=args.slug,
+        esperado_max=args.esperado_max,
     )
 
 
