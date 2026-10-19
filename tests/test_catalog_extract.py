@@ -31,9 +31,9 @@ class _FakeConn:
 
 def test_extract_codigo_seq_e_tipo_kit():
     rows = [
-        # (SEQ, DESCRICAO, UNIDADE, CODIGO_EAN13, BLOQUEADO, IS_KIT, CODPROD_ALTERN, + 6 fiscais)
-        (3381, "KIT C/5 BRANCO", "PC", None, "Nao", 1, None, None, None, None, None, None, None),
-        (3170, "BRANCO COM BORDO", "PC ", None, "Nao", 0, None, None, None, None, None, None, None),
+        # (SEQ, DESCRICAO, UNIDADE, CODIGO_EAN13, BLOQUEADO, IS_KIT, CODPROD_ALTERN, + 5 fiscais)
+        (3381, "KIT C/5 BRANCO", "PC", None, "Nao", 1, None, None, None, None, None, None),
+        (3170, "BRANCO COM BORDO", "PC ", None, "Nao", 0, None, None, None, None, None, None),
         (
             171,
             "PROD BLOQUEADO",
@@ -47,9 +47,8 @@ def test_extract_codigo_seq_e_tipo_kit():
             None,
             None,
             None,
-            None,
         ),
-        (10, "SEM EAN NEM UNIDADE", None, "  ", "Nao", 0, None, None, None, None, None, None, None),
+        (10, "SEM EAN NEM UNIDADE", None, "  ", "Nao", 0, None, None, None, None, None, None),
     ]
     out = extract_produtos(_FakeConn(rows))
     # codigo == fire_produto_id == str(SEQ); kit detectado via IS_KIT
@@ -112,7 +111,6 @@ def test_tipo_kit_sem_composicao_pela_unidade_ou_pelo_nome():
             None,
             None,
             None,
-            None,
         ),
         (
             148,
@@ -121,7 +119,6 @@ def test_tipo_kit_sem_composicao_pela_unidade_ou_pelo_nome():
             None,
             "Nao",
             0,
-            None,
             None,
             None,
             None,
@@ -142,7 +139,6 @@ def test_tipo_kit_sem_composicao_pela_unidade_ou_pelo_nome():
             None,
             None,
             None,
-            None,
         ),
         (
             3792,
@@ -151,7 +147,6 @@ def test_tipo_kit_sem_composicao_pela_unidade_ou_pelo_nome():
             None,
             "Nao",
             0,
-            None,
             None,
             None,
             None,
@@ -178,7 +173,6 @@ def test_tipo_pack_pela_unidade_ou_pelo_nome_com_ou_sem_composicao():
             None,
             None,
             None,
-            None,
         ),
         (
             2637,
@@ -187,7 +181,6 @@ def test_tipo_pack_pela_unidade_ou_pelo_nome_com_ou_sem_composicao():
             None,
             "Sim",
             0,
-            None,
             None,
             None,
             None,
@@ -214,10 +207,9 @@ def test_tipo_simples_so_para_par_sem_kit_no_nome():
             None,
             None,
             None,
-            None,
         ),
-        (3145, "BRANCO COM PRETO", "PAR", None, "Nao", 0, None, None, None, None, None, None, None),
-        (900, "MEIAS SOQUETE M", "UNID", None, "Nao", 0, None, None, None, None, None, None, None),
+        (3145, "BRANCO COM PRETO", "PAR", None, "Nao", 0, None, None, None, None, None, None),
+        (900, "MEIAS SOQUETE M", "UNID", None, "Nao", 0, None, None, None, None, None, None),
         (
             901,
             "KITCHEN TOALHA",
@@ -225,7 +217,6 @@ def test_tipo_simples_so_para_par_sem_kit_no_nome():
             None,
             "Nao",
             0,
-            None,
             None,
             None,
             None,
@@ -264,7 +255,6 @@ def test_tipo_casos_de_borda():
             None,
             None,
             None,
-            None,
         ),  # composição vence o nome
         (
             3151,
@@ -279,13 +269,12 @@ def test_tipo_casos_de_borda():
             None,
             None,
             None,
-            None,
         ),  # caixa mista
-        (2, "3 KITS MEIA", "unid", None, "Nao", 0, None, None, None, None, None, None, None),
-        (3, "PACKS 5 MEIAS", "unid", None, "Nao", 0, None, None, None, None, None, None, None),
-        (4, "KIT3 MEIA SOQUETE", "unid", None, "Nao", 0, None, None, None, None, None, None, None),
-        (5, "KIT-3 MEIAS", "unid", None, "Nao", 0, None, None, None, None, None, None, None),
-        (6, "MEIA SOQUETE", "Kit", None, "Nao", 0, None, None, None, None, None, None, None),
+        (2, "3 KITS MEIA", "unid", None, "Nao", 0, None, None, None, None, None, None),
+        (3, "PACKS 5 MEIAS", "unid", None, "Nao", 0, None, None, None, None, None, None),
+        (4, "KIT3 MEIA SOQUETE", "unid", None, "Nao", 0, None, None, None, None, None, None),
+        (5, "KIT-3 MEIAS", "unid", None, "Nao", 0, None, None, None, None, None, None),
+        (6, "MEIA SOQUETE", "Kit", None, "Nao", 0, None, None, None, None, None, None),
     ]
     tipos = [p.tipo for p in extract_produtos(_FakeConn(rows))]
     assert tipos == ["kit", "pack", "kit", "pack", "kit", "kit", "kit"]
@@ -306,10 +295,9 @@ def test_extract_traz_codigo_alternativo_limpo_e_is_kit():
             None,
             None,
             None,
-            None,
         ),
-        (3174, "BRANCO COM PRETO", "PAR", None, "Nao", 0, "  ", None, None, None, None, None, None),
-        (2544, "KIT 6", "KIT", None, "Nao", 1, "986388", None, None, None, None, None, None),
+        (3174, "BRANCO COM PRETO", "PAR", None, "Nao", 0, "  ", None, None, None, None, None),
+        (2544, "KIT 6", "KIT", None, "Nao", 1, "986388", None, None, None, None, None),
     ]
     out = extract_produtos(_FakeConn(rows))
     assert out[0].codigo_alternativo == "113649" and out[0].tem_composicao is False
@@ -337,7 +325,7 @@ def test_consultas_do_catalogo_trazem_codprod_altern():
         assert "P.CODPROD_ALTERN" in sql
 
 
-def test_extract_mapeia_as_seis_colunas_fiscais_para_o_dto():
+def test_extract_mapeia_as_cinco_colunas_fiscais_para_o_dto():
     row = (
         2645,
         "KIT3 X",
@@ -351,7 +339,6 @@ def test_extract_mapeia_as_seis_colunas_fiscais_para_o_dto():
         8,
         " CONFECCIONADO ",
         "KIT3/BCOM",
-        "BRANCO",
     )
     (d,) = extract_produtos(_FakeConn([row]))
     assert d == ProdutoFireDTO(
@@ -369,7 +356,6 @@ def test_extract_mapeia_as_seis_colunas_fiscais_para_o_dto():
         grupo_codigo=8,
         grupo_nome="CONFECCIONADO",
         codigo_nfe="KIT3/BCOM",
-        cor="BRANCO",
     )
     assert isinstance(d.sped_bruto, int) and isinstance(d.grupo_codigo, int)
 
@@ -379,6 +365,7 @@ def test_consultas_do_catalogo_trazem_as_colunas_fiscais_e_o_grupo():
         plano = " ".join(sql.split())
         assert (
             "P.CLASSIF_FISCAL, P.CODITEMSPED, P.GRUPO, G.GRUPO AS GRUPO_NOME, "
-            "P.CODPARANFE, P.DESCRICAO2" in plano
+            "P.CODPARANFE FROM" in plano
         )
+        assert "DESCRICAO2" not in sql  # "Descrição Interna" do Fire: não é lida
         assert "LEFT JOIN GRUPO_PRODUTOS G ON G.CODIGO = P.GRUPO" in plano

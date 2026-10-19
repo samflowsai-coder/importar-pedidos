@@ -167,7 +167,7 @@ def _no_real_firebird(request):
     from app.erp.connection import FirebirdConnection
 
     @contextmanager
-    def _bloqueia(self, cfg=None):  # noqa: ARG001 - assinatura espelha o real
+    def _bloqueia(self, cfg=None, **kw):  # noqa: ARG001 - assinatura espelha o real
         raise RuntimeError(
             "teste tentou abrir conexao Firebird real. Testes nao falam com o "
             "ERP: mocke `FirebirdConnection.connect_with_config`/`.connect()`, "

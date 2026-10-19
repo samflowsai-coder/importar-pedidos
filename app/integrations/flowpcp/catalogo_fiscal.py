@@ -15,7 +15,6 @@ from app.erp.catalog_extract import ProdutoFireDTO
 
 SPED_VALIDOS = frozenset({*range(0, 11), 99})
 LIMITE_CODIGO_NFE = 60
-LIMITE_COR = 120
 LIMITE_GRUPO_NOME = 80
 _NCM = re.compile(r"[0-9]{8}")  # só ASCII, a mesma regra do Zod do Flow
 _SEPARADORES = re.compile(r"[\s.\-]")
@@ -76,11 +75,7 @@ def campos_fiscais(d: ProdutoFireDTO) -> tuple[dict, list[str]]:
     nfe, _ = texto(d.codigo_nfe, LIMITE_CODIGO_NFE)
     if nfe:
         campos["codigoNfe"] = nfe
-    cor, longa = texto(d.cor, LIMITE_COR)
-    if cor:
-        campos["cor"] = cor
-    elif longa:
-        motivos.append("cor_longa")
+    # DESCRICAO2 é a "Descrição Interna" da tela do Fire, não cor (17/10/2026): não vai ao Flow.
     return campos, motivos
 
 

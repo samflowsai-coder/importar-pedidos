@@ -133,13 +133,15 @@ async def upload(file: UploadFile = File(...), _=Depends(require_admin)):
                 shutil.rmtree(child, ignore_errors=True)
         # Persiste o resumo COMPLETO no status.json — assim um reload da página
         # (que lê /status, não a resposta do /upload) mostra commit/build/
-        # arquivos/notes em vez de "—".
+        # arquivos/notes em vez de "—". Recomeça do zero, como o /restart: o
+        # status.json é mesclado, e a `phase` do update anterior vazava para o
+        # staged e o apply_requested deste (a tela marcava tudo e voltava).
+        state.clear_status(updates_dir())
         state.write_status(
             updates_dir(), status="staged", update_id=res.update_id,
             version=res.version, deps_changed=res.deps_changed,
             git_commit=res.git_commit, built_at=res.built_at,
             files_count=res.files_count, notes=res.notes,
-            kind=None,  # o status.json é mesclado: não herdar `restart` de antes
         )
         return {
             "update_id": res.update_id, "version": res.version,
@@ -164,7 +166,10 @@ def apply(body: ApplyBody, _=Depends(require_admin)):
     _reject_if_update_running(s)
     if s.get("status") != "staged" or s.get("update_id") != body.update_id:
         raise HTTPException(404, "update_id não corresponde ao pacote staged")
-    state.write_status(updates_dir(), status="apply_requested", started_at=time.time(), kind=None)
+    # Fase e desfecho são do updater; um staged gravado por versão anterior ainda
+    # pode carregar os do update passado.
+    state.write_status(updates_dir(), status="apply_requested", started_at=time.time(), kind=None,
+                       phase=None, finished_at=None, error=None, rollback_error=None)
     if not _start_updater_task():
         state.write_status(updates_dir(), status="staged")  # reverte
         raise HTTPException(409, "serviço de update não configurado — rode setup-service.bat no servidor")

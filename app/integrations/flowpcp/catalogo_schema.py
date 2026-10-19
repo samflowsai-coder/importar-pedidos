@@ -17,6 +17,11 @@ class CatalogoGrupoErp(BaseModel):
     nome: str
 
 
+class CatalogoMarcaErp(BaseModel):
+    codigo: int
+    nome: str
+
+
 def _sem_os_nao_preenchidos(modelo: BaseModel, corpo: dict, campos: tuple[str, ...]) -> dict:
     """Chave só vai no JSON quando foi preenchida: ausente ≠ [] ≠ null (ausente =
     "não mexer" no Flow). Com o interruptor desligado o payload fica igual ao de
@@ -51,13 +56,14 @@ class CatalogoProdutoItem(BaseModel):
     grupoErp: CatalogoGrupoErp | None = None  # noqa: N815
     codigoNfe: str | None = None  # noqa: N815
     cor: str | None = None
+    temNotaFiscal: bool | None = None  # noqa: N815 — NOTAPROD; ausente = não mexer
 
     @model_serializer(mode="wrap")
     def _omite_nao_preenchidos(self, handler):
         return _sem_os_nao_preenchidos(
             self,
             handler(self),
-            ("componentes", "codigoMes", "ncm", "tipoItemSped", "grupoErp", "codigoNfe", "cor"),
+            ("componentes", "codigoMes", "ncm", "tipoItemSped", "grupoErp", "codigoNfe", "cor", "temNotaFiscal"),
         )
 
 
@@ -80,11 +86,14 @@ class CatalogoRequest(BaseModel):
     # dryRun=false e só pela rota manual (o diário nunca manda).
     confirmarRemocaoComposicao: bool | None = None  # noqa: N815
     confirmarSubstituicaoComposicao: bool | None = None  # noqa: N815
+    marcasErp: list[CatalogoMarcaErp] | None = None  # noqa: N815 — PRODUTOS_MARCA filtrada
 
     @model_serializer(mode="wrap")
     def _omite_nao_preenchidos(self, handler):
         return _sem_os_nao_preenchidos(
-            self, handler(self), ("confirmarRemocaoComposicao", "confirmarSubstituicaoComposicao")
+            self,
+            handler(self),
+            ("confirmarRemocaoComposicao", "confirmarSubstituicaoComposicao", "marcasErp"),
         )
 
 

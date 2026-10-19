@@ -155,10 +155,36 @@ def test_resumo_traz_os_blocos_de_composicao():
         {"composicao_portal": {"leitura_ok": False}},
         {"composicao_portal": {"leitura_ok": True, "divergencia_nome": {"3151": "nome diz 22, composição soma 1"}}},
         {"fiscal_portal": {"capacidade_ok": False}},
+        {"marcas_portal": {"capacidade_ok": False}},
+        {"marcas_portal": {"reenviar": True}},
+        {"marcas_portal": {"leitura_ok": False}},
+        {"nota_portal": {"capacidade_ok": False}},
+        {"nota_portal": {"reenviar": True}},
+        {"nota_portal": {"leitura_ok": False}},
     ],
 )
 def test_atencao_quando_trava_falha_ou_kit_sem_chave(extra):
     assert catalogo_diario._precisa_atencao(_rep(**extra)) is True
+
+
+def test_resumo_traz_marcas_nota_e_contagem_da_volta():
+    texto = catalogo_diario._resumo(
+        _rep(
+            marcas_portal={"enviadas": 12},
+            nota_portal={"com_nota": 7},
+            fora_do_envio_volta=["3992", "4001"],
+        )
+    )
+    assert "'enviadas': 12" in texto and "'com_nota': 7" in texto
+    assert "'fora_do_envio_volta': 2" in texto
+
+
+def test_sem_atencao_com_marcas_e_nota_normais():
+    rep = _rep(
+        marcas_portal={"capacidade_ok": True, "leitura_ok": True},
+        nota_portal={"capacidade_ok": True, "leitura_ok": True},
+    )
+    assert catalogo_diario._precisa_atencao(rep) is False
 
 
 def test_sem_atencao_no_normal():

@@ -9,7 +9,9 @@ from app.erp.queries import (
     LIST_MATERIAIS,
     LIST_PRODUTOS_CATALOGO,
     LIST_PRODUTOS_CATALOGO_MEIAS,
+    LIST_PRODUTOS_COM_NOTA,
     LIST_PRODUTOS_KIT_COMPOSICAO,
+    LIST_PRODUTOS_MARCA,
 )
 
 
@@ -30,7 +32,6 @@ class ProdutoFireDTO:
     grupo_codigo: int | None = None  # GRUPO
     grupo_nome: str | None = None  # GRUPO_PRODUTOS.GRUPO
     codigo_nfe: str | None = None  # CODPARANFE
-    cor: str | None = None  # DESCRICAO2
 
 
 @dataclass(frozen=True)
@@ -117,7 +118,6 @@ def extract_produtos(fire_conn, *, apenas_meias: bool = False) -> list[ProdutoFi
         grupo,
         grupo_nome,
         nfe,
-        cor,
     ) in rows:
         seq_s = str(seq)
         nome = _clean(desc) or ""
@@ -137,7 +137,6 @@ def extract_produtos(fire_conn, *, apenas_meias: bool = False) -> list[ProdutoFi
                 grupo_codigo=_int_ou_none(grupo),
                 grupo_nome=_clean(grupo_nome),
                 codigo_nfe=_clean(nfe),
-                cor=_clean(cor),
             )
         )
     return out
@@ -162,6 +161,31 @@ def extract_composicao(fire_conn) -> dict[str, list[tuple[str | None, float | No
             (None if filho is None else str(filho), None if qtd is None else float(qtd))
         )
     return out
+
+
+def extract_marcas(fire_conn) -> list[tuple[int, str | None]]:
+    """PRODUTOS_MARCA inteiro como (CODIGO, MARCA), por código. Read-only. Código e
+    nome vão brutos: `catalogo_marcas.filtrar` decide o que o Flow aceita. Erro do
+    driver sobe (o sync trata como "marcas não enviadas")."""
+    cur = fire_conn.cursor()
+    try:
+        cur.execute(LIST_PRODUTOS_MARCA)
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+    return [(codigo, None if nome is None else str(nome)) for codigo, nome in rows]
+
+
+def extract_com_nota(fire_conn) -> set[str]:
+    """SEQs de produto que aparecem em NOTAPROD (já tiveram nota fiscal). Read-only.
+    Erro do driver sobe: o sync trata como "temNotaFiscal ausente em todos"."""
+    cur = fire_conn.cursor()
+    try:
+        cur.execute(LIST_PRODUTOS_COM_NOTA)
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+    return {str(cod) for (cod,) in rows if cod is not None}
 
 
 def extract_materiais(fire_conn) -> list[MaterialFireDTO]:

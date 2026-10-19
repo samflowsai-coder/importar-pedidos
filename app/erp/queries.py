@@ -321,10 +321,11 @@ UPDATE_DT_ENTREGA = """
 # que o cliente usa (codigo = str(SEQ)). BLOQUEADO ∈ {'Sim','Nao'} → ativo =
 # (BLOQUEADO <> 'Sim'). IS_KIT = 1 se o SEQ é pai em PRODUTOS_KIT; o tipo final
 # (pack/kit/simples) sai de catalog_extract._tipo, que também olha unidade e nome.
-# 13 colunas, nesta ordem (catalog_extract lê por posição): SEQ, DESCRICAO,
+# 12 colunas, nesta ordem (catalog_extract lê por posição): SEQ, DESCRICAO,
 # UNIDADE, CODIGO_EAN13, BLOQUEADO, IS_KIT, CODPROD_ALTERN (código do par no
-# Apontaê), e as 6 fiscais/cadastrais CLASSIF_FISCAL, CODITEMSPED, GRUPO,
-# GRUPO_NOME, CODPARANFE, DESCRICAO2 (catalogo_fiscal valida). GRUPO_NOME vem de
+# Apontaê), e as 5 fiscais/cadastrais CLASSIF_FISCAL, CODITEMSPED, GRUPO,
+# GRUPO_NOME, CODPARANFE (catalogo_fiscal valida). DESCRICAO2 não é lida: é a
+# "Descrição Interna" da tela do Fire, não cor (17/10/2026). GRUPO_NOME vem de
 # LEFT JOIN GRUPO_PRODUTOS: produto sem grupo (ou com grupo apagado) não some.
 LIST_PRODUTOS_CATALOGO = """
     SELECT P.SEQ, P.DESCRICAO, P.UNIDADE, P.CODIGO_EAN13, P.BLOQUEADO,
@@ -333,7 +334,7 @@ LIST_PRODUTOS_CATALOGO = """
            ) THEN 1 ELSE 0 END AS IS_KIT,
            P.CODPROD_ALTERN,
            P.CLASSIF_FISCAL, P.CODITEMSPED, P.GRUPO, G.GRUPO AS GRUPO_NOME,
-           P.CODPARANFE, P.DESCRICAO2
+           P.CODPARANFE
     FROM PRODUTOS P
     LEFT JOIN GRUPO_PRODUTOS G ON G.CODIGO = P.GRUPO
     ORDER BY P.SEQ
@@ -386,7 +387,7 @@ LIST_PRODUTOS_CATALOGO_MEIAS = """
            ) THEN 1 ELSE 0 END AS IS_KIT,
            P.CODPROD_ALTERN,
            P.CLASSIF_FISCAL, P.CODITEMSPED, P.GRUPO, G.GRUPO AS GRUPO_NOME,
-           P.CODPARANFE, P.DESCRICAO2
+           P.CODPARANFE
     FROM (SELECT DISTINCT SEQ FROM RECORTE) R
     JOIN PRODUTOS P ON P.SEQ = R.SEQ
     LEFT JOIN GRUPO_PRODUTOS G ON G.CODIGO = P.GRUPO
@@ -402,6 +403,11 @@ LIST_PRODUTOS_KIT_COMPOSICAO = """
     FROM PRODUTOS_KIT K
     ORDER BY K.CODPRODUTO_PAI, K.CODIGO
 """
+
+# Marcas do Fire e produtos que já têm nota fiscal, para a ida do catálogo
+# (marcasErp / temNotaFiscal). Sem filtro: quem decide o que vai é catalogo_marcas.
+LIST_PRODUTOS_MARCA = "SELECT CODIGO, MARCA FROM PRODUTOS_MARCA ORDER BY CODIGO"
+LIST_PRODUTOS_COM_NOTA = "SELECT DISTINCT CODPRODUTO FROM NOTAPROD"
 
 # ── Clientes ativos (carga Fire→Flow) ─────────────────────────────────────────
 # Clientes (RELAC_CLIENTE='Sim', não BLOQUEADO) com pelo menos um pedido em

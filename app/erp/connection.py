@@ -128,7 +128,69 @@ class FirebirdConnection:
             yield conn
 
     @contextmanager
-    def _connect_with(self, cfg: dict) -> Generator:
+    def connect_leitura_bloqueante(self, cfg: dict, lock_timeout: int = 10) -> Generator:
+        """Conexão para LER provas de ausência (recuperação do cadastro): WRITE +
+        READ COMMITTED + NO_REC_VERSION, WAIT com `isc_tpb_lock_timeout`.
+
+        Com REC_VERSION (ou SNAPSHOT), um INSERT sem commit de outra transação
+        simplesmente não aparece e "não existe" pareceria provado. Com
+        NO_REC_VERSION, ler um registro cuja última versão está pendente espera e,
+        vencido o timeout, levanta conflito de lock: quem chama aborta, não marca.
+
+        WRITE e não READ ONLY: uma transação READ ONLY + READ COMMITTED pode ser
+        tratada pelo servidor como pré-comitada e ler a última versão comitada,
+        ignorando o NO_REC_VERSION (não provado no Firebird 2.5 do Fire: fica para a
+        P0). Nada é escrito por dois caminhos: quem lê passa pelo guarda de SELECT
+        (`cadastro_recuperacao.SoSelect`), e a saída é SEMPRE rollback, nunca commit.
+        """
+        import struct
+
+        import fdb  # type: ignore[import]
+
+        tpb = bytes([
+            fdb.isc_tpb_version3, fdb.isc_tpb_write, fdb.isc_tpb_read_committed,
+            fdb.isc_tpb_no_rec_version, fdb.isc_tpb_wait, fdb.isc_tpb_lock_timeout,
+        ]) + struct.pack("<bI", 4, lock_timeout)
+        with self._connect_with(cfg, commit_na_saida=False) as conn:
+            conn.main_transaction.default_tpb = tpb
+            conn.main_transaction.default_action = "rollback"
+            conn.begin(tpb=tpb)
+            yield conn
+
+    @contextmanager
+    def connect_escrita_cadastro(self, cfg: dict, lock_timeout: int = 10) -> Generator:
+        """Conexão de ESCRITA do cadastro de produto (volta Flow -> Fire):
+        READ COMMITTED + REC_VERSION, WAIT com `isc_tpb_lock_timeout` de
+        `lock_timeout` segundos.
+
+        Sem o timeout, um SEQ aberto na tela do Fire deixaria o gravador
+        esperando o lock sem limite (e com ele o `_lock` do processo). O TPB
+        vai também como `default_tpb` da transação principal: o fdb abre a
+        transação seguinte a cada commit/rollback com esse padrão, então
+        todo cadastro do lote roda com o mesmo timeout.
+
+        A saída é SEMPRE rollback, nunca commit: o gravador comita cada
+        cadastro sozinho, e o que sobra pendente (um rollback que falhou no
+        meio) não tem prova de nada.
+        """
+        import struct
+
+        import fdb  # type: ignore[import]
+
+        tpb = bytes([
+            fdb.isc_tpb_version3, fdb.isc_tpb_write, fdb.isc_tpb_read_committed,
+            fdb.isc_tpb_rec_version, fdb.isc_tpb_wait, fdb.isc_tpb_lock_timeout,
+        ]) + struct.pack("<bI", 4, lock_timeout)
+        with self._connect_with(cfg, commit_na_saida=False) as conn:
+            conn.main_transaction.default_tpb = tpb
+            # Por padrão o fdb comita a transação ativa quando ela é encerrada sem
+            # commit/rollback explícito (`begin()` de uma nova, `Transaction.close()`).
+            conn.main_transaction.default_action = "rollback"
+            conn.begin(tpb=tpb)
+            yield conn
+
+    @contextmanager
+    def _connect_with(self, cfg: dict, *, commit_na_saida: bool = True) -> Generator:
         # fdb (driver legado) — compatível com o cliente Firebird 2.5 do Fire
         # Sistemas. O firebird-driver (moderno) exige fbclient 3.0+, que os
         # servidores 2.5 do cliente não têm.
@@ -152,7 +214,10 @@ class FirebirdConnection:
 
         try:
             yield conn
-            conn.commit()
+            if commit_na_saida:
+                conn.commit()
+            else:
+                conn.rollback()
         except Exception:
             conn.rollback()
             raise

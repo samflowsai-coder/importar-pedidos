@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
 
 import httpx
@@ -51,6 +52,21 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 _TETO_BRUTO = 64 * 1024
 # Apply do catálogo: o Flow tem maxDuration 300 s e um apply por vez (409).
 APPLY_TIMEOUT_SECONDS = 300.0
+_ORDEM_ACOES = ("criar", "atualizar", "inativar")
+
+
+@dataclass(frozen=True)
+class RespostaResultado:
+    status_http: int | None
+    corpo: dict | None
+    retry_after: int | None
+
+
+def _retry_after(resp: httpx.Response) -> int | None:
+    bruto = (resp.headers.get("Retry-After") or "").strip()
+    if not (bruto.isascii() and bruto.isdecimal()) or int(bruto) < 1:
+        return None
+    return min(int(bruto), 3600)
 
 
 class FlowPCPClientError(Exception):
@@ -169,10 +185,21 @@ class FlowPCPClient:
             )
         return DecisoesResponse.model_validate(resp.json())
 
-    def list_cadastros_pendentes(self, limite: int = 20) -> PendentesResposta:
-        """Fila de cadastros aprovados no Flow. Só leitura: nada é confirmado."""
+    def list_cadastros_pendentes(
+        self, limite: int = 20, *, acoes: tuple[str, ...] | None = None, simular: bool = False
+    ) -> PendentesResposta:
+        """Fila de cadastros aprovados. `simular=True` lê sem reservar (contrato §2);
+        sem ele, todo GET reserva os itens por 10 minutos."""
+        params: dict[str, Any] = {"limite": limite}
+        if simular:
+            params["simular"] = "1"
+        if acoes:
+            pedidas = set(acoes)
+            if not pedidas <= set(_ORDEM_ACOES):
+                raise ValueError("acoes com valor fora de criar/atualizar/inativar")
+            params["acoes"] = ",".join(a for a in _ORDEM_ACOES if a in pedidas)
         try:
-            resp = self._client.get(_CADASTROS_PENDENTES_PATH, params={"limite": limite})
+            resp = self._client.get(_CADASTROS_PENDENTES_PATH, params=params)
         except HttpError as exc:
             raise FlowPCPClientError(
                 f"list_cadastros_pendentes falhou: {exc}",
@@ -186,6 +213,31 @@ class FlowPCPClient:
                 body=(resp.text or "")[:500],
             )
         return PendentesResposta.model_validate(resp.json())
+
+    def post_cadastro_resultado(self, cadastro_id: str, corpo: dict[str, Any]) -> RespostaResultado:
+        """Resultado de um cadastro. Nunca levanta por status HTTP: quem decide é
+        `cadastro_resultado.ler_resposta`. Transporte falhou = `status_http=None`.
+        Idempotente no Flow por (cadastroId, versao)."""
+        path = f"/api/portal-pedidos/cadastros/{cadastro_id}/gravado"
+        try:
+            resp = self._client.post_json(
+                path,
+                json=corpo,
+                idempotency_key=(
+                    f"cadastro-{cadastro_id}-{corpo.get('versao')}-{corpo.get('resultado')}"
+                ),
+                retry_policy=idempotent_post_policy(),
+            )
+        except (httpx.HTTPError, OSError):
+            # timeout/rede: resultado incerto, o livro repete. Bug de código sobe.
+            return RespostaResultado(None, None, None)
+        try:
+            dados = resp.json()
+        except ValueError:
+            dados = None
+        return RespostaResultado(
+            resp.status_code, dados if isinstance(dados, dict) else None, _retry_after(resp)
+        )
 
     def confirmar_reconciliacao(
         self, decisao_id: str, request: ConfirmarReconciliacaoRequest
