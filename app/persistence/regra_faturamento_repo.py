@@ -6,6 +6,7 @@ com suas chaves (raiz de 8 dígitos ou CNPJ de 14). A regra nasce desligada.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -115,21 +116,25 @@ def salvar_rede(
             ).fetchone()
             if outra:
                 raise ValueError(f"a chave {chave} já pertence à rede {outra['nome']!r}")
-        if rede_id is None:
-            cur = conn.execute(
-                """INSERT INTO regra_faturamento_rede (nome, env_slug, alterado_por, alterado_em)
-                   VALUES (?, ?, ?, ?)""",
-                (nome, env_slug, por, _now()),
-            )
-            rede_id = int(cur.lastrowid)
-        else:
-            conn.execute(
-                """UPDATE regra_faturamento_rede
-                   SET nome = ?, env_slug = ?, alterado_por = ?, alterado_em = ?
-                   WHERE id = ?""",
-                (nome, env_slug, por, _now(), rede_id),
-            )
-            conn.execute("DELETE FROM regra_faturamento_chave WHERE rede_id = ?", (rede_id,))
+        try:
+            if rede_id is None:
+                cur = conn.execute(
+                    """INSERT INTO regra_faturamento_rede
+                           (nome, env_slug, alterado_por, alterado_em)
+                       VALUES (?, ?, ?, ?)""",
+                    (nome, env_slug, por, _now()),
+                )
+                rede_id = int(cur.lastrowid)
+            else:
+                conn.execute(
+                    """UPDATE regra_faturamento_rede
+                       SET nome = ?, env_slug = ?, alterado_por = ?, alterado_em = ?
+                       WHERE id = ?""",
+                    (nome, env_slug, por, _now(), rede_id),
+                )
+                conn.execute("DELETE FROM regra_faturamento_chave WHERE rede_id = ?", (rede_id,))
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Já existe uma rede com esse nome.") from exc
         conn.executemany(
             "INSERT INTO regra_faturamento_chave (rede_id, tipo, chave) VALUES (?, ?, ?)",
             [(rede_id, t, c) for t, c in set(norm)],
