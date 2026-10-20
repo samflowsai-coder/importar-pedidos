@@ -52,6 +52,23 @@ def test_cnpj_do_item_invalido_ou_ausente_devolve_none():
     assert produto_escopo.cnpj_do_item(_pedido(None, "x"), 5) is None  # índice fora
 
 
+def test_cnpj_alfanumerico_e_aceito_e_a_raiz_sao_os_8_primeiros_caracteres(conn):
+    o = _pedido("12.ABC.345/01DE-35", None)
+    cnpj = produto_escopo.cnpj_do_item(o, 0)
+    assert cnpj == "12ABC34501DE35"
+    assert produto_escopo.escopos_para(conn, cnpj) == ["raiz:12ABC345"]
+    assert produto_escopo.escopos_para(conn, "12.abc.345/01de-35") == ["raiz:12ABC345"]
+
+
+def test_cnpj_nao_e_truncado_nem_tem_letras_removidas():
+    # 15 caracteres; tirando a letra sobrariam 14 dígitos, mas isso seria inventar um CNPJ
+    o = _pedido("1A2345678901234", None)
+    assert produto_escopo.cnpj_do_item(o, 0) is None
+    assert produto_escopo.cnpj_do_item(_pedido("12.ABC.345/01DE-35X", None), 0) is None
+    # letras no dígito verificador também não valem
+    assert produto_escopo.cnpj_do_item(_pedido("12ABC34501DEAB", None), 0) is None
+
+
 def test_cabecalho_invalido_cai_no_proximo():
     o = _pedido("123", "33.200.056/0313-70")
     assert produto_escopo.cnpj_do_item(o, 0) == "33200056031370"

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.erp.cnpj import cnpj_digits
+from app.erp.preco_regra import normalizar_cnpj
 from app.persistence import precos_repo
 
 if TYPE_CHECKING:
@@ -18,22 +18,18 @@ if TYPE_CHECKING:
     from app.models.order import Order
 
 
-def _so_14_digitos(valor: str | None) -> str | None:
-    digitos = cnpj_digits(valor)
-    return digitos if len(digitos) == 14 else None
-
-
 def cnpj_do_item(order: Order, indice: int, *, cnpj_real: str | None = None) -> str | None:
-    """CNPJ (14 dígitos) que define o escopo do item.
+    """CNPJ que define o escopo do item (14 caracteres, formato do contrato de preço).
 
     Ordem: cliente real do intercompany, cabeçalho do pedido, CNPJ de entrega
-    do item. Candidato que não tem 14 dígitos é pulado.
+    do item. Normaliza com `normalizar_cnpj` (aceita CNPJ alfanumérico, igual à
+    tabela de preço); candidato fora do formato é pulado, nunca truncado.
     """
     candidatos: list[str | None] = [cnpj_real, order.header.customer_cnpj]
     if 0 <= indice < len(order.items):
         candidatos.append(order.items[indice].delivery_cnpj)
     for candidato in candidatos:
-        cnpj = _so_14_digitos(candidato)
+        cnpj = normalizar_cnpj(candidato)
         if cnpj:
             return cnpj
     return None
@@ -41,7 +37,7 @@ def cnpj_do_item(order: Order, indice: int, *, cnpj_real: str | None = None) -> 
 
 def escopos_para(conn: sqlite3.Connection, cnpj: str | None) -> list[str]:
     """Escopos de busca do vínculo, do mais específico ao menos: rede, depois raiz."""
-    cnpj = _so_14_digitos(cnpj)
+    cnpj = normalizar_cnpj(cnpj)
     if cnpj is None:
         return []
     escopos: list[str] = []

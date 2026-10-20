@@ -78,7 +78,7 @@ API pública para páginas-filho:
   descrição×nome > código contido). O picker de de-para abre chamando só com as
   dicas (sem `q`) pra já mostrar candidatos. 400 só quando `q` < 2 **e** sem
   dicas. Itens de `results`/`suggestions`: `{fire_produto_id, fire_codigo,
-  fire_ean, fire_nome, score?}`.
+  fire_ean, fire_codprod_altern, fire_nome, score?}`.
 - `POST /api/imported/{id}/vincular-produto` body `{item_index, fire_produto_id}`
   → grava o vínculo de-para (código e/ou EAN do item → produto do Fire) em
   `produto_depara`, audita (`produto_vinculo_criado`) e re-roda `check_order`.
