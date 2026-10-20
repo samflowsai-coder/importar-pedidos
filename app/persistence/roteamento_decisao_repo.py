@@ -39,10 +39,12 @@ def registrar(
                     decidido_por, motivo, acao,
                 ),
             )
-    except Exception:  # noqa: BLE001 — rastro não pode derrubar o import
+    except Exception as exc:  # noqa: BLE001 — rastro não pode derrubar o import
         from app.utils.logger import logger
 
-        logger.warning("roteamento.decisao_falhou import_id={}", import_id)
+        logger.warning(
+            "roteamento.decisao_falhou import_id={} erro={}", import_id, type(exc).__name__
+        )
 
 
 def listar_por_import(import_id: str) -> list[dict[str, Any]]:

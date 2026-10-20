@@ -41,3 +41,17 @@ def test_registrar_nunca_levanta(shared_db, monkeypatch):
 def test_acao_invalida_nao_grava_e_nao_levanta(shared_db):
     assert _reg(acao="inventada") is None
     assert repo.listar_por_import("i1") == []
+
+
+def test_falha_no_registro_loga_o_tipo_do_erro(shared_db, monkeypatch):
+    from app.utils.logger import logger
+
+    avisos = []
+    monkeypatch.setattr(logger, "warning", lambda msg, *a, **k: avisos.append(msg.format(*a)))
+
+    def boom():
+        raise RuntimeError("banco fora")
+
+    monkeypatch.setattr(router, "shared_connect", boom)
+    _reg()
+    assert avisos == ["roteamento.decisao_falhou import_id=i1 erro=RuntimeError"]
