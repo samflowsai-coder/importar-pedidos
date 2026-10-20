@@ -246,4 +246,3 @@ def test_uf_no_fire_binda_cnpj_mascarado_e_so_digitos(monkeypatch):
     ((sql, params),) = executados
     assert sql is queries.UF_CLIENTE_POR_CNPJ
     assert params == ("11.222.333/0001-81", CLIENTE)
-

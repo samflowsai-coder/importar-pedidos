@@ -11,8 +11,11 @@ from app.web.server import app
 def _envs():
     for slug in ("mm", "nasmar"):
         environments_repo.create(
-            slug=slug, name=slug.upper(), watch_dir=f"/x/{slug}/in",
-            output_dir=f"/x/{slug}/out", fb_path=f"/x/{slug}.fdb",
+            slug=slug,
+            name=slug.upper(),
+            watch_dir=f"/x/{slug}/in",
+            output_dir=f"/x/{slug}/out",
+            fb_path=f"/x/{slug}.fdb",
         )
 
 
@@ -124,8 +127,14 @@ def test_delete_remove_a_rede(client):
 def test_decisoes_por_import_em_ordem(client):
     for acao in ("automatico", "observando"):
         roteamento_decisao_repo.registrar(
-            import_id="imp1", modo="ligado", degrau="regra", env_sugerido="mm",
-            env_escolhido="mm", decidido_por="t", motivo=None, acao=acao,
+            import_id="imp1",
+            modo="ligado",
+            degrau="regra",
+            env_sugerido="mm",
+            env_escolhido="mm",
+            decidido_por="t",
+            motivo=None,
+            acao=acao,
         )
     body = client.get("/api/roteamento/decisoes?import_id=imp1").json()
     assert [d["acao"] for d in body] == ["automatico", "observando"]
@@ -135,16 +144,22 @@ def test_operador_comum_nao_escreve_mas_le(real_client, real_auth):
     _operador(real_client)
     assert real_client.get(BASE).status_code == 200
     assert real_client.get("/api/roteamento/decisoes?import_id=x").status_code == 200
-    assert real_client.put(
-        BASE, json={"env_sp": "mm", "env_fora_sp": "nasmar", "ativa": False}
-    ).status_code == 403
+    assert (
+        real_client.put(
+            BASE, json={"env_sp": "mm", "env_fora_sp": "nasmar", "ativa": False}
+        ).status_code
+        == 403
+    )
     assert real_client.post(f"{BASE}/redes", json=REDE).status_code == 403
     assert real_client.put(f"{BASE}/redes/1", json=REDE).status_code == 403
     assert real_client.delete(f"{BASE}/redes/1").status_code == 403
 
 
 def test_rede_sem_chave_com_regra_ligada_e_400(client):
-    assert client.put(BASE, json={"env_sp": "mm", "env_fora_sp": "nasmar", "ativa": True}).status_code == 200
+    assert (
+        client.put(BASE, json={"env_sp": "mm", "env_fora_sp": "nasmar", "ativa": True}).status_code
+        == 200
+    )
     rid = next(r["id"] for r in repo.listar_redes() if r["nome"] == "Kallan")
     r = client.put(f"{BASE}/redes/{rid}", json={"nome": "Kallan", "env_slug": "mm", "chaves": []})
     assert r.status_code == 400
@@ -152,7 +167,10 @@ def test_rede_sem_chave_com_regra_ligada_e_400(client):
 
 
 def test_delete_com_regra_ligada_e_400(client):
-    assert client.put(BASE, json={"env_sp": "mm", "env_fora_sp": "nasmar", "ativa": True}).status_code == 200
+    assert (
+        client.put(BASE, json={"env_sp": "mm", "env_fora_sp": "nasmar", "ativa": True}).status_code
+        == 200
+    )
     rid = next(r["id"] for r in repo.listar_redes() if r["nome"] == "Kallan")
     r = client.delete(f"{BASE}/redes/{rid}")
     assert r.status_code == 400

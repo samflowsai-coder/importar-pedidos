@@ -911,7 +911,9 @@ def test_envio_recusa_pedido_com_mover_inacabado(envs_mm_nasmar, monkeypatch, en
         assert r.detail == "Mover inacabado: conclua o mover do pedido antes de enviar."
 
 
-def test_rota_conclui_mover_interrompido_em_desligado(client, envs_mm_nasmar, check_falso, monkeypatch):
+def test_rota_conclui_mover_interrompido_em_desligado(
+    client, envs_mm_nasmar, check_falso, monkeypatch
+):
     """I2: em desligado a rota só conclui (pedido já nos dois bancos)."""
     _semear(envs_mm_nasmar["mm"])
     _interromper(envs_mm_nasmar, monkeypatch)
@@ -932,7 +934,10 @@ def test_rota_desligado_nao_comeca_mover_novo_nem_no_sentido_inverso(
     roteamento_repo.set_modo("desligado", por="t")
     # Destino sem cópia do pedido: é mover novo, recusado em desligado.
     environments_repo.create(
-        slug="terceira", name="Terceira", watch_dir="/x/t/in", output_dir="/x/t/out",
+        slug="terceira",
+        name="Terceira",
+        watch_dir="/x/t/in",
+        output_dir="/x/t/out",
         fb_path="/x/t.fdb",
     )
     assert _post(client, "terceira").status_code == 409
@@ -942,7 +947,10 @@ def test_rota_desligado_nao_comeca_mover_novo_nem_no_sentido_inverso(
 def test_rota_pedido_em_duas_origens_e_409(client_ligado, envs_mm_nasmar, monkeypatch):
     """M2: pedido em mais de uma empresa além do destino: não escolhe uma."""
     terceira = environments_repo.create(
-        slug="terceira", name="Terceira", watch_dir="/x/t/in", output_dir="/x/t/out",
+        slug="terceira",
+        name="Terceira",
+        watch_dir="/x/t/in",
+        output_dir="/x/t/out",
         fb_path="/x/t.fdb",
     )
     _semear(envs_mm_nasmar["mm"])
@@ -982,8 +990,13 @@ def test_rota_conclui_sem_segundo_rastro_nem_memoria(
     _semear(envs_mm_nasmar["mm"])
     _interromper(envs_mm_nasmar, monkeypatch)
     roteamento_decisao_repo.registrar(
-        import_id=IMPORT_ID, modo="ligado", degrau=None, env_sugerido=None,
-        env_escolhido="nasmar", decidido_por="ana@mm", motivo="movido de mm para nasmar",
+        import_id=IMPORT_ID,
+        modo="ligado",
+        degrau=None,
+        env_sugerido=None,
+        env_escolhido="nasmar",
+        decidido_por="ana@mm",
+        motivo="movido de mm para nasmar",
         acao="movido_apos_importar",
     )
 

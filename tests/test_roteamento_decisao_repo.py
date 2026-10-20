@@ -16,8 +16,16 @@ def shared_db(tmp_path, monkeypatch):
 
 
 def _reg(import_id="i1", acao="automatico", escolhido="mm"):
-    repo.registrar(import_id=import_id, modo="ligado", degrau="regra", env_sugerido="mm",
-                   env_escolhido=escolhido, decidido_por="sistema:regra", motivo="m", acao=acao)
+    repo.registrar(
+        import_id=import_id,
+        modo="ligado",
+        degrau="regra",
+        env_sugerido="mm",
+        env_escolhido=escolhido,
+        decidido_por="sistema:regra",
+        motivo="m",
+        acao=acao,
+    )
 
 
 def test_registrar_e_listar_em_ordem(shared_db):

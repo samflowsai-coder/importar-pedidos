@@ -90,9 +90,7 @@ def avaliar(
     rede = rede_fixa_do_pedido(order, politica)
     if rede is not None and politica.ativos is not None and rede.env_slug not in politica.ativos:
         # Nem a rede (empresa inexistente) nem a UF (a rede é exceção a ela).
-        logger.warning(
-            f"routing.regra.rede_empresa_inativa rede={rede.nome!r} env={rede.env_slug}"
-        )
+        logger.warning(f"routing.regra.rede_empresa_inativa rede={rede.nome!r} env={rede.env_slug}")
         return None
     if rede is not None:
         return ResultadoRegra(

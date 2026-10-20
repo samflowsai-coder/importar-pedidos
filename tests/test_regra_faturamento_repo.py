@@ -6,9 +6,18 @@ from app.persistence import environments_repo, router
 from app.persistence import regra_faturamento_repo as repo
 
 SAMS_CNPJS = {
-    "00063960000109", "00063960004864", "00063960006131", "00063960006999",
-    "00063960009408", "00063960012298", "00063960057984", "00063960058018",
-    "00063960058794", "00063960058875", "00063960058956", "00063960059170",
+    "00063960000109",
+    "00063960004864",
+    "00063960006131",
+    "00063960006999",
+    "00063960009408",
+    "00063960012298",
+    "00063960057984",
+    "00063960058018",
+    "00063960058794",
+    "00063960058875",
+    "00063960058956",
+    "00063960059170",
 }
 
 
@@ -25,8 +34,11 @@ def shared_db(tmp_path, monkeypatch):
 def envs_mm_nasmar(shared_db):
     for slug in ("mm", "nasmar"):
         environments_repo.create(
-            slug=slug, name=slug.upper(), watch_dir=f"/x/{slug}/in",
-            output_dir=f"/x/{slug}/out", fb_path=f"/x/{slug}.fdb",
+            slug=slug,
+            name=slug.upper(),
+            watch_dir=f"/x/{slug}/in",
+            output_dir=f"/x/{slug}/out",
+            fb_path=f"/x/{slug}.fdb",
         )
 
 
@@ -62,8 +74,9 @@ def test_politica_none_sem_config_e_com_ativa_falso(shared_db, envs_mm_nasmar):
 
 
 def test_nao_liga_com_rede_sem_chave(shared_db, envs_mm_nasmar):
-    repo.salvar_rede(nome="Riachuelo", env_slug="mm", chaves=[], por="a@x",
-                     rede_id=_rede("Riachuelo")["id"])
+    repo.salvar_rede(
+        nome="Riachuelo", env_slug="mm", chaves=[], por="a@x", rede_id=_rede("Riachuelo")["id"]
+    )
     with pytest.raises(ValueError, match="Riachuelo"):
         repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=True, por="a@x")
     assert repo.config() is None
@@ -93,8 +106,9 @@ def test_chave_nao_pertence_a_duas_redes(shared_db):
 
 def test_editar_rede_substitui_chaves_inteiras(shared_db):
     rid = _rede("Centauro")["id"]
-    repo.salvar_rede(nome="Centauro", env_slug="mm", chaves=[("raiz", "11222333")],
-                     por="a@x", rede_id=rid)
+    repo.salvar_rede(
+        nome="Centauro", env_slug="mm", chaves=[("raiz", "11222333")], por="a@x", rede_id=rid
+    )
     assert _rede("Centauro")["chaves"] == [{"tipo": "raiz", "chave": "11222333"}]
 
 
@@ -128,7 +142,9 @@ def test_politica_leva_o_nome_das_empresas(shared_db, envs_mm_nasmar):
 def test_com_regra_ligada_rede_nao_fica_sem_chave(shared_db, envs_mm_nasmar):
     repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=True, por="a@x")
     rid = _rede("Kallan")["id"]
-    with pytest.raises(ValueError, match="Com a regra ligada, toda rede precisa de ao menos uma chave."):
+    with pytest.raises(
+        ValueError, match="Com a regra ligada, toda rede precisa de ao menos uma chave."
+    ):
         repo.salvar_rede(nome="Kallan", env_slug="mm", chaves=[], por="a@x", rede_id=rid)
     assert _rede("Kallan")["chaves"] == [{"tipo": "raiz", "chave": "51540219"}]
     with pytest.raises(ValueError, match="ao menos uma chave"):
@@ -151,8 +167,9 @@ def test_semente_nao_volta_depois_que_o_admin_configurou(shared_db, envs_mm_nasm
 
 def test_nao_liga_com_rede_de_empresa_inativa(shared_db, envs_mm_nasmar):
     """I5: rede apontando para empresa que não é ambiente ativo barra o ligar."""
-    repo.salvar_rede(nome="Rede Órfã", env_slug="fantasma", chaves=[("raiz", "12345678")],
-                     por="a@x")
+    repo.salvar_rede(
+        nome="Rede Órfã", env_slug="fantasma", chaves=[("raiz", "12345678")], por="a@x"
+    )
     with pytest.raises(ValueError, match="Rede Órfã"):
         repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=True, por="a@x")
     assert repo.config() is None
@@ -169,11 +186,13 @@ def test_politica_nao_decide_por_rede_de_empresa_inativa(shared_db, envs_mm_nasm
     avisos = []
     monkeypatch.setattr(repo.logger, "warning", lambda msg, *a, **k: avisos.append(msg))
     environments_repo.create(
-        slug="terceira", name="Terceira", watch_dir="/x/t/in", output_dir="/x/t/out",
+        slug="terceira",
+        name="Terceira",
+        watch_dir="/x/t/in",
+        output_dir="/x/t/out",
         fb_path="/x/t.fdb",
     )
-    repo.salvar_rede(nome="Rede T", env_slug="terceira", chaves=[("raiz", "12345678")],
-                     por="a@x")
+    repo.salvar_rede(nome="Rede T", env_slug="terceira", chaves=[("raiz", "12345678")], por="a@x")
     repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=True, por="a@x")
     environments_repo.soft_delete(environments_repo.get_by_slug("terceira")["id"])
 

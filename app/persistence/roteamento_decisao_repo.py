@@ -8,8 +8,16 @@ from typing import Any
 from app.persistence import router
 
 _COLS = (
-    "id", "import_id", "decidido_em", "modo", "degrau", "env_sugerido",
-    "env_escolhido", "decidido_por", "motivo", "acao",
+    "id",
+    "import_id",
+    "decidido_em",
+    "modo",
+    "degrau",
+    "env_sugerido",
+    "env_escolhido",
+    "decidido_por",
+    "motivo",
+    "acao",
 )
 
 
@@ -35,8 +43,13 @@ def registrar(
                 (
                     import_id,
                     datetime.now(UTC).isoformat(timespec="seconds"),
-                    modo, degrau, env_sugerido, env_escolhido,
-                    decidido_por, motivo, acao,
+                    modo,
+                    degrau,
+                    env_sugerido,
+                    env_escolhido,
+                    decidido_por,
+                    motivo,
+                    acao,
                 ),
             )
     except Exception as exc:  # noqa: BLE001 — rastro não pode derrubar o import

@@ -55,8 +55,12 @@ def listar_redes() -> list[dict[str, Any]]:
     for c in chaves:
         por_rede.setdefault(c["rede_id"], []).append({"tipo": c["tipo"], "chave": c["chave"]})
     return [
-        {"id": r["id"], "nome": r["nome"], "env_slug": r["env_slug"],
-         "chaves": por_rede.get(r["id"], [])}
+        {
+            "id": r["id"],
+            "nome": r["nome"],
+            "env_slug": r["env_slug"],
+            "chaves": por_rede.get(r["id"], []),
+        }
         for r in redes
     ]
 
@@ -113,9 +117,7 @@ def salvar_rede(
             raise ValueError(f"tipo de chave inválido: {tipo!r}")
         digitos = cnpj_digits(chave)
         if len(digitos) != _TAMANHO[tipo]:
-            raise ValueError(
-                f"chave {tipo} precisa de {_TAMANHO[tipo]} dígitos: {chave!r}"
-            )
+            raise ValueError(f"chave {tipo} precisa de {_TAMANHO[tipo]} dígitos: {chave!r}")
         norm.append((tipo, digitos))
     with router.shared_connect() as conn:
         for tipo, chave in norm:
