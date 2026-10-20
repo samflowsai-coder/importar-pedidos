@@ -48,6 +48,13 @@ _TRAVAS_GUARD = threading.Lock()
 # Quanto o mover espera um envio em andamento antes de desistir (409).
 _ESPERA_S = 2.0
 
+# Um mover por vez na parte de banco: cada mover trava a própria origem e pede
+# o banco do outro — dois em sentidos opostos (X mm→nasmar, Y nasmar→mm) se
+# prenderiam até o timeout do SQLite ("database is locked") e parariam toda
+# escrita nas duas empresas. Ordem fixa: trava do pedido → este lock → bancos.
+# O envio nunca pega este lock, então não há ciclo.
+_MOVER_LOCK = threading.Lock()
+
 # Colunas de `imports` derivadas do Fire/empresa de origem: nascem NULL no destino.
 _ZERADAS_NO_DESTINO = (
     "check_json",
@@ -270,6 +277,7 @@ def mover_import(
     `PedidoOcupado` = um envio segura o pedido além de `_ESPERA_S`; nada mudou."""
     with (
         trava_do_pedido(import_id, espera=_ESPERA_S),
+        _MOVER_LOCK,
         router.env_connect(origem["slug"]) as oconn,
     ):
         oconn.execute("BEGIN IMMEDIATE")

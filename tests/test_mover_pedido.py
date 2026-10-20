@@ -57,10 +57,10 @@ def _snapshot():
     ).model_dump(mode="json")
 
 
-def _semear(env, **cols):
+def _semear(env, iid=IMPORT_ID, **cols):
     """Pedido em revisão na empresa `env`, com 2 audits e 1 evento de ciclo de vida."""
     linha = {
-        "id": IMPORT_ID,
+        "id": iid,
         "environment_id": env["id"],
         "source_filename": "PEDIDO.pdf",
         "imported_at": "2026-10-20T10:00:00",
@@ -83,14 +83,14 @@ def _semear(env, **cols):
             conn.execute(
                 "INSERT INTO audit_log (environment_id, import_id, event_type, detail_json,"
                 " created_at) VALUES (?, ?, ?, ?, ?)",
-                (env["id"], IMPORT_ID, ev, json.dumps({"ev": ev}), "2026-10-20T10:00:01"),
+                (env["id"], iid, ev, json.dumps({"ev": ev}), "2026-10-20T10:00:01"),
             )
         conn.execute(
             "INSERT INTO order_lifecycle_events (environment_id, import_id, event_type, source,"
             " payload_json, trace_id, occurred_at, ingested_at) VALUES (?,?,?,?,?,?,?,?)",
             (
                 env["id"],
-                IMPORT_ID,
+                iid,
                 "imported",
                 "portal",
                 "{}",
@@ -713,3 +713,65 @@ def test_rota_falha_da_memoria_nao_derruba_o_mover(
     assert _post(client_ligado).status_code == 200
     assert _linha("mm") == []
     assert len(_linha("nasmar")) == 1
+
+
+# ── Fix round 2: movers cruzados ─────────────────────────────────────────────
+
+
+def test_dois_movers_cruzados_concluem_sem_database_locked(envs_mm_nasmar, monkeypatch):
+    """X mm→nasmar e Y nasmar→mm ao mesmo tempo: cada um trava a própria
+    origem e precisaria do banco do outro. O lock global do mover serializa a
+    parte de banco: os dois concluem, nenhum "database is locked"."""
+    import threading
+    import time
+
+    _semear(envs_mm_nasmar["mm"], iid="X")
+    _semear(envs_mm_nasmar["nasmar"], iid="Y")
+    real = mp._copiar_no_destino
+
+    def _copiar_devagar(*a, **kw):
+        time.sleep(0.3)  # segura a origem travada: sem o lock global, cruza
+        return real(*a, **kw)
+
+    monkeypatch.setattr(mp, "_copiar_no_destino", _copiar_devagar)
+    erros = []
+    largada = threading.Barrier(2)
+
+    def _mover_um(iid, de, para):
+        largada.wait()
+        try:
+            mp.mover_import(iid, origem=envs_mm_nasmar[de], destino=envs_mm_nasmar[para], por="t")
+        except Exception as exc:  # noqa: BLE001
+            erros.append(exc)
+
+    threads = [
+        threading.Thread(target=_mover_um, args=("X", "mm", "nasmar")),
+        threading.Thread(target=_mover_um, args=("Y", "nasmar", "mm")),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(15)
+
+    assert erros == []
+    with router.env_connect("mm") as conn:
+        assert [r[0] for r in conn.execute("SELECT id FROM imports")] == ["Y"]
+    with router.env_connect("nasmar") as conn:
+        assert [r[0] for r in conn.execute("SELECT id FROM imports")] == ["X"]
+
+
+def test_rota_pedido_ilegivel_no_destino_move_sem_check_nem_memoria(
+    client_ligado, envs_mm_nasmar, check_falso, monkeypatch
+):
+    from app.persistence import decisao_ambiente_repo, repo
+
+    def _explode(import_id):  # noqa: ARG001
+        raise RuntimeError("snapshot podre")
+
+    monkeypatch.setattr(repo, "get_import", _explode)
+    _semear(envs_mm_nasmar["mm"])
+    assert _post(client_ligado).status_code == 200
+    assert _linha("mm") == []
+    assert _linha("nasmar")[0]["check_json"] is None
+    assert check_falso["check"] == []
+    assert decisao_ambiente_repo.lembrada("11222333000181") is None

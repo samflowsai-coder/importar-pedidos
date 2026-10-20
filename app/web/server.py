@@ -4545,22 +4545,31 @@ def mover_pedido_de_empresa(
         try:
             entry = repo.get_import(import_id)
             order = Order.model_validate(entry["snapshot"])
-            with with_trace_id(entry.get("trace_id")):
-                check = product_check.check_order(
-                    order, env=destino, escolhas=product_check.escolhas_do_import(entry)
-                )
-                if check.get("available"):
-                    repo.update_fire_metadata(import_id, check=check)
-                check_preco = preco_trava.check_preco_para_gravar(order, destino, entry)
-                if check_preco is not None:
-                    repo.update_fire_metadata(import_id, check_preco=check_preco)
-        except Exception as exc:  # noqa: BLE001 — o pedido já mudou; o check é refeito depois
+        except Exception as exc:  # noqa: BLE001 — sem o pedido legível: sem check e sem memória
             logger.warning(
-                "mover.check_destino_falhou import_id={} env={} erro={}",
+                "mover.pedido_ilegivel_no_destino import_id={} env={} erro={}",
                 import_id,
                 destino["slug"],
                 type(exc).__name__,
             )
+        if order is not None:
+            try:
+                with with_trace_id(entry.get("trace_id")):
+                    check = product_check.check_order(
+                        order, env=destino, escolhas=product_check.escolhas_do_import(entry)
+                    )
+                    if check.get("available"):
+                        repo.update_fire_metadata(import_id, check=check)
+                    check_preco = preco_trava.check_preco_para_gravar(order, destino, entry)
+                    if check_preco is not None:
+                        repo.update_fire_metadata(import_id, check_preco=check_preco)
+            except Exception as exc:  # noqa: BLE001 — o pedido já mudou; o check é refeito depois
+                logger.warning(
+                    "mover.check_destino_falhou import_id={} env={} erro={}",
+                    import_id,
+                    destino["slug"],
+                    type(exc).__name__,
+                )
 
     try:
         ultima = roteamento_decisao_repo.ultima(import_id)
