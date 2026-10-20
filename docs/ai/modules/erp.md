@@ -231,7 +231,12 @@ de-para v1 (`_vinculos_antes_do_portao` só chama `_vinculos_de_para` fora de `l
 se o modo mudou no meio, `_saida_do_envio` lê o v1 na hora). Na trava de preço,
 `_com_vinculos(..., decidido=True)` (produto `ligado`, envio e preview) pega
 `fire_unidade`/`fire_description` do candidato decidido em vez de zerar quando o
-`fire_product_id` legado é outro SEQ. O preview
+`fire_product_id` legado é outro SEQ. Com a trava de preço fora de `ligado` (regra de
+hoje, `is_blocking`), `_decidir_preco` passa a regra sobre `_preco_do_decidido(order,
+live)` (I4): cópia do check em que cada item `ok` tem `price_status`/`price_diff`/
+`fire_preco_venda` refeitos por `_classify_price` com o `preco_venda` do candidato
+decidido (o candidato serializa `preco_venda`; sem a chave, o item fica como está) — o
+match legado podia ser outro produto. O check aprovado (`DecisaoEnvio.check`) não muda. O preview
 avalia o preço pelo `produtos_decididos(entry["check"])`. `decidir_envio(...,
 export_mode=)`: o que o caminho gera (None = `EXPORT_MODE`); `/export-xlsx` passa sempre
 `"xlsx"`. O CLI em `ligado` aplica o mesmo mapa antes da planilha. `desligado` e

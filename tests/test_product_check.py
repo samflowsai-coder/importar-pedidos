@@ -757,6 +757,7 @@ def test_check_grava_produto_ok_por_codprod_altern(mock_fb):
                 "bloqueado": False,
                 "unidade": "KIT",
                 "ean": None,
+                "preco_venda": 1.0,
             }
         ],
         "troca_no_fire": None,
@@ -783,9 +784,9 @@ def test_check_ean_duplicado_nao_escolhe_menor_seq(mock_fb):
     assert item["produto"]["fire_seq"] is None
     assert item["produto"]["candidatos"] == [
         {"seq": 10, "descricao": "A", "codprod_altern": "A1", "bloqueado": False}
-        | {"unidade": "PAR", "ean": None},
+        | {"unidade": "PAR", "ean": None, "preco_venda": 1.0},
         {"seq": 20, "descricao": "B", "codprod_altern": "B1", "bloqueado": False}
-        | {"unidade": "PAR", "ean": None},
+        | {"unidade": "PAR", "ean": None, "preco_venda": 2.0},
     ]
     assert report["summary"]["items_produto_pendente"] == 1
 

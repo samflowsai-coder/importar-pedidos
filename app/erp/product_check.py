@@ -166,6 +166,8 @@ def _produto_dict(d: DecisaoProduto) -> dict:
                 # unidade e o EAN do produto decidido.
                 "unidade": c.unidade,
                 "ean": c.ean,
+                # Regra de preço de hoje em `ligado` (I4): o preço do decidido.
+                "preco_venda": c.preco_venda,
             }
             for c in d.candidatos
         ],

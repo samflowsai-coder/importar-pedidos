@@ -734,6 +734,41 @@ def registrar_aplicados(import_id: str, decisao: DecisaoEnvio) -> None:
         repo.append_audit(import_id, "preco_aplicado", aplicado)
 
 
+def _preco_do_decidido(order: Order, check: dict) -> dict:
+    """Cópia do check com `price_status`/`price_diff`/`fire_preco_venda` de cada
+    item `ok` refeitos pelo `preco_venda` do candidato decidido (I4): em
+    `produto_chave_modo` `ligado` o produto que sai é o decidido, e o match legado
+    pode ser outro produto. Candidato sem a chave `preco_venda` (check de antes
+    deste campo) fica como está. Não muda o check de entrada."""
+    itens = []
+    for i, item in enumerate(check.get("items") or []):
+        produto = item.get("produto") if isinstance(item, dict) else None
+        cand = (
+            produto_trava.candidato_decidido(produto)
+            if isinstance(produto, dict) and produto.get("estado") == "ok"
+            else None
+        )
+        if cand is None or "preco_venda" not in cand or i >= len(order.items):
+            itens.append(item)
+            continue
+        preco = cand.get("preco_venda")
+        unit = order.items[i].unit_price
+        itens.append(
+            {
+                **item,
+                "fire_product_id": produto.get("fire_seq"),
+                "fire_preco_venda": preco,
+                "price_status": pc._classify_price(unit, preco),
+                "price_diff": (
+                    round(float(preco) - float(unit), 2)
+                    if preco is not None and unit is not None
+                    else None
+                ),
+            }
+        )
+    return {**check, "items": itens}
+
+
 def _regra_de_hoje(check: dict, ack_items: list) -> DecisaoEnvio:
     blocked, block_detail = pc.is_blocking(check, ack_items=ack_items)
     if not blocked:
@@ -1117,7 +1152,9 @@ def _decidir_preco(
             import_id, order, entry, live, ack_items, agora, produtos_por_item, env
         )
 
-    hoje = _regra_de_hoje(live, ack_items)
+    hoje = _regra_de_hoje(
+        _preco_do_decidido(order, live) if _produto_ligado(env) else live, ack_items
+    )
     if modo == "observando":
         try:
             grupo = cnpjs_grupo()  # uma vez por chamada do portão
