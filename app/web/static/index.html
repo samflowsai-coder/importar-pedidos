@@ -675,10 +675,63 @@
        320px, onde faltavam ~35px pra caber label + select lado a lado. */
     .rot-choice { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
     .rot-choice label { font-weight:600; }
-    .rot-choice select { flex:1 1 200px; min-width:0; max-width:320px; height:32px; }
+    .rot-choice select {
+      flex:1 1 200px; min-width:0; max-width:320px; height:32px; padding:0 8px;
+      font: inherit; font-size: 12px; color: var(--text); background: var(--bg);
+      border: 1px solid var(--border-control); border-radius: var(--radius-sm);
+    }
+    .rot-choice select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
     /* O "porquê" da decisão de roteamento — sempre texto, nunca só title. */
     .rot-why { font-size: 11px; color: var(--text-secondary); }
+
+    /* Regra comercial: troca da empresa sugerida (ligado) e o histórico da
+       empresa no detalhe. Mesma linguagem do .pp-conflito: faixa âmbar à
+       esquerda para o que pede decisão, texto secundário para contexto. */
+    .rot-degrau { font-size: 11px; font-weight: 600; color: var(--text-secondary); }
+    .rot-aviso { color: var(--warn-strong); }
+    .rot-nota { font-size: 11px; color: var(--text-secondary); }
+    .rot-troca {
+      margin-top: 4px; padding: 10px 12px;
+      border: 1px solid var(--warn); border-left-width: 3px; border-radius: var(--radius);
+      background: var(--bg); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+    }
+    .rot-troca-txt { flex: 1 1 260px; color: var(--text); line-height: 1.5; }
+    .rot-troca-acoes { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+    .rot-hist-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+    .rot-hist-titulo {
+      font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .rot-linha { list-style: none; margin: 8px 0 0; display: flex; flex-direction: column; }
+    .rot-linha li {
+      position: relative; padding: 0 0 10px 18px; color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .rot-linha li::before {
+      content: ''; position: absolute; left: 3px; top: 6px;
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--border-control);
+    }
+    .rot-linha li:last-child::before { background: var(--accent); box-shadow: none; }
+    .rot-linha li:not(:last-child)::after {
+      content: ''; position: absolute; left: 6px; top: 15px; bottom: 0;
+      width: 1px; background: var(--border);
+    }
+    .rot-linha time { color: var(--text-secondary); }
+    .rot-linha-motivo { font-size: 11px; color: var(--text-secondary); margin-top: 1px; }
+    .rot-mover { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    /* Alvo de toque (WCAG 2.5.5) nos controles novos da faixa e do histórico. */
+    @media (max-width: 768px) {
+      .rot-choice select, .rot-troca .btn, .rot-mover .btn { min-height: 44px; }
+      .rot-troca-acoes { width: 100%; }
+      .rot-troca-acoes .btn { flex: 1 1 auto; justify-content: center; }
+      .rot-why .pb-link { padding: 13px 0; }
+    }
+    .rot-erro {
+      margin-top: 6px; padding: 8px 12px; font-size: 12px; color: var(--error-strong);
+      border: 1px solid var(--error); background: var(--error-bg); border-radius: var(--radius);
+    }
 
     .preview-dropzone {
       display: flex; flex-direction: column; align-items: center; gap: 8px;
@@ -1135,6 +1188,10 @@
            silencioso — aparece mesmo quando a decisão é automática. -->
       <div id="pvRoutingBanner" class="hidden" style="padding:10px 20px;border-bottom:1px solid var(--border-subtle);font-size:12px;background:var(--surface)"></div>
 
+      <!-- Pedido já gravado: por que está nesta empresa (rastro da decisão)
+           e, enquanto ninguém enviou, mover para a outra. -->
+      <div id="pvRoutingHistory" class="hidden" style="padding:12px 20px 10px;border-bottom:1px solid var(--border-subtle);font-size:12px;background:var(--surface)"></div>
+
       <!-- Product check banner -->
       <div id="pvCheckBanner" class="hidden" style="padding:10px 20px;border-bottom:1px solid var(--border-subtle);font-size:12px;display:flex;align-items:center;gap:12px;background:var(--surface)"></div>
 
@@ -1258,7 +1315,7 @@
   </div>
 </div>
 
-<script src="/static/js/roteamento-labels.js?v=1"></script>
+<script src="/static/js/roteamento-labels.js?v=2"></script>
 <script>
 /* ── State ── */
 let cfg = { watchDir: '', outputDir: '', exportMode: 'xlsx', firebirdConfigured: false };
@@ -1477,6 +1534,7 @@ function showPendingEmpty(msg) {
 async function previewPending(filename, envSlug) {
   currentPreview = null;
   routingChoice = null;
+  routingPendente = null;
   showPreviewModal();
   setPreviewLoading(true, 'Analisando arquivo…', esc(filename));
   hidePreviewError();
@@ -1893,6 +1951,7 @@ function renderImported(entries) {
 async function openImportDetail(importId, opts) {
   currentPreview = null;
   routingChoice = null;
+  routingPendente = null;
   showPreviewModal();
   setPreviewLoading(true, 'Carregando pedido…', '');
   hidePreviewError();
@@ -3159,7 +3218,11 @@ function fmtDatetime(iso) {
 let currentPreview = null;
 // Ambiente escolhido pelo operador quando o roteamento não soube decidir
 // sozinho (payload.roteamento.precisa_escolher) — ver renderRoutingBanner().
+// Em 'ligado' com sugestão (pode_trocar) só ganha valor quando o operador
+// CONFIRMA uma empresa diferente da sugerida; `routingPendente` é a troca
+// escolhida no seletor e ainda não confirmada (bloqueia o "Importar").
 let routingChoice = null;
+let routingPendente = null;
 
 function openPreviewPicker() {
   const input = document.getElementById('previewFileInput');
@@ -3176,6 +3239,7 @@ function handlePreviewFileInput(ev) {
 async function runPreview(file) {
   currentPreview = null;
   routingChoice = null;
+  routingPendente = null;
   showPreviewModal();
   setPreviewLoading(true, 'Analisando arquivo…', 'Isso pode levar alguns segundos.');
   hidePreviewError();
@@ -3208,6 +3272,7 @@ function closePreviewModal() {
   document.getElementById('previewOverlay').classList.remove('open');
   currentPreview = null;
   routingChoice = null;
+  routingPendente = null;
 }
 
 function setPreviewLoading(on, title, sub) {
@@ -3254,6 +3319,7 @@ function renderRoutingBanner(data) {
     el.classList.add('hidden');
     el.innerHTML = '';
     routingChoice = null;
+    routingPendente = null;
     return;
   }
 
@@ -3278,12 +3344,15 @@ function renderRoutingBanner(data) {
           </select>
         </div>
       </div>`;
+  } else if (rot.pode_trocar) {
+    renderRoutingTroca(el, rot, opcoes, nomeDoAmbiente);
   } else {
     routingChoice = null;
+    routingPendente = null;
     const label = ROUTING_DEGRAU_LABEL[rot.degrau] || rot.degrau || '';
-    const aviso = rot.divergiu_de
+    const aviso = (rot.divergiu_de
       ? `<div style="color:var(--warn-strong);margin-top:2px">⚠ A escolha registrada para este cliente era outra: <strong>${esc(nomeDoAmbiente(rot.divergiu_de))}</strong>.</div>`
-      : '';
+      : '') + routingContrariaHtml(rot);
     // A explicação (o "porquê" do degrau) sempre vira uma segunda linha —
     // nunca só um `title` de mouse. Antes, o ramo "acertei" escondia o
     // motivo atrás de hover enquanto o ramo "preciso perguntar" mostrava
@@ -3323,6 +3392,275 @@ function onRoutingChoiceChange(slug) {
   if (currentPreview) renderPreviewFooter(currentPreview, (currentPreview.items || []).length);
 }
 
+// O rótulo do degrau já diz "Regra comercial"; a explicação não repete.
+function semPrefixoRegra(txt) {
+  return String(txt || '').replace(/^Regra comercial:\s*/, '');
+}
+
+// A regra decidiu uma empresa e o documento aponta para a outra
+// (`rot.contraria`): o operador precisa ver antes de aceitar a sugestão.
+function routingContrariaHtml(rot) {
+  if (!rot.contraria) return '';
+  return `<div class="rot-aviso" style="margin-top:2px">⚠ O pedido traz o CNPJ da <strong>${esc(rot.contraria_nome || rot.contraria)}</strong>.</div>`;
+}
+
+// 'ligado' com decisão resolvida: a sugestão vem marcada no seletor e o
+// operador pode trocar. Escolher outra empresa abre a confirmação aqui
+// mesmo (nunca confirm()); só a troca CONFIRMADA vira `routingChoice`,
+// que o commit manda como `environment_slug`. Voltar para a sugestão não
+// pede confirmação — é desfazer.
+function renderRoutingTroca(el, rot, opcoes, nomeDoAmbiente) {
+  const sugerida = rot.env_slug;
+  if (!opcoes.some(o => o.slug === routingChoice) || routingChoice === sugerida) routingChoice = null;
+  if (!opcoes.some(o => o.slug === routingPendente)) routingPendente = null;
+  const destino = routingChoice || sugerida;
+  const noSeletor = routingPendente || destino;
+  const label = ROUTING_DEGRAU_LABEL[rot.degrau] || rot.degrau || '';
+  const nomeSugerida = rot.env_nome || nomeDoAmbiente(sugerida);
+  const options = opcoes.map(o =>
+    `<option value="${esc(o.slug)}" ${o.slug === noSeletor ? 'selected' : ''}>${esc(o.name)}${o.slug === sugerida ? ' (sugestão)' : ''}</option>`
+  ).join('');
+  const why = rot.explicacao ? `<div class="rot-why">${esc(semPrefixoRegra(rot.explicacao))}</div>` : '';
+  let troca = '';
+  if (routingPendente) {
+    troca = `
+      <div id="pvRoutingTroca" class="rot-troca" role="group" aria-labelledby="pvRoutingTrocaTxt">
+        <div class="rot-troca-txt" id="pvRoutingTrocaTxt">
+          Trocar para <strong>${esc(nomeDoAmbiente(routingPendente))}</strong>? A sugestão era
+          <strong>${esc(nomeSugerida)}</strong>${label ? ` (${esc(label)})` : ''}. A troca fica registrada com o seu usuário.
+        </div>
+        <div class="rot-troca-acoes">
+          <button type="button" class="btn btn-sm" onclick="cancelarTrocaEmpresa()">Manter ${esc(nomeDoAmbiente(destino))}</button>
+          <button type="button" class="btn btn-sm btn-primary" onclick="confirmarTrocaEmpresa()">Confirmar troca</button>
+        </div>
+      </div>`;
+  } else if (routingChoice) {
+    troca = `<div class="rot-why">Trocado por você. A sugestão era <strong>${esc(nomeSugerida)}</strong>.
+      <button type="button" class="pb-link" onclick="onRoutingTrocaChange('${esc(escJs(sugerida))}')">Voltar para a sugestão</button></div>`;
+  }
+  // R8: o preview conferiu os produtos no Fire da empresa do cookie; o
+  // commit confere de novo no Fire do destino quando ele é outro.
+  const atual = cfg.environment && cfg.environment.slug;
+  const nota = !routingPendente && destino !== atual
+    ? `<div class="rot-nota">Os produtos serão conferidos de novo no Fire da ${esc(nomeDoAmbiente(destino))} ao gravar.</div>`
+    : '';
+  el.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:4px;width:100%">
+      <div class="rot-choice">
+        <label for="pvRoutingSelect">Este pedido entra em</label>
+        <select id="pvRoutingSelect" onchange="onRoutingTrocaChange(this.value)">${options}</select>
+        <span class="rot-degrau">${esc(label)}</span>
+      </div>
+      ${why}
+      ${routingContrariaHtml(rot)}
+      ${troca}
+      ${nota}
+    </div>`;
+}
+
+function rerenderRoutingTroca(focoId) {
+  if (!currentPreview) return;
+  renderRoutingBanner(currentPreview);
+  renderPreviewFooter(currentPreview, (currentPreview.items || []).length);
+  const alvo = document.getElementById(focoId);
+  if (alvo) alvo.focus();
+}
+
+function onRoutingTrocaChange(slug) {
+  const rot = currentPreview && currentPreview.roteamento;
+  if (!rot) return;
+  const destino = routingChoice || rot.env_slug;
+  if (slug === rot.env_slug) {
+    routingChoice = null;
+    routingPendente = null;
+  } else {
+    routingPendente = slug === destino ? null : slug;
+  }
+  rerenderRoutingTroca('pvRoutingSelect');
+}
+
+function confirmarTrocaEmpresa() {
+  if (!routingPendente) return;
+  routingChoice = routingPendente;
+  routingPendente = null;
+  rerenderRoutingTroca('pvRoutingSelect');
+}
+
+function cancelarTrocaEmpresa() {
+  routingPendente = null;
+  rerenderRoutingTroca('pvRoutingSelect');
+}
+
+// ── Empresa do pedido gravado: linha do tempo + mover ──────────────────────
+// O rastro vem de /api/roteamento/decisoes (uma linha por decisão: commit,
+// watcher, mover). "Mover para" só aparece com o pedido em revisão, sem
+// número do Fire e o roteamento fora de 'desligado'; o servidor ainda pode
+// recusar (409) e o motivo vira texto aqui, nunca alert().
+let rotHist = null;   // { importId, decisoes, modo, envs, atual }
+let moverPendente = null;
+let moverErro = '';
+
+const ROTA_DEGRAU_FRASE = {
+  regra: 'pela regra comercial',
+  documento: 'pelo documento',
+  historico: 'pelo histórico',
+  memoria: 'pela escolha registrada',
+};
+
+function fmtQuandoCurto(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso || '—';
+  return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', '');
+}
+
+function rotPor(decididoPor) {
+  if (!decididoPor) return '';
+  return decididoPor.startsWith('sistema:') ? 'automático' : `por ${esc(decididoPor)}`;
+}
+
+function rotLinhaHtml(d, nome) {
+  const sug = d.env_sugerido ? `<strong>${esc(nome(d.env_sugerido))}</strong>` : '';
+  const pelo = ROTA_DEGRAU_FRASE[d.degrau] ? ` ${ROTA_DEGRAU_FRASE[d.degrau]}` : '';
+  const esc_ = `<strong>${esc(nome(d.env_escolhido))}</strong>`;
+  const por = rotPor(d.decidido_por);
+  let txt;
+  if (d.acao === 'movido_apos_importar') txt = `movido para ${esc_} ${por}`;
+  else if (d.acao === 'troca_no_preview') txt = `sugerido ${sug}${pelo} · trocado para ${esc_} ${por}`;
+  else if (d.acao === 'sugestao_aceita') txt = `sugerido ${sug}${pelo} · aceito ${por}`;
+  else if (d.acao === 'escolha_sem_sugestao') txt = `sem sugestão · escolhido ${esc_} ${por}`;
+  else if (d.acao === 'automatico') txt = `entrou na ${esc_}${pelo} · ${por}`;
+  else if (d.acao === 'observando') {
+    txt = sug ? `o roteamento sugeriria ${sug}${pelo} · entrou na ${esc_} ${por}` : `entrou na ${esc_} ${por}`;
+  } else txt = `${esc_} ${por}`;
+  const motivo = d.motivo && d.acao !== 'movido_apos_importar'
+    ? `<div class="rot-linha-motivo">${esc(semPrefixoRegra(d.motivo))}</div>` : '';
+  return `<li><time datetime="${esc(d.decidido_em)}">${esc(fmtQuandoCurto(d.decidido_em))}</time> · ${txt}${motivo}</li>`;
+}
+
+async function renderRoutingHistory(data) {
+  const el = document.getElementById('pvRoutingHistory');
+  if (!el) return;
+  rotHist = null;
+  moverPendente = null;
+  moverErro = '';
+  el.classList.add('hidden');
+  el.innerHTML = '';
+  if (!data.portal_status) return;
+  const importId = data.preview_id;
+  let decisoes, modo, envs;
+  try {
+    [decisoes, modo, envs] = await Promise.all([
+      api('/api/roteamento/decisoes?import_id=' + encodeURIComponent(importId)),
+      api('/api/roteamento/modo').then(r => r.modo),
+      api('/api/env/list'),
+    ]);
+  } catch (_) {
+    return;  // rastro é contexto: sem ele o detalhe segue igual a antes
+  }
+  if (!currentPreview || currentPreview.preview_id !== importId) return;
+  // Onde o pedido está: em 'ligado' o servidor resolveu pela empresa do
+  // pedido (env_name); fora dele, é a empresa selecionada (cookie).
+  const atual = (data.env_name && (envs.find(e => e.name === data.env_name) || {}).slug)
+    || (cfg.environment && cfg.environment.slug)
+    || (decisoes.length ? decisoes[decisoes.length - 1].env_escolhido : null);
+  rotHist = { importId, decisoes, modo, envs, atual, data };
+  desenharRoutingHistory();
+}
+
+function desenharRoutingHistory(focoId) {
+  const el = document.getElementById('pvRoutingHistory');
+  if (!el || !rotHist) return;
+  const { decisoes, modo, envs, atual, data } = rotHist;
+  const nome = (slug) => (envs.find(e => e.slug === slug) || {}).name || slug || '—';
+  const podeMover = modo !== 'desligado' && data.portal_status === 'parsed'
+    && data.fire_codigo == null && !!atual;
+  const destinos = podeMover ? envs.filter(e => e.slug !== atual) : [];
+  if (!decisoes.length && !destinos.length) {
+    el.classList.add('hidden');
+    el.innerHTML = '';
+    return;
+  }
+  const linhas = decisoes.length
+    ? `<ol class="rot-linha" aria-label="Decisões de empresa deste pedido">${decisoes.map(d => rotLinhaHtml(d, nome)).join('')}</ol>`
+    : '';
+  let mover = '';
+  if (moverPendente) {
+    const n = esc(nome(moverPendente));
+    mover = `
+      <div id="pvMoverConfirm" class="rot-troca" role="group" aria-labelledby="pvMoverTxt">
+        <div class="rot-troca-txt" id="pvMoverTxt">
+          Mover este pedido para a <strong>${n}</strong>? Ele sai da ${esc(nome(atual))} e os produtos
+          e preços são conferidos de novo no Fire da ${n}. A troca fica registrada com o seu usuário.
+        </div>
+        <div class="rot-troca-acoes">
+          <button type="button" class="btn btn-sm" id="pvMoverCancelar" onclick="cancelarMoverEmpresa()">Cancelar</button>
+          <button type="button" class="btn btn-sm btn-primary" id="pvMoverConfirmar" onclick="moverEmpresa('${esc(escJs(moverPendente))}')">Mover para ${n}</button>
+        </div>
+      </div>`;
+  } else if (destinos.length) {
+    mover = `<div class="rot-mover">${destinos.map(e =>
+      `<button type="button" class="btn btn-sm" id="pvMover-${esc(e.slug)}" onclick="pedirMoverEmpresa('${esc(escJs(e.slug))}')">Mover para ${esc(e.name)}</button>`
+    ).join('')}</div>`;
+  }
+  const erro = moverErro ? `<div class="rot-erro" role="alert">${esc(moverErro)}</div>` : '';
+  el.innerHTML = `
+    <div class="rot-hist-head">
+      <span class="rot-hist-titulo">Empresa do pedido</span>
+      ${atual ? `<strong>${esc(nome(atual))}</strong>` : ''}
+    </div>
+    ${linhas}
+    <div style="margin-top:${linhas ? '0' : '8px'}">${mover}${erro}</div>`;
+  el.classList.remove('hidden');
+  const alvo = focoId && document.getElementById(focoId);
+  if (alvo) alvo.focus();
+}
+
+function pedirMoverEmpresa(slug) {
+  moverPendente = slug;
+  moverErro = '';
+  desenharRoutingHistory('pvMoverConfirmar');
+}
+
+function cancelarMoverEmpresa() {
+  const slug = moverPendente;
+  moverPendente = null;
+  desenharRoutingHistory('pvMover-' + slug);
+}
+
+async function moverEmpresa(slug) {
+  if (!rotHist) return;
+  const { importId, modo, envs } = rotHist;
+  const btn = document.getElementById('pvMoverConfirmar');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Movendo…'; }
+  try {
+    const res = await fetch('/api/imported/' + encodeURIComponent(importId) + '/mover-empresa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ destino: slug }),
+    });
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      moverErro = typeof body.detail === 'string' ? body.detail : `Não deu para mover o pedido (HTTP ${res.status}).`;
+      moverPendente = null;
+      desenharRoutingHistory('pvMover-' + slug);
+      return;
+    }
+    const nomeDestino = (envs.find(e => e.slug === body.para) || {}).name || body.para;
+    loadImported();
+    if (window.appShell?.showSuccess) window.appShell.showSuccess(`Pedido movido para ${nomeDestino}.`);
+    // Em 'ligado' o pedido abre pela empresa dele: reabre para mostrar o
+    // rastro novo e a conferência do destino. Fora dele a lista é a da
+    // empresa selecionada, de onde o pedido acabou de sair.
+    if (modo === 'ligado') openImportDetail(importId);
+    else closePreviewModal();
+  } catch (err) {
+    moverErro = 'Falha de rede ao mover o pedido. Tente de novo.';
+    moverPendente = null;
+    desenharRoutingHistory('pvMover-' + slug);
+  }
+}
+
 function renderPreview(data) {
   setPreviewLoading(false);
   hidePreviewError();
@@ -3353,6 +3691,7 @@ function renderPreview(data) {
   document.getElementById('pvCustomerCnpj').textContent = h.customer_cnpj || '—';
 
   renderRoutingBanner(data);
+  renderRoutingHistory(data);
 
   // Selo do de-para de cliente intercompany (o Flow recebe o cliente real).
   const dp = data.depara_cliente;
@@ -3777,9 +4116,11 @@ function renderPreviewFooter(data, itemsCount) {
   if (!ps) {
     // Fresh preview from file — save for review
     const precisaEscolher = !!(data.roteamento && data.roteamento.precisa_escolher);
-    const bloqueado = !itemsCount || (precisaEscolher && !routingChoice);
+    const bloqueado = !itemsCount || (precisaEscolher && !routingChoice) || !!routingPendente;
     note.innerHTML = precisaEscolher && !routingChoice
       ? 'Selecione o <strong>ambiente de destino</strong> acima antes de importar.'
+      : routingPendente
+      ? 'Confirme ou desfaça a <strong>troca de empresa</strong> acima antes de importar.'
       : 'Clique em <strong>Importar para revisão</strong>. O pedido não vai para o Fire ainda — você confere o match e envia depois.';
     actions.innerHTML = `
       <button class="btn" onclick="closePreviewModal()">Cancelar</button>
@@ -3841,7 +4182,8 @@ async function commitPreview() {
   try {
     const body = { preview_id: currentPreview.preview_id };
     // Só viaja quando o roteamento pediu escolha (payload.roteamento.
-    // precisa_escolher) — nos outros modos o ambiente é sempre o do cookie.
+    // precisa_escolher) ou o operador confirmou a troca da sugestão
+    // (pode_trocar) — nos outros modos o ambiente é sempre o do cookie.
     if (routingChoice) body.environment_slug = routingChoice;
     // fetch cru (não api()): o 409 de "precisa escolher" carrega um OBJETO
     // em `detail`, não uma string — api() faria `new Error(detail)` virar
