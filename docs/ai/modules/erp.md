@@ -183,7 +183,12 @@ guardado. Envio xlsx/both e export-xlsx recusam com 409 `sem_codigo_fire` ("O pr
 X escolhido para a linha N não tem código no Fire; …") em qualquer modo, só para
 escolha pontual (`_recusa_planilha_pontual`, audit `send_to_fire_blocked` /
 `xlsx_export_blocked`); `db` passa pelo SEQ. Em `ligado` quem trava é o portão
-(`sem_codigo_fire` de `itens_planilha`).
+(`sem_codigo_fire` de `itens_planilha`). **M1:** escolha pontual que o check ao vivo
+marca `vinculo_invalido` (SEQ sumiu ou foi bloqueado no Fire;
+`depara_apply.pontuais_invalidas`) não sai em NENHUM modo nem export_mode, insert
+incluído: 409 `vinculo_invalido` "O produto X escolhido para a linha N não está mais
+ativo no Fire; escolha outro." (mesmo `_recusa_planilha_pontual`, `planilha=False` no
+`db`). Fire fora (`fire_indisponivel`) não recusa.
 `produto_conferencia_incompleta` (topo e `summary`) = `True` quando o vínculo v2
 não pôde ser lido (banco do ambiente fora, intercompany sem resposta). Com
 `env` explícito o vínculo vem de `router.env_connect(env["slug"])`, não do

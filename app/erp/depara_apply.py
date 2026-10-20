@@ -158,6 +158,29 @@ def pontuais_sem_codigo(vinculos: list[dict]) -> list[dict]:
     return [v for v in vinculos if v.get("fonte") == "escolha_pontual" and v.get("sem_codigo_fire")]
 
 
+def pontuais_invalidas(vinculos: list[dict], check: dict | None) -> list[dict]:
+    """Linhas com escolha pontual que o check ao vivo marca `vinculo_invalido`: o
+    SEQ escolhido sumiu ou foi bloqueado no Fire (M1). Não sai em nenhum modo.
+    Fire fora (check sem a decisão, `fire_indisponivel`) não afirma nada."""
+    itens = (check or {}).get("items") or []
+    out: list[dict] = []
+    for v in vinculos:
+        i = v["item_index"]
+        if v.get("fonte") != "escolha_pontual" or not 0 <= i < len(itens):
+            continue
+        produto = (itens[i] or {}).get("produto")
+        if isinstance(produto, dict) and produto.get("estado") == "vinculo_invalido":
+            out.append(v)
+    return out
+
+
+def motivo_pontual_invalida(v: dict) -> str:
+    return (
+        f"O produto {v['fire_produto_id']} escolhido para a linha {v['item_index'] + 1} "
+        "não está mais ativo no Fire; escolha outro."
+    )
+
+
 def motivo_pontual_sem_codigo(v: dict) -> str:
     return (
         f"O produto {v['fire_produto_id']} escolhido para a linha {v['item_index'] + 1} "

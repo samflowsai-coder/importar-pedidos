@@ -713,3 +713,69 @@ def test_ligado_escolha_sem_codigo_trava_planilha_e_passa_no_insert(
         assert {x["estado"] for x in audit["detail"]["produto"]} == {"sem_codigo_fire"}
     else:
         assert recebido["seq"] == {0: 2010, 1: 2010}
+
+
+# ── M1: escolha pontual cujo SEQ ficou bloqueado/sumiu não sai em nenhum modo ──
+
+MOTIVO_ESCOLHA_INATIVA = (
+    "O produto 2010 escolhido para a linha 1 não está mais ativo no Fire; escolha outro."
+)
+
+
+def _check_vivo_escolha_invalida(o, **kw):  # noqa: ARG001
+    return {
+        "available": True,
+        "items": [
+            {
+                "product_code": CODIGO,
+                "produto": {
+                    "estado": "vinculo_invalido",
+                    "fire_seq": None,
+                    "fonte": None,
+                    "motivo": "A escolha desta linha aponta para o produto 2010, que não existe "
+                    "mais ou está bloqueado.",
+                    "candidatos": [],
+                },
+            },
+            {"product_code": CODIGO, "produto": _chave_repetida()},
+        ],
+    }
+
+
+@pytest.mark.parametrize("modo", ["desligado", "observando"])
+@pytest.mark.parametrize("export_mode", ["db", "xlsx", "both"])
+def test_send_recusa_escolha_com_produto_inativo_fora_de_ligado(
+    monkeypatch, tmp_path, modo, export_mode
+):
+    entry_id, recebido = _saida_fora_de_ligado(monkeypatch, tmp_path, modo, export_mode)
+    monkeypatch.setattr(product_check, "check_order", _check_vivo_escolha_invalida)
+
+    r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == MOTIVO_ESCOLHA_INATIVA
+    assert recebido == {}  # nada saiu
+    (audit,) = [a for a in repo.list_audit(entry_id) if a["event_type"] == "send_to_fire_blocked"]
+    assert audit["detail"]["produto"][0]["estado"] == "vinculo_invalido"
+
+
+@pytest.mark.parametrize("modo", ["desligado", "observando"])
+def test_export_xlsx_recusa_escolha_com_produto_inativo(monkeypatch, tmp_path, modo):
+    entry_id, recebido = _saida_fora_de_ligado(monkeypatch, tmp_path, modo, "xlsx")
+    monkeypatch.setattr(product_check, "check_order", _check_vivo_escolha_invalida)
+
+    r = client.post(f"/api/imported/{entry_id}/export-xlsx")
+
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == MOTIVO_ESCOLHA_INATIVA
+    assert "xlsx_itens" not in recebido
+
+
+def test_send_db_com_fire_fora_nao_recusa_a_escolha(monkeypatch, tmp_path):
+    """Fire fora (check indisponível) não afirma que o produto sumiu: segue como hoje."""
+    entry_id, recebido = _saida_fora_de_ligado(monkeypatch, tmp_path, "desligado", "db")
+
+    r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+
+    assert r.status_code == 200, r.text
+    assert recebido["seq"] == {0: 2010}

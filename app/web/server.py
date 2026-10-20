@@ -2503,19 +2503,36 @@ def _saida_do_envio(
 
 
 def _recusa_planilha_pontual(
-    import_id: str, vinculos: list[dict], decisao, audit: str
+    import_id: str, vinculos: list[dict], decisao, audit: str, *, planilha: bool = True
 ) -> tuple[str, str] | None:
-    """R21: linha com escolha pontual cujo produto não tem `CODPROD_ALTERN` não
-    sai em planilha, em nenhum modo (o SEQ em texto seria casado por PREFIXO pelo
-    importador de Excel do Fire). Só a escolha pontual: o v1 de hoje não muda.
-    Muta `vinculos` com o código lido do Fire agora (`decisao.check_vivo`).
-    Devolve (reason, detalhe) e audita `audit`, ou None."""
+    """Escolha pontual que não pode sair, em nenhum modo de `produto_chave_modo`.
+
+    M1 (toda saída, planilha e insert): o check ao vivo marca a linha
+    `vinculo_invalido` — o SEQ escolhido sumiu ou foi bloqueado no Fire.
+    R21 (só com `planilha`): o produto não tem `CODPROD_ALTERN` (o SEQ em texto
+    seria casado por PREFIXO pelo importador de Excel do Fire); muta `vinculos`
+    com o código lido do Fire agora (`decisao.check_vivo`).
+    Só a escolha pontual: o v1 de hoje não muda. Devolve (reason, detalhe) e
+    audita `audit`, ou None."""
     from app.erp import depara_apply
     from app.persistence import repo
 
-    vinculos[:] = depara_apply.codigo_vivo_das_escolhas(
-        vinculos, getattr(decisao, "check_vivo", None)
-    )
+    check_vivo = getattr(decisao, "check_vivo", None)
+    invalidas = depara_apply.pontuais_invalidas(vinculos, check_vivo)
+    if invalidas:
+        itens = [
+            {
+                "index": v["item_index"],
+                "estado": "vinculo_invalido",
+                "motivo": depara_apply.motivo_pontual_invalida(v),
+            }
+            for v in invalidas
+        ]
+        repo.append_audit(import_id, audit, {"produto": itens})
+        return "vinculo_invalido", itens[0]["motivo"]
+    if not planilha:
+        return None
+    vinculos[:] = depara_apply.codigo_vivo_das_escolhas(vinculos, check_vivo)
     sem_codigo = depara_apply.pontuais_sem_codigo(vinculos)
     if not sem_codigo:
         return None
@@ -2626,10 +2643,15 @@ def _send_one_to_fire(
     vinculos, produtos_por_item = _saida_do_envio(
         decisao, order, "envio", vinculos, produtos_por_item, entry
     )
-    if export_mode in ("xlsx", "both"):
-        recusa = _recusa_planilha_pontual(import_id, vinculos, decisao, "send_to_fire_blocked")
-        if recusa is not None:
-            return _FireSendOutcome(False, reason=recusa[0], http_status=409, detail=recusa[1])
+    recusa = _recusa_planilha_pontual(
+        import_id,
+        vinculos,
+        decisao,
+        "send_to_fire_blocked",
+        planilha=export_mode in ("xlsx", "both"),
+    )
+    if recusa is not None:
+        return _FireSendOutcome(False, reason=recusa[0], http_status=409, detail=recusa[1])
 
     # Reuse the trace_id minted on commit so logs across commit→send-to-fire
     # are correlated for the same pedido.
