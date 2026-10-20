@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import os
 import re
 import shutil
@@ -2642,6 +2643,23 @@ def _registrar_aplicados(import_id: str, decisao) -> None:
         logger.warning(f"audit preco_aplicado falhou ({type(exc).__name__}): {exc}")
 
 
+def _com_trava_do_pedido(fn):
+    """Envio que leva o pedido para fora do Portal segura a trava do pedido da
+    leitura do estado até gravar o resultado: o mover de empresa não corre no
+    meio (`mover_pedido.trava_do_pedido`). Pedido movido antes de a trava sair
+    some desta empresa: a leitura devolve `not_found` sem ir ao Fire."""
+
+    @functools.wraps(fn)
+    def _com_trava(import_id: str, *args, **kwargs):
+        from app.persistence.mover_pedido import trava_do_pedido
+
+        with trava_do_pedido(import_id):
+            return fn(import_id, *args, **kwargs)
+
+    return _com_trava
+
+
+@_com_trava_do_pedido
 def _send_one_to_fire(
     import_id: str, cfg: dict, *, request_env: dict | None = None
 ) -> _FireSendOutcome:
@@ -2885,6 +2903,7 @@ class _XlsxExportOutcome:
         self.detail = detail
 
 
+@_com_trava_do_pedido
 def _export_one_xlsx(
     import_id: str, cfg: dict, *, request_env: dict | None = None
 ) -> _XlsxExportOutcome:
@@ -4478,8 +4497,10 @@ def mover_pedido_de_empresa(
     refaz. Só fora de `desligado`."""
     from app.erp import preco_trava, product_check
     from app.models.order import Order
+    from app.persistence import decisao_ambiente_repo as memoria
     from app.persistence import environments_repo, repo, roteamento_decisao_repo, roteamento_repo
-    from app.persistence.mover_pedido import PedidoNaoMovivel, mover_import
+    from app.persistence.mover_pedido import PedidoNaoMovivel, PedidoOcupado, mover_import
+    from app.routing.ambiente import cnpjs_do_pedido
     from app.utils.logger import logger
 
     modo = roteamento_repo.modo()
@@ -4509,11 +4530,17 @@ def mover_pedido_de_empresa(
             {"detail": f"O pedido não pode mudar de empresa: {exc.motivo}.", "motivo": exc.motivo},
             status_code=409,
         )
+    except PedidoOcupado:
+        return JSONResponse(
+            {"detail": "O pedido está sendo enviado agora; tente de novo em instantes."},
+            status_code=409,
+        )
 
     resposta = {"import_id": import_id, "de": origem["slug"], "para": destino["slug"]}
     if not movido:  # outro clique já moveu: nada a refazer nem registrar
         return JSONResponse(resposta)
 
+    order = None
     with env_context.active_env(destino["id"], destino["slug"]):
         try:
             entry = repo.get_import(import_id)
@@ -4535,7 +4562,13 @@ def mover_pedido_de_empresa(
                 type(exc).__name__,
             )
 
-    ultima = roteamento_decisao_repo.ultima(import_id)
+    try:
+        ultima = roteamento_decisao_repo.ultima(import_id)
+    except Exception as exc:  # noqa: BLE001 — o mover já foi gravado; o rastro sai sem sugestão
+        logger.warning(
+            "mover.ultima_decisao_falhou import_id={} erro={}", import_id, type(exc).__name__
+        )
+        ultima = None
     roteamento_decisao_repo.registrar(
         import_id=import_id,
         modo=modo,
@@ -4546,6 +4579,17 @@ def mover_pedido_de_empresa(
         motivo=f"movido de {origem['slug']} para {destino['slug']}",
         acao="movido_apos_importar",
     )
+    # A memória aprende com o operador, como na troca do preview (só em
+    # 'ligado'; em 'observando' nada aprende, para a taxa medir o roteador).
+    if modo == roteamento_repo.LIGADO and order is not None:
+        try:
+            cnpj_cliente = (cnpjs_do_pedido(order) or [""])[0]
+            if cnpj_cliente:
+                memoria.lembrar(cnpj_cliente=cnpj_cliente, env_slug=destino["slug"], por=user.email)
+        except Exception as exc:  # noqa: BLE001 — memória não derruba um mover já gravado
+            logger.warning(
+                "mover.memoria_falhou import_id={} erro={}", import_id, type(exc).__name__
+            )
     return JSONResponse(resposta)
 
 

@@ -535,3 +535,181 @@ def test_rota_conclui_mover_interrompido(client_ligado, envs_mm_nasmar, check_fa
     assert r.status_code == 200
     assert _linha("mm") == []
     assert len(_linha("nasmar")) == 1
+
+
+# ── Fix round 1: trava por pedido, inversão, rastro e memória ────────────────
+
+
+def test_mover_desiste_quando_envio_segura_o_pedido(envs_mm_nasmar, monkeypatch):
+    _semear(envs_mm_nasmar["mm"])
+    monkeypatch.setattr(mp, "_ESPERA_S", 0.05)
+    with mp.trava_do_pedido(IMPORT_ID), pytest.raises(mp.PedidoOcupado):
+        _mover(envs_mm_nasmar)
+    _nada_mudou(envs_mm_nasmar)
+    assert mp._TRAVAS == {}
+
+
+def test_envio_que_ganhou_fire_codigo_barra_o_mover_que_esperava(envs_mm_nasmar):
+    """O envio segura a trava e grava fire_codigo; o mover, que esperava, vê
+    o número do Fire na guarda e não move."""
+    import threading
+
+    _semear(envs_mm_nasmar["mm"])
+    resultado = {}
+
+    def _mover_em_thread():
+        try:
+            _mover(envs_mm_nasmar)
+        except Exception as exc:  # noqa: BLE001
+            resultado["exc"] = exc
+
+    with mp.trava_do_pedido(IMPORT_ID):
+        t = threading.Thread(target=_mover_em_thread)
+        t.start()
+        t.join(0.2)
+        assert t.is_alive()  # esperando a trava
+        with router.env_connect("mm") as conn:
+            conn.execute("UPDATE imports SET fire_codigo = 5083 WHERE id = ?", (IMPORT_ID,))
+    t.join(5)
+
+    assert isinstance(resultado["exc"], mp.PedidoNaoMovivel)
+    assert resultado["exc"].motivo == "já foi para o Fire"
+    assert _linha("mm")[0]["fire_codigo"] == 5083
+    assert _linha("nasmar") == []
+
+
+@pytest.mark.parametrize("envio", ["_send_one_to_fire", "_export_one_xlsx"])
+def test_envio_espera_o_mover_e_recusa_pedido_que_saiu_da_empresa(
+    envs_mm_nasmar, monkeypatch, envio
+):
+    """O mover segura a trava; o envio espera e, ao pegar a trava, não acha mais
+    o pedido nesta empresa: recusa sem ir ao Fire nem gerar planilha."""
+    import threading
+
+    from app.exporters import erp_exporter, firebird_exporter
+    from app.persistence import context as env_context
+    from app.web import server
+
+    def _proibido(*a, **kw):
+        raise AssertionError("não pode ir ao Fire/planilha")
+
+    monkeypatch.setattr(firebird_exporter, "FirebirdExporter", _proibido)
+    monkeypatch.setattr(erp_exporter, "ERPExporter", _proibido)
+    _semear(envs_mm_nasmar["mm"])
+    dentro, libera = threading.Event(), threading.Event()
+    real = mp._copiar_no_destino
+
+    def _copiar_devagar(*a, **kw):
+        dentro.set()
+        libera.wait(5)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(mp, "_copiar_no_destino", _copiar_devagar)
+    mm = envs_mm_nasmar["mm"]
+    saida = {}
+
+    def _enviar():
+        with env_context.active_env(mm["id"], mm["slug"]):
+            saida["r"] = getattr(server, envio)(IMPORT_ID, {"export_mode": "db"}, request_env=mm)
+
+    m = threading.Thread(target=lambda: _mover(envs_mm_nasmar))
+    m.start()
+    assert dentro.wait(5)
+    e = threading.Thread(target=_enviar)
+    e.start()
+    e.join(0.2)
+    assert e.is_alive()  # o envio espera o mover
+    libera.set()
+    m.join(5)
+    e.join(5)
+
+    assert saida["r"].ok is False
+    assert saida["r"].reason == "not_found"
+    assert _linha("mm") == []
+    assert len(_linha("nasmar")) == 1
+    assert mp._TRAVAS == {}
+
+
+def test_rota_409_quando_o_pedido_esta_sendo_enviado(client_ligado, envs_mm_nasmar, monkeypatch):
+    _semear(envs_mm_nasmar["mm"])
+    monkeypatch.setattr(mp, "_ESPERA_S", 0.05)
+    with mp.trava_do_pedido(IMPORT_ID):
+        r = _post(client_ligado)
+    assert r.status_code == 409
+    assert "sendo enviado agora" in r.json()["detail"]
+    _nada_mudou(envs_mm_nasmar)
+
+
+def test_mandar_de_volta_na_janela_do_interrompido_registra_a_volta(envs_mm_nasmar, monkeypatch):
+    """mm→nasmar interrompido (pedido nos dois); o operador manda de nasmar para
+    mm: o pedido fica na mm e o último "movido" diz nasmar→mm."""
+    _semear(envs_mm_nasmar["mm"])
+    real = mp._apagar_na_origem
+    monkeypatch.setattr(mp, "_apagar_na_origem", lambda conn, import_id: 1 / 0)  # noqa: ARG005
+    with pytest.raises(ZeroDivisionError):
+        _mover(envs_mm_nasmar)
+    monkeypatch.setattr(mp, "_apagar_na_origem", real)
+
+    assert _mover(envs_mm_nasmar, de="nasmar", para="mm") is True
+
+    assert _linha("nasmar") == []
+    assert len(_linha("mm")) == 1
+    movidos = [
+        json.loads(a["detail_json"])
+        for a in _linha("mm", "audit_log", "import_id")
+        if a["event_type"] == "movido_de_empresa"
+    ]
+    assert movidos[-1] == {"de": "nasmar", "para": "mm", "por": "ana@mm"}
+
+
+def test_rota_ultima_decisao_falha_registra_sem_sugestao(
+    client_ligado, envs_mm_nasmar, check_falso, monkeypatch
+):
+    from app.persistence import roteamento_decisao_repo
+
+    _semear(envs_mm_nasmar["mm"])
+    real = roteamento_decisao_repo.ultima
+
+    def _explode(import_id):  # noqa: ARG001
+        raise RuntimeError("shared travado")
+
+    monkeypatch.setattr(roteamento_decisao_repo, "ultima", _explode)
+    assert _post(client_ligado).status_code == 200
+    monkeypatch.setattr(roteamento_decisao_repo, "ultima", real)
+    ultima = roteamento_decisao_repo.ultima(IMPORT_ID)
+    assert ultima["acao"] == "movido_apos_importar"
+    assert ultima["env_sugerido"] is None
+
+
+def test_rota_em_ligado_ensina_a_memoria(client_ligado, envs_mm_nasmar, check_falso):
+    from app.persistence import decisao_ambiente_repo
+
+    _semear(envs_mm_nasmar["mm"])
+    assert _post(client_ligado).status_code == 200
+    lembrada = decisao_ambiente_repo.lembrada("11222333000181")
+    assert lembrada["env_slug"] == "nasmar"
+    assert lembrada["decidido_por"] == "test@portal.local"
+
+
+def test_rota_em_observando_nao_ensina_a_memoria(client, envs_mm_nasmar, check_falso):
+    from app.persistence import decisao_ambiente_repo
+
+    roteamento_repo.set_modo("observando", por="t")
+    _semear(envs_mm_nasmar["mm"])
+    assert _post(client).status_code == 200
+    assert decisao_ambiente_repo.lembrada("11222333000181") is None
+
+
+def test_rota_falha_da_memoria_nao_derruba_o_mover(
+    client_ligado, envs_mm_nasmar, check_falso, monkeypatch
+):
+    from app.persistence import decisao_ambiente_repo
+
+    def _explode(**kw):  # noqa: ARG001
+        raise RuntimeError("shared travado")
+
+    monkeypatch.setattr(decisao_ambiente_repo, "lembrar", _explode)
+    _semear(envs_mm_nasmar["mm"])
+    assert _post(client_ligado).status_code == 200
+    assert _linha("mm") == []
+    assert len(_linha("nasmar")) == 1

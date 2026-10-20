@@ -17,6 +17,13 @@ nela no meio. Ordem: copiar no destino (commit) e só então apagar na origem.
 Interrompido no meio, o pedido fica nos dois e a próxima chamada conclui — a
 cópia é idempotente (INSERT OR IGNORE; audit e eventos sem repetir). Se na
 janela a origem saiu do Portal, a cópia do destino é desfeita: nunca dois.
+
+`trava_do_pedido` é a trava por pedido do processo (o web roda num processo
+só), dividida entre o mover e tudo que leva o pedido para fora do Portal
+(envio ao Fire, export XLSX — `app/web/server.py`): o envio a segura da
+leitura do estado até gravar `fire_codigo`/`output_files`, e o mover da guarda
+até apagar a origem. Sem ela, um mover na janela do envio (segundos no Fire)
+passava pela guarda e o pedido ficava no Fire da origem e em revisão no destino.
 """
 
 from __future__ import annotations
@@ -25,15 +32,21 @@ import json
 import sqlite3
 import threading
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
 from app.persistence import router
 from app.utils.logger import logger
 
-# Um mover por vez no processo: dois cliques no mesmo pedido não correm um
-# contra o outro (o segundo encontra o pedido já movido e não faz nada).
-_lock = threading.Lock()
+# Trava por import_id (padrão de `app/reconcile/runner.py::_lock_for`), com
+# contagem de quem a usa para o dicionário não crescer sem fim.
+_TRAVAS: dict[str, list[Any]] = {}  # import_id -> [Lock, usuários]
+_TRAVAS_GUARD = threading.Lock()
+
+# Quanto o mover espera um envio em andamento antes de desistir (409).
+_ESPERA_S = 2.0
 
 # Colunas de `imports` derivadas do Fire/empresa de origem: nascem NULL no destino.
 _ZERADAS_NO_DESTINO = (
@@ -71,6 +84,32 @@ _APAGADAS_NA_ORIGEM = (
 
 _AUDIT_COLS = ("event_type", "detail_json", "created_at")
 _EVENTO_COLS = ("event_type", "source", "payload_json", "trace_id", "occurred_at", "ingested_at")
+
+
+class PedidoOcupado(Exception):  # noqa: N818 — par de PedidoNaoMovivel
+    """O pedido está sendo enviado agora (trava ocupada além da espera)."""
+
+
+@contextmanager
+def trava_do_pedido(import_id: str, *, espera: float | None = None) -> Iterator[None]:
+    """Exclusão mútua por pedido entre mover e envio. `espera=None` espera o
+    quanto for (o envio: o mover é curto); com espera, `PedidoOcupado` ao estourar."""
+    with _TRAVAS_GUARD:
+        par = _TRAVAS.setdefault(import_id, [threading.Lock(), 0])
+        par[1] += 1
+    obteve = False
+    try:
+        obteve = par[0].acquire(timeout=-1 if espera is None else espera)
+        if not obteve:
+            raise PedidoOcupado(import_id)
+        yield
+    finally:
+        if obteve:
+            par[0].release()
+        with _TRAVAS_GUARD:
+            par[1] -= 1
+            if par[1] == 0:
+                _TRAVAS.pop(import_id, None)
 
 
 class PedidoNaoMovivel(Exception):  # noqa: N818 — nome do contrato do plano
@@ -160,20 +199,25 @@ def _copiar_no_destino(
     ).fetchall()
     with router.env_connect(destino["slug"]) as dconn:
         dconn.execute("BEGIN IMMEDIATE")
-        novo = (
-            dconn.execute(
-                f"INSERT OR IGNORE INTO imports ({', '.join(linha)})"  # noqa: S608
-                f" VALUES ({', '.join('?' * len(linha))})",
-                tuple(linha.values()),
-            ).rowcount
-            == 1
+        dconn.execute(
+            f"INSERT OR IGNORE INTO imports ({', '.join(linha)})"  # noqa: S608
+            f" VALUES ({', '.join('?' * len(linha))})",
+            tuple(linha.values()),
         )
         _copiar_faltantes(dconn, "audit_log", _AUDIT_COLS, audit, iid, destino["id"])
         _copiar_faltantes(
             dconn, "order_lifecycle_events", _EVENTO_COLS, eventos, iid, destino["id"]
         )
-        if novo:
-            # Na mesma transação da linha: uma vez por mover, mesmo se interrompido.
+        # Na mesma transação da linha, e só se o último "movido" do destino não
+        # for este mesmo mover: concluir um mover interrompido não repete, e
+        # mandar de volta na janela (pedido nos dois) registra a volta.
+        ultimo = dconn.execute(
+            "SELECT detail_json FROM audit_log WHERE import_id = ?"
+            " AND event_type = 'movido_de_empresa' ORDER BY id DESC LIMIT 1",
+            (iid,),
+        ).fetchone()
+        ultimo_mover = json.loads(ultimo[0]) if ultimo and ultimo[0] else {}
+        if (ultimo_mover.get("de"), ultimo_mover.get("para")) != (origem["slug"], destino["slug"]):
             dconn.execute(
                 "INSERT INTO audit_log (environment_id, import_id, event_type, detail_json,"
                 " created_at) VALUES (?, ?, 'movido_de_empresa', ?, ?)",
@@ -196,6 +240,7 @@ def _apagar_pedido(conn: sqlite3.Connection, import_id: str) -> None:
 
 
 def _apagar_na_origem(conn: sqlite3.Connection, import_id: str) -> None:
+    # Existe separado de `_apagar_pedido` só como ponto de monkeypatch dos testes.
     _apagar_pedido(conn, import_id)
 
 
@@ -221,8 +266,12 @@ def mover_import(
     import_id: str, *, origem: dict[str, Any], destino: dict[str, Any], por: str
 ) -> bool:
     """Move o pedido de `origem` para `destino`. True = moveu agora; False = já
-    estava movido (só no destino). `PedidoNaoMovivel` = nada mudou na origem."""
-    with _lock, router.env_connect(origem["slug"]) as oconn:
+    estava movido (só no destino). `PedidoNaoMovivel` = nada mudou na origem.
+    `PedidoOcupado` = um envio segura o pedido além de `_ESPERA_S`; nada mudou."""
+    with (
+        trava_do_pedido(import_id, espera=_ESPERA_S),
+        router.env_connect(origem["slug"]) as oconn,
+    ):
         oconn.execute("BEGIN IMMEDIATE")
         row = oconn.execute("SELECT * FROM imports WHERE id = ?", (import_id,)).fetchone()
         if row is None:
