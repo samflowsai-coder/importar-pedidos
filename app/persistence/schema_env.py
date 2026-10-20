@@ -190,6 +190,26 @@ CREATE TABLE IF NOT EXISTS produto_depara (
     UNIQUE (client_key, chave_tipo, chave_valor)
 );
 
+-- De-para v2: vínculo da chave EXATA do varejista (código ou EAN) a um produto do
+-- Fire (SEQ), por escopo ('rede:<id>' ou 'raiz:<8 dígitos do CNPJ>'). Nunca é
+-- apagado: revogar grava revogado_em/revogado_por. Só um vínculo vigente por
+-- (escopo, chave) — índice único parcial em INDEXES_SQL.
+CREATE TABLE IF NOT EXISTS produto_vinculo_v2 (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    escopo         TEXT NOT NULL,
+    chave_tipo     TEXT NOT NULL CHECK (chave_tipo IN ('codigo','ean')),
+    chave_valor    TEXT NOT NULL,
+    fire_seq       INTEGER NOT NULL,
+    fire_codigo    TEXT,
+    fire_descricao TEXT NOT NULL,
+    origem         TEXT NOT NULL CHECK (origem IN ('manual','migrado_v1')),
+    pedido_id      TEXT,
+    criado_em      TEXT NOT NULL,
+    criado_por     TEXT,
+    revogado_em    TEXT,
+    revogado_por   TEXT
+);
+
 -- ── SP1: transporte de pedidos do ERP para o Flow (docs/ai/modules/erp_eventos.md) ──
 -- Nomes pelo papel (P-PROD-08): erp_*, base. Nenhuma tabela aqui tem FK para
 -- imports: pedido do ERP existe sem ter passado pelo Portal.
@@ -465,6 +485,8 @@ CREATE INDEX IF NOT EXISTS idx_imports_fire_poll
     WHERE fire_codigo IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_depara_client ON produto_depara(client_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_vinculo_v2_vigente
+    ON produto_vinculo_v2 (escopo, chave_tipo, chave_valor) WHERE revogado_em IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_erp_item_vinculo_import ON erp_item_vinculo(import_id, indice_original);
 CREATE INDEX IF NOT EXISTS idx_erp_xlsx_linha_pedido   ON erp_xlsx_linha(pedido_cliente);
