@@ -96,6 +96,11 @@ def salvar_rede(
     nome = nome.strip()
     if not nome:
         raise ValueError("nome da rede é obrigatório")
+    # Rede sem chave com a regra ligada faria os pedidos dela caírem na regra
+    # por UF em silêncio (Riachuelo de fora de SP indo para a outra empresa).
+    cfg = config()
+    if not chaves and cfg and cfg["ativa"]:
+        raise ValueError("Com a regra ligada, toda rede precisa de ao menos uma chave.")
     norm: list[tuple[str, str]] = []
     for tipo, chave in chaves:
         if tipo not in _TAMANHO:
@@ -163,4 +168,7 @@ def politica() -> Politica | None:
         )
         for r in listar_redes()
     )
-    return Politica(env_sp=cfg["env_sp"], env_fora_sp=cfg["env_fora_sp"], redes=redes)
+    nomes = {e["slug"]: e["name"] for e in environments_repo.list_active()}
+    return Politica(
+        env_sp=cfg["env_sp"], env_fora_sp=cfg["env_fora_sp"], redes=redes, nomes=nomes
+    )

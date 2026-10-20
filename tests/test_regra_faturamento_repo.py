@@ -118,3 +118,18 @@ def test_politica_monta_redes_com_raizes_e_cnpjs(shared_db, envs_mm_nasmar):
     assert sams.cnpjs == frozenset(SAMS_CNPJS) and sams.raizes == frozenset()
     cent = next(r for r in p.redes if r.nome == "Centauro")
     assert cent.raizes == frozenset({"06347409"}) and cent.env_slug == "mm"
+
+
+def test_politica_leva_o_nome_das_empresas(shared_db, envs_mm_nasmar):
+    repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=True, por="a@x")
+    assert repo.politica().nomes == {"mm": "MM", "nasmar": "NASMAR"}
+
+
+def test_com_regra_ligada_rede_nao_fica_sem_chave(shared_db, envs_mm_nasmar):
+    repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=True, por="a@x")
+    rid = _rede("Kallan")["id"]
+    with pytest.raises(ValueError, match="Com a regra ligada, toda rede precisa de ao menos uma chave."):
+        repo.salvar_rede(nome="Kallan", env_slug="mm", chaves=[], por="a@x", rede_id=rid)
+    assert _rede("Kallan")["chaves"] == [{"tipo": "raiz", "chave": "51540219"}]
+    with pytest.raises(ValueError, match="ao menos uma chave"):
+        repo.salvar_rede(nome="Nova", env_slug="mm", chaves=[], por="a@x")

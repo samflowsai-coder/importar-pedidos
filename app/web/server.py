@@ -4666,6 +4666,15 @@ def rehydrate_preview(
     # na linha da caixa somada, mas some ao abrir o modal, que é a tela onde
     # o operador decide gravar. Ver Menor 1 do lote 2.
     payload["env_name"] = _env.get("name") if _env is not None else None
+    # Empresa onde o pedido está (a do pedido em 'ligado', senão a do cookie)
+    # e se o "Mover para" pode ser oferecido: mesma guarda do mover, para a
+    # tela não prometer o que a rota recusa (ex.: XLSX já exportado).
+    from app.persistence.mover_pedido import motivo_nao_move
+
+    _onde = _env if _env is not None else _request_environment(request)
+    payload["env_slug"] = _onde.get("slug") if _onde is not None else None
+    payload["motivo_nao_move"] = motivo_nao_move(import_id)
+    payload["pode_mover"] = payload["motivo_nao_move"] is None
 
     # Surface the manual cliente override into the check banner so the UI shows
     # it in green instead of the original "✗ Cliente não encontrado" red flag.

@@ -159,6 +159,17 @@ def _motivo(conn: sqlite3.Connection, row: sqlite3.Row) -> str | None:
     return None
 
 
+def motivo_nao_move(import_id: str) -> str | None:
+    """A mesma guarda do mover (`_motivo`), lida na empresa ativa: o detalhe
+    só oferece "Mover" quando o mover aceitaria. `None` = pode mover (ou o
+    pedido não está aqui — aí o próprio mover responde)."""
+    from app.persistence import db
+
+    with db.connect() as conn:
+        row = conn.execute("SELECT * FROM imports WHERE id = ?", (import_id,)).fetchone()
+        return _motivo(conn, row) if row is not None else None
+
+
 def _copiar_faltantes(
     dconn: sqlite3.Connection,
     tabela: str,

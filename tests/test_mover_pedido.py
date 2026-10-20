@@ -775,3 +775,31 @@ def test_rota_pedido_ilegivel_no_destino_move_sem_check_nem_memoria(
     assert _linha("nasmar")[0]["check_json"] is None
     assert check_falso["check"] == []
     assert decisao_ambiente_repo.lembrada("11222333000181") is None
+
+
+def _detalhe(c):
+    r = c.get(f"/api/imported/{IMPORT_ID}/preview")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_detalhe_expoe_empresa_e_pode_mover(client_ligado, envs_mm_nasmar):
+    _semear(envs_mm_nasmar["mm"])
+    body = _detalhe(client_ligado)
+    assert body["env_slug"] == "mm"
+    assert body["pode_mover"] is True
+    assert body["motivo_nao_move"] is None
+
+
+@pytest.mark.parametrize(
+    ("cols", "motivo"),
+    [
+        ({"output_files_json": '["PEDIDO.xlsx"]'}, "já foi exportado em XLSX"),
+        ({"fire_codigo": 5083}, "já foi para o Fire"),
+    ],
+)
+def test_detalhe_usa_a_mesma_guarda_do_mover(client_ligado, envs_mm_nasmar, cols, motivo):
+    _semear(envs_mm_nasmar["mm"], **cols)
+    body = _detalhe(client_ligado)
+    assert body["pode_mover"] is False
+    assert body["motivo_nao_move"] == motivo

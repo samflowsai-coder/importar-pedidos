@@ -141,3 +141,11 @@ def test_operador_comum_nao_escreve_mas_le(real_client, real_auth):
     assert real_client.post(f"{BASE}/redes", json=REDE).status_code == 403
     assert real_client.put(f"{BASE}/redes/1", json=REDE).status_code == 403
     assert real_client.delete(f"{BASE}/redes/1").status_code == 403
+
+
+def test_rede_sem_chave_com_regra_ligada_e_400(client):
+    assert client.put(BASE, json={"env_sp": "mm", "env_fora_sp": "nasmar", "ativa": True}).status_code == 200
+    rid = next(r["id"] for r in repo.listar_redes() if r["nome"] == "Kallan")
+    r = client.put(f"{BASE}/redes/{rid}", json={"nome": "Kallan", "env_slug": "mm", "chaves": []})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Com a regra ligada, toda rede precisa de ao menos uma chave."

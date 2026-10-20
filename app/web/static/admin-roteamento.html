@@ -187,6 +187,10 @@
     @media (max-width: 640px) { .regra-grid { grid-template-columns: 1fr; } }
     .regra-field { display: flex; flex-direction: column; gap: 6px; }
     .regra-label { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+    .regra-empresas-acoes {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      margin: -4px 0 18px; padding-bottom: 18px; border-bottom: 1px solid var(--border-subtle);
+    }
 
     .regra-toggle-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
     .toggle {
@@ -308,6 +312,11 @@
             <span class="regra-label">Pedidos de fora de SP faturam por</span>
             <select id="regra-fora" class="regra-ctl" onchange="onRegraEmpresaChange()"></select>
           </label>
+        </div>
+        <div class="regra-empresas-acoes">
+          <button type="button" class="btn btn-primary" id="regra-salvar-empresas" disabled
+                  onclick="salvarEmpresas()">Salvar empresas</button>
+          <span class="regra-meta" id="regra-empresas-meta" aria-live="polite"></span>
         </div>
         <div class="regra-toggle-row">
           <button type="button" id="regra-switch" class="toggle" role="switch" aria-checked="false"
@@ -688,10 +697,14 @@
     }
   }
 
-  function renderRegraConfig() {
+  // `manterSelecao`: o switch salva com as empresas GRAVADAS e não pode
+  // jogar fora uma troca de empresas que o admin ainda não salvou.
+  function renderRegraConfig(manterSelecao) {
     const cfg = regra.config;
-    $('regra-sp').innerHTML = empresaOptions(cfg && cfg.env_sp, !cfg);
-    $('regra-fora').innerHTML = empresaOptions(cfg && cfg.env_fora_sp, !cfg);
+    const sp = (manterSelecao && $('regra-sp').value) || (cfg && cfg.env_sp);
+    const fora = (manterSelecao && $('regra-fora').value) || (cfg && cfg.env_fora_sp);
+    $('regra-sp').innerHTML = empresaOptions(sp, !sp);
+    $('regra-fora').innerHTML = empresaOptions(fora, !fora);
     $('regra-sp').disabled = !isAdmin;
     $('regra-fora').disabled = !isAdmin;
     const ligada = !!(cfg && cfg.ativa);
@@ -703,6 +716,7 @@
     else if (!cfg) meta = 'Escolha as duas empresas para poder ligar.';
     else meta = `${ligada ? 'Ligada' : 'Desligada'} · alterada por ${cfg.alterado_por} ${timeAgo(cfg.alterado_em)}`;
     $('regra-meta').textContent = meta;
+    onRegraEmpresaChange();
   }
 
   function mostrarRegraErro(msg) {
@@ -710,9 +724,9 @@
     $('regra-erro').hidden = !msg;
   }
 
-  async function salvarRegraConfig(ativa) {
-    const env_sp = $('regra-sp').value;
-    const env_fora_sp = $('regra-fora').value;
+  // As duas empresas vão juntas ("Salvar empresas"): salvar a cada `change`
+  // mudava o roteamento na hora e não deixava trocar SP e fora entre si.
+  async function salvarRegraConfig({ env_sp, env_fora_sp, ativa }) {
     if (!env_sp || !env_fora_sp || salvandoRegra) return;
     mostrarRegraErro('');
     // Ocupado sem `disabled`: desabilitar o botão com foco joga o foco
@@ -729,21 +743,25 @@
       if (r.status === 401) { location.href = '/login'; return; }
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        // Volta os controles para o que está gravado: o erro diz o porquê.
-        renderRegraConfig();
+        // O switch volta ao gravado; a seleção de empresas fica para corrigir.
+        renderRegraConfig(true);
         mostrarRegraErro(typeof data.detail === 'string' ? data.detail : `Falha ao salvar a regra (${r.status}).`);
         return;
       }
       const antes = regra.config ? regra.config.ativa : data.config.ativa;
       regra.config = data.config;
-      renderRegraConfig();
+      // O "Salvar empresas" fica desabilitado depois de salvar: o foco vai
+      // para o switch, o próximo passo, em vez de cair no <body>.
+      if (document.activeElement === $('regra-salvar-empresas')) $('regra-switch').focus();
+      renderRegraConfig(true);
+      renderRedes();
       if (window.appShell) {
         window.appShell.showSuccess(antes === data.config.ativa
           ? 'Empresas da regra salvas.'
           : (data.config.ativa ? 'Regra comercial ligada.' : 'Regra comercial desligada.'));
       }
     } catch (e) {
-      renderRegraConfig();
+      renderRegraConfig(true);
       mostrarRegraErro('Falha de rede ao salvar a regra.');
     } finally {
       salvandoRegra = false;
@@ -752,14 +770,28 @@
   }
 
   function onRegraEmpresaChange() {
-    if ($('regra-sp').value && $('regra-fora').value) {
-      salvarRegraConfig(!!(regra.config && regra.config.ativa));
-    }
+    const cfg = regra.config;
+    const sp = $('regra-sp').value;
+    const fora = $('regra-fora').value;
+    const mudou = !cfg || sp !== cfg.env_sp || fora !== cfg.env_fora_sp;
+    $('regra-salvar-empresas').disabled = !isAdmin || !sp || !fora || !mudou;
+    $('regra-salvar-empresas').hidden = !isAdmin;
+    $('regra-empresas-meta').textContent = isAdmin && cfg && mudou && sp && fora
+      ? 'Alterações não salvas: o roteamento usa as empresas gravadas até salvar.' : '';
+  }
+
+  function salvarEmpresas() {
+    salvarRegraConfig({
+      env_sp: $('regra-sp').value,
+      env_fora_sp: $('regra-fora').value,
+      ativa: !!(regra.config && regra.config.ativa),
+    });
   }
 
   function onRegraSwitch() {
-    if (!regra.config) return;
-    salvarRegraConfig(!regra.config.ativa);
+    const cfg = regra.config;
+    if (!cfg) return;
+    salvarRegraConfig({ env_sp: cfg.env_sp, env_fora_sp: cfg.env_fora_sp, ativa: !cfg.ativa });
   }
 
   function chavesHtml(id) {
@@ -791,7 +823,11 @@
   function redeHtml(rd) {
     const ed = redeEdit[rd.id];
     const dis = isAdmin ? '' : 'disabled';
-    const algumaInvalida = ed.chaves.some((c) => c.chave === '' || chaveInvalida(c));
+    // Com a regra ligada, rede sem chave faria os pedidos dela irem pela UF
+    // em silêncio: o servidor recusa e a tela nem oferece.
+    const ligada = !!(regra.config && regra.config.ativa);
+    const algumaInvalida = ed.chaves.some((c) => c.chave === '' || chaveInvalida(c))
+      || (ligada && !ed.chaves.length);
     const status = ed.salvando ? 'Salvando…' : (ed.dirty ? 'Alterações não salvas' : '');
     return `
       <div class="rede" id="rede-${rd.id}">
@@ -802,7 +838,9 @@
           </label>
         </div>
         <div class="chaves" id="chaves-${rd.id}">${chavesHtml(rd.id)}</div>
-        ${ed.chaves.length ? '' : '<p class="rede-aviso">Sem chave: a regra não liga.</p>'}
+        ${ed.chaves.length ? '' : `<p class="rede-aviso">${ligada
+          ? 'Sem chave: os pedidos desta rede vão pela UF.'
+          : 'Sem chave: a regra não liga.'}</p>`}
         <div class="rede-acoes">
           ${isAdmin ? `<button type="button" class="link-btn" id="add-chave-${rd.id}" onclick="adicionarChave(${rd.id})">+ Adicionar chave</button>` : ''}
           <span class="spacer"></span>

@@ -1952,6 +1952,7 @@ async function openImportDetail(importId, opts) {
   currentPreview = null;
   routingChoice = null;
   routingPendente = null;
+  rotHist = null;
   showPreviewModal();
   setPreviewLoading(true, 'Carregando pedido…', '');
   hidePreviewError();
@@ -3343,6 +3344,7 @@ function renderRoutingBanner(data) {
             ${options}
           </select>
         </div>
+        ${routingNotaConferencia(routingChoice, nomeDoAmbiente)}
       </div>`;
   } else if (rot.pode_trocar) {
     renderRoutingTroca(el, rot, opcoes, nomeDoAmbiente);
@@ -3389,7 +3391,19 @@ function renderRoutingBanner(data) {
 
 function onRoutingChoiceChange(slug) {
   routingChoice = slug || null;
-  if (currentPreview) renderPreviewFooter(currentPreview, (currentPreview.items || []).length);
+  rerenderRoutingBanner('pvRoutingSelect');
+}
+
+// R8: o check do preview é o do Fire da empresa selecionada (cookie); em
+// 'ligado' o commit confere de novo no Fire do destino quando ele é outro
+// — com sugestão ou sem. Sem empresa selecionada, a conferência é só a do commit.
+function routingNotaConferencia(destino, nomeDoAmbiente) {
+  const atual = cfg.environment && cfg.environment.slug;
+  if (!destino || destino === atual) return '';
+  const nome = esc(nomeDoAmbiente(destino));
+  return `<div class="rot-nota">${atual
+    ? `Os produtos serão conferidos de novo no Fire da ${nome} ao gravar.`
+    : `Os produtos serão conferidos no Fire da ${nome} ao gravar.`}</div>`;
 }
 
 // O rótulo do degrau já diz "Regra comercial"; a explicação não repete.
@@ -3438,12 +3452,7 @@ function renderRoutingTroca(el, rot, opcoes, nomeDoAmbiente) {
     troca = `<div class="rot-why">Trocado por você. A sugestão era <strong>${esc(nomeSugerida)}</strong>.
       <button type="button" class="pb-link" onclick="onRoutingTrocaChange('${esc(escJs(sugerida))}')">Voltar para a sugestão</button></div>`;
   }
-  // R8: o preview conferiu os produtos no Fire da empresa do cookie; o
-  // commit confere de novo no Fire do destino quando ele é outro.
-  const atual = cfg.environment && cfg.environment.slug;
-  const nota = !routingPendente && destino !== atual
-    ? `<div class="rot-nota">Os produtos serão conferidos de novo no Fire da ${esc(nomeDoAmbiente(destino))} ao gravar.</div>`
-    : '';
+  const nota = routingPendente ? '' : routingNotaConferencia(destino, nomeDoAmbiente);
   el.innerHTML = `
     <div style="display:flex;flex-direction:column;gap:4px;width:100%">
       <div class="rot-choice">
@@ -3458,7 +3467,7 @@ function renderRoutingTroca(el, rot, opcoes, nomeDoAmbiente) {
     </div>`;
 }
 
-function rerenderRoutingTroca(focoId) {
+function rerenderRoutingBanner(focoId) {
   if (!currentPreview) return;
   renderRoutingBanner(currentPreview);
   renderPreviewFooter(currentPreview, (currentPreview.items || []).length);
@@ -3476,19 +3485,19 @@ function onRoutingTrocaChange(slug) {
   } else {
     routingPendente = slug === destino ? null : slug;
   }
-  rerenderRoutingTroca('pvRoutingSelect');
+  rerenderRoutingBanner('pvRoutingSelect');
 }
 
 function confirmarTrocaEmpresa() {
   if (!routingPendente) return;
   routingChoice = routingPendente;
   routingPendente = null;
-  rerenderRoutingTroca('pvRoutingSelect');
+  rerenderRoutingBanner('pvRoutingSelect');
 }
 
 function cancelarTrocaEmpresa() {
   routingPendente = null;
-  rerenderRoutingTroca('pvRoutingSelect');
+  rerenderRoutingBanner('pvRoutingSelect');
 }
 
 // ── Empresa do pedido gravado: linha do tempo + mover ──────────────────────
@@ -3537,16 +3546,33 @@ function rotLinhaHtml(d, nome) {
   return `<li><time datetime="${esc(d.decidido_em)}">${esc(fmtQuandoCurto(d.decidido_em))}</time> · ${txt}${motivo}</li>`;
 }
 
+// Busca uma vez por abertura do pedido (`openImportDetail` zera `rotHist`):
+// re-render do mesmo pedido (ex.: "Conferir de novo") só redesenha, sem
+// piscar e sem apagar o motivo de um 409.
+let rotHistBuscando = null;
+
 async function renderRoutingHistory(data) {
   const el = document.getElementById('pvRoutingHistory');
   if (!el) return;
+  const importId = data.preview_id;
+  if (!data.portal_status) {
+    rotHist = null;
+    el.classList.add('hidden');
+    el.innerHTML = '';
+    return;
+  }
+  if (rotHist && rotHist.importId === importId) {
+    rotHist.data = data;
+    desenharRoutingHistory();
+    return;
+  }
+  if (rotHistBuscando === importId) return;
+  rotHistBuscando = importId;
   rotHist = null;
   moverPendente = null;
   moverErro = '';
   el.classList.add('hidden');
   el.innerHTML = '';
-  if (!data.portal_status) return;
-  const importId = data.preview_id;
   let decisoes, modo, envs;
   try {
     [decisoes, modo, envs] = await Promise.all([
@@ -3556,25 +3582,28 @@ async function renderRoutingHistory(data) {
     ]);
   } catch (_) {
     return;  // rastro é contexto: sem ele o detalhe segue igual a antes
+  } finally {
+    if (rotHistBuscando === importId) rotHistBuscando = null;
   }
   if (!currentPreview || currentPreview.preview_id !== importId) return;
-  // Onde o pedido está: em 'ligado' o servidor resolveu pela empresa do
-  // pedido (env_name); fora dele, é a empresa selecionada (cookie).
-  const atual = (data.env_name && (envs.find(e => e.name === data.env_name) || {}).slug)
-    || (cfg.environment && cfg.environment.slug)
-    || (decisoes.length ? decisoes[decisoes.length - 1].env_escolhido : null);
-  rotHist = { importId, decisoes, modo, envs, atual, data };
+  rotHist = { importId, decisoes, modo, envs, data: currentPreview };
   desenharRoutingHistory();
 }
 
 function desenharRoutingHistory(focoId) {
   const el = document.getElementById('pvRoutingHistory');
   if (!el || !rotHist) return;
-  const { decisoes, modo, envs, atual, data } = rotHist;
+  const { decisoes, modo, envs, data } = rotHist;
   const nome = (slug) => (envs.find(e => e.slug === slug) || {}).name || slug || '—';
-  const podeMover = modo !== 'desligado' && data.portal_status === 'parsed'
-    && data.fire_codigo == null && !!atual;
+  // Onde o pedido está: o servidor diz (`env_slug`: a empresa do pedido em
+  // 'ligado', senão a do cookie); a última decisão é só o último recurso.
+  const atual = data.env_slug
+    || (decisoes.length ? decisoes[decisoes.length - 1].env_escolhido : null);
+  // `pode_mover` é a mesma guarda da rota de mover (Fire, XLSX, Flow, status).
+  const podeMover = modo !== 'desligado' && data.pode_mover === true && !!atual;
   const destinos = podeMover ? envs.filter(e => e.slug !== atual) : [];
+  const naoMove = modo !== 'desligado' && data.pode_mover === false && data.motivo_nao_move
+    ? `<div class="rot-nota">Não muda mais de empresa: ${esc(data.motivo_nao_move)}.</div>` : '';
   if (!decisoes.length && !destinos.length) {
     el.classList.add('hidden');
     el.innerHTML = '';
@@ -3609,6 +3638,7 @@ function desenharRoutingHistory(focoId) {
       ${atual ? `<strong>${esc(nome(atual))}</strong>` : ''}
     </div>
     ${linhas}
+    ${naoMove}
     <div style="margin-top:${linhas ? '0' : '8px'}">${mover}${erro}</div>`;
   el.classList.remove('hidden');
   const alvo = focoId && document.getElementById(focoId);

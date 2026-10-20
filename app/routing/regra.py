@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.erp import queries
 from app.erp.cnpj import cnpj_digits
@@ -35,6 +35,11 @@ class Politica:
     env_sp: str
     env_fora_sp: str
     redes: tuple[RedeFixa, ...]
+    # slug -> nome da empresa, só para a explicação ("pela MM", não "por mm").
+    nomes: dict[str, str] = field(default_factory=dict, hash=False, compare=False)
+
+    def nome(self, slug: str) -> str:
+        return self.nomes.get(slug) or slug
 
 
 @dataclass(frozen=True)
@@ -77,7 +82,8 @@ def avaliar(
     rede = rede_fixa_do_pedido(order, politica)
     if rede is not None:
         return ResultadoRegra(
-            rede.env_slug, f"Regra comercial: {rede.nome} fatura sempre por {rede.env_slug}"
+            rede.env_slug,
+            f"Regra comercial: {rede.nome} fatura sempre pela {politica.nome(rede.env_slug)}",
         )
     cnpj = cnpj_digits(order.header.customer_cnpj)
     if not cnpj:
@@ -90,7 +96,9 @@ def avaliar(
         return None
     (uf,) = ufs
     slug = politica.env_sp if uf == "SP" else politica.env_fora_sp
-    return ResultadoRegra(slug, f"Regra comercial: CNPJ faturado {_fmt(cnpj)} em {uf} → {slug}")
+    return ResultadoRegra(
+        slug, f"Regra comercial: CNPJ faturado {_fmt(cnpj)} em {uf} → {politica.nome(slug)}"
+    )
 
 
 def _uf_no_fire(env: dict, cnpj: str) -> list[str | None]:

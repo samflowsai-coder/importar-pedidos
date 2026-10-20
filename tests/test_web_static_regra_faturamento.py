@@ -44,6 +44,10 @@ def test_rotulo_do_degrau_regra():
         "Sem chave: a regra não liga.",
         "Adicionar chave",
         "Salvar rede",
+        # fix round 1: empresas salvas juntas; rede sem chave com a regra ligada
+        'id="regra-salvar-empresas"',
+        "Salvar empresas",
+        "Sem chave: os pedidos desta rede vão pela UF.",
     ],
 )
 def test_admin_tem_trecho(trecho):
@@ -65,6 +69,12 @@ def test_admin_tem_trecho(trecho):
         "/api/roteamento/decisoes?import_id=",
         "/mover-empresa",
         "Mover para ",
+        # fix round 1: guarda do mover vem do servidor; empresa por slug; nota R8
+        "data.pode_mover",
+        "data.motivo_nao_move",
+        "data.env_slug",
+        "function routingNotaConferencia(",
+        "Os produtos serão conferidos no Fire da",
     ],
 )
 def test_index_tem_trecho(trecho):
@@ -84,3 +94,22 @@ def test_confirmacoes_sem_confirm_nativo(funcao):
 def test_admin_sem_confirm_nativo(funcao):
     corpo = _corpo_da_funcao(_ler("admin-roteamento.html"), funcao)
     assert "confirm(" not in corpo and "alert(" not in corpo
+
+
+def test_nota_r8_nos_dois_ramos_do_seletor():
+    fonte = _ler("index.html")
+    corpo = _corpo_da_funcao(fonte, "renderRoutingBanner")
+    assert "routingNotaConferencia(routingChoice" in corpo
+    assert "routingNotaConferencia(" in _corpo_da_funcao(fonte, "renderRoutingTroca")
+
+
+def test_empresa_do_pedido_nao_casa_por_nome():
+    corpo = _corpo_da_funcao(_ler("index.html"), "desenharRoutingHistory")
+    assert "env_name" not in corpo and "env_name" not in _corpo_da_funcao(
+        _ler("index.html"), "renderRoutingHistory"
+    )
+
+
+def test_selects_da_regra_nao_salvam_no_change():
+    corpo = _corpo_da_funcao(_ler("admin-roteamento.html"), "onRegraEmpresaChange")
+    assert "salvarRegraConfig" not in corpo

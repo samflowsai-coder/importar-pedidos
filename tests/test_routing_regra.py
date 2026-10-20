@@ -170,3 +170,22 @@ def test_cache_nao_guarda_indisponivel_e_expira(monkeypatch):
     regra.ler_uf_com_cache(CLIENTE, ENVS)
     assert len(chamadas) == 4  # expirou
     regra._cache_uf.clear()
+
+
+def test_explicacao_usa_o_nome_da_empresa():
+    pol = Politica(
+        env_sp="mm",
+        env_fora_sp="nasmar",
+        redes=(RedeFixa("Centauro", "mm", frozenset({CLIENTE[:8]}), frozenset()),),
+        nomes={"mm": "MM", "nasmar": "Nasmar"},
+    )
+    r = avaliar(_pedido(), pol, _nao_ler)
+    assert r.explicacao == "Regra comercial: Centauro fatura sempre pela MM"
+    pol_uf = Politica(env_sp="mm", env_fora_sp="nasmar", redes=(), nomes=pol.nomes)
+    r = avaliar(_pedido(), pol_uf, _ler(mm={"MG"}))
+    assert r.explicacao == "Regra comercial: CNPJ faturado 11.222.333/0001-81 em MG → Nasmar"
+
+
+def test_explicacao_sem_nome_cai_no_slug():
+    r = avaliar(_pedido(), _politica(), _ler(mm={"SP"}))
+    assert r.explicacao.endswith("em SP → mm")
