@@ -327,12 +327,14 @@ def _decidir_itens(
     eans: list[str | None],
     vinculos: list[tuple[int | None, int | None]],
     escolhas: dict[int, int] | None = None,
+    escolhidos: dict[int, Candidato] | None = None,
 ) -> list[dict]:
     """item["produto"] de cada item: candidatos por chave exata, numa passada batelada.
 
     `escolhas` ({posição: SEQ}, R18): a escolha pontual da linha neste pedido
     decide antes de qualquer chave. Sem ela, a chave que se repete no pedido com
-    descrições diferentes não dá `ok` sozinha (`chave_repetida`)."""
+    descrições diferentes não dá `ok` sozinha (`chave_repetida`). `escolhidos`,
+    quando passado, recebe o candidato de cada escolha válida (`ok`)."""
     escolhas = escolhas or {}
     eans_q = list(dict.fromkeys(e for e in eans if e))
     # Código maior que a coluna nunca é igual a nada (e estoura truncation no Fire).
@@ -376,7 +378,11 @@ def _decidir_itens(
     for i, (codigo, ean, (v_cod, v_ean)) in enumerate(zip(codigos, eans, vinculos, strict=True)):
         if i in escolhas:
             seq = escolhas[i]
-            out.append(_produto_dict(decidir_escolha(seq, (por_seq.get(seq) or [None])[0])))
+            cand = (por_seq.get(seq) or [None])[0]
+            decisao = decidir_escolha(seq, cand)
+            if decisao.estado == "ok" and escolhidos is not None:
+                escolhidos[i] = cand
+            out.append(_produto_dict(decisao))
             continue
         if v_cod is not None and v_ean is not None and v_cod != v_ean:
             out.append(_produto_dict(_vinculos_discordam(v_cod, v_ean, por_seq)))
@@ -622,15 +628,33 @@ def check_order(
             # Decisão por chave exata (observada: não bloqueia nada aqui). Falha
             # nesta passada não derruba os campos legados: o item fica
             # fire_indisponivel, que nunca vale como produto conferido.
+            escolhidos: dict[int, Candidato] = {}
             try:
                 produtos = _decidir_itens(
-                    cur, order, chave_codigos, chave_eans, vinculos, escolhas
+                    cur, order, chave_codigos, chave_eans, vinculos, escolhas, escolhidos
                 )
             except Exception as exc:  # noqa: BLE001
                 from app.utils.logger import logger
 
                 logger.warning(f"Busca por chave exata falhou ({type(exc).__name__}): {exc}")
                 produtos = [_produto_indisponivel() for _ in order.items]
+                escolhidos = {}
+            # R20: a linha com escolha pontual vale também nos campos legados (a tela
+            # de `desligado`, o preço de hoje e o aviso de troca olham para eles):
+            # é o produto escolhido que vai ao Fire em todo modo. Sem escolha, nada muda.
+            for i, cand in escolhidos.items():
+                _aplicar_escolha_no_legado(items_report[i], order.items[i].unit_price, cand)
+                codigos_xlsx[i] = cand.codprod_altern or str(cand.seq)
+            if escolhidos:
+                matched = sum(1 for e in items_report if e["match"])
+                contagem = {
+                    s: sum(1 for e in items_report if e["price_status"] == s)
+                    for s in ("match", "mismatch", "no_price_in_fire", "no_order_price")
+                }
+                price_match = contagem["match"]
+                price_mismatch = contagem["mismatch"]
+                price_no_price_in_fire = contagem["no_price_in_fire"]
+                price_no_order_price = contagem["no_order_price"]
 
             # Uma passada da previsão do importador do Fire para os dois usos: o
             # aviso legado (código que vai hoje no XLSX) e o código do produto
@@ -683,6 +707,27 @@ def check_order(
             },
         },
     }
+
+
+def _aplicar_escolha_no_legado(entry: dict, unit_price: float | None, cand: Candidato) -> None:
+    """Campos legados do item com o produto da escolha pontual (lido do Fire agora)."""
+    preco = cand.preco_venda
+    entry.update(
+        {
+            "match": True,
+            "match_source": "escolha_pontual",
+            "fire_product_id": cand.seq,
+            "fire_description": cand.descricao,
+            "fire_preco_venda": preco,
+            "fire_unidade": cand.unidade,
+            "price_status": _classify_price(unit_price, preco),
+            "price_diff": (
+                round(float(preco) - float(unit_price), 2)
+                if preco is not None and unit_price is not None
+                else None
+            ),
+        }
+    )
 
 
 def _codigo_do_decidido(produto: dict) -> str | None:

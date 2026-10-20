@@ -2431,35 +2431,43 @@ class _FireSendOutcome:
         self.detail = detail
 
 
-def _vinculos_de_para(order, caminho: str) -> tuple[list[dict], dict[int, int]]:
+def _vinculos_de_para(
+    order, caminho: str, entry: dict | None = None
+) -> tuple[list[dict], dict[int, int]]:
     """Vínculos de-para do pedido, consultados UMA vez antes do portão de preço.
 
     O portão avalia o SEQ do vínculo (`produtos_por_item`), o exporter grava
     esse mesmo SEQ e o XLSX leva o código dele (`depara_apply.aplicar`). Falha
     aqui não derruba o envio: sem vínculo, portão e exporter caem juntos na
-    busca normal por EAN/código (e, sem match, o exporter recusa o pedido)."""
+    busca normal por EAN/código (e, sem match, o exporter recusa o pedido).
+
+    `entry` (import salvo): a escolha pontual de cada linha (R20) vai por cima do
+    v1, em todo modo — sem ela a escolha do operador seria ignorada fora de `ligado`."""
     from app.erp import depara_apply
     from app.persistence import db
 
+    escolhidos = (entry or {}).get("produto_escolhido")
     try:
         with db.connect() as sconn:
             vinculos = depara_apply.resolver(order, conn=sconn)
-        return vinculos, depara_apply.produtos_por_item(vinculos)
     except Exception as exc:  # noqa: BLE001
         from app.utils.logger import logger
 
         logger.warning(f"de-para pulado no {caminho}: {type(exc).__name__}: {exc}")
-        return [], {}
+        vinculos = []
+    vinculos = depara_apply.sobrepor_escolhas(order, vinculos, escolhidos)
+    return vinculos, depara_apply.produtos_por_item(vinculos)
 
 
 def _vinculos_antes_do_portao(
-    order, caminho: str, env: dict | None
+    order, caminho: str, env: dict | None, entry: dict | None = None
 ) -> tuple[list[dict] | None, dict[int, int] | None]:
-    """De-para v1 para o portão, só fora de `produto_chave_modo` `ligado`. Em
-    `ligado` o v1 nem é lido (None, None): a saída é o produto decidido."""
+    """De-para v1 (com as escolhas pontuais do import por cima) para o portão,
+    só fora de `produto_chave_modo` `ligado`. Em `ligado` o v1 nem é lido
+    (None, None): a saída é o produto decidido, que já traz a escolha pontual."""
     if _trava_produto_ligada(env):
         return None, None
-    return _vinculos_de_para(order, caminho)
+    return _vinculos_de_para(order, caminho, entry)
 
 
 def _saida_do_envio(
@@ -2468,6 +2476,7 @@ def _saida_do_envio(
     caminho: str,
     vinculos: list[dict] | None,
     produtos_por_item: dict[int, int] | None,
+    entry: dict | None = None,
 ) -> tuple[list[dict], dict[int, int]]:
     """O que vai ao Fire depois do portão. Em `produto_chave_modo` `ligado`
     (`decisao.check` preenchido), o produto decidido de todo item `ok` do MESMO
@@ -2480,7 +2489,7 @@ def _saida_do_envio(
 
         return produto_trava.produtos_decididos(decisao.check)
     if vinculos is None or produtos_por_item is None:
-        return _vinculos_de_para(order, caminho)
+        return _vinculos_de_para(order, caminho, entry)
     return vinculos, produtos_por_item
 
 
@@ -2548,7 +2557,7 @@ def _send_one_to_fire(
     from app.observability import metrics
 
     export_mode = cfg.get("export_mode", "xlsx")
-    vinculos, produtos_por_item = _vinculos_antes_do_portao(order, "envio", request_env)
+    vinculos, produtos_por_item = _vinculos_antes_do_portao(order, "envio", request_env, entry)
     decisao = preco_trava.decidir_envio(
         import_id,
         order,
@@ -2567,7 +2576,7 @@ def _send_one_to_fire(
         )
     preco_trava.aplicar_precos(order, decisao.precos_aplicar)
     vinculos, produtos_por_item = _saida_do_envio(
-        decisao, order, "envio", vinculos, produtos_por_item
+        decisao, order, "envio", vinculos, produtos_por_item, entry
     )
 
     # Reuse the trace_id minted on commit so logs across commit→send-to-fire
@@ -2785,7 +2794,7 @@ def _export_one_xlsx(
     from app.erp import preco_trava
     from app.observability import metrics
 
-    vinculos, produtos_por_item = _vinculos_antes_do_portao(order, "export", request_env)
+    vinculos, produtos_por_item = _vinculos_antes_do_portao(order, "export", request_env, entry)
     decisao = preco_trava.decidir_envio(
         import_id,
         order,
@@ -2804,7 +2813,7 @@ def _export_one_xlsx(
             False, reason=decisao.reason, http_status=409, detail=decisao.detalhe
         )
     preco_trava.aplicar_precos(order, decisao.precos_aplicar)
-    vinculos, _ = _saida_do_envio(decisao, order, "export", vinculos, produtos_por_item)
+    vinculos, _ = _saida_do_envio(decisao, order, "export", vinculos, produtos_por_item, entry)
 
     with with_trace_id(entry.get("trace_id")):
         # Identidade do Fire onde há vínculo de-para (ou, em `ligado`, o produto
@@ -3612,12 +3621,12 @@ def _conflito_json(v) -> dict:
     }
 
 
-def _item_em_chave_repetida(entry: dict, order, indice: int, env: dict | None) -> bool:
-    """O item está em `chave_repetida` (R18), ou já tem escolha pontual (trocar
-    a escolha também é pontual)? Lê o check guardado; se ele não diz e a chave do
-    item se repete no pedido com descrições diferentes, confirma no check
-    recalculado (sem a escolha desta linha) — check guardado de antes da regra."""
-    from app.erp import product_check
+def _item_em_chave_repetida(entry: dict, order, indice: int) -> bool:
+    """A escolha desta linha tem de ser pontual (R18)? Sim quando o check guardado
+    diz `chave_repetida` ou a linha já tem escolha pontual (trocar também é
+    pontual), e SEMPRE que a chave do item se repete no pedido com descrições
+    diferentes, qualquer que seja o estado (`a_identificar`, `ambiguo`…): um
+    vínculo dessa chave valeria para toda linha, e todo pedido futuro, dela."""
     from app.erp.produto_chave import chaves_repetidas
     from app.persistence import produto_vinculo_repo
 
@@ -3636,15 +3645,7 @@ def _item_em_chave_repetida(entry: dict, order, indice: int, env: dict | None) -
 
     repetidas = chaves_repetidas([(*chaves(it), it.description) for it in order.items])
     codigo, ean = chaves(order.items[indice])
-    if ("codigo", codigo) not in repetidas and ("ean", ean) not in repetidas:
-        return False
-    outras = {
-        k: v for k, v in product_check.escolhas_do_import(entry).items() if k != indice
-    }
-    check = product_check.check_order(order, env=env, escolhas=outras)
-    itens = check.get("items") or []
-    produto = (itens[indice] or {}).get("produto") if indice < len(itens) else None
-    return isinstance(produto, dict) and produto.get("estado") == "chave_repetida"
+    return ("codigo", codigo) in repetidas or ("ean", ean) in repetidas
 
 
 def _escolher_pontual(
@@ -3657,8 +3658,15 @@ def _escolher_pontual(
     from app.persistence import repo
 
     import_id = entry["id"]
+    antigo = product_check.escolhas_do_import(entry).get(indice)
     repo.set_produto_escolha(
-        import_id, indice, fire_seq=fire_seq, por=user.email, descricao=prod["nome"] or ""
+        import_id,
+        indice,
+        fire_seq=fire_seq,
+        por=user.email,
+        descricao=prod["nome"] or "",
+        codigo=(prod.get("codprod_altern") or "").strip() or None,
+        ean=(prod.get("ean") or "").strip() or None,
     )
     with with_trace_id(entry.get("trace_id")):
         repo.append_audit(
@@ -3667,6 +3675,7 @@ def _escolher_pontual(
             {
                 "item_index": indice,
                 "fire_produto_id": fire_seq,
+                "fire_seq_antigo": antigo,
                 "fire_nome": prod["nome"],
                 "pedido": order.header.order_number,
                 "user_id": user.id,
@@ -3809,7 +3818,7 @@ def vincular_produto(
     # R18: chave repetida no pedido com descrições diferentes não separa as
     # linhas; um vínculo dela valeria para todas. A escolha fica só nesta linha
     # deste pedido (sem v1, sem v2, sem conflito).
-    if _item_em_chave_repetida(entry, order, body.item_index, env):
+    if _item_em_chave_repetida(entry, order, body.item_index):
         return _escolher_pontual(entry, order, body.item_index, prod, fire_seq, user, env)
 
     cnpj, intercompany = _cnpj_do_escopo(order, body.item_index, env)
@@ -3908,7 +3917,10 @@ def vincular_produto(
             },
         )
 
-    check = product_check.check_order(order, env=env)
+    # As escolhas pontuais de outras linhas deste import ficam no check regravado.
+    check = product_check.check_order(
+        order, env=env, escolhas=product_check.escolhas_do_import(repo.get_import(import_id))
+    )
     # Persiste o check fresco para o re-open do pedido e o badge da lista
     # refletirem o vínculo (senão rehydrate_preview leria o check antigo e o
     # item apareceria como ✗ de novo). Só grava quando o check é confiável —
@@ -4234,7 +4246,7 @@ def rehydrate_preview(
 
             _, produtos_por_item = produto_trava.produtos_decididos(entry.get("check"))
         else:
-            _, produtos_por_item = _vinculos_de_para(order, "preview")
+            _, produtos_por_item = _vinculos_de_para(order, "preview", entry)
         preco = preco_trava.preview_preco(
             import_id,
             entry,

@@ -69,6 +69,40 @@ def produtos_por_item(vinculos: list[dict]) -> dict[int, int]:
     return {v["item_index"]: int(v["fire_produto_id"]) for v in vinculos}
 
 
+def sobrepor_escolhas(order: Order, vinculos: list[dict], escolhidos: dict | None) -> list[dict]:
+    """Vínculos com a escolha pontual de cada linha por cima (R18/R20).
+
+    `escolhidos`: `entry["produto_escolhido"]` do import. A linha escolhida sai
+    com o SEQ escolhido (insert) e o `CODPROD_ALTERN` gravado na escolha (ou o
+    SEQ em texto, a convenção do v1, quando o produto não tem), o EAN dele (ou
+    nenhum: o EAN do cliente é da linha, não do produto escolhido) e o código do
+    cliente na OBS. Vale em todo modo; as outras linhas ficam como vieram."""
+    from app.erp.product_check import escolhas_do_import  # evita ciclo
+
+    seqs = escolhas_do_import({"produto_escolhido": escolhidos})
+    if not seqs:
+        return vinculos
+    detalhe = {int(k): v for k, v in (escolhidos or {}).items() if str(k).isdigit()}
+    out = [v for v in vinculos if v["item_index"] not in seqs]
+    for i, seq in seqs.items():
+        if not 0 <= i < len(order.items):
+            continue
+        e = detalhe.get(i) or {}
+        it = order.items[i]
+        out.append(
+            {
+                "item_index": i,
+                "fire_produto_id": seq,
+                "fire_codigo": (str(e.get("codigo") or "")).strip() or str(seq),
+                "fire_ean": (str(e.get("ean") or "")).strip(),
+                "substitui_ean": True,
+                "orig": it.product_code or it.ean or "",
+                "fonte": "escolha_pontual",
+            }
+        )
+    return sorted(out, key=lambda v: v["item_index"])
+
+
 def aplicar(order: Order, vinculos: list[dict]) -> list[dict]:
     """Enriquece os itens do `order` com a identidade Fire dos `vinculos`
     (de `resolver`). Muta `order.items` in place e retorna o resumo do que mudou."""

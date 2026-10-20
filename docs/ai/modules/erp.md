@@ -162,7 +162,15 @@ decide antes de qualquer chave (`decidir_escolha`): SEQ ativo → `ok` com fonte
 aponta para o produto X, que não existe mais ou está bloqueado."). Vale só para
 aquele import: todo chamador que confere um import salvo passa as escolhas dele
 (`decidir_envio`, recheck do vincular, ack-sem-preço, a própria rota); o check da
-fonte de preço (`_check_da_fonte`) não (SEQs de outro Fire).
+fonte de preço (`_check_da_fonte`) não (SEQs de outro Fire). A linha com escolha
+válida também tem os campos legados trocados (`match`, `match_source =
+"escolha_pontual"`, `fire_product_id`, `fire_description`, preço/unidade e
+`price_status` do escolhido; código da previsão de troca = o `CODPROD_ALTERN` dele),
+em todo modo (R20). Fora de `ligado` a saída leva a escolha por cima do v1:
+`depara_apply.sobrepor_escolhas(order, vinculos, entry["produto_escolhido"])` (SEQ
+no insert, `codigo` gravado na escolha — ou str(SEQ) — na planilha, EAN do
+escolhido ou nenhum, OBS "ref cliente: <orig>"), chamado por `_vinculos_de_para`
+(envio, export, preview).
 `produto_conferencia_incompleta` (topo e `summary`) = `True` quando o vínculo v2
 não pôde ser lido (banco do ambiente fora, intercompany sem resposta). Com
 `env` explícito o vínculo vem de `router.env_connect(env["slug"])`, não do

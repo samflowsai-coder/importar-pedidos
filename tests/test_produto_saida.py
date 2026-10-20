@@ -394,7 +394,7 @@ def _sem_depara_v1(monkeypatch):
             "orig": "x",
         }
     ]
-    monkeypatch.setattr(server_mod, "_vinculos_de_para", lambda order, caminho: (v1, {0: 777}))
+    monkeypatch.setattr(server_mod, "_vinculos_de_para", lambda order, caminho, entry=None: (v1, {0: 777}))
 
 
 def _nunca_v1(monkeypatch):

@@ -333,9 +333,9 @@ def test_vincular_em_chave_repetida_grava_pontual_e_nao_grava_v1_v2(monkeypatch)
     assert not [a for a in repo.list_audit(entry_id) if a["event_type"].startswith("produto_vinculo")]
 
 
-def test_vincular_detecta_chave_repetida_no_check_recalculado(monkeypatch):
-    """Check guardado antigo (de antes da regra) com o item `ok`: a repetição no
-    pedido força o recálculo, que acha `chave_repetida` e vai pela escolha pontual."""
+def test_vincular_com_chave_repetida_no_pedido_e_pontual_mesmo_com_check_antigo(monkeypatch):
+    """Check guardado de antes da regra (item `ok`): a chave se repete no pedido com
+    descrições diferentes, então a escolha é pontual sem recalcular nada antes."""
     chamadas: list = []
 
     def fake(o, *, env=None, escolhas=None):
@@ -354,9 +354,190 @@ def test_vincular_detecta_chave_repetida_no_check_recalculado(monkeypatch):
 
     assert r.status_code == 200, r.text
     assert r.json()["pontual"] is True
-    assert chamadas == [{}, {1: 2010}]
+    assert chamadas == [{1: 2010}]
     with db.connect() as conn:
         assert produto_vinculo_repo.listar(conn) == []
+
+
+@pytest.mark.parametrize("estado", ["a_identificar", "ambiguo", "chaves_discordam"])
+def test_vincular_com_chave_repetida_em_qualquer_estado_nao_grava_vinculo(monkeypatch, estado):
+    monkeypatch.setattr(
+        product_check,
+        "check_order",
+        lambda o, *, env=None, escolhas=None: _check(o, escolhas=escolhas, seq_rows=[BRANCO]),
+    )
+    _seed_catalogo()
+    pendente = {"estado": estado, "fire_seq": None, "fonte": None, "motivo": "x", "candidatos": []}
+    entry_id = _seed_import(_beira_rio(), produtos=[pendente, pendente])
+
+    r = client.post(
+        f"/api/imported/{entry_id}/vincular-produto",
+        json={"item_index": 0, "fire_produto_id": "2010"},
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json()["pontual"] is True
+    with db.connect() as conn:
+        assert produto_vinculo_repo.listar(conn) == []
+        ckey = produto_depara_repo.client_key("00000000000100", "BR")
+        assert produto_depara_repo.list_for_client(conn, ckey) == []
+    assert product_check.escolhas_do_import(repo.get_import(entry_id)) == {0: 2010}
+
+
+def test_trocar_escolha_audita_o_seq_antigo(monkeypatch):
+    monkeypatch.setattr(
+        product_check,
+        "check_order",
+        lambda o, *, env=None, escolhas=None: {"available": False, "items": []},
+    )
+    _seed_catalogo()
+    entry_id = _seed_import(_beira_rio())
+    repo.set_produto_escolha(entry_id, 0, fire_seq=2008, por="x@y", descricao="SORTIDO")
+
+    r = client.post(
+        f"/api/imported/{entry_id}/vincular-produto",
+        json={"item_index": 0, "fire_produto_id": "2010"},
+    )
+
+    assert r.status_code == 200, r.text
+    (audit,) = [a for a in repo.list_audit(entry_id) if a["event_type"] == "produto_escolha_pontual"]
+    assert audit["detail"]["fire_seq_antigo"] == 2008
+    assert audit["detail"]["fire_produto_id"] == 2010
+    escolha = repo.get_import(entry_id)["produto_escolhido"]["0"]
+    assert (escolha["fire_seq"], escolha["codigo"]) == (2010, "1000660710")
+
+
+def test_vincular_normal_mantem_a_escolha_pontual_de_outra_linha(monkeypatch):
+    """Escolhe a linha 0 (pontual) e vincula a linha 2 (outro código, normal): o
+    check regravado continua com a linha 0 escolhida."""
+    monkeypatch.setattr(
+        product_check,
+        "check_order",
+        lambda o, *, env=None, escolhas=None: _check(
+            o, escolhas=escolhas, code_rows=[MODELO], seq_rows=[BRANCO]
+        ),
+    )
+    _seed_catalogo()
+    order = _order(
+        {"product_code": CODIGO, "description": DESC_BRANCO},
+        {"product_code": CODIGO, "description": DESC_PRETO},
+        {"product_code": "OUTRO-1", "description": "SANDALIA"},
+    )
+    entry_id = _seed_import(order, produtos=[_chave_repetida(), _chave_repetida(), _chave_repetida()])
+    r0 = client.post(
+        f"/api/imported/{entry_id}/vincular-produto",
+        json={"item_index": 0, "fire_produto_id": "2010"},
+    )
+    assert r0.json()["pontual"] is True
+
+    r2 = client.post(
+        f"/api/imported/{entry_id}/vincular-produto",
+        json={"item_index": 2, "fire_produto_id": "2010"},
+    )
+
+    assert r2.status_code == 200, r2.text
+    assert "pontual" not in r2.json()
+    salvo = repo.get_import(entry_id)["check"]["items"][0]["produto"]
+    assert (salvo["estado"], salvo["fonte"]) == ("ok", "escolha_pontual")
+
+
+def test_escolha_pontual_vai_nos_campos_legados():
+    report = _check(_beira_rio(), escolhas={0: 2010}, code_rows=[MODELO], seq_rows=[BRANCO])
+    escolhido, outro = report["items"]
+    assert escolhido["match"] is True
+    assert escolhido["match_source"] == "escolha_pontual"
+    assert escolhido["fire_product_id"] == 2010
+    assert escolhido["fire_description"] == "CHINELO LISA BRANCO"
+    assert escolhido["price_status"] == "match"
+    assert (outro["fire_product_id"], outro["match_source"]) == (2000, "codprod_altern")
+    assert report["summary"]["items_matched"] == 2
+    # sem escolha: campos legados de sempre
+    sem = _check(_beira_rio(), code_rows=[MODELO], seq_rows=[BRANCO])
+    assert sem["items"][0]["fire_product_id"] == 2000
+
+
+def test_produto_escolhido_podre_nao_derruba_e_e_regravado():
+    entry_id = _seed_import(_beira_rio())
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE imports SET produto_escolhido_json = ? WHERE id = ?", ("{podre", entry_id)
+        )
+    assert repo.get_import(entry_id)["produto_escolhido"] == {}
+    assert [e["produto_escolhido"] for e in repo.list_imports(portal_status="parsed")] == [{}]
+
+    repo.set_produto_escolha(entry_id, 1, fire_seq=2010, por="x@y", descricao="B")
+    assert product_check.escolhas_do_import(repo.get_import(entry_id)) == {1: 2010}
+
+    with db.connect() as conn:
+        conn.execute("UPDATE imports SET produto_escolhido_json = '[1]' WHERE id = ?", (entry_id,))
+    assert repo.get_import(entry_id)["produto_escolhido"] == {}
+    repo.set_produto_escolha(entry_id, 0, fire_seq=2010, por="x@y", descricao="B")
+    assert product_check.escolhas_do_import(repo.get_import(entry_id)) == {0: 2010}
+
+
+# ── R20: fora de `ligado` a saída também usa a escolha pontual ────────────────
+
+
+def _saida_fora_de_ligado(monkeypatch, tmp_path, modo: str, export_mode: str):
+    from app import config as app_config
+    from app.exporters import erp_exporter as erp_mod
+    from app.exporters import firebird_exporter as fb_mod
+
+    monkeypatch.setattr(preco_trava, "env_trava_produto", lambda env: {"produto_chave_modo": modo})
+    monkeypatch.setattr(product_check, "check_order", lambda o, **kw: {"available": False})
+    monkeypatch.setattr(product_check, "is_blocking", lambda check, ack_items=None: (False, {}))
+    monkeypatch.setattr(
+        app_config,
+        "load",
+        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": export_mode},
+    )
+    recebido: dict = {}
+
+    def _fb(self, order, *, override_client_id=None, produtos_por_item=None):
+        recebido["seq"] = produtos_por_item
+        recebido["fb_itens"] = [(it.product_code, it.obs) for it in order.items]
+        return fb_mod.FirebirdExportResult(
+            order_number=order.header.order_number, items_inserted=2, fire_codigo=4242
+        )
+
+    def _xlsx(self, order, output_dir):
+        recebido["xlsx_itens"] = [(it.product_code, it.ean, it.obs) for it in order.items]
+        return []
+
+    monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _fb)
+    monkeypatch.setattr(erp_mod.ERPExporter, "export", _xlsx)
+    entry_id = _seed_import(_beira_rio(ean="7890000000011"))
+    repo.set_produto_escolha(
+        entry_id, 0, fire_seq=2010, por="x@y", descricao="BRANCO", codigo="1000660710"
+    )
+    return entry_id, recebido
+
+
+@pytest.mark.parametrize("modo", ["desligado", "observando"])
+@pytest.mark.parametrize("export_mode", ["db", "both"])
+def test_send_to_fire_fora_de_ligado_usa_a_escolha_pontual(monkeypatch, tmp_path, modo, export_mode):
+    entry_id, recebido = _saida_fora_de_ligado(monkeypatch, tmp_path, modo, export_mode)
+
+    r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+
+    assert r.status_code == 200, r.text
+    assert recebido["seq"] == {0: 2010}  # linha não escolhida: busca normal
+    assert recebido["fb_itens"][0] == ("1000660710", f"ref cliente: {CODIGO}")
+    assert recebido["fb_itens"][1] == (CODIGO, None)
+    if export_mode == "both":
+        assert recebido["xlsx_itens"][0] == ("1000660710", None, f"ref cliente: {CODIGO}")
+        assert recebido["xlsx_itens"][1] == (CODIGO, None, None)
+
+
+@pytest.mark.parametrize("modo", ["desligado", "observando"])
+def test_export_xlsx_fora_de_ligado_usa_a_escolha_pontual(monkeypatch, tmp_path, modo):
+    entry_id, recebido = _saida_fora_de_ligado(monkeypatch, tmp_path, modo, "xlsx")
+
+    r = client.post(f"/api/imported/{entry_id}/export-xlsx")
+
+    assert r.status_code == 200, r.text
+    assert recebido["xlsx_itens"][0] == ("1000660710", None, f"ref cliente: {CODIGO}")
+    assert recebido["xlsx_itens"][1] == (CODIGO, None, None)
 
 
 def test_recheck_e_ack_passam_as_escolhas_do_import(monkeypatch):

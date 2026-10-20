@@ -99,7 +99,7 @@ API pública para páginas-filho:
   o audit registra `v1: true|false`. Audit `produto_vinculo_criado` ou `produto_vinculo_trocado`
   (escopo, `chaves[{chave_tipo, chave_valor, fire_seq_antigo, fire_seq_novo}]`,
   `vinculo_ids`, pedido, usuário). Re-roda `check_order` deste pedido e, se ele veio
-  `available`, de até 50 pedidos `parsed` do ambiente (mais antigos primeiro, R12)
+  `available` (com as escolhas pontuais do import, que o check regravado mantém), de até 50 pedidos `parsed` do ambiente (mais antigos primeiro, R12)
   cujo check guardado tem item na mesma chave fora de `ok` e cujo escopo de busca
   inclui o escopo gravado. Resposta:
   `{entry_id, vinculos: [{id, env, escopo, chave_tipo, chave_valor}], check,
@@ -108,13 +108,14 @@ API pública para páginas-filho:
   falha fechado: exceção vira `{bloqueado: true, reason: "fire_indisponivel"}` + log. Só em `portal_status='parsed'`. 422 se o produto não
   existir no catálogo local (ou SEQ não numérico) ou item sem código nem EAN.
   **Escolha pontual (R18):** item em `chave_repetida` no check guardado, ou já com
-  fonte `escolha_pontual`, ou — check guardado de antes da regra — cuja chave se
-  repete no pedido com descrições diferentes e o check recalculado (sem a escolha
-  desta linha) dá `chave_repetida` (`_item_em_chave_repetida`): NÃO grava v1 nem v2
+  fonte `escolha_pontual`, ou cuja chave se repete no pedido com descrições
+  diferentes em QUALQUER estado (`_item_em_chave_repetida`, só `chaves_repetidas`,
+  sem Fire): NÃO grava v1 nem v2
   nem dá 409; grava `imports.produto_escolhido_json["<item_index>"] = {fire_seq, por,
-  em, descricao}` (`repo.set_produto_escolha`, um `json_set`), audita
-  `produto_escolha_pontual` (item_index, fire_produto_id, fire_nome, pedido,
-  usuário), re-roda o check com as escolhas do import, regrava o check se
+  em, descricao, codigo, ean}` (`repo.set_produto_escolha`, um `json_set`; codigo/ean
+  = `codprod_altern`/EAN do catálogo local), audita
+  `produto_escolha_pontual` (item_index, fire_produto_id, fire_seq_antigo, fire_nome,
+  pedido, usuário), re-roda o check com as escolhas do import, regrava o check se
   `available` e responde `{entry_id, pontual: true, vinculos: [], check,
   produto_trava, rechecados: []}` (`_escolher_pontual`). Os outros itens da mesma
   chave continuam pedindo escolha; nenhum outro pedido é rechecado.
