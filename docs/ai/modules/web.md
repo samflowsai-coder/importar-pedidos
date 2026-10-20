@@ -258,17 +258,21 @@ Domínio completo (degraus, interruptor, tabelas) em
   `ativa` (400 se a empresa não é ambiente ativo).
 - `POST /api/roteamento/regra/redes`, `PUT|DELETE
   /api/roteamento/regra/redes/{rede_id}` (`require_admin`) → redes fixas e suas
-  chaves.
+  chaves (`DELETE` com a regra ligada = 400).
 - `GET /api/roteamento/decisoes?import_id=` (`require_user`) → rastro
   `roteamento_decisao` do pedido.
 - `POST /api/imported/{import_id}/mover-empresa` (`require_user`) body
   `{destino}` → move pedido em revisão para a outra empresa (409 em
-  `desligado` ou pedido não movível, com `motivo`; 404/422 para pedido ou
-  destino inexistente). `GET` do detalhe do pedido ganha `env_slug`,
-  `pode_mover` e `motivo_nao_move`.
+  `desligado` — salvo para concluir um mover interrompido —, pedido não
+  movível com `motivo`, pedido em duas origens ou banco ocupado; 404/422 para
+  pedido ou destino inexistente). `GET` do detalhe do pedido ganha `env_slug`,
+  `roteamento_modo`, `pode_mover` e `motivo_nao_move` (em `desligado`:
+  `pode_mover=false`, sem ler a guarda).
 
 `POST /api/commit` (fluxo normal, sem mudança de rota) ganhou o wiring do
-roteamento: resolve `(modo, decisao)` via `_decidir_ambiente`, decide o
+roteamento: usa o `(modo, decisao)` que o preview guardou no `PreviewEntry`
+(`_roteamento_para_preview(order, entry=...)`; 409 se o modo mudou desde o
+preview; sem decisão guardada, `_decidir_ambiente`), decide o
 ambiente de gravação via `_resolver_env_alvo` (409 pede escolha quando
 `ligado` não resolve e o operador não mandou `environment_slug`; 412 se o
 ambiente resolvido não existe mais ou está inativo). Em `observando` grava

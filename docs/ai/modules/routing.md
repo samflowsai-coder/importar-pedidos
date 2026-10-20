@@ -31,8 +31,8 @@ Duas regras não se negociam em lugar nenhum deste domínio:
   testar a escada inteira sem banco.
 - `app/routing/regra.py` — degrau `regra` (puro): `Politica`, `RedeFixa`,
   `UfLida`, `avaliar`, `ler_uf` (UF de `CADASTRO.UF` lida no Fire, só-leitura,
-  via `connect_somente_leitura`) e `ler_uf_com_cache` (TTL 600 s, não guarda
-  `indisponivel`).
+  via `connect_somente_leitura`, `CPF_CNPJ IN (mascarado, dígitos)`) e
+  `ler_uf_com_cache` (TTL 600 s; `indisponivel` fica 60 s).
 - `app/routing/documento.py` — degrau 1: regex de CNPJ + `detectar_fornecedor`
   (presença, não posição) + `cnpjs_de_ambientes()`.
 - `app/routing/historico.py` — degrau 2: `consultar()` (Firebird de todos os
@@ -72,8 +72,11 @@ São 5 degraus; `regra` fica no topo e só existe com a política ativa:
    Rede fixa (raiz de 8 dígitos ou CNPJ de 14) vence a UF; sem rede fixa, a
    UF do CNPJ faturado (`CADASTRO.UF`, lida só-leitura nas duas empresas da
    política) manda: SP → `env_sp`, fora → `env_fora_sp`. **Nunca chuta UF**:
-   Fire mudo, UF divergente entre as bases, linha sem UF ou cliente
-   inexistente = `None`, e a escada segue para o degrau 1. Quando decide e o
+   Fire mudo, UF divergente entre as bases, linha sem UF, UF fora das 27 +
+   `EX` ou cliente inexistente = `None`, e a escada segue para o degrau 1.
+   O CNPJ é o do cabeçalho (`customer_cnpj`); lojas só contam para achar a
+   rede fixa. Rede cuja empresa não é ambiente ativo não decide (nem cai na
+   UF): `None` com aviso no log. Quando decide e o
    documento apontaria outra empresa, `Decisao.contraria` carrega o slug do
    documento. `deps_padrao` só monta a regra (`_regra_padrao`) com política
    ativa e as duas empresas ativas; fora disso `Deps.regra is None` e zero
@@ -179,7 +182,11 @@ dois chamadores eram cópias idênticas exceto o prefixo do log:
 
 ### Web (`app/web/server.py`, humano na tela)
 
-`POST /api/commit`: `_decidir_ambiente(order)` → `_resolver_env_alvo(...)`.
+`POST /api/commit`: a decisão que o preview guardou no `PreviewEntry`
+(`roteamento_modo`/`roteamento_decisao`, a que o operador viu; sem I/O no Fire
+de novo) → `_resolver_env_alvo(...)`. Modo mudou entre preview e commit → 409
+pedindo nova conferência, antes de consumir. Preview sem decisão guardada →
+`_decidir_ambiente(order)`.
 Fora de `ligado`, `env_alvo` é sempre o ambiente do cookie (idêntico a
 antes da feature). Em `ligado`: escolha do operador
 (`body.environment_slug`) > decisão resolvida (a sugestão do preview) > 409
@@ -235,10 +242,20 @@ sem humano. Só INSERT.
 em revisão (`portal_status='parsed'`) para a outra empresa
 (`mover_pedido.mover_import`): trava por pedido compartilhada com o envio ao
 Fire/XLSX, lock global de mover, recusa (409) pedido já no Fire, exportado em
-XLSX, com rastro no Flow/Gestor ou com revisão de preço enviada ao Flow.
-No destino recalcula o check de produto e preço; em `ligado` a memória
-aprende a nova empresa. O detalhe do pedido ganha `env_slug`, `pode_mover` e
-`motivo_nao_move`.
+XLSX, com rastro no Flow/Gestor ou com revisão de preço enviada ao Flow;
+também 409 com o pedido em duas origens e com o banco ocupado ("database is
+locked"). `mover_import` devolve `movido` | `concluido` (terminou um mover
+interrompido) | `ja_movido`; rastro e memória saem uma vez por mover. Em
+`desligado` a rota só CONCLUI um mover interrompido (pedido no destino e na
+origem). No destino recalcula o check de produto e preço; em `ligado` a
+memória aprende a nova empresa. O detalhe do pedido ganha `env_slug`,
+`roteamento_modo`, `pode_mover` e `motivo_nao_move` (nada disso é lido em
+`desligado`).
+
+Em todos os modos o envio ao Fire/XLSX segura `trava_do_pedido` com teto de
+120 s (`_ESPERA_ENVIO_S`, depois 409 `pedido_ocupado`) e recusa (409
+`mover_inacabado`) pedido que também está em outra empresa ativa — mover
+interrompido deixa as duas cópias em revisão.
 
 ## As tabelas (`app_shared.db`)
 
@@ -258,7 +275,9 @@ papel de cada uma:
   `env_fora_sp`, `ativa` (nasce 0). Sem linha = regra desligada.
 - **`regra_faturamento_rede`** / **`regra_faturamento_chave`** — redes fixas e
   suas chaves (`raiz`|`cnpj`). Semente: Centauro, Riachuelo, Kallan (por
-  raiz) e Sam's Club (12 CNPJs de CD), todas em `mm`.
+  raiz) e Sam's Club (12 CNPJs de CD), todas em `mm` — só enquanto a política
+  nunca foi salva e a tabela de redes está vazia. Ligar exige toda rede com
+  chave e em empresa ativa; remover rede exige a regra desligada.
 - **`roteamento_decisao`** — o rastro de cada decisão (ver acima).
 - **`decisao_ambiente`** — a memória (degrau 3), PK `cnpj_cliente`. Nasce
   vazia e isso é um estado válido; perde para documento E histórico sempre.

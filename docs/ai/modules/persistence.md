@@ -101,7 +101,8 @@ completo em [`modules/routing.md`](routing.md), aqui só o schema:
   `env_fora_sp`, `ativa` (nasce 0), `alterado_por`, `alterado_em`. Sem linha =
   regra desligada (`regra_faturamento_repo`).
 - `regra_faturamento_rede` — `id`, `nome` UNIQUE, `env_slug`, `alterado_por`,
-  `alterado_em`. Semente (só com a tabela vazia): Centauro, Riachuelo, Kallan,
+  `alterado_em`. Semente (só com a tabela vazia e sem linha em
+  `regra_faturamento_config`): Centauro, Riachuelo, Kallan,
   Sam's Club, todas em `mm`, `alterado_por='semente'`.
 - `regra_faturamento_chave` — PK `(tipo, chave)`, `rede_id` FK (`ON DELETE
   CASCADE`); `tipo` `raiz` (8 dígitos) ou `cnpj` (14). Uma chave pertence a

@@ -59,7 +59,10 @@ deixar rastro auditável (quem, quando, o que o portal sugeria).
 - **Troca sem dono.** Toda escolha diferente da sugestão grava o usuário. Sem
   usuário identificado (watcher), o dono é `sistema:regra`/`sistema:<degrau>`.
 - **Firebird mudo virar "fora de SP".** Erro de leitura da UF é "não sei", nunca
-  ausência (regra 2 do módulo routing).
+  ausência (regra 2 do módulo routing). O mesmo vale para UF que não é uma das
+  27 nem `EX`: lixo no cadastro não vira "fora de SP".
+- **UF das lojas decidir.** A UF que vale é a do CNPJ faturado do cabeçalho
+  (`customer_cnpj`, §10.3); CNPJs de loja só servem para achar a rede fixa.
 
 ## 5. Fatos que o desenho assume (confirmados com o Samuel / Bianca)
 
@@ -99,14 +102,18 @@ Tabela nova em `app_shared.db`, editada em `/admin/roteamento`:
 
 - `regra_faturamento_config` (linha única): `env_sp` (slug da MM), `env_fora_sp`
   (slug da Nasmar), `ativa` (0/1).
-- `regra_faturamento_rede`: `nome`, `politica` (`sempre:<slug>`), e as
-  **chaves por raiz de CNPJ** (8 dígitos) — mesmo formato de chave que
-  `preco_rede_chave_v1` já usa (`raiz`/`cnpj`, cnpj vence raiz).
+- `regra_faturamento_rede`: `nome`, `env_slug` (a empresa em que a rede fatura
+  sempre), e as **chaves** em `regra_faturamento_chave` — raiz de CNPJ (8
+  dígitos) ou CNPJ completo (14), mesmo formato que `preco_rede_chave_v1` já
+  usa (`raiz`/`cnpj`, cnpj vence raiz). Rede cujo `env_slug` não é ambiente
+  ativo não decide (nem cai na UF) e barra ligar a regra.
 
 Só as exceções precisam de linha (as 4 redes "sempre MM"). Toda rede sem linha cai
 na política padrão "por UF" — por isso rede nova funciona sem cadastro (fato 3).
 
-Nasce com as 4 redes semeadas e `ativa = 0`. As raízes de CNPJ das 4 redes
+Nasce com as 4 redes semeadas e `ativa = 0`. A semente só roda enquanto a
+política nunca foi salva e a tabela de redes está vazia — depois que o admin
+configurou, nada mais é semeado. As raízes de CNPJ das 4 redes
 saem dos samples reais e do Fire (Centauro = SBF, faturamento `/0296-51` já
 conhecido; Sam's = CD do local de entrega, ver memória do Sam's) e são conferidas
 pelo Samuel na tela antes de ligar.
@@ -137,12 +144,16 @@ Consulta nova em `app/erp/queries.py`: UF do `CADASTRO` por CNPJ (cliente ativo)
 - não achou → não responde;
 - uma base não respondeu e a outra não achou → não responde (erro não vira ausência).
 
-⚠️ **A coluna exata da UF no `CADASTRO` ainda não foi conferida** (o próprio
-`queries.py` tem um TODO pedindo isso). Task 0 do plano: ler o schema nas duas
-bases (só SELECT) e cravar o nome antes de qualquer código.
+Coluna cravada na Task 0 (Fire viva, só SELECT): `CADASTRO.UF`, cliente com
+`RELAC_CLIENTE = 'Sim'`, casado por `CPF_CNPJ`. O Fire grava o CNPJ mascarado
+(`NN.NNN.NNN/NNNN-NN`), então a consulta é `C.CPF_CNPJ IN (?, ?)` com a forma
+mascarada e a de só dígitos — a coluna crua usa o índice (um `REPLACE` na
+coluna varreria o `CADASTRO` inteiro). Cadastro em formato fora desses dois não
+acha UF e a regra não responde (nunca chuta). UF válida = as 27 + `EX`.
 
-Custo: 1 SELECT indexado por CNPJ por base, por pedido. Cachear por CNPJ durante o
-ciclo do watcher (mesmo CNPJ em vários arquivos).
+Custo: 1 SELECT indexado por CNPJ por base, por pedido, com cache em memória
+por CNPJ: leitura boa vale 600 s; base indisponível fica 60 s em cache (Fire
+fora do ar não cobra um timeout por pedido e volta a ser tentado em 1 minuto).
 
 ### 6.5 Preview e troca pelo operador
 
@@ -191,9 +202,9 @@ trocado para MM por fulano em 19/10 14:02".
 ## 9. Testes
 
 - Escada pura: regra resolve (sempre MM; SP; fora de SP); regra não responde (sem
-  CNPJ, CNPJ fora do Fire, UF vazia, UFs divergentes entre bases, base muda, lojas
-  em UFs diferentes); regra × documento divergindo; `Deps.regra=None` mantém os
-  testes atuais verdes.
+  CNPJ no cabeçalho, CNPJ fora do Fire, UF vazia, UF inválida, UFs divergentes
+  entre bases, base muda, rede de empresa inativa); regra × documento
+  divergindo; `Deps.regra=None` mantém os testes atuais verdes.
 - Wiring commit: troca no preview grava `roteamento_decisao` com o usuário.
 - Wiring watcher: `automatico` com `sistema:regra`; mover pedido entre empresas
   (linha some na origem, nasce no destino, audit nos dois, bloqueado com número Fire).
