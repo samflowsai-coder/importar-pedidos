@@ -2531,6 +2531,16 @@ def _recusa_planilha_pontual(
     return "sem_codigo_fire", itens[0]["motivo"]
 
 
+def _pedido_para_o_flow(order, decisao):
+    """O pedido que vai ao Flow (I2). Em `produto_chave_modo` `ligado`
+    (`decisao.check` preenchido), cópia ANTES do `depara_apply.aplicar`: o Flow
+    recebe o código/EAN do cliente, não os do produto decidido no Fire (até o Flow
+    consumir `erpProdutoId`). Fora de `ligado`, o próprio pedido, como hoje."""
+    if getattr(decisao, "check", None) is not None:
+        return order.model_copy(deep=True)
+    return order
+
+
 def _registrar_aplicados(import_id: str, decisao) -> None:
     """Audit `preco_aplicado` depois que o pedido saiu. Nunca derruba um envio
     que já deu certo (o Fire já tem o pedido / o XLSX já existe)."""
@@ -2630,6 +2640,7 @@ def _send_one_to_fire(
         # produto (BACKLOG §2.1).
         from app.erp import depara_apply
 
+        order_flow = _pedido_para_o_flow(order, decisao)
         dep_changed = depara_apply.aplicar(order, vinculos)
         if dep_changed:
             repo.append_audit(import_id, "depara_aplicado_no_fire", {"itens": dep_changed})
@@ -2730,7 +2741,7 @@ def _send_one_to_fire(
         # nunca derruba o send-to-fire que já teve sucesso.
         slug = (request_env or {}).get("slug")
         if slug:
-            push_new_order(order, import_id=import_id, slug=slug)
+            push_new_order(order_flow, import_id=import_id, slug=slug)
 
         return _FireSendOutcome(
             True,
@@ -2866,6 +2877,7 @@ def _export_one_xlsx(
         # do SEQ avaliado).
         from app.erp import depara_apply
 
+        order_flow = _pedido_para_o_flow(order, decisao)
         dep_changed = depara_apply.aplicar(order, vinculos)
         if dep_changed:
             repo.append_audit(import_id, "depara_aplicado_no_xls", {"itens": dep_changed})
@@ -2885,7 +2897,7 @@ def _export_one_xlsx(
         # vira outbox/log e nunca derruba a geração do XLS.
         slug = (request_env or {}).get("slug")
         if slug:
-            pushed = push_new_order(order, import_id=import_id, slug=slug)
+            pushed = push_new_order(order_flow, import_id=import_id, slug=slug)
             repo.append_audit(import_id, "flowpcp_push", {"ok": pushed})
         _registrar_aplicados(import_id, decisao)
 

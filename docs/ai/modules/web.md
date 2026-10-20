@@ -170,6 +170,10 @@ API pública para páginas-filho:
     o item vinculado com a identidade do Fire. Como o `push_new_order` compartilha o
     mesmo `order`, o FlowPCP também recebe a identidade Fire dos itens vinculados
     (desejável: o catálogo do Flow é Fire-synced). Só afeta itens com vínculo.
+    **Exceção em `produto_chave_modo` `ligado` (I2):** `_pedido_para_o_flow` tira uma
+    cópia do pedido ANTES do `aplicar` (depois do preço aprovado) e é ela que vai ao
+    `push_new_order` — o Flow recebe código/EAN do cliente, não os do produto decidido,
+    até consumir `erpProdutoId` (Task 9). Fora de `ligado`, como acima.
 
 ## Tela: produto por chave exata (`index.html`)
 Os 3 payloads de preview (`preview_file`, `preview_pending`, `rehydrate_preview`)
