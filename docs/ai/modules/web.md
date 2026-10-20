@@ -152,26 +152,39 @@ tela é a de sempre (coluna "Fire" com ✓/✗, picker com busca no topo e confi
 direto). Em `observando`/`ligado`, com `check.items[i].produto` (índice = posição do
 item):
 - `produtoBadge(produto, {acaoIdx})`: rótulos fixos (`ok` "Produto confirmado",
-  `a_identificar` "Escolher produto", `ambiguo` "Mais de um produto",
+  `a_identificar` "Escolher produto", `ambiguo` "Mais de um produto com essa chave",
   `produto_bloqueado` "Produto bloqueado", `vinculo_invalido` "Vínculo inválido",
-  `chaves_discordam` "Chaves discordam", `fire_indisponivel` "Fire sem resposta"),
-  ícone por forma + cor, motivo logo abaixo; no `ok`, SEQ + fonte e o aviso de
-  `troca_no_fire`. Linha travada ganha faixa à esquerda. Banner e rodapé resumem; em
+  `chaves_discordam` "Código e EAN apontam para produtos diferentes",
+  `fire_indisponivel` "Fire sem resposta"; `ok` com `troca_no_fire` vira o estado de
+  tela "Fire grava outro produto", em tom de aviso — `produtoEstadoTela`), ícone por
+  forma + cor, motivo logo abaixo. Linha travada ganha faixa à esquerda. Banner
+  (`produtoContagem`: pendentes, trocas e Fire sem resposta contados à parte, plural
+  de verdade) e rodapé resumem; Fire sem resposta tem banner próprio com "Conferir de
+  novo" (recarrega o preview; o check guardado só muda quando alguém reconfere). Em
   `ligado` o botão de envio fica desabilitado com o motivo (o backend decide, a tela
-  só antecipa).
+  só antecipa). Telefone: coluna Produto presa à direita, botões de ação com 44px.
 - Picker (`openProductPicker`): 3 seções na ordem "Candidatos exatos"
   (`produto.candidatos`, bloqueado não selecionável), "Sugestões pela descrição"
-  (marca "sugestão", sem pré-seleção) e "Buscar no catálogo". Código mostrado =
-  `fire_codprod_altern`. Nada vincula sozinho.
+  (marca "sugestão", sem pré-seleção) e "Buscar no catálogo" (sem repetir quem já
+  está acima). Código mostrado = `fire_codprod_altern`; nome nunca trunca; cada linha
+  traz chips "≠ tamanho/pares/cor" contra a linha do cliente. Nada vincula sozinho.
 - Confirmação lado a lado (`ppMostrarConfirmacao`): linha do cliente × produto
   escolhido; `divergenciasAtributos(descCliente, descProduto)` marca tamanho, pares e
-  cor divergentes (regras da auditoria de 19/10). Só alerta.
-- 409 `conflito`: painel `#ppConflito` na página ("Este código já aponta para…"),
-  "Trocar" reenvia com `substituir: true`, "Manter" fecha sem gravar. Vale também em
+  cor divergentes (regras da auditoria de 19/10). Só alerta: com divergência o botão
+  vira "Vincular mesmo assim" (secundário, borda de aviso) e o foco começa em
+  "Voltar". Quem grava é o `#ppVincularBtn`, que nasce desabilitado por 400 ms (duplo
+  clique no "Confirmar" não pula a confirmação). Erro do vínculo aparece em
+  `#ppConfErro`, dentro da confirmação.
+- 409 `conflito`: painel `#ppConflito` na página ("O código X de CLIENTE já aponta
+  para…", com as linhas Cliente pediu / Vínculo atual / Você escolheu e a divergência
+  marcada); "Manter" é o primário e fecha sem gravar, "Trocar vínculo" reenvia com
+  `substituir: true`. Vale também em
   `desligado` (sem ele, trocar vínculo ficaria impossível).
 - Aba "Itens a identificar" (`#tab-identificar`, `loadFilaIdentificar`) lê
   `GET /api/produtos/a-identificar`; cada linha chama
-  `openImportDetail(id, {itemIndex})`, que rola e destaca o item.
+  `openImportDetail(id, {itemIndex})`, que rola até o item e a coluna do produto e
+  o destaca até o foco sair da linha. Itens com Fire sem resposta vão para o fim, no
+  grupo "Aguardando o Fire".
 - Teste: `tests/test_web_static_produto.py` (textos/ids fixos no HTML servido e o
   `produto_chave_modo` dos payloads).
 

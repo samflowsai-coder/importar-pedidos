@@ -45,10 +45,11 @@ def html() -> str:
         # rótulos fixos do estado do item
         "'Produto confirmado'",
         "'Escolher produto'",
-        "'Mais de um produto'",
+        "'Mais de um produto com essa chave'",
         "'Produto bloqueado'",
         "'Vínculo inválido'",
-        "'Chaves discordam'",
+        "'Código e EAN apontam para produtos diferentes'",
+        "'Fire grava outro produto'",
         "'Fire sem resposta'",
         # picker: as 3 seções, nesta ordem no código
         "Candidatos exatos",
@@ -60,10 +61,24 @@ def html() -> str:
         "Produto escolhido",
         # conflito 409: painel na página, sem confirm()
         'id="ppConflito"',
-        "Este código já aponta para",
+        "já aponta para",
         "Trocar para o produto escolhido?",
-        ">Trocar<",
+        ">Trocar vínculo<",
         ">Manter<",
+        "Cliente pediu",
+        "Vínculo atual",
+        "Você escolheu",
+        # confirmação: botão próprio, divergência rebaixa o botão
+        'id="ppVincularBtn"',
+        "Vincular mesmo assim",
+        'id="ppConfErro"',
+        # chips de atributo nas linhas do picker
+        "≠ tamanho",
+        "tamanho, pares e cor batem",
+        # Fire sem resposta
+        "Não deu para conferir os produtos: o Fire não respondeu.",
+        "Conferir de novo",
+        "Aguardando o Fire",
         "substituir: true",
         # fila
         "Itens a identificar",
@@ -168,3 +183,27 @@ def test_fila_expoe_modo(env_modo, modo):
     body = r.json()
     assert body["modo"] == modo
     assert len(body["itens"]) == 1
+
+
+def test_confirmacao_nao_aceita_duplo_clique(html):
+    """O 2º clique de um duplo clique não pode gravar: a etapa de confirmação usa
+    outro botão, que nasce desabilitado e só libera depois de 400 ms."""
+    i = html.index("function ppMostrarConfirmacao(")
+    fim = html.index("\n}\n", i)
+    corpo = html[i:fim]
+    assert "ppVincularBtn" in corpo
+    assert "disabled = true" in corpo
+    assert "400" in corpo
+    j = html.index("async function confirmProductLink(")
+    corpo_confirm = html[j : html.index("\n}\n", j)]
+    assert "ppVincular(" not in corpo_confirm.split("modoNovo", 1)[1].split("}", 1)[0]
+
+
+def test_foco_inicial_sem_atalho_or(html):
+    assert "?.focus()\n      || " not in html
+    assert "?.focus() ||" not in html
+
+
+def test_sem_texto_antigo(html):
+    assert "Você pode vincular mesmo assim" not in html
+    assert "'Chaves discordam'" not in html
