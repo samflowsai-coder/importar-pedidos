@@ -217,6 +217,14 @@ def _trava_produto_ligada(env: dict | None) -> bool:
     return produto_trava.modo(preco_trava.env_trava_produto(env)) == "ligado"
 
 
+def _produto_chave_modo(env: dict | None) -> str:
+    """Modo da trava de produto para a TELA (mesma regra do portão: sem ambiente,
+    o mais restrito). A tela só mostra o estado novo do item fora de `desligado`."""
+    from app.erp import preco_trava, produto_trava
+
+    return produto_trava.modo(preco_trava.env_trava_produto(env))
+
+
 def _cfg_para_env(env: dict) -> dict:
     """Cfg legado com as pastas DESTA empresa. Usado pelo lote agrupado, onde
     cada grupo escreve na pasta da sua empresa e não na do cookie."""
@@ -2008,6 +2016,7 @@ async def preview_file(
     # alimenta `rehydrate_preview` (pedido já commitado, ambiente definitivo,
     # nada a decidir ali — ver Achado 4 do fix round 1).
     payload["roteamento"] = _roteamento_para_preview(order)
+    payload["produto_chave_modo"] = _produto_chave_modo(request_env)
     return JSONResponse(payload)
 
 
@@ -2110,6 +2119,7 @@ def preview_pending(
         payload = _build_preview_payload(entry.preview_id, name, order, check)
         # Ver comentário equivalente em `preview_upload` (Achado 4, fix round 1).
         payload["roteamento"] = _roteamento_para_preview(order)
+    payload["produto_chave_modo"] = _produto_chave_modo(request_env)
     return JSONResponse(payload)
 
 
@@ -3915,7 +3925,10 @@ def revogar_vinculo(
 
 
 @app.get("/api/produtos/a-identificar")
-def produtos_a_identificar(user: User = Depends(require_user)) -> JSONResponse:  # noqa: ARG001
+def produtos_a_identificar(
+    request: Request,
+    user: User = Depends(require_user),  # noqa: ARG001
+) -> JSONResponse:
     """Itens a identificar dos pedidos em revisão do ambiente ativo: lê o check
     guardado (`produto.estado` diferente de `ok`), sem ir ao Fire. Mais antigos
     primeiro."""
@@ -3945,7 +3958,8 @@ def produtos_a_identificar(user: User = Depends(require_user)) -> JSONResponse: 
                     "importado_em": entry.get("imported_at"),
                 }
             )
-    return JSONResponse({"itens": linhas})
+    modo = _produto_chave_modo(_request_environment(request))
+    return JSONResponse({"modo": modo, "itens": linhas})
 
 
 @app.delete("/api/produtos/depara/{depara_id}")
@@ -4064,6 +4078,7 @@ def rehydrate_preview(
     payload["fire_codigo"] = entry.get("fire_codigo")
     payload["fire_status_last_seen"] = entry.get("fire_status_last_seen")
     payload["arquivo_original"] = _arquivo_original_info(entry)
+    payload["produto_chave_modo"] = _produto_chave_modo(_request_environment(request))
     # Situação de preço por item (trava). Só leitura; ausente em `desligado` e
     # em qualquer falha — o preview sempre renderiza.
     try:

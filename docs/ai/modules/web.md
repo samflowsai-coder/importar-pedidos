@@ -115,8 +115,10 @@ API pública para páginas-filho:
   vínculo, se ele ainda existe; senão log direto. Resposta `{"revogado": id}`.
 - `GET /api/produtos/a-identificar` → fila: itens com `produto.estado` ≠ `ok` no
   `check_json` guardado dos pedidos `parsed` do ambiente ativo (sem Fire). Resposta
-  `{"itens": [{import_id, pedido, cliente, item_index, codigo, ean, descricao,
-  estado, motivo, importado_em}]}`, por `importado_em` crescente.
+  `{"modo", "itens": [{import_id, pedido, cliente, item_index, codigo, ean, descricao,
+  estado, motivo, importado_em}]}`, por `importado_em` crescente. `modo` =
+  `produto_chave_modo` do ambiente do request (`_produto_chave_modo`: mesma regra do
+  portão, sem ambiente vale o mais restrito); a tela só mostra a aba fora de `desligado`.
 - `DELETE /api/produtos/depara/{depara_id}` → desfaz um vínculo v1. Log direto
   via `logger.info` (não `audit_log` — `import_id` é `NOT NULL` com FK pra
   `imports`, e o undo não tem um import associado).
@@ -142,6 +144,36 @@ API pública para páginas-filho:
     o item vinculado com a identidade do Fire. Como o `push_new_order` compartilha o
     mesmo `order`, o FlowPCP também recebe a identidade Fire dos itens vinculados
     (desejável: o catálogo do Flow é Fire-synced). Só afeta itens com vínculo.
+
+## Tela: produto por chave exata (`index.html`)
+Os 3 payloads de preview (`preview_file`, `preview_pending`, `rehydrate_preview`)
+trazem `produto_chave_modo` (`_produto_chave_modo(request_env)`). Em `desligado` a
+tela é a de sempre (coluna "Fire" com ✓/✗, picker com busca no topo e confirmar
+direto). Em `observando`/`ligado`, com `check.items[i].produto` (índice = posição do
+item):
+- `produtoBadge(produto, {acaoIdx})`: rótulos fixos (`ok` "Produto confirmado",
+  `a_identificar` "Escolher produto", `ambiguo` "Mais de um produto",
+  `produto_bloqueado` "Produto bloqueado", `vinculo_invalido` "Vínculo inválido",
+  `chaves_discordam` "Chaves discordam", `fire_indisponivel` "Fire sem resposta"),
+  ícone por forma + cor, motivo logo abaixo; no `ok`, SEQ + fonte e o aviso de
+  `troca_no_fire`. Linha travada ganha faixa à esquerda. Banner e rodapé resumem; em
+  `ligado` o botão de envio fica desabilitado com o motivo (o backend decide, a tela
+  só antecipa).
+- Picker (`openProductPicker`): 3 seções na ordem "Candidatos exatos"
+  (`produto.candidatos`, bloqueado não selecionável), "Sugestões pela descrição"
+  (marca "sugestão", sem pré-seleção) e "Buscar no catálogo". Código mostrado =
+  `fire_codprod_altern`. Nada vincula sozinho.
+- Confirmação lado a lado (`ppMostrarConfirmacao`): linha do cliente × produto
+  escolhido; `divergenciasAtributos(descCliente, descProduto)` marca tamanho, pares e
+  cor divergentes (regras da auditoria de 19/10). Só alerta.
+- 409 `conflito`: painel `#ppConflito` na página ("Este código já aponta para…"),
+  "Trocar" reenvia com `substituir: true`, "Manter" fecha sem gravar. Vale também em
+  `desligado` (sem ele, trocar vínculo ficaria impossível).
+- Aba "Itens a identificar" (`#tab-identificar`, `loadFilaIdentificar`) lê
+  `GET /api/produtos/a-identificar`; cada linha chama
+  `openImportDetail(id, {itemIndex})`, que rola e destaca o item.
+- Teste: `tests/test_web_static_produto.py` (textos/ids fixos no HTML servido e o
+  `produto_chave_modo` dos payloads).
 
 ## Roteamento intercompany (wiring web)
 
