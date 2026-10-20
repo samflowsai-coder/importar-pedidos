@@ -155,6 +155,12 @@ bootstrap derruba as tabelas do modelo anterior (`preco_rede`, `preco_rede_cnpj`
 - `imports.check_preco_json` — check de produto que a trava avalia (gravado no `/api/commit` e
   regravado no `vincular-produto`); leva a marca `preco_fonte_slug` da fonte que o gerou, e
   de outra fonte vale como sem avaliação. `repo.get_import` devolve como `check_preco`.
+- `imports.produto_escolhido_json` — escolha pontual do produto por linha (R18, chave
+  repetida no pedido), só deste import: `{"<item_index>": {fire_seq, por, em, descricao,
+  codigo, ean}}`. Valor podre: a leitura devolve `{}` com aviso e a gravação recomeça
+  de um objeto novo.
+  Grava só `repo.set_produto_escolha` (`json_set`, nunca clobbado pelo upsert);
+  `get_import`/`list_imports` devolvem como `produto_escolhido` (`{}` sem escolha).
 - `imports.cliente_override_cnpj` — CNPJ do cliente escolhido no override; é o que define a
   rede quando o pedido veio sem CNPJ. Ver `modules/erp.md` ("Trava de preço por rede").
 

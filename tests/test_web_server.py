@@ -683,7 +683,7 @@ def _stub_fire_success(monkeypatch):
         ),
     )
     # Neutraliza price-check (sem Fire real) — deterministico.
-    monkeypatch.setattr("app.erp.product_check.check_order", lambda order, env=None: {})
+    monkeypatch.setattr("app.erp.product_check.check_order", lambda order, env=None, escolhas=None: {})
     monkeypatch.setattr(
         "app.erp.product_check.is_blocking", lambda check, ack_items=None: (False, {})
     )
@@ -2107,6 +2107,7 @@ def _seed_catalogo_fire(rows: list[dict]) -> None:
             ean=r.get("ean"),
             ativo=r.get("ativo", True),
             tipo=r.get("tipo", "simples"),
+            codigo_alternativo=r.get("codprod_altern"),
         )
         for r in rows
     ]
@@ -2151,6 +2152,23 @@ def test_produtos_search_local():
     body = r.json()
     assert any(p["fire_codigo"] == "10" for p in body["results"])
     assert any(p["fire_nome"] == "TENIS AZUL" for p in body["results"])
+
+
+def test_produtos_search_devolve_codprod_altern():
+    _seed_catalogo_fire(
+        [
+            {
+                "fire_produto_id": "10",
+                "codigo": "10",
+                "nome": "MEIA CANO ALTO",
+                "ean": "789",
+                "codprod_altern": "KG02PR",
+            }
+        ]
+    )
+    body = client.get("/api/produtos/search?q=meia&desc=meia%20cano%20alto").json()
+    assert body["results"][0]["fire_codprod_altern"] == "KG02PR"
+    assert body["suggestions"][0]["fire_codprod_altern"] == "KG02PR"
 
 
 def test_produtos_search_requires_min_length():
@@ -2701,7 +2719,7 @@ def test_send_to_fire_item_vinculado_vai_pelo_seq_do_depara(monkeypatch):
         )
 
     monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _fake_export)
-    monkeypatch.setattr("app.erp.product_check.check_order", lambda order, env=None: {})
+    monkeypatch.setattr("app.erp.product_check.check_order", lambda order, env=None, escolhas=None: {})
     monkeypatch.setattr(
         "app.erp.product_check.is_blocking", lambda check, ack_items=None: (False, {})
     )

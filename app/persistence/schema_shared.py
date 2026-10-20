@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS environments (
     preco_trava_modo          TEXT NOT NULL DEFAULT 'desligado',
     -- Slug do ambiente cuja cópia de tabela de preço vale para este. NULL = o próprio.
     preco_fonte_slug          TEXT,
+    -- Casamento de produto só por chave exata: desligado | observando | ligado.
+    produto_chave_modo        TEXT NOT NULL DEFAULT 'desligado',
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -185,6 +187,18 @@ CREATE TABLE IF NOT EXISTS erp_bases (
     UNIQUE (environment_id),
     UNIQUE (tenant_id, base)
 );
+
+-- Troca de interruptor do ambiente (M5: `produto_chave_modo`), auditável:
+-- antes, depois, quem e quando. Só INSERT; nunca apagado.
+CREATE TABLE IF NOT EXISTS ambiente_modo_audit (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    environment_id  TEXT NOT NULL,
+    campo           TEXT NOT NULL,
+    valor_antigo    TEXT,
+    valor_novo      TEXT NOT NULL,
+    alterado_por    TEXT NOT NULL,
+    alterado_em     TEXT NOT NULL
+);
 """
 
 INDEXES_SQL = """
@@ -219,6 +233,9 @@ CREATE INDEX IF NOT EXISTS idx_decisao_ambiente_env ON decisao_ambiente(env_slug
 
 CREATE INDEX IF NOT EXISTS idx_sombra_decidido_em ON roteamento_sombra(decidido_em DESC);
 CREATE INDEX IF NOT EXISTS idx_sombra_import_id   ON roteamento_sombra(import_id);
+
+CREATE INDEX IF NOT EXISTS idx_ambiente_modo_audit_env
+    ON ambiente_modo_audit(environment_id, alterado_em DESC);
 """
 
 # Migrações de coluna para shared.db — aplicadas se a coluna ainda não existir.
@@ -261,6 +278,9 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
      "ALTER TABLE environments ADD COLUMN preco_trava_modo TEXT NOT NULL DEFAULT 'desligado'"),
     ("environments", "preco_fonte_slug",
      "ALTER TABLE environments ADD COLUMN preco_fonte_slug TEXT"),
+    # Casamento de produto só por chave exata (interruptor de 3 estados).
+    ("environments", "produto_chave_modo",
+     "ALTER TABLE environments ADD COLUMN produto_chave_modo TEXT NOT NULL DEFAULT 'desligado'"),
     # CNPJ da empresa do ambiente, só dígitos — chave de `find_by_cnpj`.
     ("environments", "cnpj",
      "ALTER TABLE environments ADD COLUMN cnpj TEXT"),

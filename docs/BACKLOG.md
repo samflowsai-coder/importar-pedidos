@@ -168,6 +168,12 @@ lugar da variante.
 
 ### 2.15 Troca de produto pelo importador de Excel do Fire — aviso no portal feito, restam 3 pontas
 
+> **Resolvido com `produto_chave_modo=ligado` (2026-10-20, branch `feat/produto-chave-exata`):**
+> a planilha leva o `CODPROD_ALTERN` do produto decidido e a trava recusa
+> `troca_no_fire`/`sem_codigo_fire` em vez de só avisar (`docs/ai/modules/erp.md`, "Casamento
+> por chave exata"). Em `desligado`/`observando` o aviso e as pontas abaixo continuam valendo;
+> o chamado com a Fire Sistemas segue útil para confirmar a previsão.
+
 O aviso (`troca_no_fire`) foi implementado em 24/09/2026 — detalhe em
 `docs/ai/modules/erp.md`. O defeito de origem continua sendo do Fire (casa por
 prefixo, primeiro da ordem física); medido em 24/09: 33 trocas na MM, 5 na Nasmar,
@@ -222,6 +228,57 @@ consumidores ainda poderiam reservar o mesmo item ou o mesmo `MAX(SEQ)+1`.
 **Fix:** trava por ambiente (arquivo com lock do SO ou linha de lease no `app_shared.db`
 com validade) tomada no começo do ciclo de gravação e da recuperação. Medir antes se a
 situação acontece de fato (reinício do serviço com o processo antigo ainda vivo).
+
+### 2.20 Casamento de produto por chave exata — pontas deferidas
+Feature em `feat/produto-chave-exata` (spec `docs/superpowers/specs/2026-10-19-casamento-produto-chave-exata-design.md`).
+Itens abaixo foram vistos nas revisões e deixados de fora de propósito; nenhum bloqueia ligar `observando`.
+
+**Fora do Portal / lacunas de contrato**
+- **Flow recebe `erpProdutoId` (Task 9 adiada).** O Portal ainda não manda `erpProdutoId`/`confiancaParser` por item
+  ao Flow (o Flow não consome e a IA dele já saiu). Ligar o item pelo `fire_produto_id` e nunca casar código ou EAN de
+  pedido vindo do Portal é plano do pcp-app; depois o Portal passa a mandar (digit string, ruling R3).
+- **Preço com `preco_fonte_slug` ignora a escolha pontual** (Nasmar→MM): `_check_da_fonte` roda no Fire da fonte e não vê
+  `produto_escolhido_json`. Hoje a trava de preço da Nasmar não está ligada; resolver antes de ligar.
+- **Produto ligado + preço desligado:** `is_blocking`/`_regra_de_hoje` usa o `price_status` do match legado, não o do
+  produto decidido.
+
+**Vínculo v2 (`produto_vinculo_repo`, `vincular`)**
+- `vincular` aceita escopo vazio ou sem prefixo `rede:`/`raiz:`.
+- Mesmo SEQ já vinculado ignora `fire_codigo`/`fire_descricao` novos, sem documentar.
+- `revogar` devolve a linha de antes do update (sem `revogado_em` no dataclass).
+- `_eh_unico_do_vinculo` depende do texto da mensagem do SQLite; comentar se o índice virar expressão.
+- Falha pós-commit do v2 (v1/audit) deixa o v2 sem audit; corrida na 2ª chave deixa a 1ª sem audit.
+- Upsert do v1 sobrescreve vínculo antigo sem 409 e o audit diz "criado".
+- Revogar 2x grava 2 audits; fila e recheck truncam em 500 (os mais novos).
+- Revogar não é atômico: v2 revogado + falha ao apagar o v1 deixa o v1 órfão (retry dá 404).
+- Comentários "raiz:<8 dígitos>" em `produto_vinculo_repo.py:4` e `schema_env.py:194`: agora 8 caracteres alfanuméricos.
+
+**Escopo e check**
+- Teste de rede por CNPJ completo e de rede inativa ausente.
+- Catálogo existente fica com `codprod_altern` NULL até o próximo sync (o check lê do Fire ao vivo, não do catálogo).
+- `_vinculos_discordam` lista só os 2 candidatos dos vínculos, não os de EAN/código.
+- `router.env_connect` de slug inexistente cria banco vazio (check sai "completo sem vínculo").
+- `_check_da_fonte` usa o env da fonte (mm) para pedido Nasmar; `resolucao_para(slug="mm")` pode não resolver o cliente real.
+- Previsão de prefixo roda depois da busca exata; cursor envenenado degrada o aviso legado em `desligado`.
+- Escolha pontual em `ligado` casa só por posição (descrição não conferida).
+
+**Interruptor, trava e métricas**
+- Troca do `produto_chave_modo` só loga (loguru), sem audit consultável; avaliar antes de ligar em produção.
+- `produto_observado` é auditado em toda chamada, mesmo com itens vazios (ruído).
+- Bloqueio de produto conta em `portal_price_check_blocks_total{reason="produto"}` (mistura com preço).
+- `env=None` lê o `app_shared.db` em toda chamada (docstring "desligado inerte" imprecisa); env inativo ligado não conta.
+- Testes da rota do interruptor moraram em `tests/test_produto_trava.py` (não existe `test_routes_environments.py`).
+
+**Tela (Task 8)**
+- Roving tabindex no picker; limiar mínimo de similaridade nas sugestões; M1/M4-M7 do design review; cartão mobile completo.
+- `<button>` com `<div>` dentro na fila; `escJs` sem aspas; `ppConfErro` não limpa ao escolher outro produto; `PP_ERRO_CATALOGO` casa por igualdade de string.
+- Duas redações para o estado "troca" (preview x fila); intro da fila "sem produto confirmado" imprecisa; "Vincular produto" segue primário após erro de catálogo; topbar do telefone estoura (pré-existente).
+
+**Migração e regressão (Task 10)**
+- Dry-run cria `app_state` vazio com slug errado; `criado_em` do v1 se perde; guarda de revenda só com CNPJ completo; sem teste de `main()` em dry-run; `;` em literal recusado.
+- Guarda de SELECT não pega procedure selecionável por vírgula (`FROM a, sp(1)`); `READ ONLY` protege; teste do `query_only` é fraco.
+- Arquivo todo pendente conta como comparado na cobertura.
+- Cobertura da Nasmar insuficiente na regressão de 20/10 (48 arquivos sem pedido no Fire na janela de 72h): repetir com cópia mais nova antes de ligar a Nasmar.
 
 ---
 

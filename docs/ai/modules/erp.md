@@ -12,6 +12,10 @@ Conectar no Firebird (embedded ou TCP) e inserir pedidos preservando o schema le
 - `app/erp/fiscal.py` — `PerfilFiscal` + `perfil_para(env)`: constantes fiscais do
   pedido faturável, por ambiente (`CODFIGFISCAL` difere: 1 na MM, 5 na Nasmar).
 - `app/exporters/firebird_exporter.py` — orquestrador, chamado pelo pipeline com `EXPORT_MODE=db|both`.
+- `app/erp/produto_chave.py` (decisão pura por chave exata), `produto_escopo.py` (escopo rede/raiz do vínculo),
+  `produto_trava.py` (portão por `produto_chave_modo` e mapa do produto decidido),
+  `app/persistence/produto_vinculo_repo.py` (de-para v2) — ver "Produto por chave exata" e o runbook abaixo.
+- `tools/migrar_produto_vinculo_v2.py`, `tools/regressao_chave_exata.py` — migração v1→v2 e regressão só leitura.
 - `tools/explore_firebird.py` — gera schema_report a partir de `.fdb` (rodar SEMPRE em cópia, nunca em produção).
 
 ## Padrões reais de produção (não inventar)
@@ -67,6 +71,7 @@ FB_HOST=192.168.1.10  # omitir = embedded
 FB_PORT=3050
 FB_USER=SYSDBA
 FB_PASSWORD=masterkey
+PORTAL_PRODUTO_CHAVE_CLI=   # ligado = trava de produto no main.py (CLI); ausente = comportamento de hoje
 ```
 
 ## Configuração via UI (`/configuracoes/banco`)
@@ -130,9 +135,192 @@ E `summary.price_summary` agrega contagens.
 envio. Bloqueia em `mismatch`, `no_order_price`, ou `no_price_in_fire` não
 coberto por `ack_items`. `available=False` → não bloqueia (best-effort).
 
+### Produto por chave exata (`item["produto"]`, observado)
+
+`check_order` grava em todo item `produto = {estado, fire_seq, fonte, motivo,
+candidatos: [{seq, descricao, codprod_altern, bloqueado}]}` e
+`summary.items_produto_pendente` (estado ≠ `ok`). A decisão é a função pura
+`app/erp/produto_chave.decidir` (estados `ok | a_identificar | ambiguo |
+produto_bloqueado | vinculo_invalido | chaves_discordam | chave_repetida`; fonte
+`ean | depara | codprod_altern | escolha_pontual`). Candidatos vêm de `find_produtos_chave_por_{ean,codigo,seq}_sql`
+(todas as linhas da chave + `BLOQUEADO`), numa passada batelada a mais no mesmo
+cursor. EAN = só dígitos, igual exato; código = `strip().upper()`, igual exato.
+O de-para é o v2 (`produto_vinculo_repo.lookup` no escopo de
+`produto_escopo.cnpj_do_item`/`escopos_para`, cliente real do intercompany via
+`resolucao_para`). Vínculo inválido (SEQ sumido/bloqueado) é final. Chave com
+problema (`ambiguo`/`produto_bloqueado`) só deixa passar o SEQ que está entre os
+candidatos dela; fora disso, ou vínculos do código e do EAN diferentes →
+`chaves_discordam`. `ok` traz o candidato decidido em `candidatos`.
+**Chave repetida no pedido (R18, `produto_chave.desambiguar`):** chave do cliente
+(código normalizado, EAN) que aparece em 2+ itens do MESMO pedido com descrições
+diferentes (`descricao_normalizada`: maiúsculas, sem acento, espaços colapsados;
+`chaves_repetidas`) não discrimina. Item `ok` cujo SEQ só vinha dela (fonte `ean`,
+`codprod_altern`, ou `depara` cujo vínculo é dessa chave) vira `chave_repetida`,
+`fire_seq` None, `candidatos` = o produto que a chave achava, motivo "O código X
+aparece em N linhas com descrições diferentes; escolha o produto de cada linha."
+(ou "O EAN X …"). Outra chave do item concordante e não repetida mantém o `ok` por
+ela. Mesma chave e mesma descrição (ex.: uma linha por loja) segue igual.
+**Escolha pontual:** `check_order(order, env=..., escolhas={posição: SEQ})` —
+`escolhas_do_import(entry)` lê `imports.produto_escolhido_json`. Item com escolha
+decide antes de qualquer chave (`decidir_escolha`): SEQ ativo → `ok` com fonte
+`escolha_pontual`; sumido/bloqueado → `vinculo_invalido` ("A escolha desta linha
+aponta para o produto X, que não existe mais ou está bloqueado."). Vale só para
+aquele import: todo chamador que confere um import salvo passa as escolhas dele
+(`decidir_envio`, recheck do vincular, ack-sem-preço, a própria rota); o check da
+fonte de preço (`_check_da_fonte`) não (SEQs de outro Fire). A linha com escolha
+válida também tem os campos legados trocados (`match`, `match_source =
+"escolha_pontual"`, `fire_product_id`, `fire_description`, preço/unidade e
+`price_status` do escolhido; código da previsão de troca = o `CODPROD_ALTERN` dele),
+em todo modo (R20). Fora de `ligado` a saída leva a escolha por cima do v1:
+`depara_apply.sobrepor_escolhas(order, vinculos, entry["produto_escolhido"])` (SEQ
+no insert, `codigo` gravado na escolha na planilha, EAN do escolhido ou nenhum,
+OBS "ref cliente: <orig>"), chamado por `_vinculos_de_para` (envio, export,
+preview). **R21:** produto escolhido sem `CODPROD_ALTERN` nunca vai como str(SEQ)
+(o importador do Fire casaria por prefixo): a linha fica com o código do cliente e
+`sem_codigo_fire`; `codigo_vivo_das_escolhas` prefere o código do candidato decidido
+no check ao vivo (`DecisaoEnvio.check_vivo`, preenchido em todo modo) ao do catálogo
+guardado. Envio xlsx/both e export-xlsx recusam com 409 `sem_codigo_fire` ("O produto
+X escolhido para a linha N não tem código no Fire; …") em qualquer modo, só para
+escolha pontual (`_recusa_planilha_pontual`, audit `send_to_fire_blocked` /
+`xlsx_export_blocked`); `db` passa pelo SEQ. Em `ligado` quem trava é o portão
+(`sem_codigo_fire` de `itens_planilha`). **M1:** escolha pontual que o check ao vivo
+marca `vinculo_invalido` (SEQ sumiu ou foi bloqueado no Fire;
+`depara_apply.pontuais_invalidas`) não sai em NENHUM modo nem export_mode, insert
+incluído: 409 `vinculo_invalido` "O produto X escolhido para a linha N não está mais
+ativo no Fire; escolha outro." (mesmo `_recusa_planilha_pontual`, `planilha=False` no
+`db`). Fire fora (`fire_indisponivel`) não recusa.
+`produto_conferencia_incompleta` (topo e `summary`) = `True` quando o vínculo v2
+não pôde ser lido (banco do ambiente fora, intercompany sem resposta). Com
+`env` explícito o vínculo vem de `router.env_connect(env["slug"])`, não do
+contexto ativo, e qualquer falha marca. Sem `env`, `db.connect()`; sem ambiente
+ativo não marca. Fire fora (`available=False`) ou falha só nesta passada →
+`estado = "fire_indisponivel"` (do check, não de `decidir`). Os campos legados
+(`match`, `match_source`, `fire_product_id`, …) não mudam. Só bloqueia com o
+interruptor abaixo em `ligado`.
+
+**Interruptor `environments.produto_chave_modo`** (`desligado` nasce | `observando` |
+`ligado`): troca só por `PATCH /api/admin/environments/{id}/produto-chave`
+(admin, `{modo}`; 404/422; log via `set_produto_chave_modo`). Portão puro em
+`app/erp/produto_trava.py`: `modo(env)` (None/inválido → desligado) e
+`avaliar(check, *, env, export_mode) -> TravaProduto(bloqueado, reason, itens)`.
+`itens` = `[{index, estado, motivo}]` de todo item com `produto.estado != "ok"` (item
+sem `produto` conta como não resolvido), preenchido em `observando` e `ligado`; em
+`desligado` vem vazio. Só `ligado` bloqueia: `fire_indisponivel` (check
+`available` falso/ausente ou `produto_conferencia_incompleta`) tem precedência sobre
+`produto_a_identificar`. Com `export_mode` `xlsx` ou `both` (sai planilha), `ligado`
+ainda trava, nesta ordem, com `sem_codigo_fire` (item `ok` cujo candidato decidido não
+tem `CODPROD_ALTERN`: "O produto {seq} não tem código no Fire; a planilha não consegue
+apontá-lo.") e `troca_no_fire` (`produto.troca_no_fire` preenchido, ou a chave ausente:
+"O importador do Fire trocaria este código pelo produto {seq_previsto}." ou, com
+`seq_previsto` None, "O código {codigo} do produto {seq} não pode ser conferido na
+planilha do Fire."). Em `db` essas duas não valem (o insert entra pelo SEQ). Em
+`observando` os itens delas também entram em `itens`. `itens` dessas regras usam
+`estado` = o próprio motivo (`sem_codigo_fire`/`troca_no_fire`).
+
+**Saída com o produto decidido (`ligado`, spec §6).** `DecisaoEnvio.check` = o check ao
+vivo que a trava aprovou (None fora de `ligado`). `produto_trava.produtos_decididos(check)
+-> (vinculos, produtos_por_item)`: todo item `ok` (inclusive quando o código do cliente já
+é o `CODPROD_ALTERN`) vira um vínculo no formato do `depara_apply.aplicar`
+(`fire_codigo` = `CODPROD_ALTERN` do candidato decidido, lido do Fire no check, nunca do
+catálogo local; `fire_ean` = EAN do candidato ou "" com `substitui_ean: True`, e o
+`aplicar` troca ou LIMPA o EAN do cliente, nunca o mantém — o v1, sem a flag, segue como
+antes; `orig` = código do cliente, que vai na OBS como `ref cliente: …`) e
+`{posição: SEQ}`. Os candidatos em `item["produto"]["candidatos"]` levam também
+`unidade` e `ean` (os builders `find_produtos_chave_por_*_sql` trazem
+`TRIM(CODIGO_EAN13)` como 8ª coluna; os builders legados não mudam). Sem `CODPROD_ALTERN` o código do cliente fica (só
+o insert aceita esse item). Em `ligado`, `decidir_envio` avalia o preço por esse mapa (o
+de-para v1 passado é ignorado), e `_send_one_to_fire`/`_export_one_xlsx` (via
+`_saida_do_envio`) aplicam ESSE mapa no `depara_apply.aplicar` e no
+`FirebirdExporter.export(produtos_por_item=…)`, sem segundo `check_order` e sem ler o
+de-para v1 (`_vinculos_antes_do_portao` só chama `_vinculos_de_para` fora de `ligado`;
+se o modo mudou no meio, `_saida_do_envio` lê o v1 na hora). Na trava de preço,
+`_com_vinculos(..., decidido=True)` (produto `ligado`, envio e preview) pega
+`fire_unidade`/`fire_description` do candidato decidido em vez de zerar quando o
+`fire_product_id` legado é outro SEQ. Com a trava de preço fora de `ligado` (regra de
+hoje, `is_blocking`), `_decidir_preco` passa a regra sobre `_preco_do_decidido(order,
+live)` (I4): cópia do check em que cada item `ok` tem `price_status`/`price_diff`/
+`fire_preco_venda` refeitos por `_classify_price` com o `preco_venda` do candidato
+decidido (o candidato serializa `preco_venda`; sem a chave, o item fica como está) — o
+match legado podia ser outro produto. O check aprovado (`DecisaoEnvio.check`) não muda. O preview
+avalia o preço pelo `produtos_decididos(entry["check"])`. `decidir_envio(...,
+export_mode=)`: o que o caminho gera (None = `EXPORT_MODE`); `/export-xlsx` passa sempre
+`"xlsx"`. O CLI em `ligado` aplica o mesmo mapa antes da planilha. `desligado` e
+`observando`: `_vinculos_de_para`, como antes.
+
+**Onde a trava de produto atua** (todo caminho que grava no Fire ou gera XLSX de pedido):
+- `preco_trava.decidir_envio` (send-to-fire, export-xlsx e os lotes): logo depois do
+  `check_order(order, env=env)` do ambiente do pedido e **antes** de qualquer lógica de preço,
+  em todo modo de preço. `ligado` → `DecisaoEnvio(bloqueado, reason=fire_indisponivel |
+  produto_a_identificar, detalhe="Item N: <motivo>" [+ "Mais K item(ns)…"], block_detail=
+  {"produto": itens}, metric_labels=["produto"])`; o chamador audita
+  (`send_to_fire_blocked`/`xlsx_export_blocked`), conta `portal_price_check_blocks_total
+  {reason="produto"}` e responde 409. `observando` → audit `produto_observado {itens}` (só quando `itens` não é vazio)
+  (falha nunca muda o envio).
+- `_run_exporters` (`/api/import`, `/api/reimport`): `ligado` não gera XLSX e devolve
+  `xlsx_adiado: "produto_a_identificar"` (precede `trava_de_preco`); pedido fica em revisão.
+- `/api/process` (legado): `ligado` → 409 "Trava de produto ligada: use a revisão de pedidos."
+- `main.py` (CLI, só xlsx): sem ambiente, logo sem interruptor no banco. Só com a env var
+  `PORTAL_PRODUTO_CHAVE_CLI=ligado` (ausente ou outro valor = hoje, nem chama `check_order`):
+  roda `check_order(order)` + `produto_trava.avaliar` com env sintético `ligado` e pula o pedido
+  (log `Pedido N não exportado: …`) se o Fire não respondeu, a conferência ficou incompleta ou
+  algum item está fora de `ok`. Erro no check pula só aquele pedido, nunca o lote.
+- Sem ambiente (sem cookie/legado): `preco_trava.env_trava_produto(None)` vale `ligado` se
+  QUALQUER ambiente ativo estiver `ligado` (o mais restrito).
+
 Os guards vivem em `_send_one_to_fire` e `_export_one_xlsx` (web). Audit
 events: `send_to_fire_blocked`, `xlsx_export_blocked`, `sem_preco_acknowledged`.
 Métricas: `portal_price_check_blocks_total{reason}`, `portal_price_check_acks_total`.
+
+### Runbook: ligar o casamento por chave exata
+
+Sequência operacional (cada passo com OK do Samuel; nada daqui roda sozinho):
+
+1. **Deploy** do pacote pelo `/admin/atualizacao`. Cria a tabela `produto_vinculo_v2` e as
+   colunas novas (`environments.produto_chave_modo`, `imports.produto_escolhido_json`). O
+   interruptor nasce `desligado`: comportamento idêntico ao de antes. Cria também
+   `ambiente_modo_audit` no `app_shared.db` (troca do interruptor, M5).
+   **Logo depois de aplicar, rodar o sync do catálogo** (M3): o catálogo local
+   existente fica com `codprod_altern` NULL até o próximo sync, e o picker e o v2
+   gravam o código do Fire a partir dele.
+2. **Migração do de-para v1** (por ambiente, `mm` e depois `nasmar`):
+   `python tools/migrar_produto_vinculo_v2.py --slug mm` é DRY-RUN (só mostra); com
+   `--aplicar` grava pelo `produto_vinculo_repo.vincular` (origem `migrado_v1`, uma
+   transação por vínculo). Nunca apaga o v1, nunca sobrescreve v2 que aponte para outro
+   produto, não recria chave já revogada (`revogado_antes`) e é idempotente. Linha v1 só com
+   nome vai para `sem_cnpj_unico` (a operação vincula de novo na tela) e a da revenda
+   intercompany não migra (`revenda_intercompany`).
+3. **`observando`** por alguns dias (`PATCH /api/admin/environments/{id}/produto-chave`
+   `{modo: "observando"}`): o check calcula e a tela mostra, a saída continua igual à de
+   hoje. Ler o audit `produto_observado` (itens que `ligado` travaria) e a fila
+   `GET /api/produtos/a-identificar`.
+4. **`ligado`** só depois de (a) o `observando` limpo, (b) a regressão com cobertura
+   (abaixo) e (c) a revisão da chave repetida/escolha pontual. **Nasmar fica em
+   `observando`** até a regressão dela ter cobertura suficiente (M8: na regressão 2,
+   48 arquivos sem pedido no Fire na janela de 72 h); a MM pode ir antes. Reverter = voltar o
+   interruptor para `observando`/`desligado`; vínculos v2 nunca são apagados (só revogados).
+
+**Regressão real** (`tools/regressao_chave_exata.py`, SÓ LEITURA): relê os originais
+guardados (`--recebidos data/recebidos`, varredura recursiva) por `pipeline.process` com o
+LLM desligado, roda o `check_order` novo contra cópias dos `app_state_<slug>.db` (`--db`,
+repetível) e do Fire (`FB_USER`/`FB_PASSWORD` no ambiente; `--fb-host --fb-path`), acha o
+pedido que o importador gravou e compara SEQ decidido x gravado item a item. Baldes:
+`ok_igual`, `ok_igual_conjunto`, `suspeito`, `ok_seq_diferente` (tem que dar zero),
+`pendente`, `sem_pedido_fire`, `ambiguo`, `nao_enviado`, `sem_pareamento`, `sem_data`.
+Exit 0 só sem `ok_seq_diferente`/`suspeito`/`erro_check` e com cobertura (no máximo 50%
+dos arquivos fora de comparação). Teste: `tests/test_regressao_chave_exata.py`.
+
+**Variável de ambiente nova:** `PORTAL_PRODUTO_CHAVE_CLI` (`ligado` aplica a trava de
+produto no `main.py`; ausente ou outro valor = CLI de hoje). Única da feature: o
+interruptor do web é por ambiente (banco), não por env var.
+
+### Testes (chave exata)
+`tests/test_produto_chave.py`, `tests/test_produto_chave_repetida.py`,
+`tests/test_produto_depara.py`, `tests/test_produto_escopo.py`,
+`tests/test_produto_vinculo_repo.py`, `tests/test_produto_trava.py`,
+`tests/test_produto_trava_wiring.py`, `tests/test_produto_saida.py`,
+`tests/test_firebird_exporter_produto.py`, `tests/test_migrar_produto_vinculo_v2.py`,
+`tests/test_regressao_chave_exata.py`; web em `tests/test_web_vincular_v2.py` e
+`tests/test_web_static_produto.py`.
 
 ## Troca de produto pelo importador de Excel do Fire (`troca_no_fire`)
 
@@ -160,6 +348,12 @@ dentro do Fire).
   conferência em vez de afirmar a troca.
 - Código com mais de 30 caracteres fica fora da query: `CODPROD_ALTERN` é
   `VARCHAR(30)` nas duas Fire, e parâmetro maior estoura truncamento.
+- **Código decidido (chave exata):** na mesma passada da previsão entra o
+  `CODPROD_ALTERN` do candidato de cada item `ok`. `item["produto"]["troca_no_fire"]`
+  = `{seq_previsto, codigo}` quando o palpite é outro SEQ, ou `seq_previsto` None
+  quando não dá para prever (previsão falhou, nenhum produto começa com o código);
+  senão None (também em todo item fora de `ok`). É esse campo que trava a planilha em
+  `ligado` (acima); o `troca_no_fire` legado do item não muda.
 - Fora de `is_blocking`. UI: `⚠ vira <código>` na coluna Fire + banner com dois
   conselhos (casado no portal = troque depois no Fire; sem match = confira ou
   vincule antes).
@@ -170,6 +364,9 @@ dentro do Fire).
   item vinculado sai com o SEQ em texto e pode casar por prefixo com outro
   produto (310 SEQs na MM e 176 na Nasmar são prefixo de algum código). Se ele
   tentar SEQ antes, o aviso nesse caso é falso positivo. BACKLOG 2.15.
+  **Com `produto_chave_modo=ligado` isso deixa de valer:** a planilha leva o `CODPROD_ALTERN`
+  do produto decidido (nunca `str(SEQ)`) e a trava recusa `troca_no_fire`/`sem_codigo_fire`
+  em vez de avisar. O aviso acima segue só em `desligado`/`observando`.
 
 ## De-para de cliente intercompany (Nasmar → cliente real)
 
@@ -540,7 +737,8 @@ por EAN/código com outro produto. Nesse caso a `fire_unidade` do check é a do 
 e sai (`_com_vinculos`): o item fica `unidade_divergente`. O chamador consulta o de-para **uma vez**
 (`depara_apply.resolver`) antes do portão e passa `produtos_por_item` a `decidir_envio`
 (e a `preview_preco`), ao `FirebirdExporter` e a `depara_apply.aplicar` (códigos do XLSX).
-`desligado` ignora o mapa (regra de hoje).
+`desligado` ignora o mapa (regra de hoje). Com `produto_chave_modo` `ligado`, o mapa avaliado
+é o do produto decidido (`produto_trava.produtos_decididos`, ver a trava de produto).
 
 **Override anterior à migração:** linha com `cliente_override_codigo` e
 `cliente_override_cnpj` NULL (override feito antes da coluna existir) sai

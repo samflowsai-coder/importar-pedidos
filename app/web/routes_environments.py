@@ -215,6 +215,22 @@ def set_environment_preco_trava(
     return environments_repo.get(env_id)
 
 
+class ProdutoChaveRequest(BaseModel):
+    modo: Literal["desligado", "observando", "ligado"]
+
+
+@router.patch("/{env_id}/produto-chave")
+def set_environment_produto_chave(
+    env_id: str, payload: ProdutoChaveRequest, user=Depends(require_admin)
+):
+    """Troca o interruptor do casamento de produto por chave exata
+    (desligado | observando | ligado). Nasce desligado."""
+    if environments_repo.get(env_id) is None:
+        raise HTTPException(status_code=404, detail="Ambiente não encontrado")
+    environments_repo.set_produto_chave_modo(env_id, payload.modo, por=user.email)
+    return environments_repo.get(env_id)
+
+
 class ErpBaseRequest(BaseModel):
     """SP1: esta empresa como uma base do ERP para o Flow (rotas de eventos e foto).
 

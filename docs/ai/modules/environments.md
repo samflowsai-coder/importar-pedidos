@@ -141,6 +141,16 @@ documento, não escolhido na sessão — o gate deixa de fazer sentido:
   pelo select "Chave do produto" no cartão da trava em `/admin/ambientes/{id}`.
 - Detalhe e advertência de `ligado`: `modules/erp.md` ("Trava de preço por rede").
 
+### Casamento de produto por chave exata (`produto_chave_modo`)
+- `desligado` (nasce) | `observando` | `ligado`. Troca só por
+  `PATCH /api/admin/environments/{id}/produto-chave` (admin; `{modo}`; 404 se não existe;
+  422 se valor inválido). Setter `set_produto_chave_modo(env_id, valor, *, por)`
+  (`PRODUTO_MODOS`). Cada troca grava uma linha em `ambiente_modo_audit` do
+  `app_shared.db` (`environment_id, campo='produto_chave_modo', valor_antigo,
+  valor_novo, alterado_por, alterado_em`; só INSERT, sem rota de leitura) na mesma
+  transação do UPDATE, além do log. Entra em todo dict público do
+  ambiente. Portão: `app/erp/produto_trava.py` (ver `modules/erp.md`).
+
 ## Testes
 
 ```bash

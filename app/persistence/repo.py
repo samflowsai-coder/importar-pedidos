@@ -162,7 +162,25 @@ def _row_to_entry(row) -> dict:
         "snapshot": json.loads(row["snapshot_json"]) if row["snapshot_json"] else None,
         "check": json.loads(row["check_json"]) if _get("check_json") else None,
         "check_preco": json.loads(_get("check_preco_json")) if _get("check_preco_json") else None,
+        "produto_escolhido": _produto_escolhido(row["id"], _get("produto_escolhido_json")),
     }
+
+
+def _produto_escolhido(import_id: str, bruto: str | None) -> dict:
+    """`produto_escolhido_json` lido sem nunca derrubar a listagem: JSON podre ou
+    que não é objeto vira {} (a linha volta a pedir escolha) + aviso no log."""
+    if not bruto:
+        return {}
+    try:
+        valor = json.loads(bruto)
+    except ValueError:
+        valor = None
+    if isinstance(valor, dict):
+        return valor
+    from app.utils.logger import logger
+
+    logger.warning(f"produto_escolhido_json inválido no import {import_id}; ignorado")
+    return {}
 
 
 def _build_where(
@@ -230,7 +248,7 @@ def list_imports(
                cliente_override_codigo, cliente_override_razao,
                cliente_override_at, cliente_override_by,
                sem_preco_ack_by, sem_preco_ack_at, sem_preco_ack_items,
-               fire_status_last_seen, fire_status_polled_at
+               fire_status_last_seen, fire_status_polled_at, produto_escolhido_json
         FROM imports
         {clause}
         ORDER BY imported_at DESC, id DESC
@@ -313,7 +331,8 @@ def get_import(import_id: str) -> dict | None:
                    cliente_override_at, cliente_override_by, cliente_override_cnpj,
                    file_sha256, original_path,
                    sem_preco_ack_by, sem_preco_ack_at, sem_preco_ack_items,
-                   fire_status_last_seen, fire_status_polled_at, check_preco_json
+                   fire_status_last_seen, fire_status_polled_at, check_preco_json,
+                   produto_escolhido_json
             FROM imports WHERE id = ?
             """,
             (import_id,),
@@ -385,6 +404,50 @@ def update_fire_metadata(
         conn.execute(
             f"UPDATE imports SET {', '.join(sets)} WHERE id = ?",
             params,
+        )
+
+
+def set_produto_escolha(
+    import_id: str,
+    item_index: int,
+    *,
+    fire_seq: int,
+    por: str,
+    descricao: str,
+    codigo: str | None = None,
+    ean: str | None = None,
+) -> None:
+    """Grava a escolha pontual do produto de uma linha (R18), só deste import.
+
+    Sidecar como o ack de preço: nunca clobbado pelo upsert. Um UPDATE só
+    (`json_set`): duas linhas escolhidas ao mesmo tempo não se apagam. Valor
+    gravado podre (ou que não é objeto) recomeça de um objeto novo.
+    `codigo`/`ean`: `CODPROD_ALTERN` e EAN do produto escolhido (catálogo), o que
+    a planilha leva fora de `ligado`."""
+    escolha = {
+        "fire_seq": int(fire_seq),
+        "por": por,
+        "em": datetime.now().isoformat(timespec="seconds"),
+        "descricao": descricao,
+        "codigo": codigo,
+        "ean": ean,
+    }
+    with db.connect() as conn:
+        conn.execute(
+            """
+            UPDATE imports
+            SET produto_escolhido_json = json_set(
+                CASE
+                    WHEN json_valid(produto_escolhido_json)
+                         AND json_type(produto_escolhido_json) = 'object'
+                    THEN produto_escolhido_json
+                    ELSE '{}'
+                END,
+                ?, json(?)
+            )
+            WHERE id = ?
+            """,
+            (f'$."{int(item_index)}"', json.dumps(escolha, ensure_ascii=False), import_id),
         )
 
 

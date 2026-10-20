@@ -31,6 +31,7 @@
 | Worker APScheduler, drain_outbox, poll_fire, retention, backup | `worker` | `modules/worker.md` |
 | LLM fallback (OpenRouter / Gemini / Haiku) | `llm` | `modules/llm.md` |
 | Trava de preço por rede (tabela do Flow, aprovações, `decidir_envio`, interruptor por ambiente) | `erp` + `environments` + `web` | `modules/erp.md` ("Trava de preço por rede"), `modules/environments.md`, `modules/web.md` |
+| Casamento de produto por chave exata (EAN/de-para v2/CODPROD_ALTERN, trava `produto_chave_modo`, chave repetida, escolha pontual) | `erp` + `web` | `modules/erp.md` ("Produto por chave exata" e runbook), `modules/web.md`, `modules/environments.md` |
 | Geração de XLSX, split por loja, naming de arquivo | `exporters` | `modules/exporters.md` |
 | Orquestração (ordem dos parsers, fluxo geral) | `pipeline` | `modules/pipeline.md` |
 | Modelos Pydantic (Order, OrderItem, ERPRow) | `models` | `modules/models.md` |
@@ -60,6 +61,7 @@
 | erp | `tests/test_product_check.py`, `tests/test_depara_cliente.py`, `tests/test_depara_apply.py`, `tests/test_smoke_erp_mapper.py`, `tests/test_firebird_*.py` | `.venv/bin/pytest tests/test_product_check.py tests/test_depara_cliente.py tests/test_depara_apply.py -v` |
 | routing | `tests/test_routing_documento.py`, `tests/test_routing_historico.py`, `tests/test_routing_ambiente.py`, `tests/test_decisao_ambiente_repo.py`, `tests/test_roteamento_repo.py`, `tests/test_routing_wiring.py`, `tests/test_routing_modo.py`, `tests/test_scan_environments_roteamento.py` | `.venv/bin/pytest tests/test_routing_ambiente.py tests/test_routing_wiring.py tests/test_scan_environments_roteamento.py -v` |
 | preço (trava) | `tests/test_preco_avaliacao.py`, `tests/test_preco_trava.py`, `tests/test_precos_repo.py`, `tests/test_preco_revisao_repo.py`, `tests/test_flowpcp_precos_schema.py`, `tests/test_preco_trava_modo.py` | `.venv/bin/pytest tests/test_preco_avaliacao.py tests/test_preco_trava.py tests/test_precos_repo.py tests/test_preco_revisao_repo.py tests/test_flowpcp_precos_schema.py tests/test_preco_trava_modo.py -v` |
+| produto (chave exata) | `tests/test_produto_chave.py`, `tests/test_produto_chave_repetida.py`, `tests/test_produto_depara.py`, `tests/test_produto_escopo.py`, `tests/test_produto_vinculo_repo.py`, `tests/test_produto_trava.py`, `tests/test_produto_trava_wiring.py`, `tests/test_produto_saida.py`, `tests/test_web_vincular_v2.py`, `tests/test_web_static_produto.py`, `tests/test_migrar_produto_vinculo_v2.py`, `tests/test_regressao_chave_exata.py` | `.venv/bin/pytest tests/test_produto_*.py tests/test_web_vincular_v2.py tests/test_web_static_produto.py tests/test_migrar_produto_vinculo_v2.py tests/test_regressao_chave_exata.py -v` |
 | exporters | `tests/test_exporter_split.py`, `tests/test_smoke_exporter.py`, `tests/test_firebird_exporter_override.py` | `.venv/bin/pytest tests/test_exporter_split.py tests/test_smoke_exporter.py -v` |
 | pipeline | `tests/test_smoke_pipeline.py` | `.venv/bin/pytest tests/test_smoke_pipeline.py -v` |
 | worker | `tests/test_worker_drain_outbox.py`, `tests/test_worker_poll_fire.py`, `tests/test_retention.py` | `.venv/bin/pytest tests/test_worker_drain_outbox.py tests/test_worker_poll_fire.py tests/test_retention.py -v` |
@@ -68,7 +70,7 @@
 | web | `tests/test_web_server.py`, `tests/test_preview_cache.py`, `tests/test_env_do_pedido.py`, `tests/test_rotas_por_pedido_cross_env.py`, `tests/test_pasta_cross_env.py` | `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py tests/test_env_do_pedido.py tests/test_rotas_por_pedido_cross_env.py tests/test_pasta_cross_env.py -v` |
 | Suite completa (antes de commit) | todos | `.venv/bin/pytest tests/ -v` |
 
-> **Suíte completa: 2275 testes em 145 arquivos (conferido 2026-10-17).** `erp`, `exporters` e `pipeline` hoje TÊM
+> **Suíte completa: 3964 testes em 169 arquivos (conferido 2026-10-20).** `erp`, `exporters` e `pipeline` hoje TÊM
 > teste (ver linhas acima), mas nenhum toca Firebird de verdade — mudança em SQL/mapper
 > ainda pede validação manual com `.fdb` de **cópia** e sample real.
 

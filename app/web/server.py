@@ -209,6 +209,61 @@ def _request_environment(request: Request) -> dict | None:
     return getattr(request.state, "environment", None)
 
 
+def _trava_produto_ligada(env: dict | None) -> bool:
+    """`produto_chave_modo` em `ligado` para esta ação (sem ambiente, o mais
+    restrito — ver `preco_trava.env_trava_produto`)."""
+    from app.erp import preco_trava, produto_trava
+
+    return produto_trava.modo(preco_trava.env_trava_produto(env)) == "ligado"
+
+
+def _produto_chave_modo(env: dict | None) -> str:
+    """Modo da trava de produto para a TELA (mesma regra do portão: sem ambiente,
+    o mais restrito). A tela só mostra o estado novo do item fora de `desligado`."""
+    from app.erp import preco_trava, produto_trava
+
+    return produto_trava.modo(preco_trava.env_trava_produto(env))
+
+
+def _export_mode_atual() -> str:
+    """`export_mode` que o envio vai usar (o portão de produto depende dele)."""
+    return _get_cfg().get("export_mode", "xlsx")
+
+
+def _produto_trava_preview(check: dict | None, env: dict | None) -> dict:
+    """A decisão da trava de produto para o check guardado, com a MESMA regra do
+    portão (`produto_trava.avaliar`, inclusive o export_mode): a tela espelha o
+    backend em vez de reimplementar a regra. Só leitura."""
+    from app.erp import preco_trava, produto_trava
+
+    export_mode = "xlsx"
+    try:
+        export_mode = _export_mode_atual()
+        env_trava = preco_trava.env_trava_produto(env)
+        itens_check = (check or {}).get("items") or []
+        if (
+            produto_trava.modo(env_trava) != "desligado"
+            and itens_check
+            and not any(isinstance(it, dict) and "produto" in it for it in itens_check)
+        ):
+            # Check gravado antes do pacote da chave exata: nenhum item tem a
+            # decisão de produto. A tela não trava (o operador confere de novo);
+            # o portão do envio segue fechado, porque ele confere ao vivo.
+            return {"bloqueado": False, "reason": "check_antigo", "export_mode": export_mode, "itens": []}
+        tp = produto_trava.avaliar(check or {"items": []}, env=env_trava, export_mode=export_mode)
+    except Exception as exc:  # noqa: BLE001 — a tela nunca quebra por isto, e trava
+        from app.utils.logger import logger
+
+        logger.warning(f"produto_trava do preview falhou ({type(exc).__name__}): {exc}")
+        return {"bloqueado": True, "reason": "fire_indisponivel", "export_mode": export_mode, "itens": []}
+    return {
+        "bloqueado": tp.bloqueado,
+        "reason": tp.reason,
+        "export_mode": export_mode,
+        "itens": tp.itens,
+    }
+
+
 def _cfg_para_env(env: dict) -> dict:
     """Cfg legado com as pastas DESTA empresa. Usado pelo lote agrupado, onde
     cada grupo escreve na pasta da sua empresa e não na do cookie."""
@@ -474,7 +529,13 @@ def _run_exporters(order, output_path: Path, *, env: dict | None = None) -> dict
     # passa por `preco_trava.decidir_envio`.
     from app.erp import preco_trava
 
-    adiado = preco_trava.trava_ativa(env)
+    # Trava de produto `ligado` vem antes da de preço: o XLSX só nasce na
+    # revisão, depois que todo item tem produto exato no Fire.
+    adiado: str | None = None
+    if _trava_produto_ligada(env):
+        adiado = "produto_a_identificar"
+    elif preco_trava.trava_ativa(env):
+        adiado = "trava_de_preco"
     if export_mode in ("xlsx", "both") and not adiado:
         exporter = ERPExporter()
         paths = exporter.export(order, str(output_path))
@@ -491,7 +552,7 @@ def _run_exporters(order, output_path: Path, *, env: dict | None = None) -> dict
         "fire_codigo": fire_codigo,
     }
     if adiado and export_mode in ("xlsx", "both"):
-        out["xlsx_adiado"] = "trava_de_preco"
+        out["xlsx_adiado"] = adiado
     return out
 
 
@@ -1994,6 +2055,8 @@ async def preview_file(
     # alimenta `rehydrate_preview` (pedido já commitado, ambiente definitivo,
     # nada a decidir ali — ver Achado 4 do fix round 1).
     payload["roteamento"] = _roteamento_para_preview(order)
+    payload["produto_chave_modo"] = _produto_chave_modo(request_env)
+    payload["produto_trava"] = _produto_trava_preview(check, request_env)
     return JSONResponse(payload)
 
 
@@ -2096,6 +2159,8 @@ def preview_pending(
         payload = _build_preview_payload(entry.preview_id, name, order, check)
         # Ver comentário equivalente em `preview_upload` (Achado 4, fix round 1).
         payload["roteamento"] = _roteamento_para_preview(order)
+    payload["produto_chave_modo"] = _produto_chave_modo(request_env)
+    payload["produto_trava"] = _produto_trava_preview(check, request_env)
     return JSONResponse(payload)
 
 
@@ -2375,25 +2440,122 @@ class _FireSendOutcome:
         self.detail = detail
 
 
-def _vinculos_de_para(order, caminho: str) -> tuple[list[dict], dict[int, int]]:
+def _vinculos_de_para(
+    order, caminho: str, entry: dict | None = None
+) -> tuple[list[dict], dict[int, int]]:
     """Vínculos de-para do pedido, consultados UMA vez antes do portão de preço.
 
     O portão avalia o SEQ do vínculo (`produtos_por_item`), o exporter grava
     esse mesmo SEQ e o XLSX leva o código dele (`depara_apply.aplicar`). Falha
     aqui não derruba o envio: sem vínculo, portão e exporter caem juntos na
-    busca normal por EAN/código (e, sem match, o exporter recusa o pedido)."""
+    busca normal por EAN/código (e, sem match, o exporter recusa o pedido).
+
+    `entry` (import salvo): a escolha pontual de cada linha (R20) vai por cima do
+    v1, em todo modo — sem ela a escolha do operador seria ignorada fora de `ligado`."""
     from app.erp import depara_apply
     from app.persistence import db
 
+    escolhidos = (entry or {}).get("produto_escolhido")
     try:
         with db.connect() as sconn:
             vinculos = depara_apply.resolver(order, conn=sconn)
-        return vinculos, depara_apply.produtos_por_item(vinculos)
     except Exception as exc:  # noqa: BLE001
         from app.utils.logger import logger
 
         logger.warning(f"de-para pulado no {caminho}: {type(exc).__name__}: {exc}")
-        return [], {}
+        vinculos = []
+    vinculos = depara_apply.sobrepor_escolhas(order, vinculos, escolhidos)
+    return vinculos, depara_apply.produtos_por_item(vinculos)
+
+
+def _vinculos_antes_do_portao(
+    order, caminho: str, env: dict | None, entry: dict | None = None
+) -> tuple[list[dict] | None, dict[int, int] | None]:
+    """De-para v1 (com as escolhas pontuais do import por cima) para o portão,
+    só fora de `produto_chave_modo` `ligado`. Em `ligado` o v1 nem é lido
+    (None, None): a saída é o produto decidido, que já traz a escolha pontual."""
+    if _trava_produto_ligada(env):
+        return None, None
+    return _vinculos_de_para(order, caminho, entry)
+
+
+def _saida_do_envio(
+    decisao,
+    order,
+    caminho: str,
+    vinculos: list[dict] | None,
+    produtos_por_item: dict[int, int] | None,
+    entry: dict | None = None,
+) -> tuple[list[dict], dict[int, int]]:
+    """O que vai ao Fire depois do portão. Em `produto_chave_modo` `ligado`
+    (`decisao.check` preenchido), o produto decidido de todo item `ok` do MESMO
+    check que a trava aprovou: o insert entra pelo SEQ e a planilha leva o
+    `CODPROD_ALTERN` e o EAN dele, com o código do cliente na OBS. Fora de
+    `ligado`, os vínculos de-para de hoje (`_vinculos_de_para`); se o modo mudou
+    entre o portão e aqui e o v1 não foi lido, lê agora."""
+    if decisao.check is not None:
+        from app.erp import produto_trava
+
+        return produto_trava.produtos_decididos(decisao.check)
+    if vinculos is None or produtos_por_item is None:
+        return _vinculos_de_para(order, caminho, entry)
+    return vinculos, produtos_por_item
+
+
+def _recusa_planilha_pontual(
+    import_id: str, vinculos: list[dict], decisao, audit: str, *, planilha: bool = True
+) -> tuple[str, str] | None:
+    """Escolha pontual que não pode sair, em nenhum modo de `produto_chave_modo`.
+
+    M1 (toda saída, planilha e insert): o check ao vivo marca a linha
+    `vinculo_invalido` — o SEQ escolhido sumiu ou foi bloqueado no Fire.
+    R21 (só com `planilha`): o produto não tem `CODPROD_ALTERN` (o SEQ em texto
+    seria casado por PREFIXO pelo importador de Excel do Fire); muta `vinculos`
+    com o código lido do Fire agora (`decisao.check_vivo`).
+    Só a escolha pontual: o v1 de hoje não muda. Devolve (reason, detalhe) e
+    audita `audit`, ou None."""
+    from app.erp import depara_apply
+    from app.persistence import repo
+
+    check_vivo = getattr(decisao, "check_vivo", None)
+    invalidas = depara_apply.pontuais_invalidas(vinculos, check_vivo)
+    if invalidas:
+        itens = [
+            {
+                "index": v["item_index"],
+                "estado": "vinculo_invalido",
+                "motivo": depara_apply.motivo_pontual_invalida(v),
+            }
+            for v in invalidas
+        ]
+        repo.append_audit(import_id, audit, {"produto": itens})
+        return "vinculo_invalido", itens[0]["motivo"]
+    if not planilha:
+        return None
+    vinculos[:] = depara_apply.codigo_vivo_das_escolhas(vinculos, check_vivo)
+    sem_codigo = depara_apply.pontuais_sem_codigo(vinculos)
+    if not sem_codigo:
+        return None
+    itens = [
+        {
+            "index": v["item_index"],
+            "estado": "sem_codigo_fire",
+            "motivo": depara_apply.motivo_pontual_sem_codigo(v),
+        }
+        for v in sem_codigo
+    ]
+    repo.append_audit(import_id, audit, {"produto": itens})
+    return "sem_codigo_fire", itens[0]["motivo"]
+
+
+def _pedido_para_o_flow(order, decisao):
+    """O pedido que vai ao Flow (I2). Em `produto_chave_modo` `ligado`
+    (`decisao.check` preenchido), cópia ANTES do `depara_apply.aplicar`: o Flow
+    recebe o código/EAN do cliente, não os do produto decidido no Fire (até o Flow
+    consumir `erpProdutoId`). Fora de `ligado`, o próprio pedido, como hoje."""
+    if getattr(decisao, "check", None) is not None:
+        return order.model_copy(deep=True)
+    return order
 
 
 def _registrar_aplicados(import_id: str, decisao) -> None:
@@ -2459,7 +2621,8 @@ def _send_one_to_fire(
     from app.erp import preco_trava
     from app.observability import metrics
 
-    vinculos, produtos_por_item = _vinculos_de_para(order, "envio")
+    export_mode = cfg.get("export_mode", "xlsx")
+    vinculos, produtos_por_item = _vinculos_antes_do_portao(order, "envio", request_env, entry)
     decisao = preco_trava.decidir_envio(
         import_id,
         order,
@@ -2467,6 +2630,7 @@ def _send_one_to_fire(
         env=request_env,
         agora=datetime.now(UTC),
         produtos_por_item=produtos_por_item,
+        export_mode=export_mode,
     )
     if decisao.bloqueado:
         repo.append_audit(import_id, "send_to_fire_blocked", decisao.block_detail)
@@ -2476,6 +2640,18 @@ def _send_one_to_fire(
             False, reason=decisao.reason, http_status=409, detail=decisao.detalhe
         )
     preco_trava.aplicar_precos(order, decisao.precos_aplicar)
+    vinculos, produtos_por_item = _saida_do_envio(
+        decisao, order, "envio", vinculos, produtos_por_item, entry
+    )
+    recusa = _recusa_planilha_pontual(
+        import_id,
+        vinculos,
+        decisao,
+        "send_to_fire_blocked",
+        planilha=export_mode in ("xlsx", "both"),
+    )
+    if recusa is not None:
+        return _FireSendOutcome(False, reason=recusa[0], http_status=409, detail=recusa[1])
 
     # Reuse the trace_id minted on commit so logs across commit→send-to-fire
     # are correlated for the same pedido.
@@ -2486,13 +2662,13 @@ def _send_one_to_fire(
         # produto (BACKLOG §2.1).
         from app.erp import depara_apply
 
+        order_flow = _pedido_para_o_flow(order, decisao)
         dep_changed = depara_apply.aplicar(order, vinculos)
         if dep_changed:
             repo.append_audit(import_id, "depara_aplicado_no_fire", {"itens": dep_changed})
 
         output_path = Path(cfg["output_dir"]).expanduser().resolve()
         output_path.mkdir(parents=True, exist_ok=True)
-        export_mode = cfg.get("export_mode", "xlsx")
         output_files: list[dict] = []
         if export_mode in ("xlsx", "both"):
             from app.exporters.erp_exporter import ERPExporter
@@ -2587,7 +2763,7 @@ def _send_one_to_fire(
         # nunca derruba o send-to-fire que já teve sucesso.
         slug = (request_env or {}).get("slug")
         if slug:
-            push_new_order(order, import_id=import_id, slug=slug)
+            push_new_order(order_flow, import_id=import_id, slug=slug)
 
         return _FireSendOutcome(
             True,
@@ -2693,7 +2869,7 @@ def _export_one_xlsx(
     from app.erp import preco_trava
     from app.observability import metrics
 
-    vinculos, produtos_por_item = _vinculos_de_para(order, "export")
+    vinculos, produtos_por_item = _vinculos_antes_do_portao(order, "export", request_env, entry)
     decisao = preco_trava.decidir_envio(
         import_id,
         order,
@@ -2701,6 +2877,8 @@ def _export_one_xlsx(
         env=request_env,
         agora=datetime.now(UTC),
         produtos_por_item=produtos_por_item,
+        # Esta rota gera planilha em qualquer EXPORT_MODE: valem as regras dela.
+        export_mode="xlsx",
     )
     if decisao.bloqueado:
         repo.append_audit(import_id, "xlsx_export_blocked", decisao.block_detail)
@@ -2710,12 +2888,18 @@ def _export_one_xlsx(
             False, reason=decisao.reason, http_status=409, detail=decisao.detalhe
         )
     preco_trava.aplicar_precos(order, decisao.precos_aplicar)
+    vinculos, _ = _saida_do_envio(decisao, order, "export", vinculos, produtos_por_item, entry)
+    recusa = _recusa_planilha_pontual(import_id, vinculos, decisao, "xlsx_export_blocked")
+    if recusa is not None:
+        return _XlsxExportOutcome(False, reason=recusa[0], http_status=409, detail=recusa[1])
 
     with with_trace_id(entry.get("trace_id")):
-        # Identidade do Fire onde há vínculo de-para: os MESMOS vínculos que o
-        # portão avaliou (o XLSX leva o código do SEQ avaliado).
+        # Identidade do Fire onde há vínculo de-para (ou, em `ligado`, o produto
+        # decidido): os MESMOS vínculos que o portão avaliou (o XLSX leva o código
+        # do SEQ avaliado).
         from app.erp import depara_apply
 
+        order_flow = _pedido_para_o_flow(order, decisao)
         dep_changed = depara_apply.aplicar(order, vinculos)
         if dep_changed:
             repo.append_audit(import_id, "depara_aplicado_no_xls", {"itens": dep_changed})
@@ -2735,7 +2919,7 @@ def _export_one_xlsx(
         # vira outbox/log e nunca derruba a geração do XLS.
         slug = (request_env or {}).get("slug")
         if slug:
-            pushed = push_new_order(order, import_id=import_id, slug=slug)
+            pushed = push_new_order(order_flow, import_id=import_id, slug=slug)
             repo.append_audit(import_id, "flowpcp_push", {"ok": pushed})
         _registrar_aplicados(import_id, decisao)
 
@@ -3408,6 +3592,7 @@ def search_produtos(
                 "fire_produto_id": r["fire_produto_id"],
                 "fire_codigo": r["codigo"],
                 "fire_ean": r.get("ean"),
+                "fire_codprod_altern": r.get("codprod_altern"),
                 "fire_nome": r["nome"],
             }
             for r in rows
@@ -3424,6 +3609,7 @@ def search_produtos(
                 "fire_produto_id": r["fire_produto_id"],
                 "fire_codigo": r["codigo"],
                 "fire_ean": r.get("ean"),
+                "fire_codprod_altern": r.get("codprod_altern"),
                 "fire_nome": r["nome"],
                 "score": r["score"],
             }
@@ -3438,6 +3624,212 @@ def search_produtos(
 class VincularProdutoRequest(BaseModel):
     item_index: int
     fire_produto_id: str
+    substituir: bool = False
+
+
+MSG_VINCULO_SEM_CNPJ = "Este pedido não tem CNPJ do cliente; o vínculo não pode ser reaproveitado."
+MSG_VINCULO_CLIENTE_REAL = (
+    "Não consegui confirmar o cliente real deste pedido agora; tente de novo."
+)
+MSG_VINCULO_REVENDA = (
+    "Não sei qual é o cliente real deste pedido (pedido da revenda); "
+    "o vínculo não pode ser salvo."
+)
+# Pedidos em revisão lidos (página máxima do repo) e rechecados (R12) por vínculo.
+_RECHECK_MAX_PEDIDOS = 500
+_RECHECK_MAX_POR_VINCULO = 50
+
+
+def _chaves_do_item(item) -> list[tuple[str, str]]:
+    """(tipo, valor normalizado) do item, código antes do EAN. Mesma
+    normalização da gravação e da leitura (`produto_vinculo_repo.norm_chave`)."""
+    from app.persistence import produto_vinculo_repo
+
+    out = []
+    for tipo, valor in (("codigo", item.product_code), ("ean", item.ean)):
+        norm = produto_vinculo_repo.norm_chave(tipo, valor)
+        if norm:
+            out.append((tipo, norm))
+    return out
+
+
+def _cnpj_do_escopo(order, indice: int, env: dict | None) -> tuple[str | None, bool]:
+    """CNPJ que define o escopo do item na GRAVAÇÃO do vínculo (R11).
+
+    Pedido intercompany (`resolucao_para` não é None) só grava com o cliente
+    real resolvido: sem ele, o CNPJ do cabeçalho é o da revenda e o vínculo
+    cairia no escopo errado. Falha de conexão → 503 (tente de novo); qualquer
+    outro motivo (sem_chave, nao_encontrado, ambiguo...) → 422. A leitura do
+    check (`product_check._cnpj_real`) segue como está.
+
+    Devolve (cnpj, intercompany?)."""
+    from app.erp import produto_escopo
+
+    cnpj_real = None
+    slug = (env or {}).get("slug")
+    if slug:
+        try:
+            r = resolucao_para(order, slug=slug)
+        except Exception as exc:  # noqa: BLE001 — resolucao_para não deveria levantar
+            raise HTTPException(status_code=503, detail=MSG_VINCULO_CLIENTE_REAL) from exc
+        if r is not None:
+            if not r.resolvido or not r.cnpj:
+                if r.motivo == "erro_conexao":
+                    raise HTTPException(status_code=503, detail=MSG_VINCULO_CLIENTE_REAL)
+                raise HTTPException(status_code=422, detail=MSG_VINCULO_REVENDA)
+            cnpj_real = r.cnpj
+    return produto_escopo.cnpj_do_item(order, indice, cnpj_real=cnpj_real), cnpj_real is not None
+
+
+def _conflito_json(v) -> dict:
+    return {
+        "conflito": {
+            "chave_tipo": v.chave_tipo,
+            "chave_valor": v.chave_valor,
+            "atual": {
+                "fire_seq": v.fire_seq,
+                "fire_descricao": v.fire_descricao,
+                "criado_por": v.criado_por,
+                "criado_em": v.criado_em,
+            },
+        },
+        "detail": (
+            f"Esta chave já está vinculada ao produto {v.fire_seq} ({v.fire_descricao}). "
+            "Confirme para trocar."
+        ),
+    }
+
+
+def _item_em_chave_repetida(entry: dict, order, indice: int) -> bool:
+    """A escolha desta linha tem de ser pontual (R18)? Sim quando o check guardado
+    diz `chave_repetida` ou a linha já tem escolha pontual (trocar também é
+    pontual), e SEMPRE que a chave do item se repete no pedido com descrições
+    diferentes, qualquer que seja o estado (`a_identificar`, `ambiguo`…): um
+    vínculo dessa chave valeria para toda linha, e todo pedido futuro, dela."""
+    from app.erp.produto_chave import chaves_repetidas
+    from app.persistence import produto_vinculo_repo
+
+    itens_check = (entry.get("check") or {}).get("items") or []
+    salvo = (itens_check[indice] or {}).get("produto") if indice < len(itens_check) else None
+    if isinstance(salvo, dict) and (
+        salvo.get("estado") == "chave_repetida" or salvo.get("fonte") == "escolha_pontual"
+    ):
+        return True
+
+    def chaves(it):
+        return (
+            produto_vinculo_repo.norm_chave("codigo", it.product_code) or None,
+            produto_vinculo_repo.norm_chave("ean", it.ean) or None,
+        )
+
+    repetidas = chaves_repetidas([(*chaves(it), it.description) for it in order.items])
+    codigo, ean = chaves(order.items[indice])
+    return ("codigo", codigo) in repetidas or ("ean", ean) in repetidas
+
+
+def _escolher_pontual(
+    entry: dict, order, indice: int, prod: dict, fire_seq: int, user: User, env: dict | None
+) -> JSONResponse:
+    """Grava a escolha pontual da linha (só neste import), audita
+    `produto_escolha_pontual` e devolve o check novo com as escolhas do import.
+    Nenhum outro pedido é rechecado: a escolha não vale para eles."""
+    from app.erp import product_check
+    from app.persistence import repo
+
+    import_id = entry["id"]
+    antigo = product_check.escolhas_do_import(entry).get(indice)
+    repo.set_produto_escolha(
+        import_id,
+        indice,
+        fire_seq=fire_seq,
+        por=user.email,
+        descricao=prod["nome"] or "",
+        codigo=(prod.get("codprod_altern") or "").strip() or None,
+        ean=(prod.get("ean") or "").strip() or None,
+    )
+    with with_trace_id(entry.get("trace_id")):
+        repo.append_audit(
+            import_id,
+            "produto_escolha_pontual",
+            {
+                "item_index": indice,
+                "fire_produto_id": fire_seq,
+                "fire_seq_antigo": antigo,
+                "fire_nome": prod["nome"],
+                "pedido": order.header.order_number,
+                "user_id": user.id,
+                "user_email": user.email,
+            },
+        )
+    # Relê: a escolha de outra linha gravada ao mesmo tempo entra também.
+    escolhas = product_check.escolhas_do_import(repo.get_import(import_id))
+    check = product_check.check_order(order, env=env, escolhas=escolhas)
+    if check.get("available"):
+        repo.update_fire_metadata(import_id, check=check)
+    return JSONResponse(
+        {
+            "entry_id": import_id,
+            "pontual": True,
+            "vinculos": [],
+            "check": check,
+            "produto_trava": _produto_trava_preview(check, env),
+            "rechecados": [],
+        }
+    )
+
+
+def _rechecar_pedidos_do_escopo(
+    import_id: str, escopo: str, chaves: list[tuple[str, str]], env: dict | None
+) -> list[str]:
+    """Recheca os pedidos em revisão do ambiente com item na mesma chave, fora
+    de `ok`, cujo escopo de busca inclui `escopo`. Lê o check guardado (sem
+    Fire) para escolher; só os escolhidos passam pelo `check_order`, no máximo
+    `_RECHECK_MAX_POR_VINCULO` por chamada, mais antigos primeiro (R12)."""
+    from app.erp import product_check, produto_escopo
+    from app.models.order import Order
+    from app.persistence import db, repo
+
+    alvo = set(chaves)
+    escolhidos: list[tuple[str, Order, dict[int, int]]] = []
+    entries = repo.list_imports(portal_status="parsed", limit=_RECHECK_MAX_PEDIDOS)
+    with db.connect() as conn:
+        for entry in sorted(entries, key=lambda e: (e["imported_at"] or "", e["id"])):
+            if len(escolhidos) >= _RECHECK_MAX_POR_VINCULO:
+                break
+            if entry["id"] == import_id or not entry.get("snapshot"):
+                continue
+            itens_check = (entry.get("check") or {}).get("items") or []
+            try:
+                order = Order.model_validate(entry["snapshot"])
+            except Exception:  # noqa: BLE001 — snapshot podre não para o recheck dos outros
+                continue
+            indices = [
+                i
+                for i, it in enumerate(order.items)
+                if i < len(itens_check)
+                and ((itens_check[i] or {}).get("produto") or {}).get("estado") != "ok"
+                and alvo.intersection(_chaves_do_item(it))
+            ]
+            if not indices:
+                continue
+            cnpj_real, conferiu = product_check._cnpj_real(order, env)
+            # Cliente real incerto: rechecar é inofensivo, então entra.
+            if not conferiu or any(
+                escopo
+                in produto_escopo.escopos_para(
+                    conn, produto_escopo.cnpj_do_item(order, i, cnpj_real=cnpj_real)
+                )
+                for i in indices
+            ):
+                escolhidos.append((entry["id"], order, product_check.escolhas_do_import(entry)))
+
+    rechecados: list[str] = []
+    for outro_id, order, escolhas in escolhidos:
+        check = product_check.check_order(order, env=env, escolhas=escolhas)
+        if check.get("available"):
+            repo.update_fire_metadata(outro_id, check=check)
+            rechecados.append(outro_id)
+    return rechecados
 
 
 @app.post("/api/imported/{import_id}/vincular-produto")
@@ -3448,11 +3840,25 @@ def vincular_produto(
     user: User = Depends(require_user),
     _env=Depends(env_do_pedido),
 ) -> JSONResponse:
-    """Cria o vínculo de-para do item (code e/ou ean → produto do Fire),
-    audita e re-roda o check. Só em pedidos em revisão."""
-    from app.erp.product_check import check_order
+    """Vincula a chave exata do item (código e/ou EAN) a um produto do Fire,
+    no escopo do cliente (`rede:` ou `raiz:`), para reaproveitar em todo pedido
+    dele. Chave já vinculada a outro produto: 409 com o vínculo atual, e só
+    troca com `substituir`. Enquanto o modo do ambiente não é `ligado`, grava
+    também o de-para v1 do check legado. Audita, recheca este pedido e os
+    pedidos em revisão do mesmo escopo. Só em pedidos em revisão.
+
+    Item em `chave_repetida` (R18) ou já com escolha pontual: não grava v1 nem
+    v2; grava a escolha só desta linha deste import (`_escolher_pontual`) e a
+    resposta traz `"pontual": true`."""
+    from app.erp import product_check, produto_escopo
     from app.models.order import Order
-    from app.persistence import catalogo_fire_repo, db, produto_depara_repo, repo
+    from app.persistence import (
+        catalogo_fire_repo,
+        db,
+        produto_depara_repo,
+        produto_vinculo_repo,
+        repo,
+    )
 
     entry = repo.get_import(import_id)
     if entry is None:
@@ -3469,6 +3875,11 @@ def vincular_produto(
     if not (0 <= body.item_index < len(order.items)):
         raise HTTPException(status_code=422, detail="item_index fora do intervalo")
     item = order.items[body.item_index]
+    env = _request_environment(request)
+
+    chaves = _chaves_do_item(item)
+    if not chaves:
+        raise HTTPException(status_code=422, detail="Item sem código nem EAN para vincular")
 
     with db.connect() as conn:
         prod = next(
@@ -3479,49 +3890,116 @@ def vincular_produto(
             ),
             None,
         )
-        if prod is None:
-            raise HTTPException(status_code=422, detail="Produto não encontrado no catálogo local")
+    if prod is None or not str(prod["fire_produto_id"]).isdigit():
+        raise HTTPException(status_code=422, detail="Produto não encontrado no catálogo local")
+    fire_seq = int(prod["fire_produto_id"])
 
+    # R18: chave repetida no pedido com descrições diferentes não separa as
+    # linhas; um vínculo dela valeria para todas. A escolha fica só nesta linha
+    # deste pedido (sem v1, sem v2, sem conflito).
+    if _item_em_chave_repetida(entry, order, body.item_index):
+        return _escolher_pontual(entry, order, body.item_index, prod, fire_seq, user, env)
+
+    cnpj, intercompany = _cnpj_do_escopo(order, body.item_index, env)
+    now = datetime.now().isoformat(timespec="seconds")
+    with db.connect() as conn:
+        escopo = produto_escopo.escopo_de_gravacao(conn, cnpj)
+        if escopo is None:
+            raise HTTPException(status_code=422, detail=MSG_VINCULO_SEM_CNPJ)
+        # Confere as duas chaves antes de gravar: conflito numa não deixa a
+        # outra gravada pela metade.
+        atuais = {
+            tipo: next(iter(produto_vinculo_repo.lookup(
+                conn,
+                [escopo],
+                codigos=[valor] if tipo == "codigo" else [],
+                eans=[valor] if tipo == "ean" else [],
+            ).values()), None)
+            for tipo, valor in chaves
+        }
+        if not body.substituir:
+            for tipo, _valor in chaves:
+                atual = atuais[tipo]
+                if atual is not None and atual.fire_seq != fire_seq:
+                    return JSONResponse(status_code=409, content=_conflito_json(atual))
+        gravados = []
+        try:
+            for tipo, valor in chaves:
+                v = produto_vinculo_repo.vincular(
+                    conn,
+                    escopo=escopo,
+                    chave_tipo=tipo,
+                    chave_valor=valor,
+                    fire_seq=fire_seq,
+                    fire_codigo=prod.get("codprod_altern"),
+                    fire_descricao=prod["nome"] or "",
+                    por=user.email,
+                    pedido_id=import_id,
+                    substituir=body.substituir,
+                    agora=now,
+                )
+                gravados.append(v)
+        except produto_vinculo_repo.VinculoConflito as exc:
+            # corrida com outro usuário entre a conferência e a gravação
+            return JSONResponse(status_code=409, content=_conflito_json(exc.atual))
+
+    # Check legado (v1) segue coerente enquanto a decisão nova não manda.
+    # R13: pedido intercompany não grava v1 — o v1 é chaveado pelo cliente do
+    # cabeçalho (a revenda) e valeria para todo cliente dela no caminho legado.
+    grava_v1 = not intercompany and not _trava_produto_ligada(env)
+    if grava_v1:
         ckey = produto_depara_repo.client_key(
             order.header.customer_cnpj, order.header.customer_name
         )
-        now = datetime.now().isoformat(timespec="seconds")
-        gravou = []
-        for tipo, valor in (("ean", item.ean), ("codigo", item.product_code)):
-            if not valor:
-                continue
-            produto_depara_repo.upsert(
-                conn,
-                client_key=ckey,
-                chave_tipo=tipo,
-                chave_valor=valor,
-                fire_produto_id=prod["fire_produto_id"],
-                fire_codigo=prod["codigo"],
-                fire_ean=prod.get("ean"),
-                fire_nome=prod["nome"],
-                criado_em=now,
-                criado_por=user.email,
-            )
-            gravou.append({"chave_tipo": tipo, "chave_valor": valor})
+        with db.connect() as conn:
+            for tipo, valor in (("ean", item.ean), ("codigo", item.product_code)):
+                if not valor:
+                    continue
+                produto_depara_repo.upsert(
+                    conn,
+                    client_key=ckey,
+                    chave_tipo=tipo,
+                    chave_valor=valor,
+                    fire_produto_id=prod["fire_produto_id"],
+                    fire_codigo=prod["codigo"],
+                    fire_ean=prod.get("ean"),
+                    fire_nome=prod["nome"],
+                    criado_em=now,
+                    criado_por=user.email,
+                )
 
-    if not gravou:
-        raise HTTPException(status_code=422, detail="Item sem código nem EAN para vincular")
-
+    trocas = [
+        {
+            "chave_tipo": tipo,
+            "chave_valor": valor,
+            "fire_seq_antigo": atuais[tipo].fire_seq if atuais[tipo] is not None else None,
+            "fire_seq_novo": fire_seq,
+        }
+        for tipo, valor in chaves
+    ]
+    trocou = any(t["fire_seq_antigo"] not in (None, fire_seq) for t in trocas)
     with with_trace_id(entry.get("trace_id")):
         repo.append_audit(
             import_id,
-            "produto_vinculo_criado",
+            "produto_vinculo_trocado" if trocou else "produto_vinculo_criado",
             {
                 "item_index": body.item_index,
+                "escopo": escopo,
                 "fire_produto_id": prod["fire_produto_id"],
                 "fire_nome": prod["nome"],
-                "chaves": gravou,
+                "chaves": trocas,
+                "vinculo_ids": [v.id for v in gravados],
+                "v1": grava_v1,
+                "pedido": order.header.order_number,
                 "user_id": user.id,
                 "user_email": user.email,
             },
         )
 
-    check = check_order(order, env=_request_environment(request))
+    # As escolhas pontuais de outras linhas deste import ficam no check regravado.
+    check = product_check.check_order(
+        order, env=env, escolhas=product_check.escolhas_do_import(repo.get_import(import_id))
+    )
     # Persiste o check fresco para o re-open do pedido e o badge da lista
     # refletirem o vínculo (senão rehydrate_preview leria o check antigo e o
     # item apareceria como ✗ de novo). Só grava quando o check é confiável —
@@ -3533,10 +4011,184 @@ def vincular_produto(
     # (o vínculo pode ter mudado o produto). Desligado/sem fonte: None, sem I/O.
     from app.erp import preco_trava
 
-    check_preco = preco_trava.check_preco_para_gravar(order, _request_environment(request), entry)
+    check_preco = preco_trava.check_preco_para_gravar(order, env, entry)
     if check_preco is not None:
         repo.update_fire_metadata(import_id, check_preco=check_preco)
-    return JSONResponse({"entry_id": import_id, "vinculos": gravou, "check": check})
+    # R12: Fire fora agora → os outros também dariam indisponível; não recheca.
+    rechecados = (
+        _rechecar_pedidos_do_escopo(import_id, escopo, chaves, env)
+        if check.get("available")
+        else []
+    )
+    return JSONResponse(
+        {
+            "entry_id": import_id,
+            "vinculos": [
+                {"id": v.id, "env": (env or {}).get("slug") or env_context.current_env_slug(),
+                 "escopo": v.escopo, "chave_tipo": v.chave_tipo, "chave_valor": v.chave_valor}
+                for v in gravados
+            ],
+            "check": check,
+            # A tela lê a trava do produto daqui (bloqueio, estados de planilha):
+            # sem isto ela ficaria com a decisão de antes do vínculo.
+            "produto_trava": _produto_trava_preview(check, _request_environment(request)),
+            "rechecados": rechecados,
+        }
+    )
+
+
+def _v1_do_vinculo_revogado(conn, v, ckey_criador: str | None) -> list[dict]:
+    """Linhas do de-para v1 gravadas junto com o vínculo v2 revogado: mesma
+    chave (normalizada), mesmo SEQ e cliente do pedido que criou o vínculo ou
+    CNPJ do mesmo escopo. v1 apontando para outro SEQ fica intocado."""
+    from app.erp import produto_escopo
+    from app.persistence import produto_vinculo_repo
+
+    rows = conn.execute(
+        "SELECT id, client_key, chave_valor FROM produto_depara "
+        "WHERE chave_tipo = ? AND fire_produto_id = ?",
+        (v.chave_tipo, str(v.fire_seq)),
+    ).fetchall()
+    out = []
+    for row_id, ckey, valor in rows:
+        if produto_vinculo_repo.norm_chave(v.chave_tipo, valor) != v.chave_valor:
+            continue
+        mesmo_cliente = ckey_criador is not None and ckey == ckey_criador
+        mesmo_escopo = (
+            len(ckey) == 14
+            and ckey.isdigit()
+            and v.escopo in produto_escopo.escopos_para(conn, ckey)
+        )
+        if mesmo_cliente or mesmo_escopo:
+            out.append({"id": row_id, "client_key": ckey})
+    return out
+
+
+@app.delete("/api/produtos/vinculo/{vinculo_id}")
+def revogar_vinculo(
+    vinculo_id: int,
+    env: str = Query(..., min_length=1, max_length=64, description="slug da empresa do vínculo"),
+    user: User = Depends(require_user),
+) -> JSONResponse:
+    """Revoga um vínculo v2 (a linha fica, com revogado_em/revogado_por) no
+    banco da empresa `env` — o id do vínculo é por empresa, então a empresa
+    vem explícita e nunca do cookie. Empresa inexistente ou inativa: 403 (o
+    mesmo portão do middleware e do `env_do_pedido`: só empresa ativa).
+
+    Enquanto o `produto_chave_modo` da empresa não é `ligado`, apaga também o
+    de-para v1 gravado junto (senão o check legado seguiria casando). Audita no
+    pedido que criou o vínculo, quando ele ainda existe (o `audit_log` exige um
+    pedido); senão, log direto."""
+    from app.models.order import Order
+    from app.persistence import (
+        db,
+        environments_repo,
+        produto_depara_repo,
+        produto_vinculo_repo,
+        repo,
+    )
+    from app.utils.logger import logger
+
+    alvo = environments_repo.get_by_slug(env)
+    if alvo is None or not alvo.get("is_active"):
+        raise HTTPException(status_code=403, detail="Empresa indisponível")
+
+    now = datetime.now().isoformat(timespec="seconds")
+    with env_context.active_env(alvo["id"], alvo["slug"]):
+        with db.connect() as conn:
+            try:
+                v = produto_vinculo_repo.revogar(conn, vinculo_id, por=user.email, agora=now)
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail="Vínculo não encontrado") from exc
+            row = conn.execute(
+                "SELECT pedido_id FROM produto_vinculo_v2 WHERE id = ?", (vinculo_id,)
+            ).fetchone()
+        pedido_id = row[0] if row else None
+        pedido = repo.get_import(pedido_id) if pedido_id else None
+
+        v1_apagados: list[dict] = []
+        if not _trava_produto_ligada(alvo):
+            ckey = None
+            if pedido and pedido.get("snapshot"):
+                try:
+                    h = Order.model_validate(pedido["snapshot"]).header
+                    ckey = produto_depara_repo.client_key(h.customer_cnpj, h.customer_name)
+                except Exception:  # noqa: BLE001 — sem snapshot legível: só o escopo decide
+                    ckey = None
+            with db.connect() as conn:
+                v1_apagados = _v1_do_vinculo_revogado(conn, v, ckey)
+                for linha in v1_apagados:
+                    conn.execute("DELETE FROM produto_depara WHERE id = ?", (linha["id"],))
+
+        detalhe = {
+            "vinculo_id": v.id,
+            "env": alvo["slug"],
+            "escopo": v.escopo,
+            "chave_tipo": v.chave_tipo,
+            "chave_valor": v.chave_valor,
+            "fire_seq": v.fire_seq,
+            "v1_apagados": v1_apagados,
+            "user_id": user.id,
+            "user_email": user.email,
+        }
+        if pedido is not None:
+            repo.append_audit(pedido_id, "produto_vinculo_revogado", detalhe)
+        else:
+            logger.info(f"produto_vinculo_revogado: {detalhe}")
+    return JSONResponse({"revogado": v.id})
+
+
+@app.get("/api/produtos/a-identificar")
+def produtos_a_identificar(
+    request: Request,
+    user: User = Depends(require_user),  # noqa: ARG001
+) -> JSONResponse:
+    """Itens a identificar dos pedidos em revisão do ambiente ativo: lê o check
+    guardado (`produto.estado` diferente de `ok`), sem ir ao Fire. Mais antigos
+    primeiro."""
+    from app.erp import produto_trava
+    from app.persistence import repo
+
+    # Com planilha, o item `ok` que a planilha não aponta (sem código) ou que o
+    # importador do Fire trocaria também para o envio: entra na fila, com o
+    # mesmo estado e motivo do portão.
+    planilha = _export_mode_atual() in ("xlsx", "both")
+    entries = repo.list_imports(portal_status="parsed", limit=_RECHECK_MAX_PEDIDOS)
+    linhas = []
+    for entry in sorted(entries, key=lambda e: (e["imported_at"] or "", e["id"])):
+        check = entry.get("check") or {}
+        itens_check = check.get("items") or []
+        itens = ((entry.get("snapshot") or {}).get("items")) or []
+        da_planilha = {}
+        if planilha:
+            sem_codigo, trocas = produto_trava.itens_planilha(check)
+            da_planilha = {x["index"]: x for x in sem_codigo + trocas}
+        for i, ic in enumerate(itens_check):
+            produto = (ic or {}).get("produto") if isinstance(ic, dict) else None
+            if not isinstance(produto, dict):
+                continue
+            estado, motivo = produto.get("estado"), produto.get("motivo")
+            if estado == "ok":
+                if i not in da_planilha:
+                    continue
+                estado, motivo = da_planilha[i]["estado"], da_planilha[i]["motivo"]
+            it = itens[i] if i < len(itens) and isinstance(itens[i], dict) else {}
+            linhas.append(
+                {
+                    "import_id": entry["id"],
+                    "pedido": entry.get("order_number"),
+                    "cliente": entry.get("customer"),
+                    "item_index": i,
+                    "codigo": it.get("product_code"),
+                    "ean": it.get("ean"),
+                    "descricao": it.get("description"),
+                    "estado": estado,
+                    "motivo": motivo,
+                    "importado_em": entry.get("imported_at"),
+                }
+            )
+    modo = _produto_chave_modo(_request_environment(request))
+    return JSONResponse({"modo": modo, "itens": linhas})
 
 
 @app.delete("/api/produtos/depara/{depara_id}")
@@ -3545,15 +4197,73 @@ def delete_depara(
     request: Request,
     user: User = Depends(require_user),
 ) -> JSONResponse:
-    """Desfaz um vínculo de-para. Log direto (não audit_log — sem import_id
-    associado, e `audit_log.import_id` é NOT NULL com FK pra `imports`)."""
-    from app.persistence import db, produto_depara_repo
+    """Desfaz um vínculo de-para v1. Log direto (não audit_log — sem import_id
+    associado, e `audit_log.import_id` é NOT NULL com FK pra `imports`).
+
+    M4: revoga também o vínculo v2 gêmeo — vigente, mesma chave (normalizada),
+    mesmo SEQ, num escopo do CNPJ do `client_key` do v1 — e audita a revogação no
+    pedido que criou o v2 (senão log). `client_key` sem CNPJ (nome do cliente): o
+    escopo não sai dele; o v2 fica e a resposta traz `aviso`."""
+    from app.erp import produto_escopo
+    from app.persistence import db, produto_depara_repo, produto_vinculo_repo, repo
     from app.utils.logger import logger
 
+    now = datetime.now().isoformat(timespec="seconds")
+    revogados = []
+    aviso = None
     with db.connect() as conn:
+        row = conn.execute(
+            "SELECT client_key, chave_tipo, chave_valor, fire_produto_id "
+            "FROM produto_depara WHERE id = ?",
+            (depara_id,),
+        ).fetchone()
         produto_depara_repo.delete(conn, depara_id)
-    logger.info(f"produto_vinculo_removido: depara_id={depara_id} user={user.email}")
-    return JSONResponse({"deleted": depara_id})
+        if row is not None:
+            ckey, tipo, valor, seq = row
+            escopos = produto_escopo.escopos_para(conn, ckey)
+            if not escopos:
+                aviso = (
+                    "O vínculo novo deste cliente não foi revogado (o de-para antigo não "
+                    "tem CNPJ). Revogue pela fila de produtos, se precisar."
+                )
+            else:
+                chave = produto_vinculo_repo.norm_chave(tipo, valor)
+                gemeos = [
+                    v
+                    for e in escopos
+                    for v in produto_vinculo_repo.listar(conn, escopo=e)
+                    if v.chave_tipo == tipo and v.chave_valor == chave and str(v.fire_seq) == str(seq)
+                ]
+                for v in gemeos:
+                    pedido = conn.execute(
+                        "SELECT pedido_id FROM produto_vinculo_v2 WHERE id = ?", (v.id,)
+                    ).fetchone()
+                    produto_vinculo_repo.revogar(conn, v.id, por=user.email, agora=now)
+                    revogados.append((v, pedido[0] if pedido else None))
+    for v, pedido_id in revogados:
+        detalhe = {
+            "vinculo_id": v.id,
+            "env": env_context.current_env_slug(),
+            "escopo": v.escopo,
+            "chave_tipo": v.chave_tipo,
+            "chave_valor": v.chave_valor,
+            "fire_seq": v.fire_seq,
+            "origem": "depara_v1_removido",
+            "depara_id": depara_id,
+            "user_id": user.id,
+            "user_email": user.email,
+        }
+        if pedido_id and repo.get_import(pedido_id) is not None:
+            repo.append_audit(pedido_id, "produto_vinculo_revogado", detalhe)
+        else:
+            logger.info(f"produto_vinculo_revogado: {detalhe}")
+    logger.info(
+        f"produto_vinculo_removido: depara_id={depara_id} user={user.email} "
+        f"v2_revogados={[v.id for v, _ in revogados]}"
+    )
+    return JSONResponse(
+        {"deleted": depara_id, "v2_revogados": [v.id for v, _ in revogados], "aviso": aviso}
+    )
 
 
 @app.post("/api/imported/{import_id}/ack-sem-preco")
@@ -3593,8 +4303,10 @@ def ack_sem_preco(
         raise HTTPException(status_code=422, detail=f"Snapshot inválido: {exc}") from exc
 
     request_env = getattr(request.state, "environment", None)
+    from app.erp.product_check import escolhas_do_import
+
     with with_trace_id(entry.get("trace_id")):
-        check = check_order(order, env=request_env)
+        check = check_order(order, env=request_env, escolhas=escolhas_do_import(entry))
         if not check.get("available"):
             raise HTTPException(status_code=503, detail="Fire indisponível para validar ack")
 
@@ -3627,6 +4339,57 @@ def ack_sem_preco(
     )
 
 
+@app.post("/api/imported/{import_id}/reconferir")
+def reconferir_pedido(
+    import_id: str,
+    request: Request,
+    _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
+) -> JSONResponse:
+    """Confere de novo no Fire o pedido em revisão (com as escolhas pontuais do
+    import), grava o check e devolve o check e a trava da tela. Sai do beco do
+    check salvo antes do pacote da chave exata (itens sem `produto`). Fire fora:
+    devolve o check indisponível e mantém o check salvo."""
+    from app.erp import preco_trava, product_check
+    from app.models.order import Order
+    from app.persistence import repo
+
+    entry = repo.get_import(import_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    if entry.get("portal_status") != "parsed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Pedido não está 'em revisão' (status atual: {entry.get('portal_status')})",
+        )
+    snapshot = entry.get("snapshot")
+    if not snapshot:
+        raise HTTPException(status_code=422, detail="Snapshot indisponível")
+    try:
+        order = Order.model_validate(snapshot)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Snapshot inválido: {exc}") from exc
+
+    env = _request_environment(request)
+    with with_trace_id(entry.get("trace_id")):
+        check = product_check.check_order(
+            order, env=env, escolhas=product_check.escolhas_do_import(entry)
+        )
+        if check.get("available"):
+            repo.update_fire_metadata(import_id, check=check)
+            check_preco = preco_trava.check_preco_para_gravar(order, env, entry)
+            if check_preco is not None:
+                repo.update_fire_metadata(import_id, check_preco=check_preco)
+    return JSONResponse(
+        {
+            "entry_id": import_id,
+            "check": check,
+            "produto_chave_modo": _produto_chave_modo(env),
+            "produto_trava": _produto_trava_preview(check, env),
+        }
+    )
+
+
 @app.get("/api/imported/{import_id}/preview")
 def rehydrate_preview(
     import_id: str,
@@ -3655,6 +4418,8 @@ def rehydrate_preview(
     payload["fire_codigo"] = entry.get("fire_codigo")
     payload["fire_status_last_seen"] = entry.get("fire_status_last_seen")
     payload["arquivo_original"] = _arquivo_original_info(entry)
+    payload["produto_chave_modo"] = _produto_chave_modo(_request_environment(request))
+    payload["produto_trava"] = _produto_trava_preview(check, _request_environment(request))
     # Situação de preço por item (trava). Só leitura; ausente em `desligado` e
     # em qualquer falha — o preview sempre renderiza.
     try:
@@ -3662,7 +4427,14 @@ def rehydrate_preview(
 
         from app.erp import preco_trava
 
-        _, produtos_por_item = _vinculos_de_para(order, "preview")
+        request_env = _request_environment(request)
+        if _trava_produto_ligada(request_env):
+            # Mesmo SEQ que o envio avalia em `ligado`: o decidido do check salvo.
+            from app.erp import produto_trava
+
+            _, produtos_por_item = produto_trava.produtos_decididos(entry.get("check"))
+        else:
+            _, produtos_por_item = _vinculos_de_para(order, "preview", entry)
         preco = preco_trava.preview_preco(
             import_id,
             entry,
@@ -3748,9 +4520,15 @@ async def process_files(
     from app.exporters.erp_exporter import ERPExporter
     from app.ingestion.file_loader import LoadedFile
 
-    # Caminho legado: gera XLSX sem o portão de preço. Com a trava ativa, a
-    # planilha só sai pela revisão (preview → exportar/enviar).
-    if preco_trava.trava_ativa(_request_environment(request)):
+    # Caminho legado: gera XLSX sem o portão de preço nem o de produto. Com uma
+    # trava ativa, a planilha só sai pela revisão (preview → exportar/enviar).
+    request_env = _request_environment(request)
+    if _trava_produto_ligada(request_env):
+        raise HTTPException(
+            status_code=409,
+            detail="Trava de produto ligada: use a revisão de pedidos.",
+        )
+    if preco_trava.trava_ativa(request_env):
         raise HTTPException(
             status_code=409,
             detail="Com a trava de preço ativa, use a revisão do pedido para exportar.",

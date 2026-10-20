@@ -696,6 +696,218 @@
       color: var(--accent-hover);
     }
 
+    /* ── Produto por chave exata (produto_chave_modo observando|ligado) ──
+       O rótulo carrega o sentido; o ícone (forma) e a cor só reforçam. */
+    .pb { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
+    .pb-label {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11px; font-weight: 600; line-height: 1.4;
+      padding: 2px 8px 2px 4px; border-radius: 11px;
+      background: var(--bg); box-shadow: inset 0 0 0 1px currentColor;
+      max-width: 240px;
+    }
+    .pb-ico {
+      width: 15px; height: 15px; flex: none; border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700; line-height: 1;
+    }
+    .pb-ok    .pb-label { color: var(--success-strong); }
+    .pb-warn  .pb-label { color: var(--warn-ink); }
+    .pb-error .pb-label { color: var(--error-strong); }
+    .pb-muted .pb-label { color: var(--text-secondary); }
+    /* Ícone sólido no estado que pede ação: a forma muda, não só a cor. */
+    .pb-warn .pb-ico, .pb-error .pb-ico { background: currentColor; }
+    .pb-warn .pb-ico > span, .pb-error .pb-ico > span { color: var(--bg); }
+    .pb-muted .pb-ico { box-shadow: inset 0 0 0 1.5px currentColor; }
+    .pb-ico-2 { font-size: 8px; letter-spacing: -.04em; }
+    .pb-motivo { font-size: 11px; line-height: 1.4; color: var(--text-secondary); max-width: 260px; }
+    .pb-aviso  { font-size: 11px; line-height: 1.4; color: var(--warn-strong); font-weight: 600; max-width: 260px; }
+    .pb-acao { margin-top: 3px; height: 26px; padding: 0 10px; font-size: 11px; }
+    .pb-link {
+      font-size: 11px; color: var(--text-secondary); background: none; border: none;
+      padding: 0; font-family: inherit; cursor: pointer; text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .pb-link:hover { color: var(--text); }
+    /* Item travado: faixa à esquerda, mesma linguagem do .log-card. */
+    .preview-table tr.row-travado td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+    .preview-table tr.row-travado.row-erro td:first-child { box-shadow: inset 3px 0 0 var(--error); }
+    .preview-table tr.row-foco td {
+      background: var(--accent-bg);
+      box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent);
+    }
+    .preview-table tr.row-foco td:first-child {
+      box-shadow: inset 3px 0 0 var(--accent), inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent);
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .preview-table tbody td { transition: background 200ms; }
+    }
+    .btn-warn { background: var(--surface); border-color: var(--warn); color: var(--warn-ink); font-weight: 600; }
+    .btn-warn:hover { background: var(--warn-bg); border-color: var(--warn-strong); color: var(--warn-ink); }
+    .pv-fire-off { display: inline-flex; align-items: center; gap: 6px 10px; flex-wrap: wrap; }
+    .pv-fire-off-ajuda { flex-basis: 100%; font-size: 11px; color: var(--text-secondary); }
+    /* Chegada pela fila em linha travada: a faixa do estado e as linhas do destaque juntas. */
+    .preview-table tr.row-foco.row-travado td:first-child {
+      box-shadow: inset 3px 0 0 var(--warn), inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent);
+    }
+    .preview-table tr.row-foco.row-travado.row-erro td:first-child {
+      box-shadow: inset 3px 0 0 var(--error), inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent);
+    }
+    .preview-table td.col-produto { min-width: 200px; }
+
+    .btn:focus-visible, .pb-link:focus-visible, .dir-row:focus-visible, .fila-row:focus-visible,
+    .tab-btn:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 2px;
+    }
+
+    /* Picker: 3 seções */
+    .pp-sec { padding: 10px 8px 6px; }
+    .pp-sec + .pp-sec { border-top: 1px solid var(--border-subtle); }
+    .pp-sec-title {
+      padding: 0 4px 2px; font-size: 10px; font-weight: 700;
+      letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted);
+    }
+    .pp-sec-sub { padding: 0 4px 6px; font-size: 11px; color: var(--text-secondary); }
+    .pp-sec-vazio { padding: 4px 4px 8px; font-size: 12px; color: var(--text-muted); }
+    /* Nome nunca trunca: é o que a pessoa compara para escolher. */
+    .pp-row-body { flex: 1; min-width: 0; }
+    .pp-row-main { font-size: 13px; color: var(--text); white-space: normal; overflow-wrap: anywhere; }
+    .pp-row-sub { font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); white-space: normal; overflow-wrap: anywhere; }
+    .pp-tag-linha { display: none; margin-bottom: 3px; }
+    .pp-tag-lado { flex: none; display: inline-flex; }
+    .pp-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+    .pp-chip {
+      font-size: 10px; font-weight: 600; color: var(--warn-ink); background: var(--warn-bg);
+      padding: 1px 6px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--warn);
+    }
+    .pp-chip-ok { font-size: 10px; color: var(--text-secondary); }
+    .dir-row.is-selected { background: var(--accent-bg); box-shadow: inset 0 0 0 1px var(--accent); }
+    .dir-row.is-selected .pp-row-main { color: var(--accent-hover); font-weight: 600; }
+    .dir-row[aria-disabled="true"] { cursor: not-allowed; }
+    .dir-row[aria-disabled="true"]:hover { background: transparent; }
+    .dir-row[aria-disabled="true"] .pp-row-main { color: var(--text-secondary); }
+    .pp-tag {
+      flex: none; font-size: 10px; font-weight: 600; letter-spacing: .02em;
+      padding: 1px 7px; border-radius: 999px;
+      border: 1px dashed var(--border-control); color: var(--text-secondary);
+    }
+    .pp-tag-bloq { border-style: solid; color: var(--error-strong); border-color: currentColor; }
+    .pp-check {
+      flex: none; width: 16px; height: 16px; border-radius: 50%;
+      border: 1.5px solid var(--border-control);
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .dir-row.is-selected .pp-check { border-color: var(--accent); background: var(--accent); }
+    .dir-row.is-selected .pp-check::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #fff; }
+    .pp-busca-res { margin-top: 6px; }
+
+    /* Confirmação lado a lado */
+    .pp-conf { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 12px; }
+    .pp-conf-intro { font-size: 13px; color: var(--text); font-weight: 500; }
+    .pp-conf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
+    .pp-card {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--bg); padding: 10px 12px; min-width: 0;
+    }
+    .pp-card-escolhido { border-color: var(--accent); }
+    .pp-card-title {
+      font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--text-muted); margin-bottom: 8px;
+    }
+    .pp-card dl { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 4px 10px; font-size: 12px; }
+    .pp-card dt { color: var(--text-muted); }
+    .pp-card dd { color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+    .pp-card dd.mono { font-family: var(--font-mono); font-size: 11px; }
+    mark.pp-diverge {
+      background: var(--warn-bg); color: var(--warn-ink); font-weight: 700;
+      padding: 0 2px; border-radius: 3px; box-shadow: inset 0 -2px 0 var(--warn);
+    }
+    .pp-alerta {
+      border: 1px solid var(--warn); background: var(--warn-bg); border-radius: var(--radius);
+      padding: 10px 12px; font-size: 12px; color: var(--warn-ink);
+    }
+    .pp-alerta strong { display: block; margin-bottom: 4px; }
+    .pp-alerta ul { padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+    .pp-alerta-ok { border-color: var(--border); background: var(--surface); color: var(--text-secondary); }
+    .pp-alerta-nota { margin-top: 8px; font-size: 12px; color: var(--warn-ink); }
+    .pp-conf-erro {
+      border: 1px solid var(--error); background: var(--error-bg); border-radius: var(--radius);
+      padding: 8px 12px; font-size: 12px; color: var(--error-strong);
+    }
+    .pp-conflito-linhas { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 4px 10px; font-size: 12px; }
+    .pp-conflito-linhas dt { color: var(--text-muted); }
+    .pp-conflito-linhas dd { color: var(--text); overflow-wrap: anywhere; }
+    .fila-grupo {
+      margin: 14px 2px 2px; font-size: 10px; font-weight: 700; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--text-muted);
+    }
+    .pp-nota { font-size: 11px; color: var(--text-secondary); }
+
+    /* Conflito: o código já aponta para outro produto */
+    .pp-conflito {
+      margin: 14px 16px 16px; padding: 14px;
+      border: 1px solid var(--warn); border-left-width: 3px; border-radius: var(--radius);
+      background: var(--bg); display: flex; flex-direction: column; gap: 12px;
+    }
+    .pp-conflito-txt { font-size: 13px; color: var(--text); line-height: 1.5; }
+    .pp-conflito-acoes { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+
+    /* Fila "Itens a identificar" */
+    .fila-intro { font-size: 12px; color: var(--text-secondary); flex: 1; min-width: 200px; }
+    .fila-list { display: flex; flex-direction: column; gap: 6px; }
+    .fila-row {
+      width: 100%; text-align: left; font-family: inherit; cursor: pointer;
+      display: grid; grid-template-columns: 230px minmax(0, 1fr) auto; gap: 6px 14px; align-items: start;
+      padding: 10px 14px; border: 1px solid var(--border); border-left: 3px solid var(--warn);
+      border-radius: var(--radius-lg); background: var(--surface); color: var(--text);
+      transition: background 120ms, border-color 120ms;
+    }
+    .fila-row:hover { background: var(--surface-hover); }
+    .fila-row .pb-label { max-width: 230px; }
+    .fila-row.erro { border-left-color: var(--error); }
+    .fila-row.muted { border-left-color: var(--border-control); }
+    .fila-desc { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fila-chaves { font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); }
+    .fila-motivo { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+    .fila-ped { font-size: 11px; color: var(--text-muted); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .fila-ped strong { display: block; font-size: 12px; color: var(--text-secondary); font-weight: 600; }
+
+    @media (max-width: 640px) {
+      /* Telefone: a tabela rola dentro do modal em vez de espremer a descrição,
+         o rodapé quebra linha e as abas rolam de lado. */
+      .preview-header-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .preview-table { min-width: 820px; }
+      .preview-footer { flex-wrap: wrap; }
+      .preview-footer .footer-note { flex-basis: 100%; }
+      #pvFooterActions { flex-wrap: wrap; justify-content: flex-end; width: 100%; }
+      .tabs { overflow-x: auto; }
+      /* Paliativo até o layout de cartão: a coluna do produto fica presa à
+         direita enquanto a tabela rola de lado. */
+      .preview-table td.col-produto, .preview-table th.th-produto {
+        position: sticky; right: 0; min-width: 168px; max-width: 200px;
+        background: var(--bg); box-shadow: -8px 0 10px -8px rgba(0,0,0,.25);
+      }
+      .preview-table th.th-produto { z-index: 2; background: var(--surface); }
+      .preview-table tbody tr:hover td.col-produto { background: var(--surface-hover); }
+      /* Coluna presa precisa de fundo opaco, senão o texto que passa por baixo aparece. */
+      .preview-table tr.row-foco td.col-produto {
+        background: linear-gradient(var(--accent-bg), var(--accent-bg)), var(--bg);
+      }
+      .pb-acao { height: 44px; min-width: 44px; padding: 0 14px; font-size: 12px; }
+      .pp-tag-linha { display: block; }
+      /* "Escolhido:" em linha própria acima dos botões. */
+      #ppFooter { flex-wrap: wrap; }
+      #ppSelInfo { flex-basis: 100%; white-space: normal; }
+      /* Toast no topo: não cobre o rodapé do modal. */
+      .app-shell-toasts { top: 16px; bottom: auto; left: 16px; right: 16px; max-width: none; flex-direction: column; }
+      .pp-tag-lado { display: none; }
+      .tab-btn { white-space: nowrap; flex: none; }
+      .fila-row { grid-template-columns: minmax(0, 1fr); }
+      .fila-ped { text-align: left; white-space: normal; }
+      .fila-ped strong { display: inline; margin-right: 6px; }
+      .pp-conflito-acoes .btn { flex: 1; justify-content: center; }
+    }
+
     /* ── Utilities ── */
     .hidden { display: none !important; }
     @keyframes fadeUp {
@@ -722,6 +934,11 @@
       <button class="tab-btn" data-tab="imported" onclick="switchTab('imported')">
         Pedidos
         <span class="tab-count" id="importedCount">0</span>
+      </button>
+      <!-- Só aparece com produto_chave_modo observando/ligado (ver loadFilaIdentificar). -->
+      <button class="tab-btn hidden" data-tab="identificar" id="tabBtnIdentificar" onclick="switchTab('identificar')">
+        Itens a identificar
+        <span class="tab-count" id="identificarCount">0</span>
       </button>
     </div>
 
@@ -826,6 +1043,20 @@
       </div>
     </div>
 
+    <!-- ── Tab: Itens a identificar (fila do produto por chave exata) ── -->
+    <div class="tab-panel" id="tab-identificar">
+      <div class="toolbar">
+        <p class="fila-intro" id="filaIntro">Itens dos pedidos em revisão que ainda precisam de atenção antes de ir para o Fire.</p>
+        <button class="btn" onclick="loadFilaIdentificar()">
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <path d="M11 6.5A4.5 4.5 0 112.5 4M2.5 1.5V4H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Atualizar
+        </button>
+      </div>
+      <div class="fila-list" id="filaList" aria-live="polite"></div>
+    </div>
+
   </div>
 </div>
 
@@ -920,7 +1151,7 @@
               <th style="text-align:right">Unit.</th>
               <th style="text-align:right">Total</th>
               <th>Entrega</th>
-              <th style="text-align:center;width:68px">Fire</th>
+              <th style="text-align:center;width:68px" id="pvThFire">Fire</th>
               <th id="pvThPreco" class="hidden" style="text-align:center">Preço</th>
             </tr>
           </thead>
@@ -968,32 +1199,61 @@
   </div>
 </div>
 
-<!-- ── Manual produto picker (item sem match no Fire → vínculo de-para) ── -->
+<!-- ── Manual produto picker (item sem match no Fire → vínculo de-para) ──
+     Em produto_chave_modo desligado: busca no topo + sugestões (como sempre foi).
+     Em observando/ligado: 3 seções nesta ordem (candidatos exatos, sugestões
+     pela descrição, busca), depois a confirmação lado a lado e, no 409, o painel
+     de conflito. Nada vincula sozinho: só o botão da confirmação grava. -->
 <div class="overlay" id="productPickerOverlay">
-  <div class="modal" style="width: 640px; max-height: 75vh">
+  <div class="modal" style="width: 680px; max-height: 84vh" role="dialog" aria-modal="true" aria-labelledby="ppTitle">
     <div class="modal-header">
-      <span class="modal-title">Vincular produto do Fire</span>
-      <button class="icon-btn" onclick="closeProductPicker()">
+      <span class="modal-title" id="ppTitle">Vincular produto do Fire</span>
+      <button class="icon-btn" onclick="closeProductPicker()" aria-label="Fechar">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
           <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
         </svg>
       </button>
     </div>
-    <div style="padding: 14px 18px; border-bottom: 1px solid var(--border-subtle); flex-shrink: 0">
+    <div style="padding: 14px 18px; border-bottom: 1px solid var(--border-subtle); flex-shrink: 0" id="ppTopo">
       <div id="ppItemLabel" style="font-size:12px;color:var(--text-muted);margin-bottom:10px"></div>
-      <input type="text" class="input" id="ppSearch"
-             placeholder="Nome, código ou EAN do produto (mín. 2 caracteres)"
-             autocomplete="off"
-             oninput="onProductSearchInput()"
-             style="width:100%">
-      <div id="ppStatus" style="margin-top:8px; font-size:11px; color: var(--text-muted); min-height:14px"></div>
+      <div id="ppBuscaBloco">
+        <input type="text" class="input" id="ppSearch"
+               placeholder="Nome, código ou EAN do produto (mín. 2 caracteres)"
+               autocomplete="off" aria-label="Buscar produto no catálogo"
+               oninput="onProductSearchInput()"
+               style="width:100%">
+        <div id="ppStatus" style="margin-top:8px; font-size:11px; color: var(--text-muted); min-height:14px" aria-live="polite"></div>
+      </div>
     </div>
-    <div class="modal-body" id="ppResults" style="padding: 4px 6px"></div>
-    <div class="modal-footer">
+    <div class="modal-body" id="ppEscolha" style="padding: 0 6px">
+      <section class="pp-sec hidden" id="ppSecExatos" aria-labelledby="ppSecExatosT">
+        <div class="pp-sec-title" id="ppSecExatosT">Candidatos exatos</div>
+        <div class="pp-sec-sub">Produtos do Fire com a mesma chave do item (EAN, código ou vínculo).</div>
+        <div id="ppExatos" role="listbox" aria-labelledby="ppSecExatosT"></div>
+      </section>
+      <section class="pp-sec hidden" id="ppSecSugestoes" aria-labelledby="ppSecSugestoesT">
+        <div class="pp-sec-title" id="ppSecSugestoesT">Sugestões pela descrição</div>
+        <div class="pp-sec-sub">Parecidas com a descrição do cliente. Confira antes de escolher.</div>
+        <div id="ppSugestoes" role="listbox" aria-labelledby="ppSecSugestoesT"></div>
+      </section>
+      <section class="pp-sec hidden" id="ppSecBusca" aria-labelledby="ppSecBuscaT">
+        <div class="pp-sec-title" id="ppSecBuscaT">Buscar no catálogo</div>
+        <div id="ppBuscaSlot"></div>
+        <div id="ppBuscaResults" class="pp-busca-res" role="listbox" aria-labelledby="ppSecBuscaT"></div>
+      </section>
+      <!-- Lista única do modo desligado (sugestões e busca no mesmo lugar). -->
+      <div id="ppResults" style="padding: 4px 0"></div>
+    </div>
+    <div class="modal-body hidden" id="ppConfirmacao" aria-live="polite"></div>
+    <div class="modal-body hidden" id="ppConflito"></div>
+    <div class="modal-footer" id="ppFooter">
       <span class="modal-sel-path" id="ppSelInfo"></span>
-      <button class="btn btn-sm" onclick="closeProductPicker()">Cancelar</button>
+      <button class="btn btn-sm" id="ppCancelBtn" onclick="closeProductPicker()">Cancelar</button>
+      <button class="btn btn-sm hidden" id="ppVoltarBtn" onclick="ppVoltarEscolha()">Voltar</button>
       <button class="btn btn-primary btn-sm" id="ppConfirmBtn"
               onclick="confirmProductLink()" disabled>Confirmar</button>
+      <button class="btn btn-primary btn-sm hidden" id="ppVincularBtn"
+              onclick="ppVincularConfirmado(event)" disabled>Vincular produto</button>
     </div>
   </div>
 </div>
@@ -1010,6 +1270,7 @@ async function init() {
   await loadConfig();
   loadPending();
   loadImported();
+  loadFilaIdentificar();
   subscribeConfigChanges();
 }
 
@@ -1064,6 +1325,7 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + tab));
   if (tab === 'imported') loadImported();
+  if (tab === 'identificar') loadFilaIdentificar();
 }
 
 /* ── Pending ── */
@@ -1627,7 +1889,8 @@ function renderImported(entries) {
   }).join('');
 }
 
-async function openImportDetail(importId) {
+// opts.itemIndex: vem da fila "Itens a identificar" — abre o pedido no item.
+async function openImportDetail(importId, opts) {
   currentPreview = null;
   routingChoice = null;
   showPreviewModal();
@@ -1638,10 +1901,51 @@ async function openImportDetail(importId) {
     const data = await api('/api/imported/' + encodeURIComponent(importId) + '/preview');
     currentPreview = data;
     renderPreview(data);
+    if (opts && opts.itemIndex != null) focarItemDoPreview(opts.itemIndex);
   } catch (err) {
     setPreviewLoading(false);
     showPreviewError(err.message || 'Falha ao carregar pedido');
     document.getElementById('previewContent').classList.add('hidden');
+  }
+}
+
+// Chegada pela fila: destaca a linha até o foco sair dela.
+function focarItemDoPreview(idx) {
+  const row = document.getElementById('pvItem-' + idx);
+  if (!row) return;
+  const calmo = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  row.classList.add('row-foco');
+  // inline 'nearest': a Descrição continua à vista; no telefone a coluna do
+  // produto já fica presa à direita.
+  row.scrollIntoView({ block: 'center', inline: 'nearest', behavior: calmo ? 'auto' : 'smooth' });
+  (row.querySelector('.pb-acao') || row).focus({ preventScroll: true });
+  row.addEventListener('focusout', function sair(ev) {
+    if (row.contains(ev.relatedTarget)) return;
+    row.classList.remove('row-foco');
+    row.removeEventListener('focusout', sair);
+  });
+}
+
+// "Recarregar" / "Conferir de novo": confere de novo no Fire (com as escolhas
+// desta linha), o backend grava o check e a tela aplica check + trava da resposta.
+async function produtoConferirDeNovo(importId) {
+  const btn = document.getElementById('pvConferirDeNovoBtn');
+  const prev = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Conferindo…'; }
+  hidePreviewError();
+  try {
+    const body = await api('/api/imported/' + encodeURIComponent(importId) + '/reconferir', { method: 'POST' });
+    if (currentPreview && currentPreview.preview_id === importId) {
+      currentPreview.check = body.check;
+      if (body.produto_trava) currentPreview.produto_trava = body.produto_trava;
+      if (body.produto_chave_modo) currentPreview.produto_chave_modo = body.produto_chave_modo;
+      renderPreview(currentPreview);
+    }
+    loadImported();
+    loadFilaIdentificar();
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.innerHTML = prev; }
+    showPreviewError(err.message || 'Não deu para conferir de novo.');
   }
 }
 
@@ -1738,7 +2042,8 @@ async function doReimport(filename, entryId) {
         <path d="M2 6.5l3 3 6-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       Reimportado com sucesso ${links ? '&middot; ' + links : ''}
-      ${data.xlsx_adiado === 'trava_de_preco' ? '&middot; ' + esc(PRECO_MSG_ADIADO) : ''}`;
+      ${data.xlsx_adiado === 'trava_de_preco' ? '&middot; ' + esc(PRECO_MSG_ADIADO) : ''}
+      ${data.xlsx_adiado === 'produto_a_identificar' ? '&middot; ' + esc(PRODUTO_MSG_ADIADO) : ''}`;
     resultEl.classList.remove('hidden');
 
     loadImported();
@@ -1887,75 +2192,246 @@ async function confirmClientOverride() {
   }
 }
 
-/* ── Manual produto picker (item sem match no Fire → vínculo de-para) ──
- * Vínculo grava em produto_depara (chaveado por cliente + código/EAN do
- * item) e a partir daí o item casa sozinho em qualquer reimportação futura
- * do mesmo cliente — sem passar de novo pelo picker. */
+/* ── Manual produto picker (item sem match no Fire → vínculo) ──
+ * O vínculo grava a chave exata do item (código/EAN) para o produto escolhido,
+ * no escopo do cliente, e a partir daí o item casa sozinho nos próximos pedidos.
+ * Nunca vincula sozinho: sugestão é só sugestão, e só o botão da confirmação
+ * grava. Em `produto_chave_modo` desligado o picker é o de sempre (busca no
+ * topo, sugestões, confirmar direto); fora dele, 3 seções + confirmação lado a
+ * lado. O 409 de conflito abre um painel na página nos dois casos. */
 let ppState = {
   itemIndex: null,
-  selected: null,      // { fire_produto_id, fire_codigo, fire_nome, fire_ean }
+  selected: null,      // { fire_produto_id, fire_codigo, fire_nome, fire_ean, unidade? }
   searchTimer: null,
   searchAbort: null,
+  modoNovo: false,
+  catalogo: new Map(), // fire_produto_id -> produto (linhas renderizadas)
 };
+
+function _ppReset(itemIndex, modoNovo) {
+  const it = (currentPreview?.items || [])[itemIndex] || {};
+  ppState = { itemIndex, selected: null, searchTimer: null, searchAbort: null, modoNovo, catalogo: new Map(),
+              descCliente: it.description || '' };
+}
+
+function _ppEtapa(etapa) {
+  // etapa: 'escolha' | 'confirmacao' | 'conflito'
+  document.getElementById('ppTopo').classList.toggle('hidden', etapa !== 'escolha');
+  document.getElementById('ppEscolha').classList.toggle('hidden', etapa !== 'escolha');
+  document.getElementById('ppConfirmacao').classList.toggle('hidden', etapa !== 'confirmacao');
+  document.getElementById('ppConflito').classList.toggle('hidden', etapa !== 'conflito');
+  document.getElementById('ppFooter').classList.toggle('hidden', etapa === 'conflito');
+  document.getElementById('ppCancelBtn').classList.toggle('hidden', etapa === 'confirmacao');
+  document.getElementById('ppVoltarBtn').classList.toggle('hidden', etapa !== 'confirmacao');
+  // A confirmação tem botão próprio: o 2º clique de um duplo clique no
+  // "Confirmar" nunca cai no botão que grava.
+  document.getElementById('ppConfirmBtn').classList.toggle('hidden', etapa === 'confirmacao');
+  document.getElementById('ppVincularBtn').classList.toggle('hidden', etapa !== 'confirmacao');
+  // A confirmação já mostra o produto escolhido.
+  document.getElementById('ppSelInfo').classList.toggle('hidden', etapa === 'confirmacao');
+  // Saiu da confirmação: o timer que libera o "Vincular" não pode disparar depois.
+  if (etapa !== 'confirmacao' && ppState.timerVincular) {
+    clearTimeout(ppState.timerVincular);
+    ppState.timerVincular = null;
+  }
+}
 
 function openProductPicker(itemIndex) {
   if (!currentPreview) return;
   const it = (currentPreview.items || [])[itemIndex];
   if (!it) return;
+  const modoNovo = produtoModoNovo(currentPreview);
+  _ppReset(itemIndex, modoNovo);
 
-  ppState = { itemIndex, selected: null, searchTimer: null, searchAbort: null };
+  document.getElementById('ppTitle').textContent = modoNovo ? 'Escolher produto do Fire' : 'Vincular produto do Fire';
   document.getElementById('ppItemLabel').textContent =
     (it.description || 'Item sem descrição')
     + (it.product_code ? ' · cód. ' + it.product_code : '')
     + (it.ean ? ' · EAN ' + it.ean : '');
   document.getElementById('ppSearch').value = '';
   document.getElementById('ppStatus').textContent = '';
-  document.getElementById('ppResults').innerHTML = '';
+  ['ppResults', 'ppExatos', 'ppSugestoes', 'ppBuscaResults', 'ppConfirmacao', 'ppConflito']
+    .forEach(id => { document.getElementById(id).innerHTML = ''; });
   document.getElementById('ppSelInfo').textContent = '';
-  document.getElementById('ppConfirmBtn').disabled = true;
-  document.getElementById('productPickerOverlay').classList.add('open');
-  setTimeout(() => document.getElementById('ppSearch')?.focus(), 80);
+  const confirmar = document.getElementById('ppConfirmBtn');
+  confirmar.disabled = true;
+  confirmar.textContent = 'Confirmar';
+  const vincular = document.getElementById('ppVincularBtn');
+  vincular.disabled = true;
+  vincular.textContent = 'Vincular produto';
 
+  // A busca é um bloco só: no topo (desligado) ou como 3ª seção (modo novo).
+  const bloco = document.getElementById('ppBuscaBloco');
+  const destino = modoNovo ? document.getElementById('ppBuscaSlot') : document.getElementById('ppTopo');
+  destino.appendChild(bloco);
+  ['ppSecExatos', 'ppSecSugestoes', 'ppSecBusca'].forEach(id =>
+    document.getElementById(id).classList.toggle('hidden', !modoNovo));
+  document.getElementById('ppResults').classList.toggle('hidden', modoNovo);
+
+  _ppEtapa('escolha');
+  document.getElementById('productPickerOverlay').classList.add('open');
+
+  if (modoNovo) {
+    renderCandidatosExatos(produtoDoItem(currentPreview, itemIndex));
+    setTimeout(() => {
+      const exato = document.querySelector('#ppExatos .dir-row:not([aria-disabled="true"])');
+      if (exato) exato.focus();
+      else document.getElementById('ppSearch')?.focus();
+    }, 80);
+  } else {
+    setTimeout(() => document.getElementById('ppSearch')?.focus(), 80);
+  }
   loadProductSuggestions(it);
 }
 
 function closeProductPicker() {
   document.getElementById('productPickerOverlay').classList.remove('open');
+  if (ppState.timerVincular) clearTimeout(ppState.timerVincular);
   if (ppState.searchAbort) { ppState.searchAbort.abort(); ppState.searchAbort = null; }
   if (ppState.searchTimer) { clearTimeout(ppState.searchTimer); ppState.searchTimer = null; }
-  ppState = { itemIndex: null, selected: null, searchTimer: null, searchAbort: null };
+  _ppReset(null, false);
+}
+
+// Candidatos do check (`produto.candidatos`) no formato das linhas do catálogo.
+function _candidatoParaLinha(c) {
+  return {
+    fire_produto_id: String(c.seq),
+    fire_codigo: c.codprod_altern || '',
+    fire_nome: c.descricao || '',
+    fire_ean: c.ean || '',
+    unidade: c.unidade || '',
+    bloqueado: !!c.bloqueado,
+  };
+}
+
+function renderCandidatosExatos(produto) {
+  const el = document.getElementById('ppExatos');
+  const cands = ((produto && produto.candidatos) || []).map(_candidatoParaLinha);
+  if (!cands.length) {
+    el.innerHTML = '<div class="pp-sec-vazio">Nenhum produto do Fire tem a chave deste item.</div>';
+    return;
+  }
+  el.innerHTML = cands.map(p => ppRowHtml(p, { bloqueado: p.bloqueado })).join('');
+}
+
+// Linha da busca/sugestão (`/api/produtos/search`): o código mostrado é o
+// CODPROD_ALTERN (o que vai na planilha), não o SEQ em texto de `fire_codigo`.
+function _catalogoParaLinha(p) {
+  return { ...p, fire_codigo: p.fire_codprod_altern || '' };
+}
+
+function ppRowHtml(p, opts) {
+  const { sugestao, bloqueado } = opts || {};
+  ppState.catalogo.set(String(p.fire_produto_id), p);
+  const tag = bloqueado
+    ? '<span class="pp-tag pp-tag-bloq">bloqueado no Fire</span>'
+    : (sugestao ? '<span class="pp-tag">sugestão</span>' : '');
+  const sub = [
+    `#${p.fire_produto_id}`,
+    p.fire_codigo ? 'cód. ' + p.fire_codigo : 'sem código',
+    p.fire_ean ? 'EAN ' + p.fire_ean : null,
+  ].filter(Boolean).join(' · ');
+  const nome = p.fire_nome || '(sem nome)';
+  const attrs = bloqueado
+    ? 'aria-disabled="true" title="Produto bloqueado no Fire: não dá para vincular a ele."'
+    : `onclick="ppPick(this)" onkeydown="ppRowKey(event, this)"`;
+  const chips = atributosChipsHtml(ppState.descCliente, p.fire_nome);
+  return `
+    <div class="dir-row" role="option" tabindex="0" aria-selected="false" ${attrs}
+         data-fire-produto-id="${esc(p.fire_produto_id)}"
+         aria-label="${esc(nome + ', ' + sub + (bloqueado ? ', bloqueado no Fire' : sugestao ? ', sugestão' : '') + chips.texto)}">
+      <span class="pp-check" aria-hidden="true"></span>
+      <div class="pp-row-body">
+        ${tag ? `<div class="pp-tag-linha" aria-hidden="true">${tag}</div>` : ''}
+        <div class="pp-row-main">${esc(nome)}</div>
+        <div class="pp-row-sub">${esc(sub)}</div>
+        ${chips.html}
+      </div>
+      ${tag ? `<span class="pp-tag-lado" aria-hidden="true">${tag}</span>` : ''}
+    </div>`;
+}
+
+// Chips de atributo da linha do picker contra a descrição do cliente.
+function atributosChipsHtml(descCliente, descProduto) {
+  const a = _atributos(descCliente);
+  const b = _atributos(descProduto);
+  const nomes = { tamanho: 'tamanho', pares: 'pares', cor: 'cor' };
+  const chip = { tamanho: '≠ tamanho', pares: '≠ pares', cor: '≠ cor' };
+  const diverge = Object.keys(nomes).filter(k => a[k] && b[k] && a[k] !== b[k]);
+  const batem = Object.keys(nomes).filter(k => a[k] && b[k] && a[k] === b[k]);
+  if (diverge.length) {
+    return {
+      html: `<div class="pp-chips">${diverge.map(k => `<span class="pp-chip">${chip[k]}</span>`).join('')}</div>`,
+      texto: ', diverge em ' + diverge.join(', '),
+    };
+  }
+  if (batem.length === 3) {
+    return { html: '<div class="pp-chips"><span class="pp-chip-ok">tamanho, pares e cor batem</span></div>', texto: ', tamanho, pares e cor batem' };
+  }
+  return { html: '', texto: '' };
+}
+
+function ppRowKey(ev, el) {
+  if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ppPick(el); }
+}
+
+function ppPick(el) {
+  const p = ppState.catalogo.get(el.dataset.fireProdutoId);
+  if (!p) return;
+  selectProdutoRow(p.fire_produto_id, p.fire_codigo || '', p.fire_nome || '', p.fire_ean || '');
+  ppState.selected.unidade = p.unidade || '';
 }
 
 async function loadProductSuggestions(it) {
   const statusEl = document.getElementById('ppStatus');
-  const resultsEl = document.getElementById('ppResults');
+  const resultsEl = ppState.modoNovo ? document.getElementById('ppSugestoes') : document.getElementById('ppResults');
   const params = new URLSearchParams();
   if (it.description) params.set('desc', it.description);
   if (it.product_code) params.set('code', it.product_code);
   if (it.ean) params.set('ean_item', it.ean);
   if (![...params.keys()].length) {
-    statusEl.textContent = 'Item sem dados suficientes pra sugerir — use a busca abaixo.';
+    if (ppState.modoNovo) resultsEl.innerHTML = '<div class="pp-sec-vazio">Item sem descrição para sugerir.</div>';
+    else statusEl.textContent = 'Item sem dados suficientes pra sugerir — use a busca abaixo.';
     return;
   }
-  statusEl.textContent = 'Buscando sugestões…';
+  if (ppState.modoNovo) resultsEl.innerHTML = '<div class="pp-sec-vazio">Buscando sugestões…</div>';
+  else statusEl.textContent = 'Buscando sugestões…';
+  const itemIndex = ppState.itemIndex;
   try {
     const data = await api('/api/produtos/search?' + params.toString());
+    if (ppState.itemIndex !== itemIndex) return;  // picker fechado ou outro item
     const suggestions = data.suggestions || [];
+    if (ppState.modoNovo) {
+      // Sem pré-seleção: a sugestão vem da descrição, nunca escolhe sozinha.
+      // Quem já está nos candidatos exatos não repete aqui.
+      // Nem os da busca, se ela respondeu antes (nunca 2 linhas selecionadas).
+      const exatos = new Set(((produtoDoItem(currentPreview, itemIndex) || {}).candidatos || []).map(c => String(c.seq)));
+      document.querySelectorAll('#ppBuscaResults .dir-row').forEach(el => exatos.add(el.dataset.fireProdutoId));
+      const sug = suggestions.filter(p => !exatos.has(String(p.fire_produto_id)));
+      resultsEl.innerHTML = sug.length
+        ? sug.map(p => ppRowHtml(_catalogoParaLinha(p), { sugestao: true })).join('')
+        : '<div class="pp-sec-vazio">Nenhuma outra sugestão pela descrição.</div>';
+      _ppMarcarSelecionado();
+      return;
+    }
     renderProductCandidates(resultsEl, suggestions, { section: 'Sugestões', preselectFirst: true });
     statusEl.textContent = suggestions.length
       ? 'Selecione um candidato ou busque manualmente abaixo.'
       : 'Nenhuma sugestão — use a busca abaixo.';
   } catch (err) {
-    statusEl.innerHTML = `<span style="color:var(--error)">${esc(err.message || 'Falha ao buscar sugestões')}</span>`;
+    const msg = `<span style="color:var(--error-strong)">${esc(err.message || 'Falha ao buscar sugestões')}</span>`;
+    if (ppState.modoNovo) resultsEl.innerHTML = `<div class="pp-sec-vazio">${msg}</div>`;
+    else statusEl.innerHTML = msg;
   }
 }
 
 function onProductSearchInput() {
   const q = (document.getElementById('ppSearch').value || '').trim();
   if (ppState.searchTimer) clearTimeout(ppState.searchTimer);
+  const resultsId = ppState.modoNovo ? 'ppBuscaResults' : 'ppResults';
   if (q.length < 2) {
     document.getElementById('ppStatus').textContent = q.length === 0 ? '' : 'Digite ao menos 2 caracteres…';
-    if (q.length === 0) document.getElementById('ppResults').innerHTML = '';
+    if (q.length === 0) document.getElementById(resultsId).innerHTML = '';
     return;
   }
   ppState.searchTimer = setTimeout(() => searchProdutosFree(q), 250);
@@ -1963,7 +2439,7 @@ function onProductSearchInput() {
 
 async function searchProdutosFree(q) {
   const statusEl = document.getElementById('ppStatus');
-  const resultsEl = document.getElementById('ppResults');
+  const resultsEl = document.getElementById(ppState.modoNovo ? 'ppBuscaResults' : 'ppResults');
   statusEl.textContent = 'Buscando…';
 
   if (ppState.searchAbort) ppState.searchAbort.abort();
@@ -1987,6 +2463,20 @@ async function searchProdutosFree(q) {
       return;
     }
     statusEl.textContent = `${results.length} produto(s) encontrado(s).`;
+    if (ppState.modoNovo) {
+      // Quem já aparece nas seções de cima não repete (nunca 2 linhas selecionadas).
+      const acima = new Set([...document.querySelectorAll('#ppExatos .dir-row, #ppSugestoes .dir-row')]
+        .map(el => el.dataset.fireProdutoId));
+      const novos = results.filter(p => !acima.has(String(p.fire_produto_id)));
+      const repetidos = results.length - novos.length;
+      statusEl.textContent = !novos.length && repetidos
+        ? `Nenhum produto além dos ${repetidos} listados acima.`
+        : `${plural(novos.length, 'produto encontrado', 'produtos encontrados')}`
+          + (repetidos ? ` (${repetidos} já listado${repetidos > 1 ? 's' : ''} acima).` : '.');
+      resultsEl.innerHTML = novos.map(p => ppRowHtml(_catalogoParaLinha(p), {})).join('');
+      _ppMarcarSelecionado();
+      return;
+    }
     renderProductCandidates(resultsEl, results, { section: null, preselectFirst: false });
   } catch (err) {
     if (err.name === 'AbortError') return;
@@ -2018,55 +2508,512 @@ function renderProductCandidates(resultsEl, list, opts) {
   }
 }
 
-function selectProdutoRow(fireProdutoId, codigo, nome, ean) {
-  ppState.selected = { fire_produto_id: fireProdutoId, fire_codigo: codigo, fire_nome: nome, fire_ean: ean };
-  document.querySelectorAll('#ppResults .dir-row').forEach(el => {
-    if (el.dataset.fireProdutoId === String(fireProdutoId)) {
-      el.style.background = 'var(--accent-bg)';
-      el.style.color = 'var(--accent-hover)';
+function _ppMarcarSelecionado() {
+  const sel = ppState.selected ? String(ppState.selected.fire_produto_id) : null;
+  document.querySelectorAll('#ppEscolha .dir-row').forEach(el => {
+    const on = sel !== null && el.dataset.fireProdutoId === sel;
+    if (ppState.modoNovo) {
+      el.classList.toggle('is-selected', on);
+      el.setAttribute('aria-selected', on ? 'true' : 'false');
     } else {
-      el.style.background = '';
-      el.style.color = '';
+      el.style.background = on ? 'var(--accent-bg)' : '';
+      el.style.color = on ? 'var(--accent-hover)' : '';
     }
   });
-  document.getElementById('ppSelInfo').textContent = `Selecionado: ${codigo} · ${nome}`;
-  document.getElementById('ppConfirmBtn').disabled = false;
 }
 
+function selectProdutoRow(fireProdutoId, codigo, nome, ean) {
+  ppState.selected = { fire_produto_id: fireProdutoId, fire_codigo: codigo, fire_nome: nome, fire_ean: ean };
+  const invalido = !!ppState.produtoInvalido && ppState.produtoInvalido === String(fireProdutoId);
+  _ppMarcarSelecionado();
+  document.getElementById('ppSelInfo').textContent = ppState.modoNovo
+    ? `Escolhido: #${fireProdutoId} · ${nome}`
+    : `Selecionado: ${codigo} · ${nome}`;
+  document.getElementById('ppConfirmBtn').disabled = invalido;
+}
+
+/* Atributos da descrição (mesma leitura da auditoria de 19/10): tamanho, número
+ * de pares e cor. Só alerta, nunca bloqueia nem escolhe produto. */
+const COR_PREFIXOS = ['BRANC', 'PRET', 'CINZA', 'SORTID', 'MESCLA', 'AZUL', 'MARINHO', 'ROSA', 'VERDE', 'VERMELH', 'BEGE', 'NUDE', 'AMAREL'];
+const COR_NOME = { BRANC: 'branco', PRET: 'preto', SORTID: 'sortido', VERMELH: 'vermelho', AMAREL: 'amarelo' };
+const RE_TAMANHO = /\d{2}\s*(-|A|\/)\s*\d{2}/;
+const RE_PARES = /(\d+)\s*PARES/;
+const RE_PARES_X = /(\d)\s*X\s*\d/;
+
+function _normDesc(s) {
+  return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+}
+
+function _atributos(desc) {
+  const s = _normDesc(desc);
+  const t = s.match(RE_TAMANHO);
+  const p = s.match(RE_PARES) || s.match(RE_PARES_X);
+  const cores = COR_PREFIXOS.filter(c => new RegExp('(^|[^A-Z])' + c).test(s));
+  return {
+    tamanho: t ? t[0].replace(/\s*(-|A|\/)\s*/, '-') : null,
+    pares: p ? String(Number(p[1])) : null,
+    cor: cores.length ? cores.map(c => COR_NOME[c] || c.toLowerCase()).join(' ') : null,
+  };
+}
+
+// {tamanho, pares, cor}: cada um [cliente, produto] quando os dois lados trazem
+// o atributo e ele difere; null quando bate ou um dos lados não diz.
+function divergenciasAtributos(descCliente, descProduto) {
+  const a = _atributos(descCliente);
+  const b = _atributos(descProduto);
+  const par = k => (a[k] && b[k] && a[k] !== b[k]) ? [a[k], b[k]] : null;
+  return { tamanho: par('tamanho'), pares: par('pares'), cor: par('cor') };
+}
+
+// Descrição com os trechos divergentes marcados (texto escapado antes).
+function _marcarDivergencias(desc, div) {
+  let html = esc(desc || '—');
+  const res = [];
+  if (div.tamanho) res.push(/\d{2}\s*(-|A|\/)\s*\d{2}/gi);
+  if (div.pares) res.push(/\d+\s*PARES|\d\s*X\s*\d/gi);
+  if (div.cor) res.push(new RegExp('(?:' + COR_PREFIXOS.join('|') + ')[A-ZÀ-Ú]*', 'gi'));
+  for (const re of res) html = html.replace(re, m => `<mark class="pp-diverge">${m}</mark>`);
+  return html;
+}
+
+// Chave que o vínculo grava, para o texto da consequência e do conflito.
+function _ppChaveTexto(it) {
+  if (it.product_code && it.ean) return `o código ${it.product_code} ou o EAN ${it.ean}`;
+  if (it.product_code) return `o código ${it.product_code}`;
+  if (it.ean) return `o EAN ${it.ean}`;
+  return 'a mesma chave';
+}
+
+function _ppCliente() {
+  return (currentPreview?.header?.customer_name) || 'este cliente';
+}
+
+// Linha cuja chave se repete no pedido (R18), ou que já tem escolha pontual: o
+// backend grava a escolha só nesta linha, sem vínculo (e sem conflito).
+function _ppPontual() {
+  const p = produtoDoItem(currentPreview, ppState.itemIndex);
+  return !!p && (p.estado === 'chave_repetida' || p.fonte === 'escolha_pontual');
+}
+
+function _ppConfirmacaoHtml(it, sel, div, pontual) {
+  const nomes = { tamanho: 'Tamanho', pares: 'Pares', cor: 'Cor' };
+  const linhas = Object.keys(nomes).filter(k => div[k])
+    .map(k => `<li>${nomes[k]}: cliente <strong style="display:inline">${esc(div[k][0])}</strong>, produto <strong style="display:inline">${esc(div[k][1])}</strong>.</li>`);
+  const consequencia = pontual
+    ? 'Esta escolha vale só para esta linha deste pedido.'
+    : `Este vínculo vale para os próximos pedidos de ${_ppCliente()} com ${_ppChaveTexto(it)}.`;
+  const alerta = linhas.length
+    ? `<div class="pp-alerta" role="note"><strong>A descrição não bate em ${linhas.length === 1 ? '1 ponto' : linhas.length + ' pontos'}.</strong><ul>${linhas.join('')}</ul><p class="pp-alerta-nota">${esc(consequencia)}</p></div>`
+    : `<div class="pp-alerta pp-alerta-ok" role="note">Nenhuma divergência de tamanho, pares ou cor nas duas descrições.</div>
+       <div class="pp-nota">${esc(consequencia)}</div>`;
+  const preco = it.unit_price != null ? fmtBRL(it.unit_price) : '—';
+  return `
+    <div class="pp-conf">
+      <div class="pp-conf-intro">Confira o item do cliente e o produto escolhido.</div>
+      <div class="pp-conf-grid">
+        <div class="pp-card">
+          <div class="pp-card-title">Linha do cliente</div>
+          <dl>
+            <dt>Código</dt><dd class="mono">${esc(it.product_code || '—')}</dd>
+            <dt>EAN</dt><dd class="mono">${esc(it.ean || '—')}</dd>
+            <dt>Descrição</dt><dd>${_marcarDivergencias(it.description, div)}</dd>
+            <dt>Quantidade</dt><dd>${fmtQty(it.quantity)}</dd>
+            <dt>Preço</dt><dd>${preco}</dd>
+          </dl>
+        </div>
+        <div class="pp-card pp-card-escolhido">
+          <div class="pp-card-title">Produto escolhido</div>
+          <dl>
+            <dt>SEQ</dt><dd class="mono">#${esc(sel.fire_produto_id)}</dd>
+            <dt>Código</dt><dd class="mono">${esc(sel.fire_codigo || 'sem código no Fire')}</dd>
+            <dt>Descrição</dt><dd>${_marcarDivergencias(sel.fire_nome, div)}</dd>
+            ${sel.fire_ean ? `<dt>EAN</dt><dd class="mono">${esc(sel.fire_ean)}</dd>` : ''}
+            ${sel.unidade ? `<dt>Unidade</dt><dd>${esc(sel.unidade)}</dd>` : ''}
+          </dl>
+        </div>
+      </div>
+      ${alerta}
+      <div id="ppConfErro" class="pp-conf-erro hidden" role="alert"></div>
+    </div>`;
+}
+
+function ppMostrarConfirmacao() {
+  const it = (currentPreview?.items || [])[ppState.itemIndex];
+  if (!it || !ppState.selected) return;
+  const div = divergenciasAtributos(it.description, ppState.selected.fire_nome);
+  const diverge = !!(div.tamanho || div.pares || div.cor);
+  const pontual = _ppPontual();
+  document.getElementById('ppConfirmacao').innerHTML = _ppConfirmacaoHtml(it, ppState.selected, div, pontual);
+  _ppEtapa('confirmacao');
+  // Com divergência o botão que grava perde o destaque e diz o que faz;
+  // o foco começa no "Voltar".
+  const vincular = document.getElementById('ppVincularBtn');
+  vincular.className = diverge ? 'btn btn-sm btn-warn' : 'btn btn-primary btn-sm';
+  vincular.textContent = pontual
+    ? (diverge ? 'Usar mesmo assim' : 'Usar nesta linha')
+    : (diverge ? 'Vincular mesmo assim' : 'Vincular produto');
+  // Nasce desabilitado: o 2º clique de um duplo clique no "Confirmar" não grava.
+  // Botão desabilitado não recebe foco: sem divergência ele ganha o foco quando libera.
+  vincular.disabled = true;
+  if (ppState.timerVincular) clearTimeout(ppState.timerVincular);
+  if (diverge) document.getElementById('ppVoltarBtn').focus();
+  ppState.timerVincular = setTimeout(() => {
+    ppState.timerVincular = null;
+    // Produto que o backend já recusou (sumiu do catálogo) não volta a liberar.
+    if (ppState.produtoInvalido && ppState.produtoInvalido === String(ppState.selected?.fire_produto_id)) return;
+    vincular.disabled = false;
+    if (!diverge) vincular.focus();
+  }, 400);
+}
+
+function ppVoltarEscolha() {
+  _ppEtapa('escolha');
+  document.getElementById('ppConfirmBtn').disabled = !ppState.selected
+    || (!!ppState.produtoInvalido && ppState.produtoInvalido === String(ppState.selected.fire_produto_id));
+  document.querySelector('#ppEscolha .dir-row.is-selected')?.focus();
+}
+
+// "Confirmar": no modo novo só abre a confirmação (quem grava é o ppVincularBtn).
 async function confirmProductLink() {
   if (!ppState.selected || ppState.itemIndex == null || !currentPreview) return;
-  const btn = document.getElementById('ppConfirmBtn');
-  const statusEl = document.getElementById('ppStatus');
+  if (ppState.modoNovo) {
+    ppMostrarConfirmacao();
+    return;
+  }
+  await ppVincular(false);
+}
+
+async function ppVincularConfirmado(ev) {
+  if (ev && ev.detail > 1) return;  // clique repetido do mesmo gesto
+  if (!ppState.selected || ppState.itemIndex == null || !currentPreview) return;
+  await ppVincular(false);
+}
+
+// Texto do erro para a pessoa (o detalhe técnico do backend vira frase de ação).
+const PP_ERRO_CATALOGO = 'Esse produto não está mais no catálogo do Fire. Escolha outro.';
+function _ppTextoErro(msg) {
+  if (/catálogo local/i.test(msg || '')) return PP_ERRO_CATALOGO;
+  return msg;
+}
+
+// Erro só inline, no lugar visível da etapa atual (sem toast repetindo).
+function _ppMostrarErro(msg) {
+  const conf = document.getElementById('ppConfirmacao');
+  const erroConf = document.getElementById('ppConfErro');
+  if (erroConf && !conf.classList.contains('hidden')) {
+    erroConf.textContent = msg;
+    erroConf.classList.remove('hidden');
+    // Produto que sumiu do catálogo: tentar de novo não adianta. Só volta a
+    // liberar quando outro produto for escolhido.
+    if (msg === PP_ERRO_CATALOGO) {
+      ppState.produtoInvalido = String(ppState.selected?.fire_produto_id ?? '');
+      document.getElementById('ppVincularBtn').disabled = true;
+      document.getElementById('ppVoltarBtn').focus();
+    }
+    return;
+  }
+  document.getElementById('ppStatus').innerHTML = `<span style="color:var(--error-strong)">${esc(msg)}</span>`;
+}
+
+async function ppVincular(substituir) {
+  const naConfirmacao = !document.getElementById('ppConfirmacao').classList.contains('hidden');
+  const btn = document.getElementById(naConfirmacao ? 'ppVincularBtn' : 'ppConfirmBtn');
   const importId = currentPreview.preview_id;
   const itemIndex = ppState.itemIndex;
   const fireProdutoId = ppState.selected.fire_produto_id;
   btn.disabled = true;
   const prev = btn.innerHTML;
-  btn.innerHTML = '<span class="spin"></span> Vinculando…';
-  try {
-    const resp = await api('/api/imported/' + encodeURIComponent(importId) + '/vincular-produto', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ item_index: itemIndex, fire_produto_id: fireProdutoId }),
-    });
-    closeProductPicker();
-    if (currentPreview) {
-      currentPreview.check = resp.check;
-      renderPreview(currentPreview);
-    }
-    // Backend regravou o check no pedido; recarrega a lista pra o badge
-    // "N sem match" refletir o vínculo sem precisar dar refresh manual.
-    loadImported();
-    if (window.appShell?.showSuccess) {
-      window.appShell.showSuccess('Vínculo criado — vai casar sozinho da próxima vez');
-    }
-  } catch (err) {
+  btn.innerHTML = _ppPontual() ? '<span class="spin"></span> Salvando…' : '<span class="spin"></span> Vinculando…';
+  const falha = (msg) => {
     btn.disabled = false;
     btn.innerHTML = prev;
-    const msg = err.message || 'Falha ao criar vínculo';
-    statusEl.innerHTML = `<span style="color:var(--error)">${esc(msg)}</span>`;
-    if (window.appShell?.showError) window.appShell.showError(msg);
+    ppState.ultimoErro = _ppTextoErro(msg);
+    // Na troca (painel de conflito) quem mostra é o ppTrocarVinculo, depois de
+    // voltar para a confirmação; aqui mostra onde a pessoa está.
+    if (!substituir) _ppMostrarErro(ppState.ultimoErro);
+  };
+  let res, body;
+  try {
+    // fetch cru (não api()): o 409 de conflito traz o objeto `conflito`, que a
+    // tela precisa para perguntar se troca.
+    res = await fetch('/api/imported/' + encodeURIComponent(importId) + '/vincular-produto', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(substituir
+        ? { item_index: itemIndex, fire_produto_id: fireProdutoId, substituir: true }
+        : { item_index: itemIndex, fire_produto_id: fireProdutoId }),
+    });
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    body = await res.json().catch(() => ({}));
+  } catch (err) {
+    falha(err.message || 'Falha ao criar vínculo');
+    return;
   }
+  if (res.status === 409 && body && body.conflito && !substituir) {
+    btn.innerHTML = prev;
+    btn.disabled = false;
+    mostrarConflitoVinculo(body.conflito);
+    return;
+  }
+  if (!res.ok) {
+    falha(typeof body.detail === 'string' ? body.detail : `Falha ao criar vínculo (HTTP ${res.status})`);
+    return;
+  }
+  btn.innerHTML = prev;
+  btn.disabled = false;
+  closeProductPicker();
+  if (currentPreview) {
+    currentPreview.check = body.check;
+    // A trava (bloqueio, estados de planilha) vem junto: sem ela a tela ficaria
+    // com a decisão de antes do vínculo.
+    if (body.produto_trava) currentPreview.produto_trava = body.produto_trava;
+    renderPreview(currentPreview);
+  }
+  // Backend regravou o check deste pedido (e rechecou os parados da mesma
+  // chave): recarrega a lista e a fila sem precisar de refresh manual.
+  loadImported();
+  loadFilaIdentificar();
+  if (body.pontual) {
+    window.appShell?.showSuccess?.('Produto escolhido para esta linha deste pedido.');
+  } else if (window.appShell?.showSuccess) {
+    const outros = (body.rechecados || []).filter(id => id !== importId).length;
+    window.appShell.showSuccess(outros
+      ? `Produto vinculado. ${plural(outros, 'outro pedido conferido', 'outros pedidos conferidos')} de novo.`
+      : 'Vínculo criado — vai casar sozinho da próxima vez');
+  }
+}
+
+// 409: a chave já aponta para outro produto. Painel na própria página (sem
+// confirm()); "Trocar" reenvia com substituir, "Manter" não grava nada.
+function mostrarConflitoVinculo(conflito) {
+  const atual = (conflito && conflito.atual) || {};
+  const it = (currentPreview?.items || [])[ppState.itemIndex] || {};
+  const sel = ppState.selected || {};
+  const quando = atual.criado_em ? fmtDatetime(atual.criado_em) : 'data não registrada';
+  const quem = atual.criado_por || 'quem vinculou não registrado';
+  const descricao = atual.fire_descricao || ('produto #' + (atual.fire_seq ?? '?'));
+  const chave = conflito?.chave_tipo === 'ean' ? `O EAN ${conflito.chave_valor}` : `O código ${conflito?.chave_valor || it.product_code || ''}`;
+  const divAtual = divergenciasAtributos(it.description, atual.fire_descricao || '');
+  const divSel = divergenciasAtributos(it.description, sel.fire_nome || '');
+  const divCli = {  // marca no cliente o que diverge de qualquer um dos dois
+    tamanho: divAtual.tamanho || divSel.tamanho, pares: divAtual.pares || divSel.pares, cor: divAtual.cor || divSel.cor,
+  };
+  const el = document.getElementById('ppConflito');
+  el.innerHTML = `
+    <div class="pp-conflito" role="group" aria-labelledby="ppConflitoTxt">
+      <div class="pb pb-warn"><span class="pb-label"><span class="pb-ico" aria-hidden="true"><span>!</span></span>Já existe um vínculo</span></div>
+      <p class="pp-conflito-txt" id="ppConflitoTxt">${esc(chave)} de ${esc(_ppCliente())} já aponta para <strong>${esc(descricao)}</strong> (${esc(quem)}, ${esc(quando)}). Trocar para o produto escolhido?</p>
+      <dl class="pp-conflito-linhas">
+        <dt>Cliente pediu</dt><dd>${_marcarDivergencias(it.description, divCli)}</dd>
+        <dt>Vínculo atual</dt><dd>#${esc(atual.fire_seq ?? '?')} · ${_marcarDivergencias(atual.fire_descricao || '—', divAtual)}</dd>
+        <dt>Você escolheu</dt><dd>#${esc(sel.fire_produto_id ?? '')} · ${_marcarDivergencias(sel.fire_nome || '—', divSel)}</dd>
+      </dl>
+      <div class="pp-conflito-acoes">
+        <button class="btn btn-sm btn-warn" id="ppTrocarBtn" onclick="ppTrocarVinculo()">Trocar vínculo</button>
+        <button class="btn btn-primary btn-sm" id="ppManterBtn" onclick="ppManterVinculo()">Manter</button>
+      </div>
+    </div>`;
+  _ppEtapa('conflito');
+  document.getElementById('ppManterBtn').focus();
+}
+
+function ppManterVinculo() {
+  closeProductPicker();
+  if (window.appShell?.showInfo) window.appShell.showInfo('Vínculo mantido. Nada foi alterado.');
+}
+
+async function ppTrocarVinculo() {
+  const trocar = document.getElementById('ppTrocarBtn');
+  const manter = document.getElementById('ppManterBtn');
+  trocar.disabled = true; manter.disabled = true;
+  trocar.innerHTML = '<span class="spin"></span> Trocando…';
+  ppState.ultimoErro = null;
+  await ppVincular(true);
+  // Se falhou, volta para a etapa anterior e mostra o erro DEPOIS de redesenhar
+  // (a confirmação é refeita do zero e apagaria a mensagem).
+  if (document.getElementById('productPickerOverlay').classList.contains('open')) {
+    if (ppState.modoNovo) ppMostrarConfirmacao(); else _ppEtapa('escolha');
+    if (ppState.ultimoErro) _ppMostrarErro(ppState.ultimoErro);
+  }
+}
+
+/* ── Produto por chave exata: estado do item e fila ── */
+function produtoModoNovo(data) {
+  const m = data && data.produto_chave_modo;
+  return m === 'observando' || m === 'ligado';
+}
+
+function produtoDoItem(data, idx) {
+  const ci = ((data && data.check && data.check.items) || [])[idx];
+  return (ci && ci.produto && typeof ci.produto === 'object') ? ci.produto : null;
+}
+
+// [rótulo, tom, ícone] por estado. O rótulo é o sentido; tom e ícone reforçam.
+const PRODUTO_ESTADO = {
+  ok: ['Produto confirmado', 'ok', '✓'],
+  a_identificar: ['Escolher produto', 'warn', '?'],
+  ambiguo: ['Mais de um produto com essa chave', 'warn', '2+'],
+  produto_bloqueado: ['Produto bloqueado', 'error', '×'],
+  vinculo_invalido: ['Vínculo inválido', 'error', '!'],
+  chaves_discordam: ['Código e EAN apontam para produtos diferentes', 'warn', '⇄'],
+  // R18: o mesmo código/EAN em linhas com descrições diferentes (uma por cor).
+  chave_repetida: ['Código repetido no pedido', 'warn', '≡'],
+  // Não é estado do backend: item `ok` cujo código, na planilha, o Fire troca.
+  troca_no_fire: ['Fire grava outro produto', 'warn', '≠'],
+  sem_codigo_fire: ['Sem código para a planilha', 'warn', '#'],
+  fire_indisponivel: ['Fire sem resposta', 'muted', '…'],
+};
+const PRODUTO_FONTE = {
+  ean: 'pelo EAN', depara: 'pelo vínculo salvo', codprod_altern: 'pelo código do Fire',
+  escolha_pontual: 'escolhido para esta linha',
+};
+
+function produtoEstadoInfo(estado) {
+  return PRODUTO_ESTADO[estado] || PRODUTO_ESTADO.a_identificar;
+}
+
+// Badge do estado do produto do item, com o motivo logo abaixo do rótulo.
+// opts.acaoIdx: índice do item quando o pedido aceita escolher (já commitado).
+function produtoBadge(produto, opts) {
+  if (!produto) return '<span style="color:var(--text-muted)">—</span>';
+  const { acaoIdx, planilha } = opts || {};
+  const [label, tom, ico] = produtoEstadoInfo(produtoEstadoTela(produto, planilha));
+  let motivo = produto.motivo || '';
+  const origem = [produto.fire_seq != null ? `#${produto.fire_seq}` : '', PRODUTO_FONTE[produto.fonte] || '']
+    .filter(Boolean).join(' · ');
+  if (produto.estado === 'ok') motivo = origem;
+  let aviso = '';
+  if (produto.estado === 'ok' && planilha) {
+    // Mesmo item que o portão do backend listou (export_mode com planilha).
+    const t = produto.troca_no_fire;
+    if (planilha.estado === 'troca_no_fire' && t && t.seq_previsto != null) {
+      motivo = `O portal decidiu ${origem}, mas pela planilha o Fire grava o #${t.seq_previsto}.`;
+    } else {
+      motivo = planilha.motivo || origem;
+    }
+  }
+  const podeAgir = acaoIdx != null && produto.estado !== 'fire_indisponivel';
+  let acao = '';
+  if (podeAgir && produto.estado !== 'ok') {
+    acao = `<button class="btn btn-sm pb-acao" onclick="openProductPicker(${Number(acaoIdx)})">Escolher</button>`;
+  } else if (podeAgir && produto.fonte === 'depara') {
+    acao = `<button class="btn btn-sm pb-acao" onclick="openProductPicker(${Number(acaoIdx)})">Trocar vínculo</button>`;
+  } else if (podeAgir && produto.fonte === 'escolha_pontual') {
+    acao = `<button class="btn btn-sm pb-acao" onclick="openProductPicker(${Number(acaoIdx)})">Trocar escolha</button>`;
+  }
+  return `<div class="pb pb-${tom}">
+      <span class="pb-label"><span class="pb-ico${ico.length > 1 ? ' pb-ico-2' : ''}" aria-hidden="true"><span>${ico}</span></span>${esc(label)}</span>
+      ${motivo ? `<span class="pb-motivo">${esc(motivo)}</span>` : ''}
+      ${aviso ? `<span class="pb-aviso">${esc(aviso)}</span>` : ''}
+      ${acao}
+    </div>`;
+}
+
+// Item `ok` que o portão do backend lista pela planilha (`troca_no_fire`,
+// `sem_codigo_fire`), vindo de `data.produto_trava` — a tela não refaz a regra.
+function produtoPlanilhaDoItem(data, idx) {
+  const itens = (data && data.produto_trava && data.produto_trava.itens) || [];
+  return itens.find(x => x.index === idx && (x.estado === 'troca_no_fire' || x.estado === 'sem_codigo_fire')) || null;
+}
+
+// Estado que a TELA mostra: o `ok` que a planilha troca ou não aponta pede atenção.
+function produtoEstadoTela(produto, planilha) {
+  if (!produto) return 'a_identificar';
+  if (produto.estado === 'ok' && planilha) return planilha.estado;
+  return produto.estado;
+}
+
+// Contagem por grupo: sem produto confirmado (item sem `produto` conta, como no
+// portão), troca no Fire e Fire sem resposta (este não é "sem produto").
+function produtoContagem(data) {
+  const items = (data && data.items) || [];
+  const c = { pendentes: 0, trocas: 0, semCodigo: 0, indisponiveis: 0, total: items.length };
+  items.forEach((_, i) => {
+    const e = produtoEstadoTela(produtoDoItem(data, i), produtoPlanilhaDoItem(data, i));
+    if (e === 'fire_indisponivel') c.indisponiveis++;
+    else if (e === 'troca_no_fire') c.trocas++;
+    else if (e === 'sem_codigo_fire') c.semCodigo++;
+    else if (e !== 'ok') c.pendentes++;
+  });
+  return c;
+}
+
+function plural(n, um, varios) { return `${n} ${n === 1 ? um : varios}`; }
+
+let filaModo = 'desligado';
+
+async function loadFilaIdentificar() {
+  const tabBtn = document.getElementById('tabBtnIdentificar');
+  let data;
+  try {
+    data = await api('/api/produtos/a-identificar');
+  } catch (err) {
+    const el = document.getElementById('filaList');
+    if (el && filaModo !== 'desligado') {
+      el.innerHTML = `<div class="empty"><p class="empty-title">Não consegui carregar a fila</p><p class="empty-sub">${esc(err.message || '')}</p></div>`;
+    }
+    return;
+  }
+  filaModo = data.modo || 'desligado';
+  const ativa = filaModo === 'observando' || filaModo === 'ligado';
+  tabBtn.classList.toggle('hidden', !ativa);
+  if (!ativa) {
+    if (document.getElementById('tab-identificar').classList.contains('active')) switchTab('pending');
+    return;
+  }
+  const itens = data.itens || [];
+  document.getElementById('identificarCount').textContent = itens.length;
+  document.getElementById('filaIntro').textContent = filaModo === 'ligado'
+    ? 'Itens dos pedidos em revisão que ainda precisam de atenção antes de ir para o Fire. O pedido só sai depois de resolver cada um.'
+    : 'Itens dos pedidos em revisão que ainda precisam de atenção antes de ir para o Fire. Em observação: o envio ainda não trava.';
+  renderFilaIdentificar(itens);
+}
+
+function renderFilaIdentificar(itens) {
+  const el = document.getElementById('filaList');
+  if (!itens.length) {
+    el.innerHTML = `
+      <div class="empty">
+        <div class="empty-icon">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <circle cx="10" cy="10" r="6.5" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5"/>
+            <path d="M7.2 10.2l1.9 1.9 3.7-3.9" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <p class="empty-title">Nenhum item a identificar</p>
+        <p class="empty-sub">Todo item dos pedidos em revisão tem produto confirmado.</p>
+      </div>`;
+    return;
+  }
+  const linha = l => {
+    const [, tom] = produtoEstadoInfo(l.estado);
+    const cls = tom === 'error' ? 'erro' : tom === 'muted' ? 'muted' : '';
+    const chaves = [l.codigo ? 'cód. ' + l.codigo : null, l.ean ? 'EAN ' + l.ean : null].filter(Boolean).join(' · ') || 'sem código e sem EAN';
+    const pedido = l.pedido ? `Pedido ${l.pedido}` : 'Pedido sem número';
+    const rotulo = `${l.descricao || 'Item sem descrição'}, ${chaves}. ${produtoEstadoInfo(l.estado)[0]}. ${pedido}, item ${l.item_index + 1}.`;
+    return `
+      <button type="button" class="fila-row ${cls}" aria-label="${esc(rotulo)}"
+              onclick="openImportDetail('${escJs(l.import_id)}', { itemIndex: ${Number(l.item_index)} })">
+        <div>${produtoBadge({ estado: l.estado })}</div>
+        <div style="min-width:0">
+          <div class="fila-desc">${esc(l.descricao || 'Item sem descrição')}</div>
+          <div class="fila-chaves">${esc(chaves)}</div>
+          ${l.motivo ? `<div class="fila-motivo">${esc(l.motivo)}</div>` : ''}
+        </div>
+        <div class="fila-ped">
+          <strong>${esc(pedido)} · item ${l.item_index + 1}</strong>
+          ${esc(l.cliente || '')}${l.importado_em ? ' · ' + esc(fmtDatetime(l.importado_em)) : ''}
+        </div>
+      </button>`;
+  };
+  // Fire sem resposta não é "sem produto": vai para o fim, num grupo próprio.
+  const conferir = itens.filter(l => l.estado !== 'fire_indisponivel');
+  const aguardando = itens.filter(l => l.estado === 'fire_indisponivel');
+  el.innerHTML = conferir.map(linha).join('')
+    + (aguardando.length
+      ? `<div class="fila-grupo" role="heading" aria-level="3">Aguardando o Fire · ${plural(aguardando.length, 'item', 'itens')}</div>`
+        + aguardando.map(linha).join('')
+      : '');
 }
 
 /* ── Utils ── */
@@ -2102,6 +3049,7 @@ function escPath(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'")
 
 // ── Trava de preço (preview) ────────────────────────────────────────────────
 const PRECO_MSG_ADIADO = 'Planilha não gerada: com a trava de preço ativa, o pedido sai pela revisão (Exportar/Enviar).';
+const PRODUTO_MSG_ADIADO = 'Planilha não gerada: com a trava de produto ligada, o pedido sai pela revisão (Exportar/Enviar).';
 const PRECO_MOTIVO = {
   ok: 'Preço igual à tabela',
   preco_acima: 'Preço acima da tabela',
@@ -2475,7 +3423,9 @@ function renderPreview(data) {
 
     // ── Client bit (restored from pre-Task-10 banner) ────────────────────────
     let clientBit = '';
-    if (!check.available) {
+    if (!check.available && produtoModoNovo(data)) {
+      clientBit = '';  // o banner do produto já diz que o Fire não respondeu
+    } else if (!check.available) {
       clientBit = `<span style="color:var(--text-muted)">⚪ Check contra o Fire indisponível (${esc(check.reason || 'FB não configurado')})</span>`;
     } else {
       const client = check.client || {};
@@ -2513,11 +3463,15 @@ function renderPreview(data) {
                 style="margin-left:8px;padding:2px 10px;font-size:11px">Confirmar e prosseguir</button>`;
     } else if (regraFire && ack) {
       priceBit = `<span style="color:var(--text-muted)">✓ Confirmado por <strong>${esc(ack.by)}</strong> em ${esc(ack.at)}: ${ack.items.length} item(ns) sem preço serão importados sem validação.</span>`;
+    } else if (produtoModoNovo(data)) {
+      priceBit = produtoResumoBanner(data);
     } else {
       priceBit = (s.items_missing || 0) > 0
         ? `<span style="color:var(--warn)">⚠ ${s.items_matched}/${s.items_total} itens com match · ${s.items_missing} sem correspondência</span>`
         : `<span style="color:var(--success)">✓ ${s.items_matched}/${s.items_total} itens com match no Fire</span>`;
     }
+    // Conferência de produto: vale também com o Fire fora (o envio trava em ligado).
+    if (produtoModoNovo(data) && !check.available) priceBit = produtoResumoBanner(data);
 
     // ── Troca pelo importador do Fire (BACKLOG 2.15) — avisa, não bloqueia ────
     // O XLSX sai certo; o importador de Excel do Fire casa o código por
@@ -2545,7 +3499,7 @@ function renderPreview(data) {
     // ── Render: stacked vertically ───────────────────────────────────────────
     banner.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:6px;width:100%">
-        <div>${clientBit}</div>
+        ${clientBit ? `<div>${clientBit}</div>` : ''}
         ${priceBit ? `<div>${priceBit}</div>` : ''}
         ${trocaBit}
       </div>`;
@@ -2566,6 +3520,14 @@ function renderPreview(data) {
   const temPreco = !!data.preco;
   const nCols = temPreco ? 9 : 8;
   document.getElementById('pvThPreco').classList.toggle('hidden', !temPreco);
+  // Produto por chave exata (observando/ligado): a coluna mostra o estado do
+  // produto do item. Em desligado fica a coluna "Fire" de sempre.
+  const modoProduto = produtoModoNovo(data);
+  const thFire = document.getElementById('pvThFire');
+  thFire.textContent = modoProduto ? 'Produto' : 'Fire';
+  thFire.style.width = modoProduto ? '' : '68px';
+  thFire.style.textAlign = modoProduto ? 'left' : 'center';
+  thFire.classList.toggle('th-produto', modoProduto);
   if (!items.length) {
     tbody.innerHTML = `<tr><td colspan="${nCols}" style="text-align:center;padding:28px 14px;color:var(--text-muted)">Sem itens reconhecidos.</td></tr>`;
   } else {
@@ -2601,8 +3563,12 @@ function renderPreview(data) {
       for (const { it, idx } of gitems) {
         const deliv = [it.delivery_name, it.delivery_date].filter(Boolean).join(' · ');
         const m = _checkOf(it);
+        const prod = modoProduto ? produtoDoItem(data, idx) : null;
         let cell;
-        if (!check) {
+        if (prod) {
+          cell = produtoBadge(prod, { acaoIdx: isCommitted ? idx : null, planilha: produtoPlanilhaDoItem(data, idx) })
+            + precoFireNota(m, data);
+        } else if (!check) {
           cell = '<span style="color:var(--text-muted)">—</span>';
         } else if (!check.available) {
           cell = '<span style="color:var(--text-muted)" title="check indisponível">—</span>';
@@ -2645,7 +3611,7 @@ function renderPreview(data) {
             cell = okBadge;
           }
         }
-        if (check && check.available && m && m.troca_no_fire) {
+        if (!prod && check && check.available && m && m.troca_no_fire) {
           const t = m.troca_no_fire;
           // Código duplicado no Fire: mesmo texto, outro produto — mostra o SEQ.
           const alvo = t.codigo === it.product_code ? `#${t.fire_product_id}` : t.codigo;
@@ -2663,8 +3629,12 @@ function renderPreview(data) {
           ? `<div style="color:var(--text-muted);font-size:11px;margin-top:2px;white-space:nowrap"
                   title="Cada unidade é um PACK com ${it.qtd_por_embalagem} kits. O aviso vai na OBS do pedido.">pack c/ ${it.qtd_por_embalagem} · ${fmtQty((it.quantity || 0) * it.qtd_por_embalagem)} kits</div>`
           : '';
+        const estadoTela = prod ? produtoEstadoTela(prod, produtoPlanilhaDoItem(data, idx)) : null;
+        const travado = prod && estadoTela !== 'ok' && estadoTela !== 'fire_indisponivel';
+        const tomErro = travado && produtoEstadoInfo(estadoTela)[1] === 'error';
+        const rowCls = [travado ? 'row-travado' : '', tomErro ? 'row-erro' : ''].filter(Boolean).join(' ');
         rows.push(`
-          <tr>
+          <tr id="pvItem-${idx}" tabindex="-1"${rowCls ? ` class="${rowCls}"` : ''}>
             <td>${esc(it.description || '—')}</td>
             <td class="mono">${esc(it.product_code || '—')}</td>
             <td class="mono">${esc(it.ean || '—')}</td>
@@ -2672,7 +3642,7 @@ function renderPreview(data) {
             <td class="num">${it.unit_price != null ? fmtBRL(it.unit_price) : '—'}</td>
             <td class="num">${it.total_price != null ? fmtBRL(it.total_price) : '—'}</td>
             <td>${esc(deliv || '—')}</td>
-            <td style="text-align:center">${cell}</td>
+            <td ${prod ? 'class="col-produto"' : 'style="text-align:center"'}>${cell}</td>
             ${temPreco ? `<td style="text-align:center">${precoPillHtml(precoPorItem.get(idx), data.preco.modo)}</td>` : ''}
           </tr>`);
       }
@@ -2685,6 +3655,72 @@ function renderPreview(data) {
 
 // Em 'ligado' o preço do Fire não é a fonte (o portão usa a tabela da rede).
 function precoLigado(data) { return !!(data && data.preco && data.preco.modo === 'ligado'); }
+
+// Nota de preço do Fire (regra antiga) sob o badge do produto, quando o item
+// casou no Fire e o preço não bate. Em preço 'ligado' a fonte é a tabela.
+function precoFireNota(m, data) {
+  if (!m || !m.match || precoLigado(data)) return '';
+  const ps = m.price_status;
+  let t = '';
+  if (ps === 'mismatch') t = `Preço do Fire: ${m.fire_preco_venda != null ? fmtBRL(m.fire_preco_venda) : '?'}`;
+  else if (ps === 'no_price_in_fire') t = 'Sem preço cadastrado no Fire';
+  else if (ps === 'no_order_price') t = 'Pedido sem preço';
+  return t ? `<div class="pb-aviso" style="margin-top:3px">${esc(t)}</div>` : '';
+}
+
+// Linha do banner do pedido no modo novo do produto.
+function produtoResumoBanner(data) {
+  const check = data.check || {};
+  const c = produtoContagem(data);
+  const ligado = data.produto_chave_modo === 'ligado';
+  const fim = ligado ? 'O envio fica bloqueado até resolver.' : 'Em observação: o envio ainda não trava.';
+  const partes = [];
+  const podeReconferir = data.portal_status === 'parsed';
+  if (data.produto_trava && data.produto_trava.reason === 'check_antigo') {
+    // Check salvo antes da atualização: nenhum item tem a decisão de produto.
+    // Não conta como "sem produto": o operador confere de novo.
+    return `<span class="pv-fire-off"><span style="color:var(--text);font-weight:600">Este pedido foi conferido antes da atualização. Clique em Conferir de novo.</span>
+      ${podeReconferir ? `<button class="btn btn-sm" id="pvConferirDeNovoBtn" onclick="produtoConferirDeNovo('${escJs(data.preview_id)}')">Conferir de novo</button>` : ''}</span>`;
+  }
+  if (c.indisponiveis || !check.available) {
+    // Fire sem resposta tem banner próprio: não é "sem produto confirmado".
+    partes.push(`<span class="pv-fire-off"><span style="color:var(--text);font-weight:600">Não deu para conferir os produtos: o Fire não respondeu.</span>
+      ${podeReconferir ? `<button class="btn btn-sm" id="pvConferirDeNovoBtn" onclick="produtoConferirDeNovo('${escJs(data.preview_id)}')">Recarregar</button>
+        <span class="pv-fire-off-ajuda">Confere de novo no Fire e atualiza a tela.</span>` : ''}</span>`);
+  }
+  if (check.produto_conferencia_incompleta) {
+    partes.push(`<span style="color:var(--warn-strong);font-weight:600">⚠ Não consegui ler todos os vínculos salvos. Confira de novo antes de enviar.</span>`);
+  }
+  const conferidos = c.total - c.indisponiveis;
+  // O "o que acontece no envio" aparece uma vez só, no fim do bloco.
+  const atencao = [];
+  if (c.pendentes) atencao.push(`${c.pendentes} de ${plural(c.total, 'item', 'itens')} sem produto confirmado.`);
+  if (c.trocas) atencao.push(`Em ${plural(c.trocas, 'item', 'itens')}, o Fire grava outro produto pela planilha.`);
+  if (c.semCodigo) atencao.push(`Em ${plural(c.semCodigo, 'item', 'itens')}, o produto não tem código do Fire para a planilha.`);
+  if (atencao.length) {
+    partes.push(`<span style="color:var(--warn-strong);font-weight:600">⚠ ${atencao.join(' ')} ${fim}</span>`);
+  }
+  if (!c.pendentes && !c.trocas && !c.semCodigo && conferidos > 0) {
+    partes.push(`<span style="color:var(--success-strong)">✓ ${conferidos} de ${plural(c.total, 'item', 'itens')} com produto confirmado</span>`);
+  }
+  return partes.join('<br>');
+}
+
+// Em 'ligado' o portão trava o pedido com item fora de 'ok' (o backend decide;
+// a tela só antecipa para não deixar clicar à toa).
+// Espelha a decisão do backend (`data.produto_trava`, mesma regra do portão,
+// com o export_mode do envio): a tela não decide sozinha.
+function produtoMotivoEnvioBloqueado(data) {
+  const t = data && data.produto_trava;
+  if (!t || !t.bloqueado) return '';
+  const n = (t.itens || []).length;
+  return ({
+    fire_indisponivel: 'o Fire não respondeu na conferência do produto',
+    produto_a_identificar: `${plural(n, 'item', 'itens')} sem produto confirmado`,
+    sem_codigo_fire: `${plural(n, 'item', 'itens')} sem código do Fire para a planilha`,
+    troca_no_fire: `${plural(n, 'item', 'itens')} que o Fire grava como outro produto`,
+  })[t.reason] || 'a conferência do produto bloqueou o envio';
+}
 
 function _isBlockedByPriceCheck(data) {
   if (precoLigado(data)) return false;  // quem decide é o portão (409 com o motivo)
@@ -2755,10 +3791,13 @@ function renderPreviewFooter(data, itemsCount) {
     const noteSuffix = action.fn === 'exportXlsx'
       ? 'Confira o match e gere o XLS quando estiver OK.'
       : 'Confira o match com o Fire e envie quando estiver OK.';
-    const travaMotivo = precoMotivoEnvioBloqueado(data.preco);
-    note.innerHTML = travaMotivo
-      ? `Pedido <strong>em revisão</strong>. Envio bloqueado pela trava de preço: ${esc(travaMotivo)}.`
-      : `Pedido <strong>em revisão</strong>. ${noteSuffix}`;
+    const produtoMotivo = produtoMotivoEnvioBloqueado(data);
+    const travaMotivo = produtoMotivo || precoMotivoEnvioBloqueado(data.preco);
+    note.innerHTML = produtoMotivo
+      ? `Pedido <strong>em revisão</strong>. Envio bloqueado: ${esc(produtoMotivo)}.`
+      : travaMotivo
+        ? `Pedido <strong>em revisão</strong>. Envio bloqueado pela trava de preço: ${esc(travaMotivo)}.`
+        : `Pedido <strong>em revisão</strong>. ${noteSuffix}`;
     const blocked = _isBlockedByPriceCheck(data);
     const reason = blocked ? _blockReasonText(data) : '';
     const disabledAttr = (blocked || travaMotivo) ? 'disabled' : '';

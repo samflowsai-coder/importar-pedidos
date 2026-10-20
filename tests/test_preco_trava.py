@@ -1715,7 +1715,7 @@ def _checks_por_ambiente(monkeypatch, *, proprio, fonte, ambientes=None):
     monkeypatch.setattr(environments_repo, "get_by_slug", lambda s: ambientes.get(s))
     chamadas = []
 
-    def fake(order, *, env=None):
+    def fake(order, *, env=None, escolhas=None):
         ativo = env_context.current()
         chamadas.append(((env or {}).get("slug"), ativo["slug"] if ativo else None))
         return copy.deepcopy(fonte if (env or {}).get("slug") == "mm" else proprio)
@@ -2009,3 +2009,277 @@ def test_upsert_sem_check_preco_preserva_o_salvo():
     repo.insert_import({**base, "check_preco": _check(ids=[888])})
     repo.insert_import(base)  # replay sem o campo
     assert repo.get_import("replay")["check_preco"]["items"][0]["fire_product_id"] == 888
+
+
+# ── Trava de produto (produto_chave_modo) antes do preço ─────────────────────
+
+
+def _com_produto(
+    check, *estados, motivo="O cliente mandou o código C0, que não está cadastrado no Fire."
+):
+    """Check com `item["produto"]` (Task 3) no estado dado por item."""
+    c = copy.deepcopy(check)
+    for item, estado in zip(c["items"], estados, strict=True):
+        item["produto"] = {
+            "estado": estado,
+            "fire_seq": item.get("fire_product_id") if estado == "ok" else None,
+            "fonte": "ean" if estado == "ok" else None,
+            "motivo": "" if estado == "ok" else motivo,
+            # `ok` traz o candidato decidido (com o código do Fire) e a previsão
+            # da planilha conferida (Task 6).
+            "candidatos": (
+                [{"seq": item.get("fire_product_id"), "codprod_altern": "C0"}]
+                if estado == "ok"
+                else []
+            ),
+            "troca_no_fire": None,
+        }
+    c["produto_conferencia_incompleta"] = False
+    return c
+
+
+def _env_produto(modo_preco, modo_produto):
+    return {**_env(modo_preco), "produto_chave_modo": modo_produto}
+
+
+@pytest.mark.parametrize("modo_preco", ["desligado", "observando", "ligado"])
+def test_decidir_envio_produto_vem_antes_do_preco(monkeypatch, modo_preco):
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _com_produto(_check(status="mismatch"), "a_identificar"))
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env_produto(modo_preco, "ligado"), agora=AGORA
+    )
+
+    assert d.bloqueado is True
+    assert d.reason == "produto_a_identificar"
+    assert d.detalhe == "Item 1: O cliente mandou o código C0, que não está cadastrado no Fire."
+    assert d.metric_labels == ["produto"]
+    assert d.block_detail == {
+        "produto": [
+            {
+                "index": 0,
+                "estado": "a_identificar",
+                "motivo": "O cliente mandou o código C0, que não está cadastrado no Fire.",
+            }
+        ]
+    }
+    assert (d.precos_aplicar, d.avaliacao, d.aplicados) == ({}, None, [])
+    assert _revisoes(import_id) == []  # nenhuma revisão de preço nasce
+    assert _audits(import_id) == []
+
+
+def test_decidir_envio_produto_ligado_com_varios_itens_cita_o_primeiro(monkeypatch):
+    order = _order((54.0, 54.0, 54.0))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _com_produto(_check(3), "ok", "ambiguo", "a_identificar"))
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env_produto("desligado", "ligado"), agora=AGORA
+    )
+
+    assert d.reason == "produto_a_identificar"
+    assert d.detalhe.startswith("Item 2: ")
+    assert d.detalhe.endswith("Mais 1 item(ns) sem produto identificado.")
+    assert [i["index"] for i in d.block_detail["produto"]] == [1, 2]
+
+
+def test_decidir_envio_produto_ligado_com_fire_fora(monkeypatch):
+    order = _order()
+    import_id, entry = _seed(order)
+    check = _com_produto(_check(available=False), "fire_indisponivel")
+    _live(monkeypatch, check)
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env_produto("desligado", "ligado"), agora=AGORA
+    )
+
+    assert d.bloqueado is True
+    assert d.reason == "fire_indisponivel"
+    assert d.detalhe == "O Fire não respondeu; o produto dos itens não pôde ser conferido."
+    assert d.metric_labels == ["produto"]
+
+
+def test_decidir_envio_produto_ligado_conferencia_incompleta(monkeypatch):
+    order = _order()
+    import_id, entry = _seed(order)
+    check = _com_produto(_check(), "ok")
+    check["produto_conferencia_incompleta"] = True
+    _live(monkeypatch, check)
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env_produto("desligado", "ligado"), agora=AGORA
+    )
+
+    assert d.bloqueado is True
+    assert d.reason == "fire_indisponivel"
+    assert d.detalhe == (
+        "Não deu para ler os vínculos de produto; o produto dos itens não pôde ser conferido."
+    )
+
+
+def test_decidir_envio_produto_ligado_tudo_ok_segue_para_o_preco(monkeypatch):
+    order = _order()
+    import_id, entry = _seed(order)
+    check = _com_produto(_check(status="mismatch"), "ok")
+    _live(monkeypatch, check)
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env_produto("desligado", "ligado"), agora=AGORA
+    )
+
+    _, detalhe, block_detail, labels = _hoje(check, [])
+    assert (d.reason, d.detalhe, d.block_detail, d.metric_labels) == (
+        "price_check_failed",
+        detalhe,
+        block_detail,
+        labels,
+    )
+
+
+def test_decidir_envio_produto_observando_audita_e_segue(monkeypatch):
+    order = _order()
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _com_produto(_check(), "a_identificar"))
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env_produto("desligado", "observando"), agora=AGORA
+    )
+
+    assert d.bloqueado is False
+    obs = _audits(import_id, "produto_observado")
+    assert len(obs) == 1
+    assert obs[0]["detail"]["itens"] == [
+        {
+            "index": 0,
+            "estado": "a_identificar",
+            "motivo": "O cliente mandou o código C0, que não está cadastrado no Fire.",
+        }
+    ]
+
+
+def test_decidir_envio_produto_observando_sem_itens_nao_audita(monkeypatch):
+    """M6: nada travaria → nenhum `produto_observado` (sem ruído no audit)."""
+    order = _order()
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _com_produto(_check(), "ok"))
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env_produto("desligado", "observando"), agora=AGORA
+    )
+
+    assert d.bloqueado is False
+    assert _audits(import_id, "produto_observado") == []
+
+
+def test_decidir_envio_produto_observando_falha_no_audit_nao_muda_o_envio(monkeypatch):
+    order = _order()
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _com_produto(_check(), "a_identificar"))
+    real = repo.append_audit
+
+    def _audit(iid, tipo, detail):
+        if tipo == "produto_observado":
+            raise RuntimeError("sqlite caiu")
+        return real(iid, tipo, detail)
+
+    monkeypatch.setattr(repo, "append_audit", _audit)
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env_produto("desligado", "observando"), agora=AGORA
+    )
+    assert d.bloqueado is False
+
+
+@pytest.mark.parametrize("modo_produto", [None, "desligado", "qualquer"])
+def test_decidir_envio_desligado_igual_hoje(monkeypatch, modo_produto):
+    order = _order()
+    import_id, entry = _seed(order)
+    check = _com_produto(_check(status="mismatch"), "a_identificar")
+    _live(monkeypatch, check)
+    env = _env("desligado") if modo_produto is None else _env_produto("desligado", modo_produto)
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=env, agora=AGORA)
+
+    _, detalhe, block_detail, labels = _hoje(check, [])
+    assert (d.reason, d.detalhe, d.block_detail, d.metric_labels) == (
+        "price_check_failed",
+        detalhe,
+        block_detail,
+        labels,
+    )
+    assert _audits(import_id) == []
+
+
+# ── Produto ligado: a trava de preço avalia o produto decidido (Task 6, R15a) ──
+
+
+def _check_decidido_por_vinculo(unidade):
+    """Item casa direto (legado) no SEQ 123 em KIT, mas a chave exata decidiu o SEQ
+    456 por vínculo v2, com a unidade do 456 lida do Fire no mesmo check."""
+    c = _com_produto(_check(), "ok")
+    c["items"][0]["produto"].update(
+        {
+            "fire_seq": 456,
+            "fonte": "depara",
+            "candidatos": [
+                {"seq": 456, "descricao": "B", "codprod_altern": "B", "unidade": unidade}
+            ],
+        }
+    )
+    return c
+
+
+@pytest.mark.parametrize(("unidade", "bloqueia"), [("KIT", False), ("PACK", True)])
+def test_produto_ligado_preco_usa_unidade_do_decidido(monkeypatch, unidade, bloqueia):
+    _precos_por_produto({"123": 9900, "456": 5400})
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check_decidido_por_vinculo(unidade))
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env_produto("ligado", "ligado"), agora=AGORA
+    )
+
+    assert d.avaliacao.itens[0].fire_produto_id == "456"
+    assert d.bloqueado is bloqueia
+    if bloqueia:
+        assert d.avaliacao.itens[0].motivo == "unidade_divergente"
+    else:
+        assert d.avaliacao.itens[0].situacao == "ok"
+
+
+@pytest.mark.parametrize(("unidade", "estado"), [("KIT", "ok"), ("PACK", "nao_avaliado")])
+def test_produto_ligado_preview_usa_unidade_do_decidido(unidade, estado):
+    from app.erp import produto_trava
+
+    _precos_por_produto({"123": 9900, "456": 5400})
+    order = _order((54.0,))
+    check = _check_decidido_por_vinculo(unidade)
+    import_id, entry = _seed(order, check=check)
+    _, mapa = produto_trava.produtos_decididos(check)
+
+    preco = preco_trava.preview_preco(
+        import_id,
+        entry,
+        order,
+        env=_env_produto("ligado", "ligado"),
+        agora=AGORA,
+        produtos_por_item=mapa,
+    )
+
+    assert preco["itens"][0]["estado"] == estado
+
+
+def test_produto_desligado_vinculo_v1_continua_zerando_a_unidade(monkeypatch):
+    """Fora de `ligado` nada muda: o candidato não é usado."""
+    _precos_por_produto({"456": 5400})
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check_decidido_por_vinculo("KIT"))
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env("ligado"), agora=AGORA, produtos_por_item={0: 456}
+    )
+
+    assert d.avaliacao.itens[0].motivo == "unidade_divergente"

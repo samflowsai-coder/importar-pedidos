@@ -69,7 +69,8 @@ API pública para páginas-filho:
   Body vazio. Pre: `portal_status='parsed'`. Re-roda check, persiste lista
   em `imports.sem_preco_ack_*`, audit `sem_preco_acknowledged`. 503 se Fire offline.
 - `GET /api/produtos/search?q=&desc=&code=&ean_item=&limit=` → busca na cópia
-  local do catálogo (`catalogo_fire`, zero Firebird — funciona offline). Requer
+  local do catálogo (`catalogo_fire`, zero Firebird — funciona offline; cada item
+  devolve também `fire_codprod_altern`). Requer
   auth; clamp `limit` em [1, 50]. `q` é **opcional**: com `q` ≥ 2 chars popula
   `results` (busca por nome/código/EAN). As dicas do item do pedido (`desc`,
   `code`, `ean_item`) — quando ao menos uma vier — populam `suggestions` (top 5
@@ -77,15 +78,80 @@ API pública para páginas-filho:
   descrição×nome > código contido). O picker de de-para abre chamando só com as
   dicas (sem `q`) pra já mostrar candidatos. 400 só quando `q` < 2 **e** sem
   dicas. Itens de `results`/`suggestions`: `{fire_produto_id, fire_codigo,
-  fire_ean, fire_nome, score?}`.
-- `POST /api/imported/{id}/vincular-produto` body `{item_index, fire_produto_id}`
-  → grava o vínculo de-para (código e/ou EAN do item → produto do Fire) em
-  `produto_depara`, audita (`produto_vinculo_criado`) e re-roda `check_order`.
-  Só permitido em `portal_status='parsed'`. 422 se produto não existir no
-  catálogo local ou item sem código nem EAN.
-- `DELETE /api/produtos/depara/{depara_id}` → desfaz um vínculo. Log direto
+  fire_ean, fire_codprod_altern, fire_nome, score?}`.
+- `POST /api/imported/{id}/reconferir` (`require_user`, `env_do_pedido`) — só
+  pedido `parsed` (senão **409**): roda `check_order(order, env, escolhas=escolhas_do_import(entry))`,
+  grava `check_json` (e `check_preco` da fonte, se houver) quando `available`, e
+  devolve `{entry_id, check, produto_chave_modo, produto_trava}`. É o botão
+  "Recarregar"/"Conferir de novo" da tela. Fire fora: devolve o check indisponível e
+  mantém o salvo. `produto_trava` do preview com check onde nenhum item tem
+  `produto` (gravado antes do pacote da chave exata), fora de `desligado`, é
+  `{bloqueado: false, reason: "check_antigo"}` — a tela pede "Conferir de novo";
+  o portão do envio segue fechado (confere ao vivo).
+- `POST /api/imported/{id}/vincular-produto` body
+  `{item_index, fire_produto_id, substituir=false}` → vínculo v2
+  (`produto_vinculo_v2`, `produto_vinculo_repo.vincular`) da chave exata do item
+  (`codigo` e/ou `ean`, normalizadas) ao SEQ, no escopo
+  `escopo_de_gravacao(cnpj_do_item(order, i, cnpj_real=...))` (`rede:` ou `raiz:`).
+  Pedido intercompany (`resolucao_para(order, slug)` não é None) só grava com o
+  cliente real resolvido (`cnpj_real`): `erro_conexao` → **503** "Não consegui
+  confirmar o cliente real…"; qualquer outro motivo (sem_chave, nao_encontrado…) →
+  **422** "Não sei qual é o cliente real deste pedido (pedido da revenda)…". Nunca
+  grava no escopo da revenda (R11); a leitura do check não muda. Sem escopo → **422** "Este pedido não tem CNPJ
+  do cliente…". Chave já vigente em outro SEQ e `substituir` falso → **409**
+  `{"conflito": {chave_tipo, chave_valor, atual: {fire_seq, fire_descricao,
+  criado_por, criado_em}}, "detail"}`; as duas chaves são conferidas antes de
+  gravar (sem gravação pela metade). `fire_codigo` do v2 = `codprod_altern` do
+  catálogo local; `fire_descricao` = `nome`. Enquanto o `produto_chave_modo` não é
+  `ligado` (`_trava_produto_ligada`), grava também o v1 (`produto_depara`) para o
+  check legado — exceto em pedido intercompany (R13: o v1 é chaveado pela revenda);
+  o audit registra `v1: true|false`. Audit `produto_vinculo_criado` ou `produto_vinculo_trocado`
+  (escopo, `chaves[{chave_tipo, chave_valor, fire_seq_antigo, fire_seq_novo}]`,
+  `vinculo_ids`, pedido, usuário). Re-roda `check_order` deste pedido e, se ele veio
+  `available` (com as escolhas pontuais do import, que o check regravado mantém), de até 50 pedidos `parsed` do ambiente (mais antigos primeiro, R12)
+  cujo check guardado tem item na mesma chave fora de `ok` e cujo escopo de busca
+  inclui o escopo gravado. Resposta:
+  `{entry_id, vinculos: [{id, env, escopo, chave_tipo, chave_valor}], check,
+  produto_trava, rechecados: [import_id…]}` (`produto_trava` = a mesma decisão do
+  preview sobre o check novo; a tela troca a dela por esta). `_produto_trava_preview`
+  falha fechado: exceção vira `{bloqueado: true, reason: "fire_indisponivel"}` + log. Só em `portal_status='parsed'`. 422 se o produto não
+  existir no catálogo local (ou SEQ não numérico) ou item sem código nem EAN.
+  **Escolha pontual (R18):** item em `chave_repetida` no check guardado, ou já com
+  fonte `escolha_pontual`, ou cuja chave se repete no pedido com descrições
+  diferentes em QUALQUER estado (`_item_em_chave_repetida`, só `chaves_repetidas`,
+  sem Fire): NÃO grava v1 nem v2
+  nem dá 409; grava `imports.produto_escolhido_json["<item_index>"] = {fire_seq, por,
+  em, descricao, codigo, ean}` (`repo.set_produto_escolha`, um `json_set`; codigo/ean
+  = `codprod_altern`/EAN do catálogo local), audita
+  `produto_escolha_pontual` (item_index, fire_produto_id, fire_seq_antigo, fire_nome,
+  pedido, usuário), re-roda o check com as escolhas do import, regrava o check se
+  `available` e responde `{entry_id, pontual: true, vinculos: [], check,
+  produto_trava, rechecados: []}` (`_escolher_pontual`). Os outros itens da mesma
+  chave continuam pedindo escolha; nenhum outro pedido é rechecado.
+- `DELETE /api/produtos/vinculo/{vinculo_id}?env=<slug>` → revoga o vínculo v2 (a
+  linha fica, com `revogado_em/por`) no banco da empresa `env` (obrigatório; o id é
+  por empresa, o cookie não decide). Empresa inexistente/inativa → 403; id
+  inexistente nela → 404. Fora de `ligado`, apaga também o v1 (`produto_depara`)
+  com a mesma chave e o mesmo SEQ, do cliente do pedido que criou o vínculo ou de
+  CNPJ do mesmo escopo (v1 apontando para outro SEQ fica). Audit
+  `produto_vinculo_revogado` (com `env` e `v1_apagados`) no pedido que criou o
+  vínculo, se ele ainda existe; senão log direto. Resposta `{"revogado": id}`.
+- `GET /api/produtos/a-identificar` → fila: itens com `produto.estado` ≠ `ok` no
+  `check_json` guardado dos pedidos `parsed` do ambiente ativo (sem Fire). Resposta
+  `{"modo", "itens": [{import_id, pedido, cliente, item_index, codigo, ean, descricao,
+  estado, motivo, importado_em}]}`, por `importado_em` crescente. Com
+  `export_mode` xlsx/both, o item `ok` que a planilha não aponta ou que o importador
+  do Fire trocaria também entra, com `estado` `sem_codigo_fire`/`troca_no_fire` e o
+  motivo do portão (`produto_trava.itens_planilha`). `modo` =
+  `produto_chave_modo` do ambiente do request (`_produto_chave_modo`: mesma regra do
+  portão, sem ambiente vale o mais restrito); a tela só mostra a aba fora de `desligado`.
+- `DELETE /api/produtos/depara/{depara_id}` → desfaz um vínculo v1. Log direto
   via `logger.info` (não `audit_log` — `import_id` é `NOT NULL` com FK pra
-  `imports`, e o undo não tem um import associado).
+  `imports`, e o undo não tem um import associado). **M4:** revoga também o v2 gêmeo
+  (vigente, mesma chave normalizada, mesmo SEQ, escopo em `escopos_para(client_key)`),
+  com audit `produto_vinculo_revogado` (`origem: "depara_v1_removido"`) no pedido que
+  criou o v2 (senão log). `client_key` sem CNPJ: v2 fica e a resposta traz `aviso`.
+  Resposta `{deleted, v2_revogados: [ids], aviso}`.
 - Guards de preço em `_send_one_to_fire` / `_export_one_xlsx`: re-roda
   `check_order` + `is_blocking`; bloqueia 409 com audit `send_to_fire_blocked` /
   `xlsx_export_blocked` quando há mismatch / no_order_price / no_price_unacked.
@@ -108,6 +174,61 @@ API pública para páginas-filho:
     o item vinculado com a identidade do Fire. Como o `push_new_order` compartilha o
     mesmo `order`, o FlowPCP também recebe a identidade Fire dos itens vinculados
     (desejável: o catálogo do Flow é Fire-synced). Só afeta itens com vínculo.
+    **Exceção em `produto_chave_modo` `ligado` (I2):** `_pedido_para_o_flow` tira uma
+    cópia do pedido ANTES do `aplicar` (depois do preço aprovado) e é ela que vai ao
+    `push_new_order` — o Flow recebe código/EAN do cliente, não os do produto decidido,
+    até consumir `erpProdutoId` (Task 9). Fora de `ligado`, como acima.
+
+## Tela: produto por chave exata (`index.html`)
+Os 3 payloads de preview (`preview_file`, `preview_pending`, `rehydrate_preview`)
+trazem `produto_chave_modo` (`_produto_chave_modo(request_env)`) e `produto_trava`
+(`_produto_trava_preview`: `produto_trava.avaliar` sobre o check guardado, com o
+`export_mode` do envio → `{bloqueado, reason, export_mode, itens}`). A tela espelha
+essa decisão (estados de planilha por item e o bloqueio do rodapé), não refaz a regra. Em `desligado` a
+tela é a de sempre (coluna "Fire" com ✓/✗, picker com busca no topo e confirmar
+direto). Em `observando`/`ligado`, com `check.items[i].produto` (índice = posição do
+item):
+- `produtoBadge(produto, {acaoIdx})`: rótulos fixos (`ok` "Produto confirmado",
+  `a_identificar` "Escolher produto", `ambiguo` "Mais de um produto com essa chave",
+  `produto_bloqueado` "Produto bloqueado", `vinculo_invalido` "Vínculo inválido",
+  `chaves_discordam` "Código e EAN apontam para produtos diferentes",
+  `chave_repetida` "Código repetido no pedido" (≡, tom de pendência),
+  `fire_indisponivel` "Fire sem resposta"; o `ok` que `produto_trava.itens` lista vira
+  "Fire grava outro produto" ou "Sem código para a planilha", em tom de aviso —
+  `produtoEstadoTela`), ícone por
+  forma + cor, motivo logo abaixo. Linha travada ganha faixa à esquerda. Banner
+  (`produtoContagem`: pendentes, trocas e Fire sem resposta contados à parte, plural
+  de verdade) e rodapé resumem; Fire sem resposta tem banner próprio com "Recarregar" (traz o que está salvo;
+  quem reconfere no Fire é o envio). Em
+  `ligado` o botão de envio fica desabilitado com o motivo (o backend decide, a tela
+  só antecipa). Telefone: coluna Produto presa à direita, botões de ação com 44px.
+- Picker (`openProductPicker`): 3 seções na ordem "Candidatos exatos"
+  (`produto.candidatos`, bloqueado não selecionável), "Sugestões pela descrição"
+  (marca "sugestão", sem pré-seleção) e "Buscar no catálogo" (sem repetir quem já
+  está acima). Código mostrado = `fire_codprod_altern`; nome nunca trunca; cada linha
+  traz chips "≠ tamanho/pares/cor" contra a linha do cliente. Nada vincula sozinho.
+- Confirmação lado a lado (`ppMostrarConfirmacao`): linha do cliente × produto
+  escolhido; `divergenciasAtributos(descCliente, descProduto)` marca tamanho, pares e
+  cor divergentes (regras da auditoria de 19/10). Só alerta: com divergência o botão
+  vira "Vincular mesmo assim" (secundário, borda de aviso) e o foco começa em
+  "Voltar". Quem grava é o `#ppVincularBtn`, que nasce desabilitado por 400 ms (duplo
+  clique no "Confirmar" não pula a confirmação). Erro do vínculo aparece em
+  `#ppConfErro`, dentro da confirmação. Linha em `chave_repetida` ou com fonte
+  `escolha_pontual` (`_ppPontual`): a nota diz "Esta escolha vale só para esta linha
+  deste pedido." e o botão "Usar nesta linha"/"Usar mesmo assim"; o `ok` por
+  escolha pontual mostra "escolhido para esta linha" e o botão "Trocar escolha".
+- 409 `conflito`: painel `#ppConflito` na página ("O código X de CLIENTE já aponta
+  para…", com as linhas Cliente pediu / Vínculo atual / Você escolheu e a divergência
+  marcada); "Manter" é o primário e fecha sem gravar, "Trocar vínculo" reenvia com
+  `substituir: true`. Vale também em
+  `desligado` (sem ele, trocar vínculo ficaria impossível).
+- Aba "Itens a identificar" (`#tab-identificar`, `loadFilaIdentificar`) lê
+  `GET /api/produtos/a-identificar`; cada linha chama
+  `openImportDetail(id, {itemIndex})`, que rola até o item e a coluna do produto e
+  o destaca até o foco sair da linha. Itens com Fire sem resposta vão para o fim, no
+  grupo "Aguardando o Fire".
+- Teste: `tests/test_web_static_produto.py` (textos/ids fixos no HTML servido e o
+  `produto_chave_modo` dos payloads).
 
 ## Roteamento intercompany (wiring web)
 
@@ -246,7 +367,8 @@ recusa `db|both` com `sys.exit`. A gravação só ocorre no preview → enviar
 (`_send_one_to_fire`), onde passa por `preco_trava.decidir_envio` (ver `modules/erp.md`,
 "Trava de preço por rede"). Com a trava `observando`/`ligado`, a importação **também não
 gera XLSX** (resposta traz `xlsx_adiado: "trava_de_preco"`); o XLSX sai pelo preview →
-exportar. O payload do preview ganha `preco`.
+exportar. Com `produto_chave_modo` em `ligado` idem, com `xlsx_adiado: "produto_a_identificar"`
+(precede o de preço), e `/api/process` responde 409. O payload do preview ganha `preco`.
 
 ## Reatividade de config (exportMode)
 O botão de ação principal (`#pvCommitBtn` no preview e `#batchSendBtn` no log)

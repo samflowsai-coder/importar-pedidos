@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS imports (
     sem_preco_ack_by         TEXT,
     sem_preco_ack_at         TEXT,
     sem_preco_ack_items      TEXT,
-    check_preco_json         TEXT
+    check_preco_json         TEXT,
+    produto_escolhido_json   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -188,6 +189,26 @@ CREATE TABLE IF NOT EXISTS produto_depara (
     criado_em       TEXT NOT NULL,
     criado_por      TEXT,
     UNIQUE (client_key, chave_tipo, chave_valor)
+);
+
+-- De-para v2: vínculo da chave EXATA do varejista (código ou EAN) a um produto do
+-- Fire (SEQ), por escopo ('rede:<id>' ou 'raiz:<8 dígitos do CNPJ>'). Nunca é
+-- apagado: revogar grava revogado_em/revogado_por. Só um vínculo vigente por
+-- (escopo, chave) — índice único parcial em INDEXES_SQL.
+CREATE TABLE IF NOT EXISTS produto_vinculo_v2 (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    escopo         TEXT NOT NULL,
+    chave_tipo     TEXT NOT NULL CHECK (chave_tipo IN ('codigo','ean')),
+    chave_valor    TEXT NOT NULL,
+    fire_seq       INTEGER NOT NULL,
+    fire_codigo    TEXT,
+    fire_descricao TEXT NOT NULL,
+    origem         TEXT NOT NULL CHECK (origem IN ('manual','migrado_v1')),
+    pedido_id      TEXT,
+    criado_em      TEXT NOT NULL,
+    criado_por     TEXT,
+    revogado_em    TEXT,
+    revogado_por   TEXT
 );
 
 -- ── SP1: transporte de pedidos do ERP para o Flow (docs/ai/modules/erp_eventos.md) ──
@@ -465,6 +486,8 @@ CREATE INDEX IF NOT EXISTS idx_imports_fire_poll
     WHERE fire_codigo IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_depara_client ON produto_depara(client_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_vinculo_v2_vigente
+    ON produto_vinculo_v2 (escopo, chave_tipo, chave_valor) WHERE revogado_em IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_erp_item_vinculo_import ON erp_item_vinculo(import_id, indice_original);
 CREATE INDEX IF NOT EXISTS idx_erp_xlsx_linha_pedido   ON erp_xlsx_linha(pedido_cliente);
@@ -477,6 +500,8 @@ CREATE INDEX IF NOT EXISTS idx_cadastro_volta_produto  ON cadastro_volta(produto
 
 # Cada entrada: (table, column_name, ALTER TABLE DDL) — aplicada só se a coluna ainda não existir.
 COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    # Código alternativo do Fire (CODPROD_ALTERN): chave de casamento exato do item.
+    ("catalogo_fire", "codprod_altern", "ALTER TABLE catalogo_fire ADD COLUMN codprod_altern TEXT"),
     ("imports", "sem_preco_ack_by", "ALTER TABLE imports ADD COLUMN sem_preco_ack_by TEXT"),
     ("imports", "sem_preco_ack_at", "ALTER TABLE imports ADD COLUMN sem_preco_ack_at TEXT"),
     ("imports", "sem_preco_ack_items", "ALTER TABLE imports ADD COLUMN sem_preco_ack_items TEXT"),
@@ -490,6 +515,9 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # Trava de preço: check do ambiente fonte da chave do produto (Nasmar → MM),
     # gravado no commit e no vínculo de-para; o preview avalia por ele.
     ("imports", "check_preco_json", "ALTER TABLE imports ADD COLUMN check_preco_json TEXT"),
+    # R18: escolha pontual do produto por linha (chave repetida no pedido), só
+    # deste import: {"<item_index>": {fire_seq, por, em, descricao}}.
+    ("imports", "produto_escolhido_json", "ALTER TABLE imports ADD COLUMN produto_escolhido_json TEXT"),
     # SP1 — eco: o que a decisão do Flow mudou no ERP. `erp_codigos_json` porque
     # o UPDATE por PEDIDO_CLIENTE + CLIENTE pode tocar mais de um pedido
     # (BACKLOG 1.5); `erp_codigo` só quando tocou exatamente um.

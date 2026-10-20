@@ -28,7 +28,8 @@ from decimal import Decimal
 from typing import Any
 
 import app.erp.product_check as pc
-from app.erp import preco_regra
+from app import config as app_config
+from app.erp import preco_regra, produto_trava
 from app.erp.mapper import parse_date
 from app.erp.preco_avaliacao import (
     Avaliacao,
@@ -73,6 +74,13 @@ class DecisaoEnvio:
     # {item_index, preco, flow_id} por preço aplicado; o chamador audita
     # `preco_aplicado` só depois que o pedido saiu (registrar_aplicados).
     aplicados: list[dict] = field(default_factory=list)
+    # `produto_chave_modo` `ligado`: o check (do Fire, ao vivo) que a trava de produto
+    # aprovou. O chamador monta dele o que vai ao Fire
+    # (`produto_trava.produtos_decididos`), sem conferir de novo. None fora de `ligado`.
+    check: dict | None = None
+    # O check ao vivo do ambiente do pedido, em todo modo (R21): fora de `ligado` a
+    # saída lê dele o `CODPROD_ALTERN` do produto da escolha pontual. Só leitura.
+    check_vivo: dict | None = None
 
 
 def _modo(env: dict | None) -> str:
@@ -115,22 +123,46 @@ def _check_utilizavel(check: dict | None, order: Order) -> dict | None:
     return check
 
 
-def _com_vinculos(check: dict | None, produtos_por_item: dict[int, int] | None) -> dict | None:
+def _produto_ligado(env: dict | None) -> bool:
+    return produto_trava.modo(env_trava_produto(env)) == "ligado"
+
+
+def _com_vinculos(
+    check: dict | None, produtos_por_item: dict[int, int] | None, *, decidido: bool = False
+) -> dict | None:
     """Check com o SEQ do vínculo de-para nos itens vinculados: o Fire recebe
     esse SEQ (`FirebirdExporter(produtos_por_item=...)`) e o XLSX o código
     dele, então é ele que a trava avalia, mesmo quando o item também casa
     direto por EAN/código com outro produto. Nesse caso a `fire_unidade` do
-    check é a do OUTRO produto: sai (unidade desconhecida bloqueia)."""
+    check é a do OUTRO produto: sai (unidade desconhecida bloqueia).
+
+    `decidido` (`produto_chave_modo` `ligado`): o mapa é o do produto decidido, e
+    a unidade/descrição vêm do candidato decidido (lido do Fire no mesmo check),
+    em vez de sair. Sem esse candidato, sai como antes."""
     if check is None or not produtos_por_item:
         return check
     itens = [dict(it) for it in check.get("items") or []]
     for i, seq in produtos_por_item.items():
         if 0 <= i < len(itens):
             if str(itens[i].get("fire_product_id")) != str(seq):
-                itens[i]["fire_unidade"] = None
-                itens[i]["fire_description"] = None
+                cand = _candidato_do_seq(itens[i], seq) if decidido else None
+                if cand is not None:
+                    itens[i]["fire_unidade"] = (cand.get("unidade") or "").strip() or None
+                    itens[i]["fire_description"] = cand.get("descricao")
+                else:
+                    itens[i]["fire_unidade"] = None
+                    itens[i]["fire_description"] = None
             itens[i]["fire_product_id"] = seq
     return {**check, "items": itens}
+
+
+def _candidato_do_seq(item: dict, seq: int) -> dict | None:
+    """Candidato decidido do item `ok` quando ele é o `seq` e traz a unidade."""
+    produto = item.get("produto") if isinstance(item.get("produto"), dict) else {}
+    if produto.get("estado") != "ok" or str(produto.get("fire_seq")) != str(seq):
+        return None
+    cand = produto_trava.candidato_decidido(produto)
+    return cand if cand is not None and "unidade" in cand else None
 
 
 def _fonte(env: dict | None) -> str | None:
@@ -171,6 +203,7 @@ def _check_para_preco(
         return _com_vinculos(
             _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order),
             produtos_por_item,
+            decidido=_produto_ligado(env),
         )
     return _check_utilizavel(_check_da_fonte(order, fonte), order)
 
@@ -187,7 +220,11 @@ def _check_salvo_para_preco(
     se foi gerado por essa mesma fonte; de outra fonte = sem avaliação."""
     fonte = _fonte(env)
     if fonte is None or _eh_intercompany(order, entry, grupo):
-        return _com_vinculos(_check_utilizavel(entry.get("check"), order), produtos_por_item)
+        return _com_vinculos(
+            _check_utilizavel(entry.get("check"), order),
+            produtos_por_item,
+            decidido=_produto_ligado(env),
+        )
     salvo = entry.get("check_preco")
     if not salvo or salvo.get("preco_fonte_slug") != fonte:
         return None
@@ -697,6 +734,41 @@ def registrar_aplicados(import_id: str, decisao: DecisaoEnvio) -> None:
         repo.append_audit(import_id, "preco_aplicado", aplicado)
 
 
+def _preco_do_decidido(order: Order, check: dict) -> dict:
+    """Cópia do check com `price_status`/`price_diff`/`fire_preco_venda` de cada
+    item `ok` refeitos pelo `preco_venda` do candidato decidido (I4): em
+    `produto_chave_modo` `ligado` o produto que sai é o decidido, e o match legado
+    pode ser outro produto. Candidato sem a chave `preco_venda` (check de antes
+    deste campo) fica como está. Não muda o check de entrada."""
+    itens = []
+    for i, item in enumerate(check.get("items") or []):
+        produto = item.get("produto") if isinstance(item, dict) else None
+        cand = (
+            produto_trava.candidato_decidido(produto)
+            if isinstance(produto, dict) and produto.get("estado") == "ok"
+            else None
+        )
+        if cand is None or "preco_venda" not in cand or i >= len(order.items):
+            itens.append(item)
+            continue
+        preco = cand.get("preco_venda")
+        unit = order.items[i].unit_price
+        itens.append(
+            {
+                **item,
+                "fire_product_id": produto.get("fire_seq"),
+                "fire_preco_venda": preco,
+                "price_status": pc._classify_price(unit, preco),
+                "price_diff": (
+                    round(float(preco) - float(unit), 2)
+                    if preco is not None and unit is not None
+                    else None
+                ),
+            }
+        )
+    return {**check, "items": itens}
+
+
 def _regra_de_hoje(check: dict, ack_items: list) -> DecisaoEnvio:
     blocked, block_detail = pc.is_blocking(check, ack_items=ack_items)
     if not blocked:
@@ -830,6 +902,7 @@ def _decidir_ligado(
     check_hoje = _com_vinculos(
         _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order),
         produtos_por_item,
+        decidido=_produto_ligado(env),
     )
     vazio = Avaliacao(rede=None, cnpj_rede=None)
     revisao: dict | None = None
@@ -933,6 +1006,81 @@ def _decidir_ligado(
     return DecisaoEnvio(False, precos_aplicar=precos, avaliacao=av, aplicados=aplicados)
 
 
+MOTIVO_PRODUTO_FIRE_FORA = "O Fire não respondeu; o produto dos itens não pôde ser conferido."
+MOTIVO_PRODUTO_CONFERENCIA_INCOMPLETA = (
+    "Não deu para ler os vínculos de produto; o produto dos itens não pôde ser conferido."
+)
+
+
+def _detalhe_produto(tp: produto_trava.TravaProduto, live: dict) -> str:
+    if tp.reason == "fire_indisponivel":
+        if live.get("available"):
+            return MOTIVO_PRODUTO_CONFERENCIA_INCOMPLETA
+        return MOTIVO_PRODUTO_FIRE_FORA
+    primeiro = tp.itens[0]
+    motivo = primeiro.get("motivo") or "produto não identificado no Fire."
+    detalhe = f"Item {primeiro['index'] + 1}: {motivo}"
+    if len(tp.itens) > 1:
+        resto = (
+            "sem produto identificado"
+            if tp.reason == "produto_a_identificar"
+            else "que a planilha não consegue levar ao Fire"
+        )
+        detalhe += f" Mais {len(tp.itens) - 1} item(ns) {resto}."
+    return detalhe
+
+
+def env_trava_produto(env: dict | None) -> dict | None:
+    """Ambiente que decide a trava de produto. Sem ambiente (sem cookie, deploy
+    legado) vale o mais restrito: `ligado` se QUALQUER ambiente ativo estiver
+    `ligado` — sem saber a empresa, não dá para afirmar que a trava não vale."""
+    if env is not None:
+        return env
+    if any(produto_trava.modo(e) == "ligado" for e in environments_repo.list_active()):
+        return {"produto_chave_modo": "ligado"}
+    return None
+
+
+def _portao_produto(
+    import_id: str, live: dict, env: dict | None, export_mode: str
+) -> DecisaoEnvio | None:
+    """Trava de produto por chave exata (`produto_chave_modo`). Em `ligado` devolve
+    o bloqueio; em `observando` grava `produto_observado` (só com itens) e segue; `desligado` é
+    inerte (nada lido, nada gravado)."""
+    env = env_trava_produto(env)
+    m = produto_trava.modo(env)
+    if m == "desligado":
+        return None
+    if m == "observando":
+        try:
+            tp = produto_trava.avaliar(live, env=env, export_mode=export_mode)
+            if tp.itens:  # nada travaria: sem audit (M6)
+                repo.append_audit(import_id, "produto_observado", {"itens": tp.itens})
+        except Exception as exc:  # noqa: BLE001 — observando nunca muda o envio
+            from app.utils.logger import logger
+
+            logger.warning(f"produto observando falhou ({type(exc).__name__}): {exc}")
+        return None
+    # ligado: erro ao avaliar sobe (fail-closed) — nada sai para o Fire.
+    tp = produto_trava.avaliar(live, env=env, export_mode=export_mode)
+    if not tp.bloqueado:
+        return None
+    return DecisaoEnvio(
+        bloqueado=True,
+        reason=tp.reason,
+        detalhe=_detalhe_produto(tp, live),
+        block_detail={"produto": tp.itens},
+        metric_labels=["produto"],
+        precos_aplicar={},
+        avaliacao=None,
+        aplicados=[],
+    )
+
+
+def _export_mode() -> str:
+    return app_config.load().get("export_mode", "xlsx")
+
+
 def decidir_envio(
     import_id: str,
     order: Order,
@@ -941,6 +1089,7 @@ def decidir_envio(
     env: dict | None,
     agora: datetime,
     produtos_por_item: dict[int, int] | None = None,
+    export_mode: str | None = None,
 ) -> DecisaoEnvio:
     """Decide se o pedido pode ir ao Fire/XLSX. O chamador grava o audit de
     bloqueio (nome do seu caminho) com `block_detail` e conta `metric_labels`;
@@ -949,9 +1098,54 @@ def decidir_envio(
 
     `produtos_por_item`: {posição: SEQ} dos vínculos de-para, o MESMO mapa que
     vai ao `FirebirdExporter` (e cujos códigos vão ao XLSX). Em `observando` e
-    `ligado` a avaliação usa esse SEQ; `desligado` não olha (regra de hoje)."""
+    `ligado` a avaliação usa esse SEQ; `desligado` não olha (regra de hoje).
+    Com `produto_chave_modo` `ligado`, esse mapa é ignorado: a avaliação usa o SEQ
+    decidido de cada item `ok` do check ao vivo, e `DecisaoEnvio.check` devolve esse
+    check para o chamador montar a saída dele (o produto avaliado é o gravado).
+
+    `export_mode`: o que este caminho gera ("xlsx", "db" ou "both"); None = o
+    `EXPORT_MODE` configurado. A rota de planilha passa "xlsx" sempre.
+
+    Antes de qualquer lógica de preço, a trava de produto (`produto_chave_modo`,
+    `_portao_produto`) sobre o check do ambiente do pedido: em `ligado` bloqueia
+    com `reason` `fire_indisponivel`/`produto_a_identificar` e `metric_labels`
+    `["produto"]`; em `observando` só grava o audit `produto_observado`.
+
+    O check ao vivo leva as escolhas pontuais do import (`entry["produto_escolhido"]`,
+    R18); o check do ambiente fonte de preço não (os SEQs são do Fire do pedido)."""
+    # R18: a escolha pontual de cada linha (só deste import) entra no MESMO check
+    # que a trava avalia e de onde sai o produto gravado.
+    live = pc.check_order(order, env=env, escolhas=pc.escolhas_do_import(entry))
+    # Trava de produto antes de qualquer lógica de preço, em todo modo de preço:
+    # usa o check do PRÓPRIO ambiente do pedido (não o da fonte de preço).
+    bloqueio_produto = _portao_produto(
+        import_id, live, env, export_mode if export_mode is not None else _export_mode()
+    )
+    if bloqueio_produto is not None:
+        return bloqueio_produto
+    if not _produto_ligado(env):
+        decisao = _decidir_preco(import_id, order, entry, live, env, agora, produtos_por_item)
+        decisao.check_vivo = live
+        return decisao
+    # ligado: o SEQ avaliado e o gravado saem do mesmo check que a trava aprovou.
+    _, decididos = produto_trava.produtos_decididos(live)
+    decisao = _decidir_preco(import_id, order, entry, live, env, agora, decididos)
+    decisao.check = live
+    decisao.check_vivo = live
+    return decisao
+
+
+def _decidir_preco(
+    import_id: str,
+    order: Order,
+    entry: dict,
+    live: dict,
+    env: dict | None,
+    agora: datetime,
+    produtos_por_item: dict[int, int] | None,
+) -> DecisaoEnvio:
+    """A parte de preço do `decidir_envio`, depois da trava de produto."""
     modo = _modo(env)
-    live = pc.check_order(order, env=env)
     ack_items = entry.get("sem_preco_ack_items") or []
 
     if modo == "ligado":
@@ -959,7 +1153,9 @@ def decidir_envio(
             import_id, order, entry, live, ack_items, agora, produtos_por_item, env
         )
 
-    hoje = _regra_de_hoje(live, ack_items)
+    hoje = _regra_de_hoje(
+        _preco_do_decidido(order, live) if _produto_ligado(env) else live, ack_items
+    )
     if modo == "observando":
         try:
             grupo = cnpjs_grupo()  # uma vez por chamada do portão
