@@ -247,7 +247,8 @@ recusa `db|both` com `sys.exit`. A gravação só ocorre no preview → enviar
 (`_send_one_to_fire`), onde passa por `preco_trava.decidir_envio` (ver `modules/erp.md`,
 "Trava de preço por rede"). Com a trava `observando`/`ligado`, a importação **também não
 gera XLSX** (resposta traz `xlsx_adiado: "trava_de_preco"`); o XLSX sai pelo preview →
-exportar. O payload do preview ganha `preco`.
+exportar. Com `produto_chave_modo` em `ligado` idem, com `xlsx_adiado: "produto_a_identificar"`
+(precede o de preço), e `/api/process` responde 409. O payload do preview ganha `preco`.
 
 ## Reatividade de config (exportMode)
 O botão de ação principal (`#pvCommitBtn` no preview e `#batchSendBtn` no log)

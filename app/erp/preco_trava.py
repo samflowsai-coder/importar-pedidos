@@ -28,7 +28,8 @@ from decimal import Decimal
 from typing import Any
 
 import app.erp.product_check as pc
-from app.erp import preco_regra
+from app import config as app_config
+from app.erp import preco_regra, produto_trava
 from app.erp.mapper import parse_date
 from app.erp.preco_avaliacao import (
     Avaliacao,
@@ -933,6 +934,73 @@ def _decidir_ligado(
     return DecisaoEnvio(False, precos_aplicar=precos, avaliacao=av, aplicados=aplicados)
 
 
+MOTIVO_PRODUTO_FIRE_FORA = "O Fire não respondeu; o produto dos itens não pôde ser conferido."
+MOTIVO_PRODUTO_CONFERENCIA_INCOMPLETA = (
+    "Não deu para ler os vínculos de produto; o produto dos itens não pôde ser conferido."
+)
+
+
+def _detalhe_produto(tp: produto_trava.TravaProduto, live: dict) -> str:
+    if tp.reason == "fire_indisponivel":
+        if live.get("available"):
+            return MOTIVO_PRODUTO_CONFERENCIA_INCOMPLETA
+        return MOTIVO_PRODUTO_FIRE_FORA
+    primeiro = tp.itens[0]
+    motivo = primeiro.get("motivo") or "produto não identificado no Fire."
+    detalhe = f"Item {primeiro['index'] + 1}: {motivo}"
+    if len(tp.itens) > 1:
+        detalhe += f" Mais {len(tp.itens) - 1} item(ns) sem produto identificado."
+    return detalhe
+
+
+def env_trava_produto(env: dict | None) -> dict | None:
+    """Ambiente que decide a trava de produto. Sem ambiente (sem cookie, deploy
+    legado) vale o mais restrito: `ligado` se QUALQUER ambiente ativo estiver
+    `ligado` — sem saber a empresa, não dá para afirmar que a trava não vale."""
+    if env is not None:
+        return env
+    if any(produto_trava.modo(e) == "ligado" for e in environments_repo.list_active()):
+        return {"produto_chave_modo": "ligado"}
+    return None
+
+
+def _portao_produto(import_id: str, live: dict, env: dict | None) -> DecisaoEnvio | None:
+    """Trava de produto por chave exata (`produto_chave_modo`). Em `ligado` devolve
+    o bloqueio; em `observando` grava `produto_observado` e segue; `desligado` é
+    inerte (nada lido, nada gravado)."""
+    env = env_trava_produto(env)
+    m = produto_trava.modo(env)
+    if m == "desligado":
+        return None
+    if m == "observando":
+        try:
+            tp = produto_trava.avaliar(live, env=env, export_mode=_export_mode())
+            repo.append_audit(import_id, "produto_observado", {"itens": tp.itens})
+        except Exception as exc:  # noqa: BLE001 — observando nunca muda o envio
+            from app.utils.logger import logger
+
+            logger.warning(f"produto observando falhou ({type(exc).__name__}): {exc}")
+        return None
+    # ligado: erro ao avaliar sobe (fail-closed) — nada sai para o Fire.
+    tp = produto_trava.avaliar(live, env=env, export_mode=_export_mode())
+    if not tp.bloqueado:
+        return None
+    return DecisaoEnvio(
+        bloqueado=True,
+        reason=tp.reason,
+        detalhe=_detalhe_produto(tp, live),
+        block_detail={"produto": tp.itens},
+        metric_labels=["produto"],
+        precos_aplicar={},
+        avaliacao=None,
+        aplicados=[],
+    )
+
+
+def _export_mode() -> str:
+    return app_config.load().get("export_mode", "xlsx")
+
+
 def decidir_envio(
     import_id: str,
     order: Order,
@@ -949,9 +1017,19 @@ def decidir_envio(
 
     `produtos_por_item`: {posição: SEQ} dos vínculos de-para, o MESMO mapa que
     vai ao `FirebirdExporter` (e cujos códigos vão ao XLSX). Em `observando` e
-    `ligado` a avaliação usa esse SEQ; `desligado` não olha (regra de hoje)."""
+    `ligado` a avaliação usa esse SEQ; `desligado` não olha (regra de hoje).
+
+    Antes de qualquer lógica de preço, a trava de produto (`produto_chave_modo`,
+    `_portao_produto`) sobre o check do ambiente do pedido: em `ligado` bloqueia
+    com `reason` `fire_indisponivel`/`produto_a_identificar` e `metric_labels`
+    `["produto"]`; em `observando` só grava o audit `produto_observado`."""
     modo = _modo(env)
     live = pc.check_order(order, env=env)
+    # Trava de produto antes de qualquer lógica de preço, em todo modo de preço:
+    # usa o check do PRÓPRIO ambiente do pedido (não o da fonte de preço).
+    bloqueio_produto = _portao_produto(import_id, live, env)
+    if bloqueio_produto is not None:
+        return bloqueio_produto
     ack_items = entry.get("sem_preco_ack_items") or []
 
     if modo == "ligado":

@@ -1738,7 +1738,8 @@ async function doReimport(filename, entryId) {
         <path d="M2 6.5l3 3 6-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       Reimportado com sucesso ${links ? '&middot; ' + links : ''}
-      ${data.xlsx_adiado === 'trava_de_preco' ? '&middot; ' + esc(PRECO_MSG_ADIADO) : ''}`;
+      ${data.xlsx_adiado === 'trava_de_preco' ? '&middot; ' + esc(PRECO_MSG_ADIADO) : ''}
+      ${data.xlsx_adiado === 'produto_a_identificar' ? '&middot; ' + esc(PRODUTO_MSG_ADIADO) : ''}`;
     resultEl.classList.remove('hidden');
 
     loadImported();
@@ -2102,6 +2103,7 @@ function escPath(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'")
 
 // ── Trava de preço (preview) ────────────────────────────────────────────────
 const PRECO_MSG_ADIADO = 'Planilha não gerada: com a trava de preço ativa, o pedido sai pela revisão (Exportar/Enviar).';
+const PRODUTO_MSG_ADIADO = 'Planilha não gerada: com a trava de produto ligada, o pedido sai pela revisão (Exportar/Enviar).';
 const PRECO_MOTIVO = {
   ok: 'Preço igual à tabela',
   preco_acima: 'Preço acima da tabela',

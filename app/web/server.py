@@ -209,6 +209,14 @@ def _request_environment(request: Request) -> dict | None:
     return getattr(request.state, "environment", None)
 
 
+def _trava_produto_ligada(env: dict | None) -> bool:
+    """`produto_chave_modo` em `ligado` para esta ação (sem ambiente, o mais
+    restrito — ver `preco_trava.env_trava_produto`)."""
+    from app.erp import preco_trava, produto_trava
+
+    return produto_trava.modo(preco_trava.env_trava_produto(env)) == "ligado"
+
+
 def _cfg_para_env(env: dict) -> dict:
     """Cfg legado com as pastas DESTA empresa. Usado pelo lote agrupado, onde
     cada grupo escreve na pasta da sua empresa e não na do cookie."""
@@ -474,7 +482,13 @@ def _run_exporters(order, output_path: Path, *, env: dict | None = None) -> dict
     # passa por `preco_trava.decidir_envio`.
     from app.erp import preco_trava
 
-    adiado = preco_trava.trava_ativa(env)
+    # Trava de produto `ligado` vem antes da de preço: o XLSX só nasce na
+    # revisão, depois que todo item tem produto exato no Fire.
+    adiado: str | None = None
+    if _trava_produto_ligada(env):
+        adiado = "produto_a_identificar"
+    elif preco_trava.trava_ativa(env):
+        adiado = "trava_de_preco"
     if export_mode in ("xlsx", "both") and not adiado:
         exporter = ERPExporter()
         paths = exporter.export(order, str(output_path))
@@ -491,7 +505,7 @@ def _run_exporters(order, output_path: Path, *, env: dict | None = None) -> dict
         "fire_codigo": fire_codigo,
     }
     if adiado and export_mode in ("xlsx", "both"):
-        out["xlsx_adiado"] = "trava_de_preco"
+        out["xlsx_adiado"] = adiado
     return out
 
 
@@ -3750,9 +3764,15 @@ async def process_files(
     from app.exporters.erp_exporter import ERPExporter
     from app.ingestion.file_loader import LoadedFile
 
-    # Caminho legado: gera XLSX sem o portão de preço. Com a trava ativa, a
-    # planilha só sai pela revisão (preview → exportar/enviar).
-    if preco_trava.trava_ativa(_request_environment(request)):
+    # Caminho legado: gera XLSX sem o portão de preço nem o de produto. Com uma
+    # trava ativa, a planilha só sai pela revisão (preview → exportar/enviar).
+    request_env = _request_environment(request)
+    if _trava_produto_ligada(request_env):
+        raise HTTPException(
+            status_code=409,
+            detail="Trava de produto ligada: use a revisão de pedidos.",
+        )
+    if preco_trava.trava_ativa(request_env):
         raise HTTPException(
             status_code=409,
             detail="Com a trava de preço ativa, use a revisão do pedido para exportar.",

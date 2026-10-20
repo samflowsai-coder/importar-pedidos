@@ -152,8 +152,8 @@ não pôde ser lido (banco do ambiente fora, intercompany sem resposta). Com
 contexto ativo, e qualquer falha marca. Sem `env`, `db.connect()`; sem ambiente
 ativo não marca. Fire fora (`available=False`) ou falha só nesta passada →
 `estado = "fire_indisponivel"` (do check, não de `decidir`). Os campos legados
-(`match`, `match_source`, `fire_product_id`, …) não mudam. Nada bloqueia ainda
-(o portão `avaliar` existe, mas ainda não está ligado em nenhum caminho).
+(`match`, `match_source`, `fire_product_id`, …) não mudam. Só bloqueia com o
+interruptor abaixo em `ligado`.
 
 **Interruptor `environments.produto_chave_modo`** (`desligado` nasce | `observando` |
 `ligado`): troca só por `PATCH /api/admin/environments/{id}/produto-chave`
@@ -165,6 +165,23 @@ sem `produto` conta como não resolvido), preenchido em `observando` e `ligado`;
 `desligado` vem vazio. Só `ligado` bloqueia: `fire_indisponivel` (check
 `available` falso/ausente ou `produto_conferencia_incompleta`) tem precedência sobre
 `produto_a_identificar`. `troca_no_fire`/`sem_codigo_fire` (xlsx) vêm na Task 6.
+
+**Onde a trava de produto atua** (todo caminho que grava no Fire ou gera XLSX de pedido):
+- `preco_trava.decidir_envio` (send-to-fire, export-xlsx e os lotes): logo depois do
+  `check_order(order, env=env)` do ambiente do pedido e **antes** de qualquer lógica de preço,
+  em todo modo de preço. `ligado` → `DecisaoEnvio(bloqueado, reason=fire_indisponivel |
+  produto_a_identificar, detalhe="Item N: <motivo>" [+ "Mais K item(ns)…"], block_detail=
+  {"produto": itens}, metric_labels=["produto"])`; o chamador audita
+  (`send_to_fire_blocked`/`xlsx_export_blocked`), conta `portal_price_check_blocks_total
+  {reason="produto"}` e responde 409. `observando` → audit `produto_observado {itens}`
+  (falha nunca muda o envio).
+- `_run_exporters` (`/api/import`, `/api/reimport`): `ligado` não gera XLSX e devolve
+  `xlsx_adiado: "produto_a_identificar"` (precede `trava_de_preco`); pedido fica em revisão.
+- `/api/process` (legado): `ligado` → 409 "Trava de produto ligada: use a revisão de pedidos."
+- `main.py` (CLI, só xlsx): `check_order(order)`; com `available` e item fora de `ok`, pula o
+  pedido e loga `Pedido N não exportado: item i sem produto exato (motivo).`
+- Sem ambiente (sem cookie/legado): `preco_trava.env_trava_produto(None)` vale `ligado` se
+  QUALQUER ambiente ativo estiver `ligado` (o mais restrito).
 
 Os guards vivem em `_send_one_to_fire` e `_export_one_xlsx` (web). Audit
 events: `send_to_fire_blocked`, `xlsx_export_blocked`, `sem_preco_acknowledged`.
