@@ -23,7 +23,15 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
-1) **A tela de atualização mostra os passos na ordem certa.** Antes ela marcava todos os passos logo no começo e depois voltava, porque lia a etapa da atualização anterior; agora o progresso só anda para frente, a etapa de dependências some quando o pacote não precisa dela, e enquanto o portal está fora do ar a tela diz isso em vez de marcar passos que ainda não aconteceram. As notas da versão mostram o negrito.
+Nada novo desde a versão 20261020-0700.
+
+## 20261020-0700
+
+1) **Item do pedido só é ligado a um produto do Fire por código exato, nunca pela descrição.** Vale o EAN (quando há um único produto ativo com ele), o código do cliente igual ao código alternativo do produto no Fire, ou um vínculo que alguém do portal confirmou uma vez para aquele cliente; sem nenhum desses, o item fica como "produto a identificar" e a escolha feita na tela vira o vínculo dos próximos pedidos. Fica desligado por empresa: em "observando" o portal mostra o que decidiria sem mudar nada no envio, e só em "ligado" ele trava o pedido e manda ao Fire o produto decidido.
+2) **Quando o mesmo código aparece em várias linhas do pedido com descrições diferentes** (por exemplo uma linha por cor), a tela pede o produto de cada linha, e essa escolha vale só para aquela linha daquele pedido. Isso já vale com a empresa desligada.
+3) **Ao vincular um código que já tem outro produto ligado para o mesmo cliente, a tela pede confirmação antes de trocar**, em vez de substituir sem avisar. Isso também já vale com a empresa desligada.
+4) **Trava de preço por rede, com a tabela que mora no Flow.** O portal guarda uma cópia da tabela, mostra no preview a situação de preço de cada item, e com a trava ligada segura o envio ao Fire do pedido com preço fora da tabela até alguém aprovar; a aprovação e a revisão do pedido conversam com o Flow. Fica desligada por empresa e só liga depois da primeira cópia da tabela.
+5) **A tela de atualização mostra os passos na ordem certa.** Antes ela marcava todos os passos logo no começo e depois voltava, porque lia a etapa da atualização anterior; agora o progresso só anda para frente, a etapa de dependências some quando o pacote não precisa dela, e enquanto o portal está fora do ar a tela diz isso em vez de marcar passos que ainda não aconteceram. As notas da versão mostram o negrito.
 
 ## 20261018-1647
 
