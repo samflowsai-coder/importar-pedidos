@@ -103,3 +103,70 @@ def test_base_indisponivel_nao_responde_mesmo_com_outra_achando():
         )
 
     assert avaliar(_pedido(), _politica(), ler) is None
+
+
+# ── Task 3: leitura da UF ────────────────────────────────────────────────────
+from app.routing import regra  # noqa: E402
+
+ENVS = [{"slug": "mm"}, {"slug": "nasmar"}]
+
+
+def test_ler_uf_normaliza_cnpj_mascarado_de_entrada():
+    vistos = []
+
+    def ler(env, cnpj):
+        vistos.append(cnpj)
+        return ["SP"]
+
+    regra.ler_uf("12.345.678/0001-90", envs=ENVS, ler=ler)
+    assert vistos == ["12345678000190", "12345678000190"]
+
+
+def test_ler_uf_normaliza_valores():
+    r = regra.ler_uf(CLIENTE, envs=[{"slug": "mm"}], ler=lambda e, c: ["sp ", None])
+    assert r == (UfLida("mm", frozenset({"SP", ""})),)
+
+
+def test_ler_uf_mesmo_cnpj_duas_linhas_ufs_diferentes():
+    leituras = regra.ler_uf(CLIENTE, envs=[{"slug": "mm"}], ler=lambda e, c: ["SP", "MG"])
+    assert leituras[0].ufs == frozenset({"SP", "MG"})
+    assert avaliar(_pedido(), _politica(), lambda c: leituras) is None
+
+
+def test_ler_uf_erro_vira_indisponivel():
+    def ler(env, cnpj):
+        if env["slug"] == "nasmar":
+            raise RuntimeError("fire fora")
+        return ["SP"]
+
+    r = regra.ler_uf(CLIENTE, envs=ENVS, ler=ler)
+    assert r[0] == UfLida("mm", frozenset({"SP"}))
+    assert r[1].indisponivel is True
+    assert avaliar(_pedido(), _politica(), lambda c: r) is None
+
+
+def test_cache_nao_guarda_indisponivel_e_expira(monkeypatch):
+    chamadas = []
+    estado = {"falha": True, "t": 1000.0}
+
+    def fake_ler_uf(cnpj, *, envs, ler=None):
+        chamadas.append(cnpj)
+        return tuple(UfLida(e["slug"], frozenset(), indisponivel=estado["falha"]) for e in envs)
+
+    monkeypatch.setattr(regra, "ler_uf", fake_ler_uf)
+    monkeypatch.setattr(regra.time, "monotonic", lambda: estado["t"])
+    regra._cache_uf.clear()
+
+    regra.ler_uf_com_cache(CLIENTE, ENVS)
+    regra.ler_uf_com_cache(CLIENTE, ENVS)
+    assert len(chamadas) == 2  # indisponível não foi guardado
+
+    estado["falha"] = False
+    regra.ler_uf_com_cache(CLIENTE, ENVS)
+    regra.ler_uf_com_cache(CLIENTE, ENVS)
+    assert len(chamadas) == 3  # o ok foi guardado
+
+    estado["t"] += 601
+    regra.ler_uf_com_cache(CLIENTE, ENVS)
+    assert len(chamadas) == 4  # expirou
+    regra._cache_uf.clear()

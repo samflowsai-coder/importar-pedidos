@@ -7,11 +7,15 @@ entra por `ler_uf`, injetada.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import threading
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from app.erp import queries
 from app.erp.cnpj import cnpj_digits
 from app.models.order import Order
+from app.utils.logger import logger
 
 
 @dataclass(frozen=True)
@@ -87,3 +91,61 @@ def avaliar(
     (uf,) = ufs
     slug = politica.env_sp if uf == "SP" else politica.env_fora_sp
     return ResultadoRegra(slug, f"Regra comercial: CNPJ faturado {_fmt(cnpj)} em {uf} → {slug}")
+
+
+def _uf_no_fire(env: dict, cnpj: str) -> list[str | None]:
+    """UF(s) do CNPJ no Firebird do ambiente. Somente leitura."""
+    from app.erp.connection import FirebirdConnection
+    from app.persistence import environments_repo
+
+    cfg = environments_repo.to_fb_config(env)
+    with FirebirdConnection().connect_somente_leitura(cfg) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(queries.UF_CLIENTE_POR_CNPJ, (cnpj,))
+            return [r[0] for r in cur.fetchall()]
+        finally:
+            cur.close()
+
+
+def ler_uf(
+    cnpj: str,
+    *,
+    envs: Sequence[dict],
+    ler: Callable[[dict, str], list[str | None]] | None = None,
+) -> tuple[UfLida, ...]:
+    """Uma `UfLida` por env. Falha numa base = `indisponivel`, nunca chute."""
+    leitor = ler or _uf_no_fire
+    cnpj = cnpj_digits(cnpj)
+    saida: list[UfLida] = []
+    for env in envs:
+        slug = env["slug"]
+        try:
+            valores = leitor(env, cnpj)
+        except Exception as exc:  # noqa: BLE001 - base fora do ar = "não sei"
+            logger.warning(f"routing.regra.uf_indisponivel env={slug} erro={exc!r}")
+            saida.append(UfLida(slug, frozenset(), indisponivel=True))
+            continue
+        saida.append(UfLida(slug, frozenset((v or "").strip().upper() for v in valores)))
+    return tuple(saida)
+
+
+_TTL_CACHE_UF_S = 600.0
+_cache_uf: dict[tuple[str, tuple[str, ...]], tuple[float, tuple[UfLida, ...]]] = {}
+_cache_uf_lock = threading.Lock()
+
+
+def ler_uf_com_cache(cnpj: str, envs: Sequence[dict]) -> tuple[UfLida, ...]:
+    """`ler_uf` com cache em memória (TTL 600 s). Não guarda `indisponivel`."""
+    cnpj = cnpj_digits(cnpj)
+    chave = (cnpj, tuple(e["slug"] for e in envs))
+    agora = time.monotonic()
+    with _cache_uf_lock:
+        hit = _cache_uf.get(chave)
+        if hit and agora - hit[0] < _TTL_CACHE_UF_S:
+            return hit[1]
+    leituras = ler_uf(cnpj, envs=envs)
+    if not any(le.indisponivel for le in leituras):
+        with _cache_uf_lock:
+            _cache_uf[chave] = (agora, leituras)
+    return leituras

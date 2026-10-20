@@ -531,6 +531,17 @@ def count_pedidos_cliente_desde_sql(n: int) -> str:
     """
 
 
+# Regra comercial de faturamento: UF do cliente faturado. Sem ROWS de propósito
+# — o chamador precisa ver duplicatas (mesmo CPF_CNPJ com UFs diferentes).
+UF_CLIENTE_POR_CNPJ = """
+    SELECT TRIM(C.UF)
+    FROM CADASTRO C
+    WHERE C.RELAC_CLIENTE = 'Sim'
+      AND REPLACE(REPLACE(REPLACE(REPLACE(
+            C.CPF_CNPJ, '.', ''), '/', ''), '-', ''), ' ', '') = ?
+"""
+
+
 # ── SP1: vigia de pedidos do ERP (SÓ LEITURA) ─────────────────────────────────
 # Lidas dentro de `FirebirdConnection.connect_somente_leitura` (transação
 # READ ONLY + SNAPSHOT): mesmo que alguém troque um SELECT por UPDATE aqui, o
