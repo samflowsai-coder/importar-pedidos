@@ -6,11 +6,23 @@ DESLIGADO, roda o `check_order` novo (vínculos v2 do `--db`, Fire em leitura),
 acha o pedido que o importador gravou no Fire e compara, item a item, o SEQ
 decidido com o SEQ gravado:
 
-  ok_igual           decidido == gravado no Fire
+  ok_igual           decidido == gravado no Fire, no MESMO item (posição)
+  ok_igual_conjunto  decidido está entre os SEQs do pedido, mas a contagem de
+                     itens difere (pareamento fraco; olhar por amostragem)
+  suspeito           mesma contagem, o SEQ existe no pedido mas em OUTRA posição
   ok_seq_diferente   decidido != gravado  (o balde PERIGOSO: tem que dar zero)
   pendente           o check novo não decide (fica para a operação vincular)
   sem_pedido_fire    o pedido não foi achado no Fire
-  (por arquivo)      sem_parse = não leu o arquivo; erro_check = Fire fora
+  sem_data           o arquivo não casa com nenhuma importação (sem data, não
+                     liga: sem a janela de datas o pedido mais antigo ganharia)
+  (por arquivo)      sem_parse = não leu o arquivo; erro_check = Fire fora ou
+                     vínculos não lidos (conferência incompleta)
+
+Os originais ficam em subpastas (recebidos/<slug>/AAAA/MM/) com o nome
+`<AAAAMMDD-HHMMSS>_<sha12>_<nome original>`: a pasta é varrida recursivamente e
+cada arquivo vira sua importação pelo nome guardado em `imports.original_path`
+(ou, na falta, pelo sha256) — nunca por `source_filename`, que repete.
+Exit 0 só sem ok_seq_diferente, sem suspeito e sem erro_check.
 
 Não escreve em nada: o SQLite do ambiente abre `mode=ro`; o Fire entra com
 transação READ ONLY e uma guarda que só deixa passar SELECT/WITH; o intercompany
@@ -30,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -37,6 +50,7 @@ import sqlite3
 import sys
 from collections import Counter
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -56,23 +70,61 @@ from app.erp.numero_pedido import variantes  # noqa: E402
 from app.models.order import Order  # noqa: E402
 
 MECANICO_IMPORTADOR = 99
-BALDES_ITEM = ("ok_igual", "ok_seq_diferente", "pendente", "sem_pedido_fire")
+BALDES_ITEM = (
+    "ok_igual",
+    "ok_igual_conjunto",
+    "suspeito",
+    "ok_seq_diferente",
+    "pendente",
+    "sem_pedido_fire",
+    "sem_data",
+)
 BLOCO = 200
 
-_LEITURA = re.compile(r"^\s*(SELECT|WITH)\b", re.IGNORECASE)
+_LEITURA = re.compile(r"^\s*(SELECT|WITH)\b")
+# Uma passada só, na ordem em que aparecem: literal, identificador entre aspas ou
+# comentário. Assim `'--'` não vira comentário nem `/* ' */` vira literal.
+_TOKEN_OPACO = re.compile(
+    r"""'(?:[^']|'')*'|"(?:[^"]|"")*"|--[^\n]*|/\*.*?\*/""", re.DOTALL
+)
 
 
-# ── Guarda de leitura ────────────────────────────────────────────────────────
+def _opaco(m: re.Match) -> str:
+    t = m.group(0)
+    return " " if t.startswith(("--", "/*")) else ("0" if t[0] == "'" else "X")
+# Qualquer um destes, em qualquer lugar: escreve, trava, consome gerador ou
+# executa procedimento. GEN_ID/NEXT VALUE FOR mexem em gerador mesmo dentro de um
+# SELECT; FOR UPDATE/WITH LOCK travam linhas; `FROM proc(...)` executa procedimento
+# selecionável (que pode escrever).
+_PROIBIDO = re.compile(
+    r"\b(GEN_ID|NEXT\s+VALUE\s+FOR|FOR\s+UPDATE|WITH\s+LOCK|INSERT|UPDATE|DELETE|MERGE"
+    r"|EXECUTE|SET|ALTER|CREATE|DROP|GRANT|RECREATE|REVOKE|COMMIT|ROLLBACK)\b"
+    r"|\b(?:FROM|JOIN)\s+[A-Z_][A-Z0-9_$]*\s*\("
+)
+
+
 def so_leitura(sql: str) -> str:
-    """Só SELECT/WITH, e uma instrução só. `raise`, não `assert`: com `-O` o
-    assert some e a guarda junto."""
-    corpo = (sql or "").strip().rstrip(";")
-    if not _LEITURA.match(corpo) or ";" in corpo:
-        raise RuntimeError("ferramenta só leitura: apenas SELECT/WITH")
+    """Só SELECT/WITH, uma instrução só, sem nada da lista proibida. O texto é
+    limpo de comentários e literais ANTES de olhar (um `/* SELECT */ DELETE` não
+    passa, e um literal 'UPDATE' não derruba a consulta). `raise`, não `assert`:
+    com `-O` o assert some e a guarda junto. É defesa em profundidade: a
+    transação READ ONLY do Fire é a garantia de fato."""
+    limpo = _TOKEN_OPACO.sub(_opaco, sql or "")
+    if "'" in limpo or '"' in limpo or "/*" in limpo or "*/" in limpo:
+        raise RuntimeError("ferramenta só leitura: literal ou comentário sem fechar")
+    limpo = limpo.strip().rstrip(";").upper()
+    if not _LEITURA.match(limpo) or ";" in limpo:
+        raise RuntimeError("ferramenta só leitura: apenas SELECT/WITH, uma instrução")
+    achado = _PROIBIDO.search(limpo)
+    if achado:
+        raise RuntimeError(f"ferramenta só leitura: recusado ({achado.group(0).strip()})")
     return sql
 
 
 class CursorSoLeitura:
+    """Cursor com lista de atributos permitidos (nada de `prep`, `transaction`,
+    `callproc`...): quem não está na lista não existe aqui."""
+
     def __init__(self, cur: Any) -> None:
         self._cur = cur
 
@@ -80,10 +132,25 @@ class CursorSoLeitura:
         so_leitura(sql)
         return self._cur.execute(sql, params)
 
-    def __getattr__(self, nome: str) -> Any:
-        if nome in ("executemany", "callproc"):
-            raise RuntimeError("ferramenta só leitura")
-        return getattr(self._cur, nome)
+    def fetchone(self) -> Any:
+        return self._cur.fetchone()
+
+    def fetchall(self) -> Any:
+        return self._cur.fetchall()
+
+    def fetchmany(self, *args: Any) -> Any:
+        return self._cur.fetchmany(*args)
+
+    def close(self) -> None:
+        self._cur.close()
+
+    @property
+    def description(self) -> Any:
+        return self._cur.description
+
+    @property
+    def rowcount(self) -> Any:
+        return self._cur.rowcount
 
     def __iter__(self) -> Iterator:
         return iter(self._cur)
@@ -167,13 +234,22 @@ class FireLeitura:
 
 
 # ── Ligação e comparação (puras) ─────────────────────────────────────────────
-def candidato_do_pedido(order: Order, *, data_pedido: str | None) -> Candidato:
+def candidato_do_pedido(
+    order: Order,
+    *,
+    data_pedido: str | None,
+    numero: str | None = None,
+    cnpj: str | None = None,
+) -> Candidato:
+    """`numero`/`cnpj` da importação (o que de fato foi para o Fire) vencem os do
+    re-parse quando existem."""
     lojas = tuple(dict.fromkeys(i.delivery_cnpj for i in order.items if i.delivery_cnpj))
+    numero = (numero or order.header.order_number or "").strip()
     return Candidato(
-        import_id=order.source_file or order.header.order_number or "",
-        numero=order.header.order_number or "",
+        import_id=order.source_file or numero,
+        numero=numero,
         cliente_codigo=None,
-        cnpj_header=order.header.customer_cnpj,
+        cnpj_header=(cnpj or "").strip() or order.header.customer_cnpj,
         cnpjs_entrega=lojas,
         data_pedido=data_pedido,
     )
@@ -194,13 +270,16 @@ def ligar_pedido(candidato: Candidato, linhas: list[tuple]) -> int | None:
 
 
 def comparar_itens(itens_check: list[dict], seqs_fire: list[int | None]) -> list[dict]:
-    """Um registro por item: ok_igual / ok_seq_diferente / pendente.
+    """Um registro por item. `status`:
 
-    Pareia por posição (o importador grava na ordem do pedido) e, no que sobrar,
-    pelo conjunto de SEQs do pedido no Fire; cada SEQ do Fire é consumido uma
-    vez. `pareamento` diz qual dos dois valeu. Sem pareamento certo (contagens
-    diferentes), um SEQ ausente do Fire é marcado `ok_seq_diferente`: o lado
-    seguro é mostrar para um humano olhar."""
+    - `pendente`: o check não decidiu;
+    - `ok_igual`: mesma posição, mesmo SEQ;
+    - `suspeito`: contagem igual, o SEQ decidido existe no pedido mas em OUTRA
+      posição (o importador grava na ordem do pedido: ordem trocada merece olho);
+    - `ok_igual_conjunto`: contagens diferentes e o SEQ está entre os do pedido;
+    - `ok_seq_diferente`: o SEQ decidido não está (mais) entre os do pedido.
+
+    Cada SEQ do Fire é consumido uma vez. `pareamento` diz por onde valeu."""
     produtos = [it.get("produto") or {} for it in itens_check]
     restantes = Counter(s for s in seqs_fire if s is not None)
     mesma_contagem = len(produtos) == len(seqs_fire)
@@ -221,16 +300,38 @@ def comparar_itens(itens_check: list[dict], seqs_fire: list[int | None]) -> list
         if r["status"] is None and mesma_contagem and r["seq_decidido"] == r["seq_fire"]:
             r["status"], r["pareamento"] = "ok_igual", "posicao"
             restantes[r["seq_decidido"]] -= 1
-    for r in out:  # 2) conjunto
+    for r in out:  # 2) o que sobrou, pelo conjunto
         if r["status"] is not None:
             continue
         r["pareamento"] = "conjunto"
         if restantes[r["seq_decidido"]] > 0:
             restantes[r["seq_decidido"]] -= 1
-            r["status"] = "ok_igual"
+            r["status"] = "suspeito" if mesma_contagem else "ok_igual_conjunto"
         else:
             r["status"] = "ok_seq_diferente"
     return out
+
+
+def _itens_sem_comparacao(itens_check: list[dict], status: str) -> list[dict]:
+    return [
+        {
+            "indice": i,
+            "status": status,
+            "estado": (it.get("produto") or {}).get("estado"),
+            "seq_decidido": (it.get("produto") or {}).get("fire_seq"),
+            "seq_fire": None,
+            "pareamento": None,
+        }
+        for i, it in enumerate(itens_check)
+    ]
+
+
+def _motivo_erro_check(check: dict) -> str | None:
+    if not check.get("available"):
+        return check.get("reason") or "fire_indisponivel"
+    if check.get("produto_conferencia_incompleta"):
+        return "conferencia_incompleta"  # vínculos/intercompany não lidos: não vale como prova
+    return None
 
 
 def executar(
@@ -238,54 +339,74 @@ def executar(
     *,
     checar: Callable[[Order], dict],
     fire: Any,
-    datas: dict[str, str],
+    importacoes: dict[str, dict],
 ) -> dict:
-    """Roda a regressão sobre `pedidos` (arquivo -> Order ou None se não leu)."""
-    totais: Counter = Counter({b: 0 for b in (*BALDES_ITEM, "sem_parse", "erro_check")})
+    """Roda a regressão sobre `pedidos` (arquivo -> Order, ou None se não leu).
+
+    `importacoes`: arquivo -> {imported_at, order_number, customer_cnpj} da
+    importação dele. Sem ela (ou sem `imported_at`) o arquivo não liga ao Fire:
+    sem a janela de datas, um número que se repete entre anos ligaria ao pedido
+    errado — vai para `sem_data`."""
+    contados = (*BALDES_ITEM, "sem_parse", "erro_check")
+    totais: Counter = Counter({b: 0 for b in contados})
     arquivos: list[dict] = []
     perigosos: list[dict] = []
+    suspeitos: list[dict] = []
     for nome, order in sorted(pedidos.items()):
         if order is None:
             totais["sem_parse"] += 1
             arquivos.append({"arquivo": nome, "resultado": "sem_parse", "itens": []})
             continue
         check = checar(order)
-        if not check.get("available"):
+        motivo = _motivo_erro_check(check)
+        if motivo is not None:
             totais["erro_check"] += 1
             arquivos.append(
-                {"arquivo": nome, "resultado": "erro_check", "motivo": check.get("reason"),
-                 "itens": []}
+                {"arquivo": nome, "resultado": "erro_check", "motivo": motivo, "itens": []}
             )
             continue
-        cand = candidato_do_pedido(order, data_pedido=datas.get(nome))
-        numeros = [
-            v for v in variantes(cand.numero) if len(v) <= _TAMANHO_PEDIDO_CLIENTE
-        ]
-        codigo = ligar_pedido(cand, fire.pedidos_por_numero(numeros)) if numeros else None
         itens_check = check.get("items") or []
-        if codigo is None:
-            itens = [
-                {"indice": i, "status": "sem_pedido_fire",
-                 "estado": (it.get("produto") or {}).get("estado"),
-                 "seq_decidido": (it.get("produto") or {}).get("fire_seq"),
-                 "seq_fire": None, "pareamento": None}
-                for i, it in enumerate(itens_check)
-            ]
+        imp = importacoes.get(nome) or {}
+        data = (imp.get("imported_at") or "")[:10] or None
+        cand = candidato_do_pedido(
+            order,
+            data_pedido=data,
+            numero=imp.get("order_number"),
+            cnpj=imp.get("customer_cnpj"),
+        )
+        codigo = None
+        if data is None:
+            resultado, itens = "sem_data", _itens_sem_comparacao(itens_check, "sem_data")
         else:
-            itens = comparar_itens(itens_check, fire.seqs_do_pedido(codigo))
+            numeros = [v for v in variantes(cand.numero) if len(v) <= _TAMANHO_PEDIDO_CLIENTE]
+            codigo = ligar_pedido(cand, fire.pedidos_por_numero(numeros)) if numeros else None
+            if codigo is None:
+                resultado = "sem_pedido_fire"
+                itens = _itens_sem_comparacao(itens_check, "sem_pedido_fire")
+            else:
+                resultado = "comparado"
+                itens = comparar_itens(itens_check, fire.seqs_do_pedido(codigo))
         for it in itens:
             totais[it["status"]] += 1
+            reg = {"arquivo": nome, "pedido": cand.numero, "fire_codigo": codigo, **it}
             if it["status"] == "ok_seq_diferente":
-                perigosos.append({"arquivo": nome, "pedido": cand.numero,
-                                  "fire_codigo": codigo, **it})
+                perigosos.append(reg)
+            elif it["status"] == "suspeito":
+                suspeitos.append(reg)
         arquivos.append(
-            {"arquivo": nome, "resultado": "comparado" if codigo else "sem_pedido_fire",
-             "pedido": cand.numero, "fire_codigo": codigo, "itens": itens}
+            {
+                "arquivo": nome,
+                "resultado": resultado,
+                "pedido": cand.numero,
+                "fire_codigo": codigo,
+                "itens": itens,
+            }
         )
     return {
-        "ok": totais["ok_seq_diferente"] == 0 and totais["erro_check"] == 0,
+        "ok": not (totais["ok_seq_diferente"] or totais["suspeito"] or totais["erro_check"]),
         "totais": dict(totais),
         "perigosos": perigosos,
+        "suspeitos": suspeitos,
         "arquivos": arquivos,
     }
 
@@ -330,30 +451,84 @@ def _costuras(*, db_path: Path, fire_conn: ConexaoSoLeitura) -> Iterator[None]:
         yield
 
 
-def reler_arquivos(diretorio: str) -> dict[str, Order | None]:
-    from app import pipeline
-    from app.ingestion.file_loader import FileLoader
+SUPORTADOS = (".pdf", ".xls", ".xlsx")
+_PREFIXO_GUARDADO = re.compile(r"^\d{8}-\d{6}_[0-9a-f]{12}_(.+)$", re.IGNORECASE)
 
-    out: dict[str, Order | None] = {}
-    for arq in FileLoader().load_files(diretorio):
+
+@dataclass(frozen=True)
+class Relido:
+    chave: str  # caminho relativo, único por arquivo
+    guardado: str  # nome guardado: <AAAAMMDD-HHMMSS>_<sha12>_<nome original>
+    sha256: str
+    order: Order | None
+
+
+def nome_original(guardado: str) -> str:
+    """Nome que o parser enxerga: o original, sem o prefixo de guarda."""
+    m = _PREFIXO_GUARDADO.match(guardado)
+    return m.group(1) if m else guardado
+
+
+def reler_arquivos(diretorio: str) -> list[Relido]:
+    """Varre `diretorio` RECURSIVAMENTE (os originais ficam em AAAA/MM/) e relê
+    cada PDF/XLS/XLSX pelo `pipeline.process` (LoadedFile como o resto do app)."""
+    from app import pipeline
+    from app.ingestion.file_loader import LoadedFile
+
+    base = Path(diretorio)
+    out: list[Relido] = []
+    for path in sorted(p for p in base.rglob("*") if p.is_file()):
+        if path.suffix.lower() not in SUPORTADOS:
+            continue
+        raw = path.read_bytes()
+        chave = path.relative_to(base).as_posix()
+        order: Order | None = None
         try:
-            out[arq.path.name] = pipeline.process(arq)
+            arq = LoadedFile(
+                path=path.with_name(nome_original(path.name)),
+                extension=path.suffix.lower(),
+                raw=raw,
+            )
+            order = pipeline.process(arq)
         except Exception as exc:  # noqa: BLE001 — um arquivo ruim não derruba a regressão
-            print(f"  não leu {arq.path.name}: {type(exc).__name__}: {exc}", file=sys.stderr)
-            out[arq.path.name] = None
+            print(f"  não leu {chave}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        out.append(Relido(chave, path.name, hashlib.sha256(raw).hexdigest(), order))
     return out
 
 
-def datas_de_importacao(db_path: Path) -> dict[str, str]:
-    """source_filename -> data (YYYY-MM-DD) da importação mais recente."""
+def _basename(caminho: str | None) -> str:
+    """Último componente de um caminho Windows OU POSIX (o portal roda no Windows)."""
+    return re.split(r"[\\/]", caminho or "")[-1]
+
+
+def importacoes_dos_arquivos(db_path: Path, arquivos: list[Relido]) -> dict[str, dict]:
+    """chave do arquivo -> importação dele (imported_at, order_number,
+    customer_cnpj). Casa pelo nome GUARDADO contra o basename de
+    `imports.original_path` e, na falta, pelo sha256 do conteúdo. NUNCA por
+    `source_filename` (o nome original se repete entre pedidos). Várias
+    importações do mesmo arquivo: vale a mais recente."""
     conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
     try:
         rows = conn.execute(
-            "SELECT source_filename, MAX(imported_at) FROM imports GROUP BY source_filename"
+            "SELECT original_path, file_sha256, imported_at, order_number, customer_cnpj "
+            "FROM imports ORDER BY imported_at"
         ).fetchall()
     finally:
         conn.close()
-    return {nome: (quando or "")[:10] for nome, quando in rows if quando}
+    por_nome: dict[str, dict] = {}
+    por_sha: dict[str, dict] = {}
+    for caminho, sha, quando, numero, cnpj in rows:  # crescente: a última vence
+        reg = {"imported_at": quando, "order_number": numero, "customer_cnpj": cnpj}
+        if caminho:
+            por_nome[_basename(caminho)] = reg
+        if sha:
+            por_sha[sha.strip().lower()] = reg
+    out: dict[str, dict] = {}
+    for a in arquivos:
+        achada = por_nome.get(a.guardado) or por_sha.get(a.sha256)
+        if achada is not None:
+            out[a.chave] = achada
+    return out
 
 
 def _imprimir(out: dict) -> None:
@@ -362,6 +537,15 @@ def _imprimir(out: dict) -> None:
     for b in BALDES_ITEM:
         print(f"  {b}: {t.get(b, 0)}")
     print(f"Arquivos: sem_parse={t.get('sem_parse', 0)} erro_check={t.get('erro_check', 0)}")
+    if t.get("sem_data"):
+        print("  (sem_data: arquivo sem importação correspondente em imports; não foi ligado)")
+    if out["suspeitos"]:
+        print("\nsuspeito (mesma contagem de itens, SEQ certo em OUTRA posição):")
+        for p in out["suspeitos"]:
+            print(
+                f"  {p['arquivo']} pedido {p['pedido']} item {p['indice']}: "
+                f"decidido {p['seq_decidido']} (Fire CAB {p['fire_codigo']})"
+            )
     if out["perigosos"]:
         print("\nok_seq_diferente (decidiu um SEQ diferente do gravado no Fire):")
         for p in out["perigosos"]:
@@ -404,13 +588,16 @@ def main(argv: list[str] | None = None) -> int:
         host=args.fb_host, path=args.fb_path, port=args.fb_port,
         user=user, password=password, charset=args.fb_charset,
     ) as conn, _costuras(db_path=db_path, fire_conn=conn):
-        pedidos = reler_arquivos(args.recebidos)
-        print(f"{len(pedidos)} arquivos relidos; conferindo no Fire (só leitura)...")
+        relidos = reler_arquivos(args.recebidos)
+        if not relidos:
+            print(f"nenhum PDF/XLS/XLSX em {args.recebidos} (nem nas subpastas)", file=sys.stderr)
+            return 2
+        print(f"{len(relidos)} arquivos relidos; conferindo no Fire (só leitura)...")
         out = executar(
-            pedidos,
+            {r.chave: r.order for r in relidos},
             checar=lambda o: product_check.check_order(o, env={"slug": args.slug}),
             fire=FireLeitura(conn),
-            datas=datas_de_importacao(db_path),
+            importacoes=importacoes_dos_arquivos(db_path, relidos),
         )
     Path(args.saida).write_text(json.dumps(out, ensure_ascii=False, indent=2, default=str))
     _imprimir(out)

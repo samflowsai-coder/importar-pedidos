@@ -17,6 +17,8 @@ Regras (spec chave exata):
   senão fica em `sem_cnpj_unico` para a operação vincular de novo na tela;
 - linha v1 do CNPJ da REVENDA intercompany (config do ambiente) NÃO migra: o
   v1 sob a revenda valeria para todo cliente real dela (`revenda_intercompany`);
+- chave que já teve vínculo v2 REVOGADO não é recriada (`revogado_antes`): alguém
+  desfez de propósito; a migração não desfaz o desfazer;
 - `fire_codigo` do v2 é o CODPROD_ALTERN do catálogo local quando existe;
   o `fire_codigo` do v1 é o SEQ em texto e não serve.
 """
@@ -42,6 +44,7 @@ BUCKETS = (
     "migrados",
     "ja_existiam",
     "conflito",
+    "revogado_antes",
     "sem_cnpj_unico",
     "revenda_intercompany",
     "invalidos",
@@ -55,7 +58,12 @@ def _cnpjs_da_revenda(slug: str) -> set[str]:
     from app.persistence import environments_repo
 
     env = environments_repo.get_by_slug(slug)
-    alvo = cnpj_digits((env or {}).get("intercompany_cnpj"))
+    if env is None:
+        raise RuntimeError(
+            f"ambiente '{slug}' não existe em app_shared.db: sem ele não dá para saber a revenda "
+            "intercompany (confira --slug e APP_DATA_DIR)"
+        )
+    alvo = cnpj_digits(env.get("intercompany_cnpj"))
     return {alvo} if alvo else set()
 
 
@@ -113,7 +121,27 @@ def migrar(
 ) -> dict[str, list[dict]]:
     """Migra (ou, sem `aplicar`, só planeja) o v1 do ambiente para o v2.
 
-    Devolve um dict com as listas de `BUCKETS`. Cada item traz a linha v1
+    Sem `aplicar` a conexão fica em `PRAGMA query_only=ON`: o próprio SQLite
+    recusa qualquer escrita, mesmo que o código erre.
+    """
+    if aplicar:
+        return _migrar(conn, slug=slug, aplicar=True, agora=agora, cnpjs_revenda=cnpjs_revenda)
+    conn.execute("PRAGMA query_only=ON")
+    try:
+        return _migrar(conn, slug=slug, aplicar=False, agora=agora, cnpjs_revenda=cnpjs_revenda)
+    finally:
+        conn.execute("PRAGMA query_only=OFF")
+
+
+def _migrar(
+    conn: sqlite3.Connection,
+    *,
+    slug: str,
+    aplicar: bool,
+    agora: str,
+    cnpjs_revenda: Iterable[str] | None,
+) -> dict[str, list[dict]]:
+    """Devolve um dict com as listas de `BUCKETS`. Cada item traz a linha v1
     (`v1_id`, `client_key`, `chave_tipo`, `chave_valor`, `fire_seq`) e, quando
     resolvido, o `escopo`. `cnpjs_revenda` None = lê a config do ambiente."""
     revenda = (
@@ -122,6 +150,14 @@ def migrar(
         else _cnpjs_da_revenda(slug)
     )
     por_nome = _cnpjs_por_nome(conn)
+    # Todo v2 que já existiu, vigente ou revogado (o `Vinculo` do repo não traz
+    # `revogado_em`, por isso a leitura direta): (escopo, tipo, chave) -> [(seq, revogado_em)].
+    historico: dict[tuple[str, str, str], list[tuple[int, str | None]]] = {}
+    for escopo_, tipo_, chave_, seq_, revogado_ in conn.execute(
+        "SELECT escopo, chave_tipo, chave_valor, fire_seq, revogado_em "
+        "FROM produto_vinculo_v2 ORDER BY id"
+    ):
+        historico.setdefault((escopo_, tipo_, chave_), []).append((seq_, revogado_))
     rows = conn.execute(
         "SELECT id, client_key, chave_tipo, chave_valor, fire_produto_id, fire_nome, criado_por "
         "FROM produto_depara ORDER BY id"
@@ -158,13 +194,12 @@ def migrar(
             continue
         item["escopo"] = escopo
 
-        atual = produto_vinculo_repo.lookup(
-            conn,
-            [escopo],
-            codigos=[chave] if tipo == "codigo" else [],
-            eans=[chave] if tipo == "ean" else [],
-        ).get((tipo, chave))
-        ja_seq = atual.fire_seq if atual is not None else planejados.get((escopo, tipo, chave))
+        passadas = historico.get((escopo, tipo, chave), [])
+        vigente = next((seq_ for seq_, revogado_ in passadas if revogado_ is None), None)
+        if passadas and vigente is None:
+            out["revogado_antes"].append(item)
+            continue
+        ja_seq = vigente if vigente is not None else planejados.get((escopo, tipo, chave))
         if ja_seq is not None:
             out["ja_existiam" if ja_seq == seq else "conflito"].append(
                 {**item, "vigente_fire_seq": ja_seq}
@@ -198,7 +233,9 @@ def _imprimir(resultado: dict[str, list[dict]], *, aplicar: bool) -> None:
     print("APLICADO" if aplicar else "DRY-RUN (nada foi gravado; use --aplicar)")
     for bucket in BUCKETS:
         print(f"{bucket}: {len(resultado[bucket])}")
-    for bucket in ("sem_cnpj_unico", "conflito", "revenda_intercompany", "invalidos"):
+    for bucket in (
+        "sem_cnpj_unico", "conflito", "revogado_antes", "revenda_intercompany", "invalidos",
+    ):
         for it in resultado[bucket]:
             extra = it.get("motivo") or it.get("vigente_fire_seq") or ""
             print(
@@ -215,9 +252,23 @@ def main(argv: list[str] | None = None) -> int:
 
     from app.persistence import router
 
+    try:
+        caminho = router.env_db_path(args.slug)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if not caminho.is_file():
+        # `env_connect` criaria um banco vazio e a migração "rodaria" sobre nada.
+        print(f"banco do ambiente não existe: {caminho} (confira --slug e APP_DATA_DIR)",
+              file=sys.stderr)
+        return 2
     agora = datetime.now().isoformat(timespec="seconds")
-    with router.env_connect(args.slug) as conn:
-        resultado = migrar(conn, slug=args.slug, aplicar=args.aplicar, agora=agora)
+    try:
+        with router.env_connect(args.slug) as conn:
+            resultado = migrar(conn, slug=args.slug, aplicar=args.aplicar, agora=agora)
+    except RuntimeError as exc:
+        print(f"erro: {exc}", file=sys.stderr)
+        return 2
     _imprimir(resultado, aplicar=args.aplicar)
     return 0
 

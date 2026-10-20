@@ -217,3 +217,68 @@ def test_migrar_seq_invalido_vai_para_invalidos(env_conn):
 
     assert len(r["invalidos"]) == 1
     assert _vigentes(env_conn) == []
+
+
+def test_migrar_vinculo_revogado_nao_e_recriado(env_conn):
+    v = produto_vinculo_repo.vincular(
+        env_conn, escopo="raiz:11222333", chave_tipo="codigo", chave_valor="KG02PR",
+        fire_seq=2077, fire_codigo=None, fire_descricao="MEIA KIDS", por="grazi@mm",
+        pedido_id=None, agora="2026-10-10T10:00:00",
+    )
+    produto_vinculo_repo.revogar(env_conn, v.id, por="grazi@mm", agora="2026-10-11T10:00:00")
+    _v1(env_conn, key=CNPJ_A)
+
+    for aplicar in (False, True):
+        r = mig.migrar(env_conn, slug="mm", aplicar=aplicar, agora=AGORA, cnpjs_revenda=set())
+        assert r["migrados"] == []
+        assert len(r["revogado_antes"]) == 1
+    assert _vigentes(env_conn) == []  # segue sem vigente: ninguém "desfez o desfazer"
+
+
+def test_migrar_revogado_e_depois_recriado_conta_como_ja_existia(env_conn):
+    for seq, quando in ((2077, "2026-10-10"), (2077, "2026-10-12")):
+        v = produto_vinculo_repo.vincular(
+            env_conn, escopo="raiz:11222333", chave_tipo="codigo", chave_valor="KG02PR",
+            fire_seq=seq, fire_codigo=None, fire_descricao="MEIA KIDS", por="g",
+            pedido_id=None, agora=f"{quando}T10:00:00",
+        )
+        if quando == "2026-10-10":
+            produto_vinculo_repo.revogar(env_conn, v.id, por="g", agora="2026-10-11T00:00:00")
+    _v1(env_conn, key=CNPJ_A)
+
+    r = mig.migrar(env_conn, slug="mm", aplicar=True, agora=AGORA, cnpjs_revenda=set())
+
+    assert len(r["ja_existiam"]) == 1 and r["revogado_antes"] == []
+
+
+def test_migrar_ambiente_inexistente_e_erro_claro(env_conn):
+    _v1(env_conn, key=CNPJ_A)
+
+    with pytest.raises(RuntimeError, match="ambiente 'mm' não existe"):
+        mig.migrar(env_conn, slug="mm", aplicar=True, agora=AGORA)
+
+    assert _vigentes(env_conn) == []
+
+
+def test_migrar_dry_run_deixa_a_conexao_em_modo_leitura_so_durante_a_chamada(env_conn):
+    _v1(env_conn, key=CNPJ_A)
+
+    mig.migrar(env_conn, slug="mm", aplicar=False, agora=AGORA, cnpjs_revenda=set())
+
+    assert env_conn.execute("PRAGMA query_only").fetchone()[0] == 0
+    # e dentro do dry-run uma escrita seria recusada pelo SQLite
+    env_conn.execute("PRAGMA query_only=ON")
+    with pytest.raises(Exception, match="readonly"):
+        env_conn.execute("INSERT INTO imports (id, environment_id, source_filename, "
+                         "imported_at, status) VALUES ('z','mm','z','t','parsed')")
+    env_conn.execute("PRAGMA query_only=OFF")
+
+
+def test_main_exige_o_banco_do_ambiente(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    router.reset_init_cache()
+
+    assert mig.main(["--slug", "mm"]) == 2
+
+    assert "banco do ambiente não existe" in capsys.readouterr().err
+    assert not (tmp_path / "app_state_mm.db").exists()
