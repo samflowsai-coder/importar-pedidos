@@ -488,7 +488,8 @@ def _db_imports(tmp_path, linhas, nome="app_state_mm.db"):
     c.execute(
         "CREATE TABLE imports (original_path TEXT, file_sha256 TEXT, imported_at TEXT, "
         "order_number TEXT, customer_cnpj TEXT, source_filename TEXT, "
-        "portal_status TEXT DEFAULT 'found_in_fire', fire_codigo INTEGER)"
+        "portal_status TEXT DEFAULT 'found_in_fire', fire_codigo INTEGER, "
+        "output_files_json TEXT)"
     )
     c.executemany(
         "INSERT INTO imports (original_path, file_sha256, imported_at, order_number, "
@@ -660,7 +661,8 @@ def test_comparar_pedido_pareamento_ambiguo_nao_compara():
 
     itens = rg.comparar_pedido(o, check, cand, fire.pedidos_por_numero(["AF049"]), fire)
 
-    assert [i["status"] for i in itens] == ["sem_pareamento", "sem_pareamento"]
+    assert [i["status"] for i in itens] == ["ambiguo", "ambiguo"]
+    assert itens[0]["candidatos_fire"] == [11, 12]
 
 
 # ── cobertura: nada comparado nunca parece sucesso ───────────────────────────
@@ -834,3 +836,128 @@ def test_executar_leva_o_mapeamento_para_o_json():
     )
     assert out["arquivos"][0]["resultado"] == "sem_data"
     assert out["arquivos"][0]["mapeamento"] == {"por": None, "bancos": []}
+
+
+def test_comparar_pedido_reimportacao_da_mesma_loja_e_ambiguo_nunca_ok_igual():
+    # sonda do review: a loja A tem o CAB 11 [10,30] e um CAB 13 [99,98], ambos na janela
+    o = _order_lojas()
+    check = _check("ok:10", "ok:20", "ok:30")["items"]
+    fire = FakeFire(
+        [
+            _linha("AF049", 11, "PEDIDO", "2026-10-19", 5, LOJA_A),
+            _linha("AF049", 13, "PEDIDO", "2026-10-19", 5, LOJA_A),
+            _linha("AF049", 12, "PEDIDO", "2026-10-19", 6, LOJA_B),
+        ],
+        {11: [10, 30], 13: [99, 98], 12: [20]},
+    )
+    cand = rg.candidato_do_pedido(o, data_pedido="2026-10-19")
+
+    itens = rg.comparar_pedido(o, check, cand, fire.pedidos_por_numero(["AF049"]), fire)
+
+    assert [i["status"] for i in itens] == ["ambiguo", "ok_igual", "ambiguo"]
+    assert itens[0]["candidatos_fire"] == [11, 13] and itens[2]["candidatos_fire"] == [11, 13]
+    assert itens[1]["fire_codigo"] == 12
+
+
+def test_comparar_pedido_pedido_perdido_sem_cnpj_de_loja_serve_a_todas_e_e_ambiguo():
+    o = _order_lojas()
+    check = _check("ok:10", "ok:20", "ok:30")["items"]
+    fire = FakeFire(
+        [
+            _linha("AF049", 11, "PEDIDO", "2026-10-19", 5, LOJA_A),
+            _linha("AF049", 12, "PEDIDO", "2026-10-19", 6, LOJA_B),
+            _linha("AF049", 14, "PEDIDO", "2026-10-19", 7, CNPJ),  # cliente do cabeçalho, 1 item
+        ],
+        {11: [10, 30], 12: [20], 14: [20]},
+    )
+    cand = rg.candidato_do_pedido(o, data_pedido="2026-10-19")
+
+    itens = rg.comparar_pedido(o, check, cand, fire.pedidos_por_numero(["AF049"]), fire)
+
+    assert {i["status"] for i in itens} == {"ambiguo"}
+
+
+def test_comparar_pedido_varios_pedidos_inteiros_e_ambiguo_com_os_cabs():
+    o = _order_lojas()
+    check = _check("ok:10", "ok:20", "ok:30")["items"]
+    fire = FakeFire(
+        [
+            _linha("AF049", 21, "PEDIDO", "2026-10-19", 5, CNPJ),
+            _linha("AF049", 22, "PEDIDO", "2026-10-19", 5, CNPJ),
+        ],
+        {21: [10, 30, 20], 22: [10, 30, 20]},
+    )
+    cand = rg.candidato_do_pedido(o, data_pedido="2026-10-19")
+
+    itens = rg.comparar_pedido(o, check, cand, fire.pedidos_por_numero(["AF049"]), fire)
+
+    assert [i["status"] for i in itens] == ["ambiguo"] * 3
+    assert itens[0]["candidatos_fire"] == [21, 22]
+
+
+def test_chave_repetida_conta_como_pendente():
+    itens = rg.comparar_itens(
+        _check("chave_repetida", "ok:20")["items"], [10, 20]
+    )
+    assert [i["status"] for i in itens] == ["pendente", "ok_igual"]
+
+
+def test_nao_enviado_so_sem_planilha_gerada():
+    fire = FakeFire([_linha("AF049", 1, "PEDIDO", "2026-10-19", 5, CNPJ)], {1: [10, 20]})
+    base = {"imported_at": "2026-10-19T10:00:00", "portal_status": "parsed", "fire_codigo": None}
+    pedidos = {"a.pdf": _order("AF049"), "p.pdf": _order("ZZ1"), "x.pdf": _order("ZZ2")}
+    out = rg.executar(
+        pedidos,
+        checar=lambda o: _check("ok:10", "ok:20"),
+        fire=fire,
+        importacoes={
+            "a.pdf": IMP,
+            "p.pdf": {**base, "tem_saida": False},  # nada saiu: nunca foi para o Fire
+            "x.pdf": {**base, "tem_saida": True},  # saiu .xlsx: o Fire deveria ter importado
+        },
+    )
+    res = {a["arquivo"]: a["resultado"] for a in out["arquivos"]}
+    assert res["p.pdf"] == "nao_enviado"
+    assert res["x.pdf"] == "sem_pedido_fire"
+    assert out["totais"]["sem_pedido_fire"] == 2
+
+
+def test_importacoes_tem_saida_le_output_files_json(tmp_path):
+    import sqlite3
+
+    guardado_a = "20260910-103421_aaaaaaaaaaaa_a.xlsx"
+    guardado_b = "20260910-103421_bbbbbbbbbbbb_b.xlsx"
+    guardado_c = "20260910-103421_cccccccccccc_c.xlsx"
+    db = _db_imports(
+        tmp_path,
+        [
+            ("C:\\x\\" + guardado_a, None, "2026-09-10T10:34:30", "A", CNPJ, "a.xlsx"),
+            ("C:\\x\\" + guardado_b, None, "2026-09-10T10:34:30", "B", CNPJ, "b.xlsx"),
+            ("C:\\x\\" + guardado_c, None, "2026-09-10T10:34:30", "C", CNPJ, "c.xlsx"),
+        ],
+    )
+    c = sqlite3.connect(db)
+    c.execute("UPDATE imports SET output_files_json = '[\"o.xlsx\"]' WHERE order_number = 'A'")
+    c.execute("UPDATE imports SET output_files_json = '[]' WHERE order_number = 'B'")
+    c.commit()
+    c.close()
+    rel = [rg.Relido(g, g, "0" * 64, None) for g in (guardado_a, guardado_b, guardado_c)]
+
+    out = rg.importacoes_dos_arquivos(db, rel)
+
+    assert [out[g]["tem_saida"] for g in (guardado_a, guardado_b, guardado_c)] == [
+        True, False, False
+    ]
+
+
+def test_cobertura_sem_parse_conta_como_nao_ligado():
+    out = rg.executar(
+        {"a.pdf": _order("AF049"), "b.pdf": None, "c.pdf": None},
+        checar=lambda o: _check("ok:10", "ok:20"),
+        fire=FakeFire([_linha("AF049", 1, "PEDIDO", "2026-10-19", 5, CNPJ)], {1: [10, 20]}),
+        importacoes={"a.pdf": IMP},
+    )
+    assert out["totais"]["sem_parse"] == 2
+    assert out["cobertura"]["nao_ligados"] == 2
+    assert "COBERTURA INSUFICIENTE" in out["cobertura"]["mensagem"]
+    assert out["ok"] is False

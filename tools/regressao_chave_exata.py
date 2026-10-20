@@ -28,8 +28,8 @@ Os originais ficam em subpastas (recebidos/<slug>/AAAA/MM/) com o nome
 cada arquivo vira sua importação pelo nome guardado em `imports.original_path`
 (ou, na falta, pelo sha256) — nunca por `source_filename`, que repete.
 Exit 0 só sem ok_seq_diferente, sem suspeito e sem erro_check, E com cobertura:
-ao menos um arquivo comparado e no máximo 50% dos arquivos em sem_data /
-sem_pedido_fire / sem_pareamento ("nada comparado" nunca parece sucesso).
+ao menos um arquivo comparado e no máximo 50% dos arquivos em sem_parse / sem_data /
+sem_pedido_fire / ambiguo / sem_pareamento ("nada comparado" nunca parece sucesso).
 
 Ordem dos itens no Fire: o insert direto grava AGRUPADO por local de entrega
 (não na ordem do pedido), e a planilha sai uma por loja (um pedido do Fire por
@@ -546,8 +546,10 @@ def comparar_pedido(
 
     inteiros = [codigo for codigo, _ in achados if len(seqs[codigo]) == n]
     if inteiros:  # insert direto: o pedido inteiro, agrupado por loja
-        if len(inteiros) > 1:
-            return _sem_comparacao(itens_check, todos, "sem_pareamento")
+        if len(inteiros) > 1 or len(achados) > 1:  # outro pedido plausível: não escolhe
+            return _sem_comparacao(
+                itens_check, todos, "ambiguo", sorted(codigo for codigo, _ in achados)
+            )
         itens = comparar_em_ordem(
             itens_check, ordem if ordem_ok else todos, seqs[inteiros[0]], posicional=ordem_ok
         )
@@ -558,26 +560,33 @@ def comparar_pedido(
     for posicoes in planilhas:
         cnpjs = {cnpj_digits(order.items[p].delivery_cnpj) for p in posicoes} - {""}
         lojas.append((posicoes, cnpjs or ({header} - {""})))
-    livres = list(range(len(lojas)))
-    saida: list[dict] = []
-    ambiguas: set[int] = set()
+
+    def donas(cnpj: str) -> list[int]:
+        """Lojas a que um pedido do Fire pode pertencer: as do CNPJ dele; sem CNPJ
+        ou fora de todas as lojas (cabeçalho, revenda), qualquer uma."""
+        certas = [i for i, (_, cnpjs) in enumerate(lojas) if cnpj and cnpj in cnpjs]
+        return certas or list(range(len(lojas)))
+
+    por_loja: dict[int, set[int]] = {i: set() for i in range(len(lojas))}
     for codigo, cnpj in achados:
-        cands = [
-            i for i in livres
-            if len(lojas[i][0]) == len(seqs[codigo]) and (not cnpj or cnpj in lojas[i][1])
-        ]
-        if len(cands) == 1:
-            i = cands[0]
-            livres.remove(i)
-            saida += _com_fire(
-                comparar_em_ordem(itens_check, lojas[i][0], seqs[codigo]), codigo
-            )
+        for i in donas(cnpj):
+            por_loja[i].add(codigo)
+    cnpj_de = dict(achados)
+    saida: list[dict] = []
+    for i, (posicoes, _) in enumerate(lojas):
+        codigos = sorted(por_loja[i])
+        if not codigos:
+            saida += _sem_comparacao(itens_check, posicoes, "sem_pedido_fire")
+        elif len(codigos) > 1 or len(donas(cnpj_de[codigos[0]])) > 1:
+            # dois pedidos para a mesma loja (reimportação), ou um pedido que
+            # serve a mais de uma loja: nada de escolher em silêncio
+            saida += _sem_comparacao(itens_check, posicoes, "ambiguo", codigos)
+        elif len(seqs[codigos[0]]) != len(posicoes):
+            saida += _sem_comparacao(itens_check, posicoes, "sem_pareamento")
         else:
-            ambiguas.update(cands)
-    for i in livres:
-        saida += _sem_comparacao(
-            itens_check, lojas[i][0], "sem_pareamento" if i in ambiguas else "sem_pedido_fire"
-        )
+            saida += _com_fire(
+                comparar_em_ordem(itens_check, posicoes, seqs[codigos[0]]), codigos[0]
+            )
     return sorted(saida, key=lambda r: r["indice"])
 
 
@@ -594,7 +603,8 @@ LIMITE_NAO_LIGADOS = 0.5
 
 def _cobertura(arquivos: list[dict]) -> dict:
     """"Nada comparado" nunca pode parecer sucesso: sem nenhum arquivo comparado,
-    ou com mais da metade em sem_data / sem_pedido_fire / sem_pareamento / ambiguo,
+    ou com mais da metade em sem_parse / sem_data / sem_pedido_fire / sem_pareamento /
+    ambiguo,
     a regressão falha, seja qual for o resto. `nao_enviado` (importação que nunca
     foi para o Fire) não entra na conta."""
     nao_enviados = sum(1 for a in arquivos if a["resultado"] == "nao_enviado")
@@ -603,7 +613,8 @@ def _cobertura(arquivos: list[dict]) -> dict:
     nao_ligados = sum(
         1
         for a in arquivos
-        if a["resultado"] in ("sem_data", "sem_pedido_fire", "sem_pareamento", "ambiguo")
+        if a["resultado"]
+        in ("sem_parse", "sem_data", "sem_pedido_fire", "sem_pareamento", "ambiguo")
     )
     mensagem = None
     if comparados == 0:
@@ -613,7 +624,7 @@ def _cobertura(arquivos: list[dict]) -> dict:
     elif nao_ligados / total > LIMITE_NAO_LIGADOS:
         mensagem = (
             f"COBERTURA INSUFICIENTE: {nao_ligados} de {total} arquivos sem data, sem pedido no "
-            f"Fire, sem pareamento ou ambíguos (limite {int(LIMITE_NAO_LIGADOS * 100)}%). "
+            f"Fire, sem pareamento, ambíguos ou ilegíveis (limite {int(LIMITE_NAO_LIGADOS * 100)}%). "
             "O resultado não prova nada."
         )
     return {
@@ -641,8 +652,9 @@ def executar(
     `imported_at`) o arquivo não liga ao Fire: sem a data, um número que se repete
     ligaria ao pedido errado — vai para `sem_data`. `cnpjs_revenda`: clientes
     extras aceitos no Fire (a revenda intercompany: o pedido da MM pode estar no
-    nome dela). Importação `parsed` (nunca enviada ao Fire) sem pedido no Fire é
-    `nao_enviado`: esperado, e fora da conta de cobertura."""
+    nome dela). Importação `parsed`, sem `fire_codigo` e SEM planilha gerada
+    (`tem_saida`) e sem pedido no Fire é `nao_enviado`: esperado, e fora da conta de
+    cobertura. Com planilha gerada o Fire deveria ter importado: fica sem_pedido_fire."""
     contados = (*BALDES_ITEM, "sem_parse", "erro_check")
     totais: Counter = Counter({b: 0 for b in contados})
     arquivos: list[dict] = []
@@ -692,8 +704,14 @@ def executar(
             resultado = "ambiguo"
         elif "sem_pareamento" in statuses:
             resultado = "sem_pareamento"
-        elif imp.get("portal_status") == "parsed" and not imp.get("fire_codigo"):
-            resultado = "nao_enviado"  # a importação nunca foi para o Fire
+        elif (
+            imp.get("portal_status") == "parsed"
+            and not imp.get("fire_codigo")
+            and not imp.get("tem_saida")
+        ):
+            # nunca foi para o Fire e nem gerou planilha: se saiu .xlsx, quem
+            # importou foi o Fire e o pedido DEVERIA estar lá (fica sem_pedido_fire)
+            resultado = "nao_enviado"
             for it in itens:
                 it["status"] = "nao_enviado"
         else:
@@ -815,6 +833,16 @@ def reler_arquivos(diretorio: str) -> list[Relido]:
     return out
 
 
+def _tem_saida(output_files_json: Any) -> bool:
+    """A importação gerou planilha(s) (output_files_json não vazio)?"""
+    if not output_files_json:
+        return False
+    try:
+        return bool(json.loads(output_files_json))
+    except (TypeError, ValueError):
+        return True  # ilegível: na dúvida, trate como enviado (não esconde um sem_pedido_fire)
+
+
 def _basename(caminho: str | None) -> str:
     """Último componente de um caminho Windows OU POSIX (o portal roda no Windows)."""
     return re.split(r"[\\/]", caminho or "")[-1]
@@ -834,7 +862,7 @@ def importacoes_dos_arquivos(
     caminhos = [db_paths] if isinstance(db_paths, Path) else list(db_paths)
     colunas = (
         "original_path, file_sha256, imported_at, order_number, customer_cnpj, "
-        "portal_status, fire_codigo"
+        "portal_status, fire_codigo, output_files_json"
     )
     indices: list[tuple[str, dict[str, dict], dict[str, dict], int]] = []
     for caminho in caminhos:
@@ -845,13 +873,14 @@ def importacoes_dos_arquivos(
             conn.close()
         por_nome: dict[str, dict] = {}
         por_sha: dict[str, dict] = {}
-        for caminho_orig, sha, quando, numero, cnpj, status, fire_cod in rows:  # a última vence
+        for caminho_orig, sha, quando, numero, cnpj, status, fire_cod, saidas in rows:  # a última vence
             reg = {
                 "imported_at": quando,
                 "order_number": numero,
                 "customer_cnpj": cnpj,
                 "portal_status": status,
                 "fire_codigo": fire_cod,
+                "tem_saida": _tem_saida(saidas),
             }
             if caminho_orig:
                 por_nome[_basename(caminho_orig)] = reg
