@@ -143,6 +143,7 @@ def _produto_indisponivel() -> dict:
         "fonte": None,
         "motivo": MOTIVO_FIRE_INDISPONIVEL,
         "candidatos": [],
+        "troca_no_fire": None,
     }
 
 
@@ -161,6 +162,8 @@ def _produto_dict(d: DecisaoProduto) -> dict:
             }
             for c in d.candidatos
         ],
+        # Preenchido depois, só no `ok` (`_marcar_trocas_do_decidido`).
+        "troca_no_fire": None,
     }
 
 
@@ -558,8 +561,6 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
                 items_report.append(entry)
                 codigos_xlsx.append(codigo_xlsx)
 
-            trocas, troca_checked = _marcar_trocas_no_fire(cur, items_report, codigos_xlsx)
-
             # Decisão por chave exata (observada: não bloqueia nada aqui). Falha
             # nesta passada não derruba os campos legados: o item fica
             # fire_indisponivel, que nunca vale como produto conferido.
@@ -570,6 +571,14 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
 
                 logger.warning(f"Busca por chave exata falhou ({type(exc).__name__}): {exc}")
                 produtos = [_produto_indisponivel() for _ in order.items]
+
+            # Uma passada da previsão do importador do Fire para os dois usos: o
+            # aviso legado (código que vai hoje no XLSX) e o código do produto
+            # decidido (o que a planilha leva em `ligado`).
+            decididos = [_codigo_do_decidido(p) for p in produtos]
+            palpites = _prever_tudo(cur, [*codigos_xlsx, *decididos])
+            trocas, troca_checked = _marcar_trocas_no_fire(items_report, codigos_xlsx, palpites)
+            _marcar_trocas_do_decidido(produtos, decididos, palpites)
             for entry, produto in zip(items_report, produtos, strict=True):
                 entry["produto"] = produto
 
@@ -616,22 +625,58 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
     }
 
 
+def _codigo_do_decidido(produto: dict) -> str | None:
+    """`CODPROD_ALTERN` (lido do Fire agora) do candidato decidido de um item `ok`."""
+    if produto.get("estado") != "ok":
+        return None
+    for c in produto.get("candidatos") or []:
+        if c.get("seq") == produto.get("fire_seq"):
+            return (c.get("codprod_altern") or "").strip() or None
+    return None
+
+
+def _prever_tudo(cur, codigos: list[str | None]) -> dict[str, tuple] | None:
+    """`_prever_import_fire` dos códigos (dedup); None se a previsão falhou."""
+    try:
+        return _prever_import_fire(cur, list(dict.fromkeys(c for c in codigos if c)))
+    except Exception as exc:  # noqa: BLE001 — previsão é extra, o check não depende dela
+        from app.utils.logger import logger
+
+        logger.warning(f"Previsão do importador do Fire falhou ({type(exc).__name__}): {exc}")
+        return None
+
+
+def _marcar_trocas_do_decidido(
+    produtos: list[dict], decididos: list[str | None], palpites: dict[str, tuple] | None
+) -> None:
+    """`produto["troca_no_fire"]` do item `ok`: o importador do Fire, lendo o
+    `CODPROD_ALTERN` decidido na planilha, gravaria OUTRO SEQ (`seq_previsto`), ou
+    não dá para afirmar qual gravaria (`seq_previsto` None: previsão falhou, código
+    fora da previsão ou sem nenhum candidato). Sem código: fica None (a trava cobre
+    com `sem_codigo_fire`)."""
+    for produto, codigo in zip(produtos, decididos, strict=True):
+        if codigo is None:
+            continue
+        palpite = palpites.get(codigo) if palpites is not None else None
+        if palpite is not None and palpite[0] == produto.get("fire_seq"):
+            continue
+        produto["troca_no_fire"] = {
+            "seq_previsto": int(palpite[0]) if palpite is not None else None,
+            "codigo": codigo,
+        }
+
+
 def _marcar_trocas_no_fire(
-    cur, items_report: list[dict], codigos_xlsx: list[str | None]
+    items_report: list[dict], codigos_xlsx: list[str | None], palpites: dict[str, tuple] | None
 ) -> tuple[int, bool]:
     """Preenche `troca_no_fire` onde o palpite do Fire difere do match do portal.
 
     Cobre o item sem match também: o Fire não recusa código inexistente se algum
     código começa com ele, e grava o outro em silêncio (pedido 4932). Só avisa,
-    nunca bloqueia: o XLSX está certo, o erro acontece dentro do Fire. Qualquer
-    falha aqui não derruba o check — devolve (0, False) e o preview segue.
+    nunca bloqueia: o XLSX está certo, o erro acontece dentro do Fire. Previsão
+    que falhou (`palpites` None) não derruba o check — devolve (0, False).
     """
-    try:
-        palpites = _prever_import_fire(cur, list({c for c in codigos_xlsx if c}))
-    except Exception as exc:  # noqa: BLE001 — previsão é extra, o check não depende dela
-        from app.utils.logger import logger
-
-        logger.warning(f"Previsão do importador do Fire falhou ({type(exc).__name__}): {exc}")
+    if palpites is None:
         return 0, False
 
     trocas = 0

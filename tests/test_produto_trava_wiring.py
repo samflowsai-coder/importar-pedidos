@@ -219,7 +219,18 @@ def _cli(monkeypatch, tmp_path, orders, checks, *, trava=None):
 
 
 def _item(estado, motivo=""):
-    return {"produto": {"estado": estado, "motivo": motivo}}
+    if estado != "ok":
+        return {"produto": {"estado": estado, "motivo": motivo}}
+    candidato = {"seq": 1, "codprod_altern": "C1"}
+    return {
+        "produto": {
+            "estado": "ok",
+            "motivo": "",
+            "fire_seq": 1,
+            "candidatos": [candidato],
+            "troca_no_fire": None,
+        }
+    }
 
 
 def _ok(*estados, available=True, incompleta=False):

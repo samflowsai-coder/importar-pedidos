@@ -164,7 +164,31 @@ interruptor abaixo em `ligado`.
 sem `produto` conta como não resolvido), preenchido em `observando` e `ligado`; em
 `desligado` vem vazio. Só `ligado` bloqueia: `fire_indisponivel` (check
 `available` falso/ausente ou `produto_conferencia_incompleta`) tem precedência sobre
-`produto_a_identificar`. `troca_no_fire`/`sem_codigo_fire` (xlsx) vêm na Task 6.
+`produto_a_identificar`. Com `export_mode` `xlsx` ou `both` (sai planilha), `ligado`
+ainda trava, nesta ordem, com `sem_codigo_fire` (item `ok` cujo candidato decidido não
+tem `CODPROD_ALTERN`: "O produto {seq} não tem código no Fire; a planilha não consegue
+apontá-lo.") e `troca_no_fire` (`produto.troca_no_fire` preenchido, ou a chave ausente:
+"O importador do Fire trocaria este código pelo produto {seq_previsto}." ou, com
+`seq_previsto` None, "O código {codigo} do produto {seq} não pode ser conferido na
+planilha do Fire."). Em `db` essas duas não valem (o insert entra pelo SEQ). Em
+`observando` os itens delas também entram em `itens`. `itens` dessas regras usam
+`estado` = o próprio motivo (`sem_codigo_fire`/`troca_no_fire`).
+
+**Saída com o produto decidido (`ligado`, spec §6).** `DecisaoEnvio.check` = o check ao
+vivo que a trava aprovou (None fora de `ligado`). `produto_trava.produtos_decididos(check)
+-> (vinculos, produtos_por_item)`: todo item `ok` (inclusive quando o código do cliente já
+é o `CODPROD_ALTERN`) vira um vínculo no formato do `depara_apply.aplicar`
+(`fire_codigo` = `CODPROD_ALTERN` do candidato decidido, lido do Fire no check, nunca do
+catálogo local; `fire_ean` None; `orig` = código do cliente, que vai na OBS como
+`ref cliente: …`) e `{posição: SEQ}`. Sem `CODPROD_ALTERN` o código do cliente fica (só
+o insert aceita esse item). Em `ligado`, `decidir_envio` avalia o preço por esse mapa (o
+de-para v1 passado é ignorado), e `_send_one_to_fire`/`_export_one_xlsx` (via
+`_saida_do_envio`) aplicam ESSE mapa no `depara_apply.aplicar` e no
+`FirebirdExporter.export(produtos_por_item=…)`, sem segundo `check_order`. O preview
+avalia o preço pelo `produtos_decididos(entry["check"])`. `decidir_envio(...,
+export_mode=)`: o que o caminho gera (None = `EXPORT_MODE`); `/export-xlsx` passa sempre
+`"xlsx"`. O CLI em `ligado` aplica o mesmo mapa antes da planilha. `desligado` e
+`observando`: `_vinculos_de_para`, como antes.
 
 **Onde a trava de produto atua** (todo caminho que grava no Fire ou gera XLSX de pedido):
 - `preco_trava.decidir_envio` (send-to-fire, export-xlsx e os lotes): logo depois do
@@ -216,6 +240,12 @@ dentro do Fire).
   conferência em vez de afirmar a troca.
 - Código com mais de 30 caracteres fica fora da query: `CODPROD_ALTERN` é
   `VARCHAR(30)` nas duas Fire, e parâmetro maior estoura truncamento.
+- **Código decidido (chave exata):** na mesma passada da previsão entra o
+  `CODPROD_ALTERN` do candidato de cada item `ok`. `item["produto"]["troca_no_fire"]`
+  = `{seq_previsto, codigo}` quando o palpite é outro SEQ, ou `seq_previsto` None
+  quando não dá para prever (previsão falhou, nenhum produto começa com o código);
+  senão None (também em todo item fora de `ok`). É esse campo que trava a planilha em
+  `ligado` (acima); o `troca_no_fire` legado do item não muda.
 - Fora de `is_blocking`. UI: `⚠ vira <código>` na coluna Fire + banner com dois
   conselhos (casado no portal = troque depois no Fire; sem match = confira ou
   vincule antes).
@@ -596,7 +626,8 @@ por EAN/código com outro produto. Nesse caso a `fire_unidade` do check é a do 
 e sai (`_com_vinculos`): o item fica `unidade_divergente`. O chamador consulta o de-para **uma vez**
 (`depara_apply.resolver`) antes do portão e passa `produtos_por_item` a `decidir_envio`
 (e a `preview_preco`), ao `FirebirdExporter` e a `depara_apply.aplicar` (códigos do XLSX).
-`desligado` ignora o mapa (regra de hoje).
+`desligado` ignora o mapa (regra de hoje). Com `produto_chave_modo` `ligado`, o mapa avaliado
+é o do produto decidido (`produto_trava.produtos_decididos`, ver a trava de produto).
 
 **Override anterior à migração:** linha com `cliente_override_codigo` e
 `cliente_override_cnpj` NULL (override feito antes da coluna existir) sai

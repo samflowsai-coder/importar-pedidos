@@ -2025,7 +2025,14 @@ def _com_produto(
             "fire_seq": item.get("fire_product_id") if estado == "ok" else None,
             "fonte": "ean" if estado == "ok" else None,
             "motivo": "" if estado == "ok" else motivo,
-            "candidatos": [],
+            # `ok` traz o candidato decidido (com o código do Fire) e a previsão
+            # da planilha conferida (Task 6).
+            "candidatos": (
+                [{"seq": item.get("fire_product_id"), "codprod_altern": "C0"}]
+                if estado == "ok"
+                else []
+            ),
+            "troca_no_fire": None,
         }
     c["produto_conferencia_incompleta"] = False
     return c

@@ -11,7 +11,16 @@ from app.persistence import db, environments_repo, router
 
 
 def _item(estado: str = "ok", motivo: str | None = None) -> dict:
-    return {"produto": {"estado": estado, "motivo": motivo, "fire_seq": 1, "candidatos": []}}
+    candidatos = [{"seq": 1, "codprod_altern": "C1"}] if estado == "ok" else []
+    return {
+        "produto": {
+            "estado": estado,
+            "motivo": motivo,
+            "fire_seq": 1,
+            "candidatos": candidatos,
+            "troca_no_fire": None,
+        }
+    }
 
 
 def _check(*estados, available: bool = True, incompleta: bool = False) -> dict:

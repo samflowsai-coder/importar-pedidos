@@ -2410,6 +2410,21 @@ def _vinculos_de_para(order, caminho: str) -> tuple[list[dict], dict[int, int]]:
         return [], {}
 
 
+def _saida_do_envio(
+    decisao, vinculos: list[dict], produtos_por_item: dict[int, int]
+) -> tuple[list[dict], dict[int, int]]:
+    """O que vai ao Fire depois do portão. Em `produto_chave_modo` `ligado`
+    (`decisao.check` preenchido), o produto decidido de todo item `ok` do MESMO
+    check que a trava aprovou: o insert entra pelo SEQ e a planilha leva o
+    `CODPROD_ALTERN`, com o código do cliente na OBS. Fora de `ligado`, os
+    vínculos de-para de hoje (`_vinculos_de_para`)."""
+    if decisao.check is None:
+        return vinculos, produtos_por_item
+    from app.erp import produto_trava
+
+    return produto_trava.produtos_decididos(decisao.check)
+
+
 def _registrar_aplicados(import_id: str, decisao) -> None:
     """Audit `preco_aplicado` depois que o pedido saiu. Nunca derruba um envio
     que já deu certo (o Fire já tem o pedido / o XLSX já existe)."""
@@ -2473,6 +2488,7 @@ def _send_one_to_fire(
     from app.erp import preco_trava
     from app.observability import metrics
 
+    export_mode = cfg.get("export_mode", "xlsx")
     vinculos, produtos_por_item = _vinculos_de_para(order, "envio")
     decisao = preco_trava.decidir_envio(
         import_id,
@@ -2481,6 +2497,7 @@ def _send_one_to_fire(
         env=request_env,
         agora=datetime.now(UTC),
         produtos_por_item=produtos_por_item,
+        export_mode=export_mode,
     )
     if decisao.bloqueado:
         repo.append_audit(import_id, "send_to_fire_blocked", decisao.block_detail)
@@ -2490,6 +2507,7 @@ def _send_one_to_fire(
             False, reason=decisao.reason, http_status=409, detail=decisao.detalhe
         )
     preco_trava.aplicar_precos(order, decisao.precos_aplicar)
+    vinculos, produtos_por_item = _saida_do_envio(decisao, vinculos, produtos_por_item)
 
     # Reuse the trace_id minted on commit so logs across commit→send-to-fire
     # are correlated for the same pedido.
@@ -2506,7 +2524,6 @@ def _send_one_to_fire(
 
         output_path = Path(cfg["output_dir"]).expanduser().resolve()
         output_path.mkdir(parents=True, exist_ok=True)
-        export_mode = cfg.get("export_mode", "xlsx")
         output_files: list[dict] = []
         if export_mode in ("xlsx", "both"):
             from app.exporters.erp_exporter import ERPExporter
@@ -2715,6 +2732,8 @@ def _export_one_xlsx(
         env=request_env,
         agora=datetime.now(UTC),
         produtos_por_item=produtos_por_item,
+        # Esta rota gera planilha em qualquer EXPORT_MODE: valem as regras dela.
+        export_mode="xlsx",
     )
     if decisao.bloqueado:
         repo.append_audit(import_id, "xlsx_export_blocked", decisao.block_detail)
@@ -2724,10 +2743,12 @@ def _export_one_xlsx(
             False, reason=decisao.reason, http_status=409, detail=decisao.detalhe
         )
     preco_trava.aplicar_precos(order, decisao.precos_aplicar)
+    vinculos, _ = _saida_do_envio(decisao, vinculos, produtos_por_item)
 
     with with_trace_id(entry.get("trace_id")):
-        # Identidade do Fire onde há vínculo de-para: os MESMOS vínculos que o
-        # portão avaliou (o XLSX leva o código do SEQ avaliado).
+        # Identidade do Fire onde há vínculo de-para (ou, em `ligado`, o produto
+        # decidido): os MESMOS vínculos que o portão avaliou (o XLSX leva o código
+        # do SEQ avaliado).
         from app.erp import depara_apply
 
         dep_changed = depara_apply.aplicar(order, vinculos)
@@ -4031,7 +4052,14 @@ def rehydrate_preview(
 
         from app.erp import preco_trava
 
-        _, produtos_por_item = _vinculos_de_para(order, "preview")
+        request_env = _request_environment(request)
+        if _trava_produto_ligada(request_env):
+            # Mesmo SEQ que o envio avalia em `ligado`: o decidido do check salvo.
+            from app.erp import produto_trava
+
+            _, produtos_por_item = produto_trava.produtos_decididos(entry.get("check"))
+        else:
+            _, produtos_por_item = _vinculos_de_para(order, "preview")
         preco = preco_trava.preview_preco(
             import_id,
             entry,

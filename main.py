@@ -6,7 +6,7 @@ import os
 import sys
 
 from app import config as app_config
-from app.erp import produto_trava
+from app.erp import depara_apply, produto_trava
 from app.erp.product_check import check_order
 from app.exporters.erp_exporter import ERPExporter
 from app.ingestion.file_loader import FileLoader
@@ -28,7 +28,10 @@ def _trava_produto_cli_ligada() -> bool:
 
 def _item_sem_produto_exato(order) -> bool:
     """True (e loga) se o pedido não pode ir à planilha: mesma regra do
-    `produto_trava.avaliar` em `ligado`. Falha no check pula só este pedido."""
+    `produto_trava.avaliar` em `ligado`. Falha no check pula só este pedido.
+
+    Liberado, aplica no `order` o produto decidido pelo MESMO check (a planilha
+    leva o `CODPROD_ALTERN` dele, com o código do cliente na OBS)."""
     numero = order.header.order_number
     try:
         check = check_order(order)
@@ -39,6 +42,7 @@ def _item_sem_produto_exato(order) -> bool:
         )
         return True
     if not tp.bloqueado:
+        depara_apply.aplicar(order, produto_trava.produtos_decididos(check)[0])
         return False
     if tp.reason == "fire_indisponivel":
         logger.warning(
@@ -48,8 +52,11 @@ def _item_sem_produto_exato(order) -> bool:
         return True
     primeiro = tp.itens[0] if tp.itens else {"index": 0, "motivo": None}
     motivo = (primeiro.get("motivo") or "produto não identificado no Fire").rstrip(".")
+    problema = (
+        "sem produto exato" if tp.reason == "produto_a_identificar" else "não pode ir na planilha"
+    )
     logger.warning(
-        f"Pedido {numero} não exportado: item {primeiro['index'] + 1} sem produto exato ({motivo})."
+        f"Pedido {numero} não exportado: item {primeiro['index'] + 1} {problema} ({motivo})."
     )
     return True
 

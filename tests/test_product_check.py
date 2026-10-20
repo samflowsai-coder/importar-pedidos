@@ -429,10 +429,15 @@ def test_is_blocking_returns_false_when_check_unavailable():
 
 
 def _fire_fisico(produtos, *, client_row=(1, "ACME"), falha_previsao=False):
-    """produtos: [(seq, codprod_altern, descricao, preco)] NA ORDEM FÍSICA."""
+    """produtos: [(seq, codprod_altern, descricao, preco[, ean[, bloqueado]])] NA ORDEM
+    FÍSICA. Responde também as buscas da chave exata (7 colunas, ORDER BY SEQ)."""
     cur = MagicMock()
     estado = {"rows": [], "previsoes": []}
-    por_seq = sorted(produtos)
+    cat = [(*p[:4], p[4] if len(p) > 4 else None, p[5] if len(p) > 5 else "Nao") for p in produtos]
+    por_seq = sorted(cat)
+
+    def chave(k, s, c, d, p, b):
+        return (k, s, d, p, "PAR", b, c)
 
     def execute(sql, params=()):
         if "FROM CADASTRO" in sql:
@@ -444,13 +449,31 @@ def _fire_fisico(produtos, *, client_row=(1, "ACME"), falha_previsao=False):
             estado["previsoes"].append(list(params))
             estado["rows"] = [
                 (cod, seq, desc)
-                for seq, cod, desc, _ in produtos
+                for seq, cod, desc, *_ in cat
                 if any(cod.startswith(p) for p in params)
             ]
+        elif "BLOQUEADO" in sql and "CODIGO_EAN13" in sql:
+            estado["rows"] = [
+                chave(e, s, c, d, p, b) for s, c, d, p, e, b in por_seq if e in params
+            ]
+        elif "BLOQUEADO" in sql and "CODPROD_ALTERN) IN" in sql:
+            estado["rows"] = [
+                chave(c.strip(), s, c, d, p, b)
+                for s, c, d, p, e, b in por_seq
+                if c.strip() in params
+            ]
+        elif "BLOQUEADO" in sql and "SEQ IN" in sql:
+            estado["rows"] = [
+                chave(s, s, c, d, p, b) for s, c, d, p, e, b in por_seq if s in params
+            ]
+        elif "CODIGO_EAN13" in sql and " IN " in sql:
+            estado["rows"] = [(e, s, d, p, "PAR") for s, c, d, p, e, b in por_seq if e in params]
         elif "CODPROD_ALTERN" in sql and " IN " in sql:
-            estado["rows"] = [(c, s, d, p, "PAR") for s, c, d, p in por_seq if c.strip() in params]
+            estado["rows"] = [
+                (c, s, d, p, "PAR") for s, c, d, p, e, b in por_seq if c.strip() in params
+            ]
         elif "SEQ IN" in sql:
-            estado["rows"] = [(s, d, p, "PAR") for s, c, d, p in por_seq if s in params]
+            estado["rows"] = [(s, d, p, "PAR") for s, c, d, p, e, b in por_seq if s in params]
         else:
             estado["rows"] = []
 
@@ -651,9 +674,14 @@ def _make_fb_ctx_chave(*, ean_rows=None, code_rows=None, seq_rows=None, client_r
     cur = MagicMock()
     state = {"rows": []}
 
+    # Catálogo na ordem dada (a "física"): a previsão do importador casa por prefixo.
+    catalogo = list(dict.fromkeys((r[6], r[1], r[2]) for r in ean_rows + code_rows + seq_rows))
+
     def execute_side_effect(sql, params=None):
         if "FROM CADASTRO" in sql:
             rows = []
+        elif "STARTING WITH" in sql:
+            rows = [r for r in catalogo if r[0] and any(r[0].startswith(p) for p in params)]
         elif "BLOQUEADO" in sql:
             if "TRIM(CODIGO_EAN13) IN" in sql:
                 rows = ean_rows
@@ -719,6 +747,7 @@ def test_check_grava_produto_ok_por_codprod_altern(mock_fb):
         "candidatos": [
             {"seq": 42, "descricao": "KIT GRAZI", "codprod_altern": "KG02PR", "bloqueado": False}
         ],
+        "troca_no_fire": None,
     }
     assert report["summary"]["items_produto_pendente"] == 0
     assert report["produto_conferencia_incompleta"] is False
@@ -799,6 +828,7 @@ def test_check_indisponivel_marca_fire_indisponivel():
             "fonte": None,
             "motivo": product_check.MOTIVO_FIRE_INDISPONIVEL,
             "candidatos": [],
+            "troca_no_fire": None,
         }
         assert item["match"] is False  # legado inalterado
     assert report["summary"]["items_produto_pendente"] == 2

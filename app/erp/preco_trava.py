@@ -74,6 +74,10 @@ class DecisaoEnvio:
     # {item_index, preco, flow_id} por preço aplicado; o chamador audita
     # `preco_aplicado` só depois que o pedido saiu (registrar_aplicados).
     aplicados: list[dict] = field(default_factory=list)
+    # `produto_chave_modo` `ligado`: o check (do Fire, ao vivo) que a trava de produto
+    # aprovou. O chamador monta dele o que vai ao Fire
+    # (`produto_trava.produtos_decididos`), sem conferir de novo. None fora de `ligado`.
+    check: dict | None = None
 
 
 def _modo(env: dict | None) -> str:
@@ -949,7 +953,12 @@ def _detalhe_produto(tp: produto_trava.TravaProduto, live: dict) -> str:
     motivo = primeiro.get("motivo") or "produto não identificado no Fire."
     detalhe = f"Item {primeiro['index'] + 1}: {motivo}"
     if len(tp.itens) > 1:
-        detalhe += f" Mais {len(tp.itens) - 1} item(ns) sem produto identificado."
+        resto = (
+            "sem produto identificado"
+            if tp.reason == "produto_a_identificar"
+            else "que a planilha não consegue levar ao Fire"
+        )
+        detalhe += f" Mais {len(tp.itens) - 1} item(ns) {resto}."
     return detalhe
 
 
@@ -964,7 +973,9 @@ def env_trava_produto(env: dict | None) -> dict | None:
     return None
 
 
-def _portao_produto(import_id: str, live: dict, env: dict | None) -> DecisaoEnvio | None:
+def _portao_produto(
+    import_id: str, live: dict, env: dict | None, export_mode: str
+) -> DecisaoEnvio | None:
     """Trava de produto por chave exata (`produto_chave_modo`). Em `ligado` devolve
     o bloqueio; em `observando` grava `produto_observado` e segue; `desligado` é
     inerte (nada lido, nada gravado)."""
@@ -974,7 +985,7 @@ def _portao_produto(import_id: str, live: dict, env: dict | None) -> DecisaoEnvi
         return None
     if m == "observando":
         try:
-            tp = produto_trava.avaliar(live, env=env, export_mode=_export_mode())
+            tp = produto_trava.avaliar(live, env=env, export_mode=export_mode)
             repo.append_audit(import_id, "produto_observado", {"itens": tp.itens})
         except Exception as exc:  # noqa: BLE001 — observando nunca muda o envio
             from app.utils.logger import logger
@@ -982,7 +993,7 @@ def _portao_produto(import_id: str, live: dict, env: dict | None) -> DecisaoEnvi
             logger.warning(f"produto observando falhou ({type(exc).__name__}): {exc}")
         return None
     # ligado: erro ao avaliar sobe (fail-closed) — nada sai para o Fire.
-    tp = produto_trava.avaliar(live, env=env, export_mode=_export_mode())
+    tp = produto_trava.avaliar(live, env=env, export_mode=export_mode)
     if not tp.bloqueado:
         return None
     return DecisaoEnvio(
@@ -1009,6 +1020,7 @@ def decidir_envio(
     env: dict | None,
     agora: datetime,
     produtos_por_item: dict[int, int] | None = None,
+    export_mode: str | None = None,
 ) -> DecisaoEnvio:
     """Decide se o pedido pode ir ao Fire/XLSX. O chamador grava o audit de
     bloqueio (nome do seu caminho) com `block_detail` e conta `metric_labels`;
@@ -1018,18 +1030,45 @@ def decidir_envio(
     `produtos_por_item`: {posição: SEQ} dos vínculos de-para, o MESMO mapa que
     vai ao `FirebirdExporter` (e cujos códigos vão ao XLSX). Em `observando` e
     `ligado` a avaliação usa esse SEQ; `desligado` não olha (regra de hoje).
+    Com `produto_chave_modo` `ligado`, esse mapa é ignorado: a avaliação usa o SEQ
+    decidido de cada item `ok` do check ao vivo, e `DecisaoEnvio.check` devolve esse
+    check para o chamador montar a saída dele (o produto avaliado é o gravado).
+
+    `export_mode`: o que este caminho gera ("xlsx", "db" ou "both"); None = o
+    `EXPORT_MODE` configurado. A rota de planilha passa "xlsx" sempre.
 
     Antes de qualquer lógica de preço, a trava de produto (`produto_chave_modo`,
     `_portao_produto`) sobre o check do ambiente do pedido: em `ligado` bloqueia
     com `reason` `fire_indisponivel`/`produto_a_identificar` e `metric_labels`
     `["produto"]`; em `observando` só grava o audit `produto_observado`."""
-    modo = _modo(env)
     live = pc.check_order(order, env=env)
     # Trava de produto antes de qualquer lógica de preço, em todo modo de preço:
     # usa o check do PRÓPRIO ambiente do pedido (não o da fonte de preço).
-    bloqueio_produto = _portao_produto(import_id, live, env)
+    bloqueio_produto = _portao_produto(
+        import_id, live, env, export_mode if export_mode is not None else _export_mode()
+    )
     if bloqueio_produto is not None:
         return bloqueio_produto
+    if produto_trava.modo(env_trava_produto(env)) != "ligado":
+        return _decidir_preco(import_id, order, entry, live, env, agora, produtos_por_item)
+    # ligado: o SEQ avaliado e o gravado saem do mesmo check que a trava aprovou.
+    _, decididos = produto_trava.produtos_decididos(live)
+    decisao = _decidir_preco(import_id, order, entry, live, env, agora, decididos)
+    decisao.check = live
+    return decisao
+
+
+def _decidir_preco(
+    import_id: str,
+    order: Order,
+    entry: dict,
+    live: dict,
+    env: dict | None,
+    agora: datetime,
+    produtos_por_item: dict[int, int] | None,
+) -> DecisaoEnvio:
+    """A parte de preço do `decidir_envio`, depois da trava de produto."""
+    modo = _modo(env)
     ack_items = entry.get("sem_preco_ack_items") or []
 
     if modo == "ligado":
