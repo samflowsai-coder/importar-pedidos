@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
+from app.erp import queries
 from app.models.order import Order, OrderHeader, OrderItem
+from app.routing import regra
 from app.routing.regra import Politica, RedeFixa, UfLida, avaliar, rede_fixa_do_pedido
 
 CLIENTE = "11222333000181"
@@ -106,8 +110,6 @@ def test_base_indisponivel_nao_responde_mesmo_com_outra_achando():
 
 
 # ── Task 3: leitura da UF ────────────────────────────────────────────────────
-from app.routing import regra  # noqa: E402
-
 ENVS = [{"slug": "mm"}, {"slug": "nasmar"}]
 
 
@@ -196,9 +198,6 @@ def test_explicacao_sem_nome_cai_no_slug():
 
 
 # ── Revisão final: UF válida e SQL por CPF_CNPJ indexado ─────────────────────
-import pytest  # noqa: E402
-
-from app.erp import queries  # noqa: E402
 
 
 @pytest.mark.parametrize("uf", ["XX", "SAO PAULO", "S", "BR", "0"])
