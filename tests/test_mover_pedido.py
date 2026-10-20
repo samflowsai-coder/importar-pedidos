@@ -1022,3 +1022,66 @@ def test_rota_conclui_sem_segundo_rastro_nem_memoria(
     assert len(roteamento_decisao_repo.listar_por_import(IMPORT_ID)) == 1
     assert decisao_ambiente_repo.lembrada("11222333000181") is None
     assert _linha("mm") == []
+
+
+# ── Não deu para conferir as outras empresas: recusa só aquele pedido ────────
+
+_NAO_CONFERIU = "Não deu para conferir as outras empresas agora; tente de novo."
+
+
+def _outra_empresa_quebrada(monkeypatch, quebrados):
+    """`env_do_import_id` levanta (SQLite de OUTRA empresa com erro) só para `quebrados`."""
+    from app.web import server
+
+    real = server.env_do_import_id
+
+    def _env_do_import_id(import_id, *a, **kw):
+        if import_id in quebrados:
+            raise RuntimeError("sqlite da outra empresa indisponível")
+        return real(import_id, *a, **kw)
+
+    monkeypatch.setattr(server, "env_do_import_id", _env_do_import_id)
+
+
+@pytest.mark.parametrize("envio", ["_send_one_to_fire", "_export_one_xlsx"])
+def test_envio_unico_recusa_quando_nao_confere_outras_empresas(envs_mm_nasmar, monkeypatch, envio):
+    from app.exporters import erp_exporter, firebird_exporter
+    from app.persistence import context as env_context
+    from app.web import server
+
+    def _proibido(*a, **kw):
+        raise AssertionError("não pode ir ao Fire/planilha")
+
+    monkeypatch.setattr(firebird_exporter, "FirebirdExporter", _proibido)
+    monkeypatch.setattr(erp_exporter, "ERPExporter", _proibido)
+    _semear(envs_mm_nasmar["mm"])
+    _outra_empresa_quebrada(monkeypatch, {IMPORT_ID})
+    mm = envs_mm_nasmar["mm"]
+
+    with env_context.active_env(mm["id"], mm["slug"]):
+        r = getattr(server, envio)(IMPORT_ID, {"export_mode": "db"}, request_env=mm)
+
+    assert r.ok is False
+    assert r.reason == "mover_inacabado"
+    assert r.http_status == 409
+    assert r.detail == _NAO_CONFERIU
+    assert _linha("mm")[0]["fire_codigo"] is None
+
+
+def test_lote_recusa_so_o_pedido_que_nao_conferiu_e_segue_com_os_outros(
+    client, envs_mm_nasmar, monkeypatch
+):
+    mm = envs_mm_nasmar["mm"]
+    _semear(mm, "imp-a")
+    _semear(mm, "imp-b", snapshot_json=json.dumps(None))
+    _outra_empresa_quebrada(monkeypatch, {"imp-a"})
+    client.cookies.set("portal_env", mm["id"])
+
+    r = client.post("/api/batch/send-to-fire", json={"ids": ["imp-a", "imp-b"]})
+
+    assert r.status_code == 200
+    por_id = {x["id"]: x for x in r.json()["results"]}
+    assert por_id["imp-a"]["detail"] == _NAO_CONFERIU
+    assert por_id["imp-a"]["ok"] is False
+    # o seguinte foi avaliado normalmente (parou depois da checagem de mover)
+    assert por_id["imp-b"]["reason"] == "no_snapshot"

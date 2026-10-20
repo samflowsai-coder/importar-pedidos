@@ -2683,6 +2683,29 @@ def _mover_inacabado(import_id: str) -> bool:
     return env_do_import_id(import_id, envs=outras) is not None
 
 
+_MOVER_NAO_CONFERIDO = "Não deu para conferir as outras empresas agora; tente de novo."
+
+
+def _recusa_mover(import_id: str, outcome_cls):
+    """Recusa (outcome 409) quando o pedido não pode sair agora: mover
+    inacabado, ou não deu para conferir as outras empresas (SQLite de outra
+    empresa com erro — recusa só este pedido, sem ir ao Fire). None = pode."""
+    try:
+        inacabado = _mover_inacabado(import_id)
+    except Exception as exc:  # noqa: BLE001
+        from app.utils.logger import logger
+
+        logger.warning(f"mover inacabado: conferência falhou ({type(exc).__name__})")
+        return outcome_cls(
+            False, reason="mover_inacabado", http_status=409, detail=_MOVER_NAO_CONFERIDO
+        )
+    if inacabado:
+        return outcome_cls(
+            False, reason="mover_inacabado", http_status=409, detail=_MOVER_INACABADO
+        )
+    return None
+
+
 def _com_trava_do_pedido(outcome_cls):
     """Envio que leva o pedido para fora do Portal segura a trava do pedido da
     leitura do estado até gravar o resultado: o mover de empresa não corre no
@@ -2741,10 +2764,9 @@ def _send_one_to_fire(
         return _FireSendOutcome(
             False, reason="not_found", http_status=404, detail="Pedido não encontrado"
         )
-    if _mover_inacabado(import_id):
-        return _FireSendOutcome(
-            False, reason="mover_inacabado", http_status=409, detail=_MOVER_INACABADO
-        )
+    recusa = _recusa_mover(import_id, _FireSendOutcome)
+    if recusa is not None:
+        return recusa
     if entry.get("portal_status") != "parsed":
         return _FireSendOutcome(
             False,
@@ -2983,10 +3005,9 @@ def _export_one_xlsx(
         return _XlsxExportOutcome(
             False, reason="not_found", http_status=404, detail="Pedido não encontrado"
         )
-    if _mover_inacabado(import_id):
-        return _XlsxExportOutcome(
-            False, reason="mover_inacabado", http_status=409, detail=_MOVER_INACABADO
-        )
+    recusa = _recusa_mover(import_id, _XlsxExportOutcome)
+    if recusa is not None:
+        return recusa
     if entry.get("portal_status") == "found_in_fire":
         return _XlsxExportOutcome(
             False,
