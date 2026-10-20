@@ -3454,6 +3454,110 @@ def search_produtos(
 class VincularProdutoRequest(BaseModel):
     item_index: int
     fire_produto_id: str
+    substituir: bool = False
+
+
+MSG_VINCULO_SEM_CNPJ = "Este pedido não tem CNPJ do cliente; o vínculo não pode ser reaproveitado."
+MSG_VINCULO_CLIENTE_REAL = (
+    "Não consegui confirmar o cliente real deste pedido agora; tente de novo."
+)
+# Teto de pedidos em revisão rechecados por vínculo (o mesmo da página do repo).
+_RECHECK_MAX_PEDIDOS = 500
+
+
+def _chaves_do_item(item) -> list[tuple[str, str]]:
+    """(tipo, valor normalizado) do item, código antes do EAN. Mesma
+    normalização da gravação e da leitura (`produto_vinculo_repo.norm_chave`)."""
+    from app.persistence import produto_vinculo_repo
+
+    out = []
+    for tipo, valor in (("codigo", item.product_code), ("ean", item.ean)):
+        norm = produto_vinculo_repo.norm_chave(tipo, valor)
+        if norm:
+            out.append((tipo, norm))
+    return out
+
+
+def _cnpj_do_escopo(order, indice: int, env: dict | None) -> str | None:
+    """CNPJ que define o escopo do item, com o cliente real do intercompany
+    (mesma resolução do check). Resolução incompleta: 503 em vez de gravar o
+    vínculo no escopo da revenda (R11)."""
+    from app.erp import product_check, produto_escopo
+
+    cnpj_real, conferiu = product_check._cnpj_real(order, env)
+    if not conferiu:
+        raise HTTPException(status_code=503, detail=MSG_VINCULO_CLIENTE_REAL)
+    return produto_escopo.cnpj_do_item(order, indice, cnpj_real=cnpj_real)
+
+
+def _conflito_json(v) -> dict:
+    return {
+        "conflito": {
+            "chave_tipo": v.chave_tipo,
+            "chave_valor": v.chave_valor,
+            "atual": {
+                "fire_seq": v.fire_seq,
+                "fire_descricao": v.fire_descricao,
+                "criado_por": v.criado_por,
+                "criado_em": v.criado_em,
+            },
+        },
+        "detail": (
+            f"Esta chave já está vinculada ao produto {v.fire_seq} ({v.fire_descricao}). "
+            "Confirme para trocar."
+        ),
+    }
+
+
+def _rechecar_pedidos_do_escopo(
+    import_id: str, escopo: str, chaves: list[tuple[str, str]], env: dict | None
+) -> list[str]:
+    """Recheca os pedidos em revisão do ambiente com item na mesma chave, fora
+    de `ok`, cujo escopo de busca inclui `escopo`. Lê o check guardado (sem
+    Fire) para escolher; só os escolhidos passam pelo `check_order`."""
+    from app.erp import product_check, produto_escopo
+    from app.models.order import Order
+    from app.persistence import db, repo
+
+    alvo = set(chaves)
+    escolhidos: list[tuple[str, Order]] = []
+    entries = repo.list_imports(portal_status="parsed", limit=_RECHECK_MAX_PEDIDOS)
+    with db.connect() as conn:
+        for entry in sorted(entries, key=lambda e: (e["imported_at"] or "", e["id"])):
+            if entry["id"] == import_id or not entry.get("snapshot"):
+                continue
+            itens_check = (entry.get("check") or {}).get("items") or []
+            try:
+                order = Order.model_validate(entry["snapshot"])
+            except Exception:  # noqa: BLE001 — snapshot podre não para o recheck dos outros
+                continue
+            indices = [
+                i
+                for i, it in enumerate(order.items)
+                if i < len(itens_check)
+                and ((itens_check[i] or {}).get("produto") or {}).get("estado") != "ok"
+                and alvo.intersection(_chaves_do_item(it))
+            ]
+            if not indices:
+                continue
+            cnpj_real, conferiu = product_check._cnpj_real(order, env)
+            # Cliente real incerto: rechecar é inofensivo, então entra.
+            if not conferiu or any(
+                escopo
+                in produto_escopo.escopos_para(
+                    conn, produto_escopo.cnpj_do_item(order, i, cnpj_real=cnpj_real)
+                )
+                for i in indices
+            ):
+                escolhidos.append((entry["id"], order))
+
+    rechecados: list[str] = []
+    for outro_id, order in escolhidos:
+        check = product_check.check_order(order, env=env)
+        if check.get("available"):
+            repo.update_fire_metadata(outro_id, check=check)
+            rechecados.append(outro_id)
+    return rechecados
 
 
 @app.post("/api/imported/{import_id}/vincular-produto")
@@ -3464,11 +3568,21 @@ def vincular_produto(
     user: User = Depends(require_user),
     _env=Depends(env_do_pedido),
 ) -> JSONResponse:
-    """Cria o vínculo de-para do item (code e/ou ean → produto do Fire),
-    audita e re-roda o check. Só em pedidos em revisão."""
-    from app.erp.product_check import check_order
+    """Vincula a chave exata do item (código e/ou EAN) a um produto do Fire,
+    no escopo do cliente (`rede:` ou `raiz:`), para reaproveitar em todo pedido
+    dele. Chave já vinculada a outro produto: 409 com o vínculo atual, e só
+    troca com `substituir`. Enquanto o modo do ambiente não é `ligado`, grava
+    também o de-para v1 do check legado. Audita, recheca este pedido e os
+    pedidos em revisão do mesmo escopo. Só em pedidos em revisão."""
+    from app.erp import product_check, produto_escopo
     from app.models.order import Order
-    from app.persistence import catalogo_fire_repo, db, produto_depara_repo, repo
+    from app.persistence import (
+        catalogo_fire_repo,
+        db,
+        produto_depara_repo,
+        produto_vinculo_repo,
+        repo,
+    )
 
     entry = repo.get_import(import_id)
     if entry is None:
@@ -3485,6 +3599,11 @@ def vincular_produto(
     if not (0 <= body.item_index < len(order.items)):
         raise HTTPException(status_code=422, detail="item_index fora do intervalo")
     item = order.items[body.item_index]
+    env = _request_environment(request)
+
+    chaves = _chaves_do_item(item)
+    if not chaves:
+        raise HTTPException(status_code=422, detail="Item sem código nem EAN para vincular")
 
     with db.connect() as conn:
         prod = next(
@@ -3495,49 +3614,103 @@ def vincular_produto(
             ),
             None,
         )
-        if prod is None:
-            raise HTTPException(status_code=422, detail="Produto não encontrado no catálogo local")
+    if prod is None or not str(prod["fire_produto_id"]).isdigit():
+        raise HTTPException(status_code=422, detail="Produto não encontrado no catálogo local")
+    fire_seq = int(prod["fire_produto_id"])
 
+    cnpj = _cnpj_do_escopo(order, body.item_index, env)
+    now = datetime.now().isoformat(timespec="seconds")
+    with db.connect() as conn:
+        escopo = produto_escopo.escopo_de_gravacao(conn, cnpj)
+        if escopo is None:
+            raise HTTPException(status_code=422, detail=MSG_VINCULO_SEM_CNPJ)
+        # Confere as duas chaves antes de gravar: conflito numa não deixa a
+        # outra gravada pela metade.
+        atuais = {
+            tipo: next(iter(produto_vinculo_repo.lookup(
+                conn,
+                [escopo],
+                codigos=[valor] if tipo == "codigo" else [],
+                eans=[valor] if tipo == "ean" else [],
+            ).values()), None)
+            for tipo, valor in chaves
+        }
+        if not body.substituir:
+            for tipo, _valor in chaves:
+                atual = atuais[tipo]
+                if atual is not None and atual.fire_seq != fire_seq:
+                    return JSONResponse(status_code=409, content=_conflito_json(atual))
+        gravados = []
+        try:
+            for tipo, valor in chaves:
+                v = produto_vinculo_repo.vincular(
+                    conn,
+                    escopo=escopo,
+                    chave_tipo=tipo,
+                    chave_valor=valor,
+                    fire_seq=fire_seq,
+                    fire_codigo=prod.get("codprod_altern"),
+                    fire_descricao=prod["nome"] or "",
+                    por=user.email,
+                    pedido_id=import_id,
+                    substituir=body.substituir,
+                    agora=now,
+                )
+                gravados.append(v)
+        except produto_vinculo_repo.VinculoConflito as exc:
+            # corrida com outro usuário entre a conferência e a gravação
+            return JSONResponse(status_code=409, content=_conflito_json(exc.atual))
+
+    # Check legado (v1) segue coerente enquanto a decisão nova não manda.
+    if not _trava_produto_ligada(env):
         ckey = produto_depara_repo.client_key(
             order.header.customer_cnpj, order.header.customer_name
         )
-        now = datetime.now().isoformat(timespec="seconds")
-        gravou = []
-        for tipo, valor in (("ean", item.ean), ("codigo", item.product_code)):
-            if not valor:
-                continue
-            produto_depara_repo.upsert(
-                conn,
-                client_key=ckey,
-                chave_tipo=tipo,
-                chave_valor=valor,
-                fire_produto_id=prod["fire_produto_id"],
-                fire_codigo=prod["codigo"],
-                fire_ean=prod.get("ean"),
-                fire_nome=prod["nome"],
-                criado_em=now,
-                criado_por=user.email,
-            )
-            gravou.append({"chave_tipo": tipo, "chave_valor": valor})
+        with db.connect() as conn:
+            for tipo, valor in (("ean", item.ean), ("codigo", item.product_code)):
+                if not valor:
+                    continue
+                produto_depara_repo.upsert(
+                    conn,
+                    client_key=ckey,
+                    chave_tipo=tipo,
+                    chave_valor=valor,
+                    fire_produto_id=prod["fire_produto_id"],
+                    fire_codigo=prod["codigo"],
+                    fire_ean=prod.get("ean"),
+                    fire_nome=prod["nome"],
+                    criado_em=now,
+                    criado_por=user.email,
+                )
 
-    if not gravou:
-        raise HTTPException(status_code=422, detail="Item sem código nem EAN para vincular")
-
+    trocas = [
+        {
+            "chave_tipo": tipo,
+            "chave_valor": valor,
+            "fire_seq_antigo": atuais[tipo].fire_seq if atuais[tipo] is not None else None,
+            "fire_seq_novo": fire_seq,
+        }
+        for tipo, valor in chaves
+    ]
+    trocou = any(t["fire_seq_antigo"] not in (None, fire_seq) for t in trocas)
     with with_trace_id(entry.get("trace_id")):
         repo.append_audit(
             import_id,
-            "produto_vinculo_criado",
+            "produto_vinculo_trocado" if trocou else "produto_vinculo_criado",
             {
                 "item_index": body.item_index,
+                "escopo": escopo,
                 "fire_produto_id": prod["fire_produto_id"],
                 "fire_nome": prod["nome"],
-                "chaves": gravou,
+                "chaves": trocas,
+                "vinculo_ids": [v.id for v in gravados],
+                "pedido": order.header.order_number,
                 "user_id": user.id,
                 "user_email": user.email,
             },
         )
 
-    check = check_order(order, env=_request_environment(request))
+    check = product_check.check_order(order, env=env)
     # Persiste o check fresco para o re-open do pedido e o badge da lista
     # refletirem o vínculo (senão rehydrate_preview leria o check antigo e o
     # item apareceria como ✗ de novo). Só grava quando o check é confiável —
@@ -3549,10 +3722,93 @@ def vincular_produto(
     # (o vínculo pode ter mudado o produto). Desligado/sem fonte: None, sem I/O.
     from app.erp import preco_trava
 
-    check_preco = preco_trava.check_preco_para_gravar(order, _request_environment(request), entry)
+    check_preco = preco_trava.check_preco_para_gravar(order, env, entry)
     if check_preco is not None:
         repo.update_fire_metadata(import_id, check_preco=check_preco)
-    return JSONResponse({"entry_id": import_id, "vinculos": gravou, "check": check})
+    rechecados = _rechecar_pedidos_do_escopo(import_id, escopo, chaves, env)
+    return JSONResponse(
+        {
+            "entry_id": import_id,
+            "vinculos": [
+                {"id": v.id, "escopo": v.escopo, "chave_tipo": v.chave_tipo,
+                 "chave_valor": v.chave_valor}
+                for v in gravados
+            ],
+            "check": check,
+            "rechecados": rechecados,
+        }
+    )
+
+
+@app.delete("/api/produtos/vinculo/{vinculo_id}")
+def revogar_vinculo(
+    vinculo_id: int,
+    user: User = Depends(require_user),
+) -> JSONResponse:
+    """Revoga um vínculo v2 (a linha fica, com revogado_em/revogado_por).
+    Audita no pedido que criou o vínculo, quando ele ainda existe (o
+    `audit_log` exige um pedido); senão, log direto."""
+    from app.persistence import db, produto_vinculo_repo, repo
+    from app.utils.logger import logger
+
+    now = datetime.now().isoformat(timespec="seconds")
+    with db.connect() as conn:
+        try:
+            v = produto_vinculo_repo.revogar(conn, vinculo_id, por=user.email, agora=now)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Vínculo não encontrado") from exc
+        row = conn.execute(
+            "SELECT pedido_id FROM produto_vinculo_v2 WHERE id = ?", (vinculo_id,)
+        ).fetchone()
+    detalhe = {
+        "vinculo_id": v.id,
+        "escopo": v.escopo,
+        "chave_tipo": v.chave_tipo,
+        "chave_valor": v.chave_valor,
+        "fire_seq": v.fire_seq,
+        "user_id": user.id,
+        "user_email": user.email,
+    }
+    pedido_id = row[0] if row else None
+    if pedido_id and repo.get_import(pedido_id) is not None:
+        repo.append_audit(pedido_id, "produto_vinculo_revogado", detalhe)
+    else:
+        logger.info(f"produto_vinculo_revogado: {detalhe}")
+    return JSONResponse({"revogado": v.id})
+
+
+@app.get("/api/produtos/a-identificar")
+def produtos_a_identificar(user: User = Depends(require_user)) -> JSONResponse:  # noqa: ARG001
+    """Itens a identificar dos pedidos em revisão do ambiente ativo: lê o check
+    guardado (`produto.estado` diferente de `ok`), sem ir ao Fire. Mais antigos
+    primeiro."""
+    from app.persistence import repo
+
+    entries = repo.list_imports(portal_status="parsed", limit=_RECHECK_MAX_PEDIDOS)
+    linhas = []
+    for entry in sorted(entries, key=lambda e: (e["imported_at"] or "", e["id"])):
+        itens_check = (entry.get("check") or {}).get("items") or []
+        itens = ((entry.get("snapshot") or {}).get("items")) or []
+        for i, ic in enumerate(itens_check):
+            produto = (ic or {}).get("produto") if isinstance(ic, dict) else None
+            if not isinstance(produto, dict) or produto.get("estado") == "ok":
+                continue
+            it = itens[i] if i < len(itens) and isinstance(itens[i], dict) else {}
+            linhas.append(
+                {
+                    "import_id": entry["id"],
+                    "pedido": entry.get("order_number"),
+                    "cliente": entry.get("customer"),
+                    "item_index": i,
+                    "codigo": it.get("product_code"),
+                    "ean": it.get("ean"),
+                    "descricao": it.get("description"),
+                    "estado": produto.get("estado"),
+                    "motivo": produto.get("motivo"),
+                    "importado_em": entry.get("imported_at"),
+                }
+            )
+    return JSONResponse({"itens": linhas})
 
 
 @app.delete("/api/produtos/depara/{depara_id}")

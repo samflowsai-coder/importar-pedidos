@@ -79,12 +79,37 @@ API pública para páginas-filho:
   dicas (sem `q`) pra já mostrar candidatos. 400 só quando `q` < 2 **e** sem
   dicas. Itens de `results`/`suggestions`: `{fire_produto_id, fire_codigo,
   fire_ean, fire_codprod_altern, fire_nome, score?}`.
-- `POST /api/imported/{id}/vincular-produto` body `{item_index, fire_produto_id}`
-  → grava o vínculo de-para (código e/ou EAN do item → produto do Fire) em
-  `produto_depara`, audita (`produto_vinculo_criado`) e re-roda `check_order`.
-  Só permitido em `portal_status='parsed'`. 422 se produto não existir no
-  catálogo local ou item sem código nem EAN.
-- `DELETE /api/produtos/depara/{depara_id}` → desfaz um vínculo. Log direto
+- `POST /api/imported/{id}/vincular-produto` body
+  `{item_index, fire_produto_id, substituir=false}` → vínculo v2
+  (`produto_vinculo_v2`, `produto_vinculo_repo.vincular`) da chave exata do item
+  (`codigo` e/ou `ean`, normalizadas) ao SEQ, no escopo
+  `escopo_de_gravacao(cnpj_do_item(order, i, cnpj_real=...))` (`rede:` ou `raiz:`).
+  `cnpj_real` vem de `product_check._cnpj_real` (mesma resolução intercompany do
+  check); resolução incompleta → **503** "Não consegui confirmar o cliente real…"
+  (nunca grava no escopo da revenda). Sem escopo → **422** "Este pedido não tem CNPJ
+  do cliente…". Chave já vigente em outro SEQ e `substituir` falso → **409**
+  `{"conflito": {chave_tipo, chave_valor, atual: {fire_seq, fire_descricao,
+  criado_por, criado_em}}, "detail"}`; as duas chaves são conferidas antes de
+  gravar (sem gravação pela metade). `fire_codigo` do v2 = `codprod_altern` do
+  catálogo local; `fire_descricao` = `nome`. Enquanto o `produto_chave_modo` não é
+  `ligado` (`_trava_produto_ligada`), grava também o v1 (`produto_depara`) para o
+  check legado. Audit `produto_vinculo_criado` ou `produto_vinculo_trocado`
+  (escopo, `chaves[{chave_tipo, chave_valor, fire_seq_antigo, fire_seq_novo}]`,
+  `vinculo_ids`, pedido, usuário). Re-roda `check_order` deste pedido e de todo
+  pedido `parsed` do ambiente (até 500) cujo check guardado tem item na mesma chave
+  fora de `ok` e cujo escopo de busca inclui o escopo gravado. Resposta:
+  `{entry_id, vinculos: [{id, escopo, chave_tipo, chave_valor}], check,
+  rechecados: [import_id…]}`. Só em `portal_status='parsed'`. 422 se o produto não
+  existir no catálogo local (ou SEQ não numérico) ou item sem código nem EAN.
+- `DELETE /api/produtos/vinculo/{vinculo_id}` → revoga o vínculo v2 (a linha fica,
+  com `revogado_em/por`). Audit `produto_vinculo_revogado` no pedido que criou o
+  vínculo (`pedido_id`), se ele ainda existe; senão log direto. 404 se não existe.
+  Resposta `{"revogado": id}`. **Não** mexe no v1.
+- `GET /api/produtos/a-identificar` → fila: itens com `produto.estado` ≠ `ok` no
+  `check_json` guardado dos pedidos `parsed` do ambiente ativo (sem Fire). Resposta
+  `{"itens": [{import_id, pedido, cliente, item_index, codigo, ean, descricao,
+  estado, motivo, importado_em}]}`, por `importado_em` crescente.
+- `DELETE /api/produtos/depara/{depara_id}` → desfaz um vínculo v1. Log direto
   via `logger.info` (não `audit_log` — `import_id` é `NOT NULL` com FK pra
   `imports`, e o undo não tem um import associado).
 - Guards de preço em `_send_one_to_fire` / `_export_one_xlsx`: re-roda

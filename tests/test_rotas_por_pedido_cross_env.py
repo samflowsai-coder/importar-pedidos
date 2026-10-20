@@ -361,16 +361,20 @@ def test_ligado_vincular_produto_roda_o_check_na_empresa_do_pedido(portal, espia
     monkeypatch.setattr(
         catalogo_fire_repo,
         "list_all",
-        lambda conn: [{"fire_produto_id": "P1", "codigo": 111, "nome": "TENIS X", "ean": "7891"}],
+        # SEQ do Fire é numérico: o vínculo v2 grava fire_seq INTEGER.
+        lambda conn: [{"fire_produto_id": "1", "codigo": 111, "nome": "TENIS X", "ean": "7891"}],
     )
 
-    _grava("nasmar", "N1", snapshot=_snapshot("N1"))
+    # O vínculo é gravado no escopo do CNPJ do cliente: sem CNPJ a rota dá 422.
+    snapshot = _snapshot("N1")
+    snapshot["header"]["customer_cnpj"] = "11.222.333/0001-44"
+    _grava("nasmar", "N1", snapshot=snapshot)
     roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
     if cookie:
         portal.cookies.set("portal_env", environments_repo.get_by_slug(cookie)["id"])
 
     r = portal.post(
-        "/api/imported/N1/vincular-produto", json={"item_index": 0, "fire_produto_id": "P1"}
+        "/api/imported/N1/vincular-produto", json={"item_index": 0, "fire_produto_id": "1"}
     )
     assert r.status_code == 200, r.text
     assert espia["check"] == "nasmar"
