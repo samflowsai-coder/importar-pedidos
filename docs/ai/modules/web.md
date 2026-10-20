@@ -253,6 +253,20 @@ Domínio completo (degraus, interruptor, tabelas) em
   escolhida é um estado válido ("todas as empresas"); nos outros modos a UI
   não oferece a opção.
 
+- `GET /api/roteamento/regra` (`require_user`) → política, redes e chaves.
+  `PUT /api/roteamento/regra` (`require_admin`) grava `env_sp`, `env_fora_sp`,
+  `ativa` (400 se a empresa não é ambiente ativo).
+- `POST /api/roteamento/regra/redes`, `PUT|DELETE
+  /api/roteamento/regra/redes/{rede_id}` (`require_admin`) → redes fixas e suas
+  chaves.
+- `GET /api/roteamento/decisoes?import_id=` (`require_user`) → rastro
+  `roteamento_decisao` do pedido.
+- `POST /api/imported/{import_id}/mover-empresa` (`require_user`) body
+  `{destino}` → move pedido em revisão para a outra empresa (409 em
+  `desligado` ou pedido não movível, com `motivo`; 404/422 para pedido ou
+  destino inexistente). `GET` do detalhe do pedido ganha `env_slug`,
+  `pode_mover` e `motivo_nao_move`.
+
 `POST /api/commit` (fluxo normal, sem mudança de rota) ganhou o wiring do
 roteamento: resolve `(modo, decisao)` via `_decidir_ambiente`, decide o
 ambiente de gravação via `_resolver_env_alvo` (409 pede escolha quando

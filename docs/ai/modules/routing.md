@@ -9,6 +9,11 @@ que nasce **desligado** — mergear e deployar esta feature não muda nada no
 comportamento de hoje até alguém virar a chave explicitamente em
 `/admin/roteamento`.
 
+Por cima da escada original há a **regra comercial de faturamento** (degrau
+`regra`): rede fixa por raiz/CNPJ ou UF do cliente faturado decidem MM x
+Nasmar antes de qualquer outro degrau. Nasce **desligada** e só existe quando
+a política está ativa.
+
 Duas regras não se negociam em lugar nenhum deste domínio:
 
 1. **Ambíguo não responde.** Cliente com pedido em dois ambientes na mesma
@@ -24,6 +29,10 @@ Duas regras não se negociam em lugar nenhum deste domínio:
   (`decidir`) e `Deps`/`Decisao`. Módulo **puro**: só faz I/O através de
   `Deps`, nenhum import de persistência no topo do arquivo — é o que permite
   testar a escada inteira sem banco.
+- `app/routing/regra.py` — degrau `regra` (puro): `Politica`, `RedeFixa`,
+  `UfLida`, `avaliar`, `ler_uf` (UF de `CADASTRO.UF` lida no Fire, só-leitura,
+  via `connect_somente_leitura`) e `ler_uf_com_cache` (TTL 600 s, não guarda
+  `indisponivel`).
 - `app/routing/documento.py` — degrau 1: regex de CNPJ + `detectar_fornecedor`
   (presença, não posição) + `cnpjs_de_ambientes()`.
 - `app/routing/historico.py` — degrau 2: `consultar()` (Firebird de todos os
@@ -33,9 +42,18 @@ Duas regras não se negociam em lugar nenhum deste domínio:
 - `app/persistence/roteamento_repo.py` — o interruptor (`modo`, `set_modo`),
   a tabela sombra (`registrar_sombra`, `taxa`) e a fila de pendência
   (`registrar_pendencia`, `buscar_pendencia`, `limpar_pendencia`).
-- `app/persistence/schema_shared.py` — as quatro tabelas (ver
+- `app/persistence/regra_faturamento_repo.py` — política e redes
+  (`config`, `set_config`, `listar_redes`, `salvar_rede`, `remover_rede`,
+  `politica`).
+- `app/persistence/roteamento_decisao_repo.py` — o rastro (`registrar`,
+  `listar_por_import`, `ultima`); `registrar` nunca levanta.
+- `app/persistence/mover_pedido.py` — mover pedido em revisão de empresa
+  (`mover_import`, `motivo_nao_move`, `trava_do_pedido`, `PedidoNaoMovivel`,
+  `PedidoOcupado`).
+- `app/persistence/schema_shared.py` — as tabelas (ver
   `modules/persistence.md` pro schema completo).
-- `app/web/routes_roteamento.py` — `/api/roteamento/modo`, `/api/roteamento/taxa`.
+- `app/web/routes_roteamento.py` — `/api/roteamento/modo`, `/api/roteamento/taxa`,
+  `/api/roteamento/regra*`, `/api/roteamento/decisoes`.
 - `app/web/server.py` — wiring do commit (`_decidir_ambiente`,
   `_resolver_env_alvo`, `_roteamento_para_preview`) e cross-env de
   `/api/imported` (ver `modules/web.md`, seção "Roteamento intercompany").
@@ -47,7 +65,19 @@ Duas regras não se negociam em lugar nenhum deste domínio:
 
 ## A escada (`ambiente_para`, `app/routing/ambiente.py`)
 
-Precedência **estrita** — cada degrau perde para o de cima, sem exceção:
+Precedência **estrita** — cada degrau perde para o de cima, sem exceção.
+São 5 degraus; `regra` fica no topo e só existe com a política ativa:
+
+0. **`regra`** — regra comercial de faturamento (`app/routing/regra.py`).
+   Rede fixa (raiz de 8 dígitos ou CNPJ de 14) vence a UF; sem rede fixa, a
+   UF do CNPJ faturado (`CADASTRO.UF`, lida só-leitura nas duas empresas da
+   política) manda: SP → `env_sp`, fora → `env_fora_sp`. **Nunca chuta UF**:
+   Fire mudo, UF divergente entre as bases, linha sem UF ou cliente
+   inexistente = `None`, e a escada segue para o degrau 1. Quando decide e o
+   documento apontaria outra empresa, `Decisao.contraria` carrega o slug do
+   documento. `deps_padrao` só monta a regra (`_regra_padrao`) com política
+   ativa e as duas empresas ativas; fora disso `Deps.regra is None` e zero
+   I/O novo.
 
 1. **`documento`** — `supplier_cnpj` do pedido casa com `environments.cnpj`.
    Detecção é por **presença**, não posição: `detectar_fornecedor` acha o
@@ -151,8 +181,12 @@ dois chamadores eram cópias idênticas exceto o prefixo do log:
 
 `POST /api/commit`: `_decidir_ambiente(order)` → `_resolver_env_alvo(...)`.
 Fora de `ligado`, `env_alvo` é sempre o ambiente do cookie (idêntico a
-antes da feature). Em `ligado`: decisão resolvida > escolha do operador
-(`body.environment_slug`) > 409 pedindo escolha (nunca um default). O 409
+antes da feature). Em `ligado`: escolha do operador
+(`body.environment_slug`) > decisão resolvida (a sugestão do preview) > 409
+pedindo escolha (nunca um default). A escolha vence porque o operador pode
+trocar qualquer sugestão; a troca fica no rastro. Quando o destino difere da
+empresa que conferiu o preview (`PreviewEntry.check_env_slug`), o commit refaz
+a conferência de produtos no Fire do destino. O 409
 roda ANTES de `get_cache().consume()` — não queima o preview se o
 roteador falhar exatamente no commit. Em `observando`, grava
 `roteamento_sombra`; se a decisão divergiu da memória, marca
@@ -189,7 +223,24 @@ Nunca grava sombra em `ligado` — sombra é "o que o roteador TERIA feito" e
 alimenta a taxa que autoriza virar a chave; misturar "o que ele fez"
 distorceria a métrica.
 
-## As quatro tabelas (`app_shared.db`)
+### Rastro (`roteamento_decisao`) e mover pedido
+
+Todo commit web e todo import do watcher grava uma linha em
+`roteamento_decisao` com `acao` em: `sugestao_aceita`, `troca_no_preview`,
+`escolha_sem_sugestao`, `movido_apos_importar`, `automatico`, `observando`.
+`decidido_por` = e-mail do usuário, ou `sistema:<degrau>` / `sistema:pasta`
+sem humano. Só INSERT.
+
+`POST /api/imported/{id}/mover-empresa` (fora de `desligado`) leva um pedido
+em revisão (`portal_status='parsed'`) para a outra empresa
+(`mover_pedido.mover_import`): trava por pedido compartilhada com o envio ao
+Fire/XLSX, lock global de mover, recusa (409) pedido já no Fire, exportado em
+XLSX, com rastro no Flow/Gestor ou com revisão de preço enviada ao Flow.
+No destino recalcula o check de produto e preço; em `ligado` a memória
+aprende a nova empresa. O detalhe do pedido ganha `env_slug`, `pode_mover` e
+`motivo_nao_move`.
+
+## As tabelas (`app_shared.db`)
 
 Schema completo em [`modules/persistence.md`](persistence.md). Resumo do
 papel de cada uma:
@@ -203,6 +254,12 @@ papel de cada uma:
   divergências (`GET /api/roteamento/taxa`).
 - **`roteamento_pendencia`** — arquivo que o watcher não soube rotear em
   `ligado`. PK `sha256`, idempotente (re-varredura não infla a fila).
+- **`regra_faturamento_config`** — política única (`id=1`): `env_sp`,
+  `env_fora_sp`, `ativa` (nasce 0). Sem linha = regra desligada.
+- **`regra_faturamento_rede`** / **`regra_faturamento_chave`** — redes fixas e
+  suas chaves (`raiz`|`cnpj`). Semente: Centauro, Riachuelo, Kallan (por
+  raiz) e Sam's Club (12 CNPJs de CD), todas em `mm`.
+- **`roteamento_decisao`** — o rastro de cada decisão (ver acima).
 - **`decisao_ambiente`** — a memória (degrau 3), PK `cnpj_cliente`. Nasce
   vazia e isso é um estado válido; perde para documento E histórico sempre.
 
@@ -212,7 +269,11 @@ papel de cada uma:
 .venv/bin/pytest tests/test_routing_documento.py tests/test_routing_historico.py \
   tests/test_routing_ambiente.py tests/test_decisao_ambiente_repo.py \
   tests/test_roteamento_repo.py tests/test_routing_wiring.py \
-  tests/test_routing_modo.py tests/test_scan_environments_roteamento.py -v
+  tests/test_routing_modo.py tests/test_scan_environments_roteamento.py \
+  tests/test_routing_regra.py tests/test_regra_faturamento_repo.py \
+  tests/test_roteamento_decisao_repo.py tests/test_mover_pedido.py \
+  tests/test_routes_regra_faturamento.py tests/test_queries_regra_uf.py \
+  tests/test_web_static_regra_faturamento.py -v
 ```
 
 - `test_routing_documento.py` — regex de CNPJ, presença vs. ambiguidade.
@@ -230,3 +291,10 @@ papel de cada uma:
   retenção de slug fantasma, throttle de pendência e sua reversão
   imediata ao trocar de modo, dedupe global vs. por-ambiente conforme o
   modo, e o audit trail em `ligado`.
+- `test_routing_regra.py` — `avaliar` (rede fixa, UF, nunca chuta), cache de UF.
+- `test_regra_faturamento_repo.py` / `test_roteamento_decisao_repo.py` —
+  política, redes e rastro.
+- `test_mover_pedido.py` — mover, recusas, travas e a rota.
+- `test_routes_regra_faturamento.py` — `/api/roteamento/regra*` e `/decisoes`.
+- `test_queries_regra_uf.py`, `test_web_static_regra_faturamento.py` — SQL de
+  UF só-leitura e a UI do admin.
