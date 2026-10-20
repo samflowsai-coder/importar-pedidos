@@ -2493,6 +2493,35 @@ def _saida_do_envio(
     return vinculos, produtos_por_item
 
 
+def _recusa_planilha_pontual(
+    import_id: str, vinculos: list[dict], decisao, audit: str
+) -> tuple[str, str] | None:
+    """R21: linha com escolha pontual cujo produto não tem `CODPROD_ALTERN` não
+    sai em planilha, em nenhum modo (o SEQ em texto seria casado por PREFIXO pelo
+    importador de Excel do Fire). Só a escolha pontual: o v1 de hoje não muda.
+    Muta `vinculos` com o código lido do Fire agora (`decisao.check_vivo`).
+    Devolve (reason, detalhe) e audita `audit`, ou None."""
+    from app.erp import depara_apply
+    from app.persistence import repo
+
+    vinculos[:] = depara_apply.codigo_vivo_das_escolhas(
+        vinculos, getattr(decisao, "check_vivo", None)
+    )
+    sem_codigo = depara_apply.pontuais_sem_codigo(vinculos)
+    if not sem_codigo:
+        return None
+    itens = [
+        {
+            "index": v["item_index"],
+            "estado": "sem_codigo_fire",
+            "motivo": depara_apply.motivo_pontual_sem_codigo(v),
+        }
+        for v in sem_codigo
+    ]
+    repo.append_audit(import_id, audit, {"produto": itens})
+    return "sem_codigo_fire", itens[0]["motivo"]
+
+
 def _registrar_aplicados(import_id: str, decisao) -> None:
     """Audit `preco_aplicado` depois que o pedido saiu. Nunca derruba um envio
     que já deu certo (o Fire já tem o pedido / o XLSX já existe)."""
@@ -2578,6 +2607,10 @@ def _send_one_to_fire(
     vinculos, produtos_por_item = _saida_do_envio(
         decisao, order, "envio", vinculos, produtos_por_item, entry
     )
+    if export_mode in ("xlsx", "both"):
+        recusa = _recusa_planilha_pontual(import_id, vinculos, decisao, "send_to_fire_blocked")
+        if recusa is not None:
+            return _FireSendOutcome(False, reason=recusa[0], http_status=409, detail=recusa[1])
 
     # Reuse the trace_id minted on commit so logs across commit→send-to-fire
     # are correlated for the same pedido.
@@ -2814,6 +2847,9 @@ def _export_one_xlsx(
         )
     preco_trava.aplicar_precos(order, decisao.precos_aplicar)
     vinculos, _ = _saida_do_envio(decisao, order, "export", vinculos, produtos_por_item, entry)
+    recusa = _recusa_planilha_pontual(import_id, vinculos, decisao, "xlsx_export_blocked")
+    if recusa is not None:
+        return _XlsxExportOutcome(False, reason=recusa[0], http_status=409, detail=recusa[1])
 
     with with_trace_id(entry.get("trace_id")):
         # Identidade do Fire onde há vínculo de-para (ou, em `ligado`, o produto

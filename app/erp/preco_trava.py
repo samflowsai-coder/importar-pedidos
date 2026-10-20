@@ -78,6 +78,9 @@ class DecisaoEnvio:
     # aprovou. O chamador monta dele o que vai ao Fire
     # (`produto_trava.produtos_decididos`), sem conferir de novo. None fora de `ligado`.
     check: dict | None = None
+    # O check ao vivo do ambiente do pedido, em todo modo (R21): fora de `ligado` a
+    # saída lê dele o `CODPROD_ALTERN` do produto da escolha pontual. Só leitura.
+    check_vivo: dict | None = None
 
 
 def _modo(env: dict | None) -> str:
@@ -1085,11 +1088,14 @@ def decidir_envio(
     if bloqueio_produto is not None:
         return bloqueio_produto
     if not _produto_ligado(env):
-        return _decidir_preco(import_id, order, entry, live, env, agora, produtos_por_item)
+        decisao = _decidir_preco(import_id, order, entry, live, env, agora, produtos_por_item)
+        decisao.check_vivo = live
+        return decisao
     # ligado: o SEQ avaliado e o gravado saem do mesmo check que a trava aprovou.
     _, decididos = produto_trava.produtos_decididos(live)
     decisao = _decidir_preco(import_id, order, entry, live, env, agora, decididos)
     decisao.check = live
+    decisao.check_vivo = live
     return decisao
 
 

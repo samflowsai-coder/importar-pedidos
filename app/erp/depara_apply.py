@@ -73,10 +73,15 @@ def sobrepor_escolhas(order: Order, vinculos: list[dict], escolhidos: dict | Non
     """Vínculos com a escolha pontual de cada linha por cima (R18/R20).
 
     `escolhidos`: `entry["produto_escolhido"]` do import. A linha escolhida sai
-    com o SEQ escolhido (insert) e o `CODPROD_ALTERN` gravado na escolha (ou o
-    SEQ em texto, a convenção do v1, quando o produto não tem), o EAN dele (ou
-    nenhum: o EAN do cliente é da linha, não do produto escolhido) e o código do
-    cliente na OBS. Vale em todo modo; as outras linhas ficam como vieram."""
+    com o SEQ escolhido (insert) e o `CODPROD_ALTERN` gravado na escolha, o EAN
+    dele (ou nenhum: o EAN do cliente é da linha, não do produto escolhido) e o
+    código do cliente na OBS. Vale em todo modo; as outras linhas ficam como vieram.
+
+    Produto sem `CODPROD_ALTERN` (R21): nunca vai o SEQ em texto (o importador de
+    Excel do Fire casaria por PREFIXO); a linha fica com o código do cliente e
+    `sem_codigo_fire: True` — só o insert (pelo SEQ) aceita; a planilha recusa
+    (`pontuais_sem_codigo`). `codigo_vivo_das_escolhas` troca pelo código lido
+    do Fire agora, quando o check traz o produto."""
     from app.erp.product_check import escolhas_do_import  # evita ciclo
 
     seqs = escolhas_do_import({"produto_escolhido": escolhidos})
@@ -89,11 +94,14 @@ def sobrepor_escolhas(order: Order, vinculos: list[dict], escolhidos: dict | Non
             continue
         e = detalhe.get(i) or {}
         it = order.items[i]
+        codigo = (str(e.get("codigo") or "")).strip()
         out.append(
             {
                 "item_index": i,
                 "fire_produto_id": seq,
-                "fire_codigo": (str(e.get("codigo") or "")).strip() or str(seq),
+                "fire_codigo": codigo or it.product_code,
+                "codigo_cliente": it.product_code,
+                "sem_codigo_fire": not codigo,
                 "fire_ean": (str(e.get("ean") or "")).strip(),
                 "substitui_ean": True,
                 "orig": it.product_code or it.ean or "",
@@ -101,6 +109,61 @@ def sobrepor_escolhas(order: Order, vinculos: list[dict], escolhidos: dict | Non
             }
         )
     return sorted(out, key=lambda v: v["item_index"])
+
+
+def codigo_vivo_das_escolhas(vinculos: list[dict], check: dict | None) -> list[dict]:
+    """Escolhas pontuais com o `CODPROD_ALTERN` lido do Fire no check ao vivo
+    (o candidato decidido do item `ok` por `escolha_pontual` no mesmo SEQ), que
+    vale mais que o do catálogo guardado na escolha. Sem esse candidato no
+    check (Fire fora, outro SEQ), fica o da escolha. Candidato sem código no
+    Fire = sem código, mesmo que o catálogo guardado tivesse um."""
+    from app.erp.produto_trava import candidato_decidido  # evita ciclo
+
+    itens = (check or {}).get("items") or []
+
+    def _candidato(v: dict) -> dict | None:
+        i = v["item_index"]
+        if v.get("fonte") != "escolha_pontual" or not 0 <= i < len(itens):
+            return None
+        produto = (itens[i] or {}).get("produto")
+        if (
+            not isinstance(produto, dict)
+            or produto.get("estado") != "ok"
+            or produto.get("fonte") != "escolha_pontual"
+            or str(produto.get("fire_seq")) != str(v["fire_produto_id"])
+        ):
+            return None
+        return candidato_decidido(produto)
+
+    out: list[dict] = []
+    for v in vinculos:
+        cand = _candidato(v)
+        if cand is None:
+            out.append(v)
+            continue
+        codigo = (cand.get("codprod_altern") or "").strip()
+        out.append(
+            {
+                **v,
+                "fire_codigo": codigo or v.get("codigo_cliente"),
+                "sem_codigo_fire": not codigo,
+            }
+        )
+    return out
+
+
+def pontuais_sem_codigo(vinculos: list[dict]) -> list[dict]:
+    """Linhas com escolha pontual cujo produto não tem `CODPROD_ALTERN`: a
+    planilha não consegue apontá-las (R21)."""
+    return [v for v in vinculos if v.get("fonte") == "escolha_pontual" and v.get("sem_codigo_fire")]
+
+
+def motivo_pontual_sem_codigo(v: dict) -> str:
+    return (
+        f"O produto {v['fire_produto_id']} escolhido para a linha {v['item_index'] + 1} "
+        "não tem código no Fire; a planilha não consegue apontá-lo. "
+        "Use o envio direto ou ajuste o cadastro."
+    )
 
 
 def aplicar(order: Order, vinculos: list[dict]) -> list[dict]:

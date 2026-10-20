@@ -48,7 +48,9 @@ def isolated_sqlite(tmp_path_factory):
 
 def _order(*itens: dict) -> Order:
     return Order(
-        header=OrderHeader(order_number="14330456", customer_cnpj="00000000000100", customer_name="BR"),
+        header=OrderHeader(
+            order_number="14330456", customer_cnpj="00000000000100", customer_name="BR"
+        ),
         items=[OrderItem(quantity=1.0, unit_price=10.0, **kw) for kw in itens],
     )
 
@@ -326,11 +328,15 @@ def test_vincular_em_chave_repetida_grava_pontual_e_nao_grava_v1_v2(monkeypatch)
     # o check guardado reflete a escolha (re-open e fila)
     assert salvo["check"]["items"][0]["produto"]["fonte"] == "escolha_pontual"
 
-    (audit,) = [a for a in repo.list_audit(entry_id) if a["event_type"] == "produto_escolha_pontual"]
+    (audit,) = [
+        a for a in repo.list_audit(entry_id) if a["event_type"] == "produto_escolha_pontual"
+    ]
     assert audit["detail"]["item_index"] == 0
     assert audit["detail"]["fire_produto_id"] == 2010
     assert audit["detail"]["pedido"] == "14330456"
-    assert not [a for a in repo.list_audit(entry_id) if a["event_type"].startswith("produto_vinculo")]
+    assert not [
+        a for a in repo.list_audit(entry_id) if a["event_type"].startswith("produto_vinculo")
+    ]
 
 
 def test_vincular_com_chave_repetida_no_pedido_e_pontual_mesmo_com_check_antigo(monkeypatch):
@@ -344,7 +350,13 @@ def test_vincular_com_chave_repetida_no_pedido_e_pontual_mesmo_com_check_antigo(
 
     monkeypatch.setattr(product_check, "check_order", fake)
     _seed_catalogo()
-    ok = {"estado": "ok", "fire_seq": 2000, "fonte": "codprod_altern", "motivo": "", "candidatos": []}
+    ok = {
+        "estado": "ok",
+        "fire_seq": 2000,
+        "fonte": "codprod_altern",
+        "motivo": "",
+        "candidatos": [],
+    }
     entry_id = _seed_import(_beira_rio(), produtos=[ok, ok])
 
     r = client.post(
@@ -400,7 +412,9 @@ def test_trocar_escolha_audita_o_seq_antigo(monkeypatch):
     )
 
     assert r.status_code == 200, r.text
-    (audit,) = [a for a in repo.list_audit(entry_id) if a["event_type"] == "produto_escolha_pontual"]
+    (audit,) = [
+        a for a in repo.list_audit(entry_id) if a["event_type"] == "produto_escolha_pontual"
+    ]
     assert audit["detail"]["fire_seq_antigo"] == 2008
     assert audit["detail"]["fire_produto_id"] == 2010
     escolha = repo.get_import(entry_id)["produto_escolhido"]["0"]
@@ -423,7 +437,9 @@ def test_vincular_normal_mantem_a_escolha_pontual_de_outra_linha(monkeypatch):
         {"product_code": CODIGO, "description": DESC_PRETO},
         {"product_code": "OUTRO-1", "description": "SANDALIA"},
     )
-    entry_id = _seed_import(order, produtos=[_chave_repetida(), _chave_repetida(), _chave_repetida()])
+    entry_id = _seed_import(
+        order, produtos=[_chave_repetida(), _chave_repetida(), _chave_repetida()]
+    )
     r0 = client.post(
         f"/api/imported/{entry_id}/vincular-produto",
         json={"item_index": 0, "fire_produto_id": "2010"},
@@ -489,7 +505,11 @@ def _saida_fora_de_ligado(monkeypatch, tmp_path, modo: str, export_mode: str):
     monkeypatch.setattr(
         app_config,
         "load",
-        lambda: {"watch_dir": str(tmp_path), "output_dir": str(tmp_path), "export_mode": export_mode},
+        lambda: {
+            "watch_dir": str(tmp_path),
+            "output_dir": str(tmp_path),
+            "export_mode": export_mode,
+        },
     )
     recebido: dict = {}
 
@@ -515,7 +535,9 @@ def _saida_fora_de_ligado(monkeypatch, tmp_path, modo: str, export_mode: str):
 
 @pytest.mark.parametrize("modo", ["desligado", "observando"])
 @pytest.mark.parametrize("export_mode", ["db", "both"])
-def test_send_to_fire_fora_de_ligado_usa_a_escolha_pontual(monkeypatch, tmp_path, modo, export_mode):
+def test_send_to_fire_fora_de_ligado_usa_a_escolha_pontual(
+    monkeypatch, tmp_path, modo, export_mode
+):
     entry_id, recebido = _saida_fora_de_ligado(monkeypatch, tmp_path, modo, export_mode)
 
     r = client.post(f"/api/imported/{entry_id}/send-to-fire")
@@ -556,3 +578,138 @@ def test_recheck_e_ack_passam_as_escolhas_do_import(monkeypatch):
 
     server._rechecar_pedidos_do_escopo("outro", "raiz:00000000", [("codigo", CODIGO)], None)
     assert vistos == [{1: 2010}]
+
+
+# ── R21: escolha pontual sem CODPROD_ALTERN nunca sai em planilha ─────────────
+
+MOTIVO_SEM_CODIGO = (
+    "O produto 2010 escolhido para a linha 1 não tem código no Fire; a planilha não "
+    "consegue apontá-lo. Use o envio direto ou ajuste o cadastro."
+)
+
+
+def _sem_codigo_na_escolha(entry_id):
+    repo.set_produto_escolha(entry_id, 0, fire_seq=2010, por="x@y", descricao="BRANCO")
+
+
+@pytest.mark.parametrize("modo", ["desligado", "observando"])
+@pytest.mark.parametrize("export_mode", ["xlsx", "both"])
+def test_send_planilha_recusa_escolha_sem_codigo_fora_de_ligado(
+    monkeypatch, tmp_path, modo, export_mode
+):
+    entry_id, recebido = _saida_fora_de_ligado(monkeypatch, tmp_path, modo, export_mode)
+    _sem_codigo_na_escolha(entry_id)
+
+    r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == MOTIVO_SEM_CODIGO
+    assert recebido == {}  # nada saiu
+    (audit,) = [a for a in repo.list_audit(entry_id) if a["event_type"] == "send_to_fire_blocked"]
+    assert audit["detail"]["produto"][0]["estado"] == "sem_codigo_fire"
+
+
+@pytest.mark.parametrize("modo", ["desligado", "observando"])
+def test_export_xlsx_recusa_escolha_sem_codigo_fora_de_ligado(monkeypatch, tmp_path, modo):
+    entry_id, recebido = _saida_fora_de_ligado(monkeypatch, tmp_path, modo, "xlsx")
+    _sem_codigo_na_escolha(entry_id)
+
+    r = client.post(f"/api/imported/{entry_id}/export-xlsx")
+
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == MOTIVO_SEM_CODIGO
+    assert "xlsx_itens" not in recebido
+
+
+@pytest.mark.parametrize("modo", ["desligado", "observando"])
+def test_send_db_aceita_escolha_sem_codigo_pelo_seq(monkeypatch, tmp_path, modo):
+    entry_id, recebido = _saida_fora_de_ligado(monkeypatch, tmp_path, modo, "db")
+    _sem_codigo_na_escolha(entry_id)
+
+    r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+
+    assert r.status_code == 200, r.text
+    assert recebido["seq"] == {0: 2010}
+    # nunca o SEQ em texto: fica o código do cliente (o insert entra pelo SEQ)
+    assert recebido["fb_itens"][0] == (CODIGO, f"ref cliente: {CODIGO}")
+
+
+def _check_vivo_com(codprod):
+    def fake(o, **kw):
+        return {
+            "available": True,
+            "items": [
+                {
+                    "product_code": CODIGO,
+                    "produto": {
+                        "estado": "ok",
+                        "fire_seq": 2010,
+                        "fonte": "escolha_pontual",
+                        "motivo": "",
+                        "candidatos": [
+                            {
+                                "seq": 2010,
+                                "descricao": "B",
+                                "codprod_altern": codprod,
+                                "bloqueado": False,
+                                "unidade": "PAR",
+                                "ean": None,
+                            }
+                        ],
+                    },
+                },
+                {"product_code": CODIGO, "produto": _chave_repetida()},
+            ],
+        }
+
+    return fake
+
+
+def test_planilha_prefere_o_codigo_vivo_do_fire(monkeypatch, tmp_path):
+    entry_id, recebido = _saida_fora_de_ligado(monkeypatch, tmp_path, "desligado", "xlsx")
+    monkeypatch.setattr(product_check, "check_order", _check_vivo_com("VIVO-10"))
+
+    r = client.post(f"/api/imported/{entry_id}/export-xlsx")
+
+    assert r.status_code == 200, r.text
+    assert recebido["xlsx_itens"][0][0] == "VIVO-10"
+
+
+def test_planilha_recusa_quando_o_fire_vivo_nao_tem_codigo(monkeypatch, tmp_path):
+    """O catálogo guardado tinha código, mas o Fire agora não tem: vale o Fire."""
+    entry_id, recebido = _saida_fora_de_ligado(monkeypatch, tmp_path, "desligado", "xlsx")
+    monkeypatch.setattr(product_check, "check_order", _check_vivo_com(None))
+
+    r = client.post(f"/api/imported/{entry_id}/export-xlsx")
+
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == MOTIVO_SEM_CODIGO
+
+
+@pytest.mark.parametrize(("export_mode", "status"), [("xlsx", 409), ("both", 409), ("db", 200)])
+def test_ligado_escolha_sem_codigo_trava_planilha_e_passa_no_insert(
+    monkeypatch, tmp_path, export_mode, status
+):
+    entry_id, recebido = _saida_fora_de_ligado(monkeypatch, tmp_path, "ligado", export_mode)
+    sem_codigo = (2010, 2010, "CHINELO LISA BRANCO", 10.0, "PAR", "Nao", None)
+    monkeypatch.setattr(
+        product_check,
+        "check_order",
+        lambda o, *, env=None, escolhas=None: _check(
+            o, escolhas=escolhas, code_rows=[MODELO], seq_rows=[sem_codigo]
+        ),
+    )
+    _sem_codigo_na_escolha(entry_id)
+    repo.set_produto_escolha(entry_id, 1, fire_seq=2010, por="x@y", descricao="BRANCO")
+
+    r = client.post(f"/api/imported/{entry_id}/send-to-fire")
+
+    assert r.status_code == status, r.text
+    if status == 409:
+        assert recebido == {}
+        (audit,) = [
+            a for a in repo.list_audit(entry_id) if a["event_type"] == "send_to_fire_blocked"
+        ]
+        assert {x["estado"] for x in audit["detail"]["produto"]} == {"sem_codigo_fire"}
+    else:
+        assert recebido["seq"] == {0: 2010, 1: 2010}

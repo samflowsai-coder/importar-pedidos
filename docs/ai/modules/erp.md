@@ -168,9 +168,17 @@ válida também tem os campos legados trocados (`match`, `match_source =
 `price_status` do escolhido; código da previsão de troca = o `CODPROD_ALTERN` dele),
 em todo modo (R20). Fora de `ligado` a saída leva a escolha por cima do v1:
 `depara_apply.sobrepor_escolhas(order, vinculos, entry["produto_escolhido"])` (SEQ
-no insert, `codigo` gravado na escolha — ou str(SEQ) — na planilha, EAN do
-escolhido ou nenhum, OBS "ref cliente: <orig>"), chamado por `_vinculos_de_para`
-(envio, export, preview).
+no insert, `codigo` gravado na escolha na planilha, EAN do escolhido ou nenhum,
+OBS "ref cliente: <orig>"), chamado por `_vinculos_de_para` (envio, export,
+preview). **R21:** produto escolhido sem `CODPROD_ALTERN` nunca vai como str(SEQ)
+(o importador do Fire casaria por prefixo): a linha fica com o código do cliente e
+`sem_codigo_fire`; `codigo_vivo_das_escolhas` prefere o código do candidato decidido
+no check ao vivo (`DecisaoEnvio.check_vivo`, preenchido em todo modo) ao do catálogo
+guardado. Envio xlsx/both e export-xlsx recusam com 409 `sem_codigo_fire` ("O produto
+X escolhido para a linha N não tem código no Fire; …") em qualquer modo, só para
+escolha pontual (`_recusa_planilha_pontual`, audit `send_to_fire_blocked` /
+`xlsx_export_blocked`); `db` passa pelo SEQ. Em `ligado` quem trava é o portão
+(`sem_codigo_fire` de `itens_planilha`).
 `produto_conferencia_incompleta` (topo e `summary`) = `True` quando o vínculo v2
 não pôde ser lido (banco do ambiente fora, intercompany sem resposta). Com
 `env` explícito o vínculo vem de `router.env_connect(env["slug"])`, não do
