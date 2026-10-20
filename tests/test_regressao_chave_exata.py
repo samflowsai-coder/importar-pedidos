@@ -3,6 +3,8 @@ comparação item a item. Sem rede e sem Firebird: tudo com fakes."""
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from app.models.order import Order, OrderHeader, OrderItem
@@ -478,16 +480,21 @@ def test_reler_arquivos_erro_num_arquivo_nao_derruba(tmp_path, monkeypatch):
     assert [r.order for r in rg.reler_arquivos(str(tmp_path))] == [None]
 
 
-def _db_imports(tmp_path, linhas):
+def _db_imports(tmp_path, linhas, nome="app_state_mm.db"):
     import sqlite3
 
-    db = tmp_path / "app_state_mm.db"
+    db = tmp_path / nome
     c = sqlite3.connect(db)
     c.execute(
         "CREATE TABLE imports (original_path TEXT, file_sha256 TEXT, imported_at TEXT, "
-        "order_number TEXT, customer_cnpj TEXT, source_filename TEXT)"
+        "order_number TEXT, customer_cnpj TEXT, source_filename TEXT, "
+        "portal_status TEXT DEFAULT 'found_in_fire', fire_codigo INTEGER)"
     )
-    c.executemany("INSERT INTO imports VALUES (?, ?, ?, ?, ?, ?)", linhas)
+    c.executemany(
+        "INSERT INTO imports (original_path, file_sha256, imported_at, order_number, "
+        "customer_cnpj, source_filename) VALUES (?, ?, ?, ?, ?, ?)",
+        linhas,
+    )
     c.commit()
     c.close()
     return db
@@ -529,4 +536,301 @@ def test_importacoes_caem_para_o_sha256_e_posix(tmp_path):
 
     out = rg.importacoes_dos_arquivos(db, [relido, nao])
 
-    assert list(out) == ["a/b.xlsx"]  # o que não casa fica de fora (vira sem_data)
+    assert out["a/b.xlsx"]["imported_at"] == "2026-09-09T12:00:00"
+    assert out["a/b.xlsx"]["mapeamento"]["por"] == "sha256"
+    # o que não casa vem SEM imported_at (vira sem_data), com o diagnóstico do que foi tentado
+    assert "imported_at" not in out["c.xlsx"]
+    assert out["c.xlsx"]["mapeamento"]["por"] is None
+    assert out["c.xlsx"]["mapeamento"]["bancos"] == [{"db": "app_state_mm.db", "importacoes": 1}]
+
+
+# ── ordem de gravação (agrupada por loja) e pedidos de várias lojas ──────────
+LOJA_A = "22333444000155"
+LOJA_B = "33444555000166"
+
+
+def _order_lojas(entregas=(LOJA_A, LOJA_B, LOJA_A), numero="AF049"):
+    o = Order(
+        header=OrderHeader(order_number=numero, customer_cnpj=CNPJ, customer_name="X"),
+        items=[
+            OrderItem(product_code=f"C{i}", delivery_cnpj=e, quantity=1.0)
+            for i, e in enumerate(entregas)
+        ],
+    )
+    return o
+
+
+def test_ordem_de_insercao_agrupa_por_loja_como_o_exportador():
+    assert rg.ordem_de_insercao(_order_lojas()) == [0, 2, 1]
+    assert rg.posicoes_por_planilha(_order_lojas()) == [[0, 2], [1]]
+
+
+def test_comparar_pedido_intercalado_a_b_a_no_insert_direto_nao_e_suspeito():
+    o = _order_lojas()
+    # decidido por item (ordem do pedido): 10, 20, 30. O Fire grava A, A, B = itens 0, 2, 1.
+    check = _check("ok:10", "ok:20", "ok:30")["items"]
+    fire = FakeFire(
+        [_linha("AF049", 1, "PEDIDO", "2026-10-19", 5, CNPJ)], {1: [10, 30, 20]}
+    )
+    cand = rg.candidato_do_pedido(o, data_pedido="2026-10-19")
+
+    itens = rg.comparar_pedido(o, check, cand, fire.pedidos_por_numero(["AF049"]), fire)
+
+    assert [(i["indice"], i["status"]) for i in itens] == [
+        (0, "ok_igual"), (1, "ok_igual"), (2, "ok_igual")
+    ]
+    assert {i["fire_codigo"] for i in itens} == {1}
+
+
+def test_comparar_pedido_intercalado_com_ordem_errada_de_verdade_e_suspeito():
+    o = _order_lojas()
+    check = _check("ok:10", "ok:20", "ok:30")["items"]
+    fire = FakeFire(
+        [_linha("AF049", 1, "PEDIDO", "2026-10-19", 5, CNPJ)], {1: [10, 20, 30]}
+    )
+    cand = rg.candidato_do_pedido(o, data_pedido="2026-10-19")
+
+    itens = rg.comparar_pedido(o, check, cand, fire.pedidos_por_numero(["AF049"]), fire)
+
+    assert [i["status"] for i in itens] == ["ok_igual", "suspeito", "suspeito"]
+
+
+def test_comparar_pedido_planilhas_por_loja_compara_so_os_itens_da_loja():
+    o = _order_lojas()
+    check = _check("ok:10", "ok:20", "ok:30")["items"]
+    # um pedido do Fire por loja: A (itens 0 e 2) e B (item 1), CNPJ do cliente = a loja
+    fire = FakeFire(
+        [
+            _linha("AF049", 11, "PEDIDO", "2026-10-19", 5, "22.333.444/0001-55"),
+            _linha("AF049", 12, "PEDIDO", "2026-10-19", 6, "33.444.555/0001-66"),
+        ],
+        {11: [10, 30], 12: [20]},
+    )
+    cand = rg.candidato_do_pedido(o, data_pedido="2026-10-19")
+
+    itens = rg.comparar_pedido(o, check, cand, fire.pedidos_por_numero(["AF049"]), fire)
+
+    assert [(i["indice"], i["status"], i["fire_codigo"]) for i in itens] == [
+        (0, "ok_igual", 11), (1, "ok_igual", 12), (2, "ok_igual", 11)
+    ]
+
+
+def test_comparar_pedido_planilhas_por_loja_seq_trocado_entre_lojas_e_perigoso():
+    o = _order_lojas()
+    check = _check("ok:10", "ok:20", "ok:30")["items"]
+    fire = FakeFire(
+        [
+            _linha("AF049", 11, "PEDIDO", "2026-10-19", 5, LOJA_A),
+            _linha("AF049", 12, "PEDIDO", "2026-10-19", 6, LOJA_B),
+        ],
+        {11: [10, 99], 12: [20]},
+    )
+    cand = rg.candidato_do_pedido(o, data_pedido="2026-10-19")
+
+    itens = rg.comparar_pedido(o, check, cand, fire.pedidos_por_numero(["AF049"]), fire)
+
+    assert [i["status"] for i in itens] == ["ok_igual", "ok_igual", "ok_seq_diferente"]
+
+
+def test_comparar_pedido_planilhas_loja_sem_pedido_no_fire():
+    o = _order_lojas()
+    check = _check("ok:10", "ok:20", "ok:30")["items"]
+    fire = FakeFire([_linha("AF049", 11, "PEDIDO", "2026-10-19", 5, LOJA_A)], {11: [10, 30]})
+    cand = rg.candidato_do_pedido(o, data_pedido="2026-10-19")
+
+    itens = rg.comparar_pedido(o, check, cand, fire.pedidos_por_numero(["AF049"]), fire)
+
+    assert [i["status"] for i in itens] == ["ok_igual", "sem_pedido_fire", "ok_igual"]
+
+
+def test_comparar_pedido_pareamento_ambiguo_nao_compara():
+    # duas planilhas (split por EAN de entrega) do mesmo CNPJ e do mesmo tamanho
+    o = _order_lojas(entregas=(LOJA_A, LOJA_A))
+    o.items[0].delivery_ean = "789000000001"
+    o.items[1].delivery_ean = "789000000002"
+    check = _check("ok:10", "ok:20")["items"]
+    fire = FakeFire(
+        [
+            _linha("AF049", 11, "PEDIDO", "2026-10-19", 5, LOJA_A),
+            _linha("AF049", 12, "PEDIDO", "2026-10-19", 5, LOJA_A),
+        ],
+        {11: [10], 12: [20]},
+    )
+    cand = rg.candidato_do_pedido(o, data_pedido="2026-10-19")
+
+    itens = rg.comparar_pedido(o, check, cand, fire.pedidos_por_numero(["AF049"]), fire)
+
+    assert [i["status"] for i in itens] == ["sem_pareamento", "sem_pareamento"]
+
+
+# ── cobertura: nada comparado nunca parece sucesso ───────────────────────────
+def test_cobertura_zero_comparados_falha_com_mensagem():
+    out = rg.executar(
+        {"a.pdf": _order(), "b.pdf": _order()},
+        checar=lambda o: _check("ok:10", "ok:20"),
+        fire=FakeFire([], {}),
+        importacoes={"a.pdf": IMP, "b.pdf": IMP},
+    )
+    assert out["totais"]["ok_seq_diferente"] == 0
+    assert out["cobertura"]["comparados"] == 0
+    assert "NADA FOI COMPARADO" in out["cobertura"]["mensagem"]
+    assert out["ok"] is False
+
+
+def test_cobertura_mais_de_metade_nao_ligada_falha():
+    fire = FakeFire([_linha("AF049", 1, "PEDIDO", "2026-10-19", 5, CNPJ)], {1: [10, 20]})
+    pedidos = {"a.pdf": _order("AF049"), "b.pdf": _order("X1"), "c.pdf": _order("X2")}
+    out = rg.executar(
+        pedidos,
+        checar=lambda o: _check("ok:10", "ok:20"),
+        fire=fire,
+        importacoes={n: IMP for n in pedidos},
+    )
+    assert out["totais"]["ok_igual"] == 2
+    assert out["cobertura"]["comparados"] == 1
+    assert "COBERTURA INSUFICIENTE" in out["cobertura"]["mensagem"]
+    assert out["ok"] is False
+
+
+def test_cobertura_exatamente_metade_passa():
+    fire = FakeFire([_linha("AF049", 1, "PEDIDO", "2026-10-19", 5, CNPJ)], {1: [10, 20]})
+    pedidos = {"a.pdf": _order("AF049"), "b.pdf": _order("X1")}
+    out = rg.executar(
+        pedidos,
+        checar=lambda o: _check("ok:10", "ok:20"),
+        fire=fire,
+        importacoes={n: IMP for n in pedidos},
+    )
+    assert out["cobertura"]["ok"] is True and out["ok"] is True
+
+
+def test_cobertura_sem_arquivo_nenhum_falha():
+    out = rg.executar({}, checar=lambda o: {}, fire=FakeFire([], {}), importacoes={})
+    assert out["ok"] is False
+
+
+def test_importacoes_procuram_em_varios_bancos(tmp_path):
+    guardado = "20260910-103421_d7483e588500_AF166.xlsx"
+    db_mm = _db_imports(tmp_path, [], nome="app_state_mm.db")
+    db_nas = _db_imports(
+        tmp_path,
+        [("C:\\x\\" + guardado, None, "2026-09-10T10:34:30", "AF166", CNPJ, "AF166.xlsx")],
+        nome="app_state_nasmar.db",
+    )
+    relido = rg.Relido("2026/09/" + guardado, guardado, "f" * 64, None)
+
+    out = rg.importacoes_dos_arquivos([db_mm, db_nas], [relido])
+
+    m = out[relido.chave]["mapeamento"]
+    assert (m["por"], m["achado_em"]) == ("original_path", "app_state_nasmar.db")
+    assert [b["db"] for b in m["bancos"]] == ["app_state_mm.db", "app_state_nasmar.db"]
+
+
+# ── várias candidatas: horário de inserção, ambiguidade, revenda ─────────────
+def _linha_ins(numero, codigo, data, cli, cnpj, ins, status="PEDIDO", mec=99):
+    return (numero, codigo, status, data, cli, cnpj, mec, ins)
+
+
+def _cand(o, data="2026-10-07"):
+    return rg.candidato_do_pedido(o, data_pedido=data)
+
+
+def test_ligar_dois_pedidos_do_mesmo_cliente_e_ambiguo_e_lista_os_cabs():
+    # AW088: 5067 e 5068 do mesmo cliente, 7 min de diferença, importados 3 vezes
+    o = _order("AW088")
+    linhas = [
+        _linha_ins("AW088", 5067, "2026-10-07", 5, CNPJ, datetime(2026, 10, 7, 7, 10)),
+        _linha_ins("AW088", 5068, "2026-10-07", 5, CNPJ, datetime(2026, 10, 7, 7, 17)),
+    ]
+    veredito, cabs = rg.ligar_unico(_cand(o), linhas, importado_em="2026-10-07T07:09:17")
+    assert (veredito, cabs) == ("ambiguo", [5067, 5068])
+    assert rg.ligar_pedido(_cand(o), linhas, importado_em="2026-10-07T07:09:17") is None
+
+
+def test_ligar_pelo_horario_descarta_pedido_antigo_do_mesmo_numero():
+    # AF199: o 4574 é de agosto; o 5077 foi inserido 50 min depois da importação
+    o = _order("AF199")
+    linhas = [
+        _linha_ins("AF199", 4574, "2026-08-03", 5, CNPJ, datetime(2026, 8, 3, 15, 40)),
+        _linha_ins("AF199", 5077, "2026-10-09", 5, CNPJ, datetime(2026, 10, 9, 9, 35)),
+    ]
+    assert rg.ligar_unico(
+        _cand(o, "2026-10-09"), linhas, importado_em="2026-10-09T08:45:11"
+    ) == ("unico", [5077])
+
+
+def test_ligar_aceita_pedido_no_nome_da_revenda():
+    revenda = "34513679000134"
+    o = _order("AF199")
+    linhas = [
+        _linha_ins("AF199", 5077, "2026-10-09", 9, "34.513.679/0001-34",
+                   datetime(2026, 10, 9, 9, 35)),
+    ]
+    cand = _cand(o, "2026-10-09")
+    assert rg.ligar_unico(cand, linhas, importado_em="2026-10-09T08:45:11")[0] == "nenhum"
+    assert rg.ligar_unico(
+        cand, linhas, importado_em="2026-10-09T08:45:11", cnpjs_extra=[revenda]
+    ) == ("unico", [5077])
+
+
+def test_horario_fora_da_janela_nao_liga_e_sem_horario_no_fire_nao_filtra():
+    o = _order("X1")
+    antes = _linha_ins("X1", 1, "2026-10-09", 5, CNPJ, datetime(2026, 10, 9, 8, 30))  # -15 min
+    longe = _linha_ins("X1", 2, "2026-10-09", 5, CNPJ, datetime(2026, 10, 13, 8, 0))  # +4 dias
+    sem = _linha_ins("X1", 3, "2026-10-09", 5, CNPJ, None)
+    cand = _cand(o, "2026-10-09")
+    assert rg.ligar_unico(cand, [antes, longe], importado_em="2026-10-09T08:45:00")[0] == "nenhum"
+    assert rg.ligar_unico(cand, [sem], importado_em="2026-10-09T08:45:00") == ("unico", [3])
+    assert rg.ligar_unico(cand, [sem, sem], importado_em="2026-10-09T08:45:00")[0] == "unico"
+    # linha de 7 colunas (sem horário) segue valendo
+    antiga = ("X1", 4, "PEDIDO", "2026-10-09", 5, CNPJ, 99)
+    assert rg.ligar_unico(cand, [antiga], importado_em="2026-10-09T08:45:00") == ("unico", [4])
+
+
+def test_executar_ambiguo_nao_e_ok_igual_nem_perigoso_e_lista_candidatos():
+    linhas = [
+        _linha_ins("AW088", 5067, "2026-10-07", 5, CNPJ, datetime(2026, 10, 7, 7, 10)),
+        _linha_ins("AW088", 5068, "2026-10-07", 5, CNPJ, datetime(2026, 10, 7, 7, 17)),
+        _linha_ins("AF049", 1, "2026-10-07", 5, CNPJ, datetime(2026, 10, 7, 7, 10)),
+    ]
+    fire = FakeFire(linhas, {1: [10, 20]})
+    imp = {"imported_at": "2026-10-07T07:09:17"}
+    out = rg.executar(
+        {"a.xlsx": _order("AW088"), "b.xlsx": _order("AF049")},
+        checar=lambda o: _check("ok:10", "ok:20"),
+        fire=fire,
+        importacoes={"a.xlsx": imp, "b.xlsx": imp},
+    )
+    assert out["totais"]["ambiguo"] == 2
+    assert out["totais"]["ok_igual"] == 2 and out["totais"]["ok_seq_diferente"] == 0
+    a = next(x for x in out["arquivos"] if x["arquivo"] == "a.xlsx")
+    assert a["resultado"] == "ambiguo"
+    assert a["itens"][0]["candidatos_fire"] == [5067, 5068]
+    assert out["perigosos"] == []
+
+
+def test_executar_importacao_parsed_sem_pedido_e_nao_enviado_e_fica_fora_da_cobertura():
+    fire = FakeFire([_linha("AF049", 1, "PEDIDO", "2026-10-19", 5, CNPJ)], {1: [10, 20]})
+    parsed = {"imported_at": "2026-10-19T10:00:00", "portal_status": "parsed", "fire_codigo": None}
+    pedidos = {"a.pdf": _order("AF049")}
+    pedidos.update({f"p{i}.pdf": _order(f"ZZ{i}") for i in range(5)})
+    out = rg.executar(
+        pedidos,
+        checar=lambda o: _check("ok:10", "ok:20"),
+        fire=fire,
+        importacoes={"a.pdf": IMP, **{f"p{i}.pdf": parsed for i in range(5)}},
+    )
+    assert out["totais"]["nao_enviado"] == 10
+    assert out["cobertura"]["nao_enviados"] == 5
+    assert out["cobertura"]["ok"] is True and out["ok"] is True
+
+
+def test_executar_leva_o_mapeamento_para_o_json():
+    out = rg.executar(
+        {"a.pdf": _order()},
+        checar=lambda o: _check("ok:10", "ok:20"),
+        fire=FakeFire([], {}),
+        importacoes={"a.pdf": {"mapeamento": {"por": None, "bancos": []}}},
+    )
+    assert out["arquivos"][0]["resultado"] == "sem_data"
+    assert out["arquivos"][0]["mapeamento"] == {"por": None, "bancos": []}

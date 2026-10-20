@@ -13,6 +13,11 @@ decidido com o SEQ gravado:
   ok_seq_diferente   decidido != gravado  (o balde PERIGOSO: tem que dar zero)
   pendente           o check novo não decide (fica para a operação vincular)
   sem_pedido_fire    o pedido não foi achado no Fire
+  ambiguo            mais de um pedido do Fire serve (mesmo número, mesmo cliente,
+                     inseridos logo após a importação); lista os CABs, não compara
+  nao_enviado        a importação nunca foi para o Fire (portal_status parsed)
+  sem_pareamento     pedido de várias lojas: não deu para dizer qual pedido do
+                     Fire é de qual loja (tamanho/CNPJ ambíguos); não comparado
   sem_data           o arquivo não casa com nenhuma importação (sem data, não
                      liga: sem a janela de datas o pedido mais antigo ganharia)
   (por arquivo)      sem_parse = não leu o arquivo; erro_check = Fire fora ou
@@ -22,20 +27,31 @@ Os originais ficam em subpastas (recebidos/<slug>/AAAA/MM/) com o nome
 `<AAAAMMDD-HHMMSS>_<sha12>_<nome original>`: a pasta é varrida recursivamente e
 cada arquivo vira sua importação pelo nome guardado em `imports.original_path`
 (ou, na falta, pelo sha256) — nunca por `source_filename`, que repete.
-Exit 0 só sem ok_seq_diferente, sem suspeito e sem erro_check.
+Exit 0 só sem ok_seq_diferente, sem suspeito e sem erro_check, E com cobertura:
+ao menos um arquivo comparado e no máximo 50% dos arquivos em sem_data /
+sem_pedido_fire / sem_pareamento ("nada comparado" nunca parece sucesso).
+
+Ordem dos itens no Fire: o insert direto grava AGRUPADO por local de entrega
+(não na ordem do pedido), e a planilha sai uma por loja (um pedido do Fire por
+planilha). A comparação por posição usa a MESMA permutação do exportador
+(`firebird_exporter._to_erp_rows_indexados` / `ERPExporter.linhas_por_arquivo`),
+e num pedido de várias lojas compara cada pedido do Fire só com os itens da sua loja.
 
 Não escreve em nada: o SQLite do ambiente abre `mode=ro`; o Fire entra com
 transação READ ONLY e uma guarda que só deixa passar SELECT/WITH; o intercompany
 fica desligado (consultaria o Fire da revenda); nenhuma chamada de LLM.
 
   FB_USER=SYSDBA FB_PASSWORD=... .venv/bin/python tools/regressao_chave_exata.py \\
-      --recebidos <dir dos originais> --db <app_state_mm.db> --slug mm \\
+      --recebidos <dir dos originais> --db <app_state_mm.db> [--db <outro.db> ...] \\
+      [--cnpj-revenda 34513679000134] --slug mm \\
       --fb-host 192.168.15.4 --fb-path 'C:\\Fire\\MM_CONFECCAO.FDB' \\
       --saida regressao-mm.json
 
 Ligação ao pedido do Fire: CAB_VENDAS por PEDIDO_CLIENTE (variantes do número)
-+ CNPJ do cliente + janela de 90 dias antes da importação + MECANICO = 99
-(criado pelo importador); a mesma chave dupla da reconciliação.
++ cliente esperado (cabeçalho, lojas, ou a revenda de --cnpj-revenda) + MECANICO = 99
++ inserido (ULT_INS_DTHR) de -5 min a +72 h depois da importação. Mais de um pedido
+plausível = `ambiguo` (lista os CABs; nunca escolhe). Importação `parsed` que nunca
+foi para o Fire e não tem pedido = `nao_enviado` (esperado; fora da cobertura).
 """
 
 from __future__ import annotations
@@ -49,8 +65,9 @@ import re
 import sqlite3
 import sys
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -59,10 +76,11 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.erp import queries  # noqa: E402
+from app.erp.cnpj import cnpj_digits  # noqa: E402
 from app.erp.fire_reconcile import (  # noqa: E402
     _TAMANHO_PEDIDO_CLIENTE,
     Candidato,
-    _decidir_candidato,
+    _dentro_da_janela,
     _indexar_por_numero,
     _linhas_do_candidato,
 )
@@ -77,6 +95,9 @@ BALDES_ITEM = (
     "ok_seq_diferente",
     "pendente",
     "sem_pedido_fire",
+    "sem_pareamento",
+    "ambiguo",
+    "nao_enviado",
     "sem_data",
 )
 BLOCO = 200
@@ -193,14 +214,15 @@ def abrir_fire(
 
 # ── Fire: pedido e itens gravados pelo importador ────────────────────────────
 def sql_pedidos_por_numero(n: int) -> str:
-    """(PEDIDO_CLIENTE, CODIGO, STATUS, DATA_PEDIDO, CLIENTE.CODIGO, CPF_CNPJ, MECANICO)
-    — as seis primeiras na ordem da reconciliação; MECANICO no fim."""
+    """(PEDIDO_CLIENTE, CODIGO, STATUS, DATA_PEDIDO, CLIENTE.CODIGO, CPF_CNPJ, MECANICO,
+    ULT_INS_DTHR) — as seis primeiras na ordem da reconciliação; MECANICO e o
+    instante de INSERÇÃO do pedido no fim."""
     if n < 1:
         raise ValueError("IN () é SQL inválida no Firebird: n >= 1")
     marcas = ", ".join("?" for _ in range(n))
     return (
         "SELECT TRIM(V.PEDIDO_CLIENTE), V.CODIGO, V.STATUS, V.DATA_PEDIDO, "
-        "C.CODIGO, TRIM(C.CPF_CNPJ), V.MECANICO "
+        "C.CODIGO, TRIM(C.CPF_CNPJ), V.MECANICO, V.ULT_INS_DTHR "
         "FROM CAB_VENDAS V JOIN CADASTRO C ON C.CODIGO = V.CLIENTE "
         f"WHERE TRIM(V.PEDIDO_CLIENTE) IN ({marcas})"
     )
@@ -259,30 +281,145 @@ def _eh_importador(mecanico: Any) -> bool:
     return str(mecanico).strip() == str(MECANICO_IMPORTADOR)
 
 
-def ligar_pedido(candidato: Candidato, linhas: list[tuple]) -> int | None:
-    """CAB_VENDAS.CODIGO do pedido que o importador gravou para o candidato, ou
-    None. Só linhas com MECANICO = 99; resto da decisão é o da reconciliação."""
-    do_importador = [linha[:6] for linha in linhas if _eh_importador(linha[6])]
-    achado = _decidir_candidato(
-        candidato, _linhas_do_candidato(candidato, _indexar_por_numero(do_importador))
+JANELA_ANTES = timedelta(minutes=5)  # relógio do portal x relógio do Fire
+JANELA_DEPOIS = timedelta(hours=72)  # planilha: o Fire importa horas depois do envio
+
+
+def _instante(valor: Any) -> datetime | None:
+    """datetime do driver ou texto ISO ('T' ou espaço); None se ilegível."""
+    if isinstance(valor, datetime):
+        return valor.replace(tzinfo=None)
+    if isinstance(valor, str) and valor.strip():
+        try:
+            return datetime.fromisoformat(valor.strip().replace("Z", "")).replace(tzinfo=None)
+        except ValueError:
+            return None
+    return None
+
+
+def candidatos_fire(
+    candidato: Candidato, linhas: list[tuple], *, cnpjs_extra: Iterable[str] = ()
+) -> list[dict]:
+    """Pedidos do importador (MECANICO 99) com o mesmo número (variantes), dentro
+    da janela de 90 dias, de um cliente esperado: o do cabeçalho, uma das lojas ou
+    `cnpjs_extra` (a revenda intercompany: o pedido da MM pode estar no nome dela).
+    CANCELADO sai quando há alternativa. Cada um: codigo, cnpj, status, inserido_em."""
+    do_importador = [linha for linha in linhas if _eh_importador(linha[6])]
+    inseridos = {linha[1]: (linha[7] if len(linha) > 7 else None) for linha in do_importador}
+    mesmas = _linhas_do_candidato(
+        candidato, _indexar_por_numero([linha[:6] for linha in do_importador])
     )
-    return achado.fire_codigo if achado is not None else None
+    na_janela = [linha for linha in mesmas if _dentro_da_janela(linha[3], candidato.data_pedido)]
+    alvos = {
+        cnpj_digits(c) for c in (candidato.cnpj_header, *candidato.cnpjs_entrega, *cnpjs_extra)
+    } - {""}
+    casadas = [linha for linha in na_janela if cnpj_digits(linha[5]) in alvos]
+    vivas = [linha for linha in casadas if (linha[2] or "").strip().upper() != "CANCELADO"]
+    unicos: dict[int, dict] = {}
+    for linha in vivas or casadas:
+        unicos.setdefault(
+            linha[1],
+            {
+                "codigo": linha[1],
+                "cnpj": cnpj_digits(linha[5]),
+                "status": (linha[2] or "").strip(),
+                "inserido_em": inseridos.get(linha[1]),
+            },
+        )
+    return [unicos[k] for k in sorted(unicos)]
 
 
-def comparar_itens(itens_check: list[dict], seqs_fire: list[int | None]) -> list[dict]:
-    """Um registro por item. `status`:
+def filtrar_por_horario(cands: list[dict], importado_em: Any) -> list[dict]:
+    """Fica com os pedidos INSERIDOS pouco depois da importação (de -5 min a
+    +72 h). Pedidos sem horário no Fire só valem se NENHUM tem horário (aí não há
+    como filtrar). Sem hora de importação, não filtra."""
+    t0 = _instante(importado_em)
+    if t0 is None:
+        return cands
+    com_horario = [c for c in cands if _instante(c["inserido_em"]) is not None]
+    if not com_horario:
+        return cands
+    return [
+        c
+        for c in com_horario
+        if -JANELA_ANTES <= _instante(c["inserido_em"]) - t0 <= JANELA_DEPOIS
+    ]
+
+
+def ligar_unico(
+    candidato: Candidato,
+    linhas: list[tuple],
+    *,
+    importado_em: Any = None,
+    cnpjs_extra: Iterable[str] = (),
+) -> tuple[str, list[int]]:
+    """('unico' | 'ambiguo' | 'nenhum', CABs candidatos). Com mais de um pedido
+    plausível NUNCA escolhe: devolve 'ambiguo' com todos."""
+    cands = filtrar_por_horario(
+        candidatos_fire(candidato, linhas, cnpjs_extra=cnpjs_extra), importado_em
+    )
+    codigos = [c["codigo"] for c in cands]
+    if not codigos:
+        return "nenhum", []
+    return ("unico" if len(codigos) == 1 else "ambiguo"), codigos
+
+
+def ligar_pedido(candidato: Candidato, linhas: list[tuple], **kw: Any) -> int | None:
+    """CAB_VENDAS.CODIGO do pedido do importador, ou None (nenhum OU ambíguo)."""
+    veredito, codigos = ligar_unico(candidato, linhas, **kw)
+    return codigos[0] if veredito == "unico" else None
+
+
+def ligar_todos(
+    candidato: Candidato,
+    linhas: list[tuple],
+    *,
+    importado_em: Any = None,
+    cnpjs_extra: Iterable[str] = (),
+) -> list[tuple[int, str]]:
+    """Todos os pedidos plausíveis [(CODIGO, CNPJ do cliente)] — para pedido de
+    várias lojas, que a planilha por loja vira N pedidos no Fire."""
+    cands = filtrar_por_horario(
+        candidatos_fire(candidato, linhas, cnpjs_extra=cnpjs_extra), importado_em
+    )
+    return [(c["codigo"], c["cnpj"]) for c in cands]
+
+
+def ordem_de_insercao(order: Order) -> list[int]:
+    """Posição em `order.items` de cada item, NA ORDEM em que o insert direto os
+    grava no Fire (agrupado por local de entrega). Reaproveita o exportador."""
+    from app.exporters.firebird_exporter import _to_erp_rows_indexados
+
+    return [indice for indice, _ in _to_erp_rows_indexados(order)]
+
+
+def posicoes_por_planilha(order: Order) -> list[list[int]]:
+    """Por planilha (= um pedido do Fire por loja), as posições em `order.items`,
+    na ordem das linhas. Reaproveita o exportador."""
+    from app.exporters.erp_exporter import ERPExporter
+
+    return [posicoes for _, posicoes in ERPExporter().linhas_por_arquivo(order)]
+
+
+def comparar_itens(
+    itens_check: list[dict], seqs_fire: list[int | None], *, posicional: bool = True
+) -> list[dict]:
+    """Um registro por item. `itens_check` JÁ vem na ordem esperada no Fire (ver
+    `comparar_em_ordem`); `posicional=False` quando essa ordem não é conhecida.
+    `status`:
 
     - `pendente`: o check não decidiu;
     - `ok_igual`: mesma posição, mesmo SEQ;
     - `suspeito`: contagem igual, o SEQ decidido existe no pedido mas em OUTRA
-      posição (o importador grava na ordem do pedido: ordem trocada merece olho);
+      posição, DEPOIS de aplicada a ordem de gravação do exportador (agrupada por
+      local de entrega): ordem trocada além disso merece olho;
     - `ok_igual_conjunto`: contagens diferentes e o SEQ está entre os do pedido;
     - `ok_seq_diferente`: o SEQ decidido não está (mais) entre os do pedido.
 
     Cada SEQ do Fire é consumido uma vez. `pareamento` diz por onde valeu."""
     produtos = [it.get("produto") or {} for it in itens_check]
     restantes = Counter(s for s in seqs_fire if s is not None)
-    mesma_contagem = len(produtos) == len(seqs_fire)
+    mesma_contagem = posicional and len(produtos) == len(seqs_fire)
     out: list[dict] = []
     for i, p in enumerate(produtos):
         decidido = p.get("fire_seq") if p.get("estado") == "ok" else None
@@ -312,18 +449,136 @@ def comparar_itens(itens_check: list[dict], seqs_fire: list[int | None]) -> list
     return out
 
 
-def _itens_sem_comparacao(itens_check: list[dict], status: str) -> list[dict]:
+def comparar_em_ordem(
+    itens_check: list[dict],
+    posicoes: list[int],
+    seqs_fire: list[int | None],
+    *,
+    posicional: bool = True,
+) -> list[dict]:
+    """Compara só os itens `posicoes` (índices em `itens_check`), tomados NESSA
+    ordem, com os SEQs do Fire. `indice` do resultado volta a ser o do pedido."""
+    resultado = comparar_itens(
+        [itens_check[p] for p in posicoes], seqs_fire, posicional=posicional
+    )
+    for r, p in zip(resultado, posicoes, strict=True):
+        r["indice"] = p
+    return sorted(resultado, key=lambda r: r["indice"])
+
+
+def _com_fire(itens: list[dict], codigo: int | None) -> list[dict]:
+    for it in itens:
+        it["fire_codigo"] = codigo
+    return itens
+
+
+def _sem_comparacao(
+    itens_check: list[dict], posicoes: list[int], status: str, candidatos: list[int] | None = None
+) -> list[dict]:
     return [
         {
-            "indice": i,
+            "indice": p,
             "status": status,
-            "estado": (it.get("produto") or {}).get("estado"),
-            "seq_decidido": (it.get("produto") or {}).get("fire_seq"),
+            "estado": (itens_check[p].get("produto") or {}).get("estado"),
+            "seq_decidido": (itens_check[p].get("produto") or {}).get("fire_seq"),
             "seq_fire": None,
             "pareamento": None,
+            "fire_codigo": None,
+            **({"candidatos_fire": candidatos} if candidatos else {}),
         }
-        for i, it in enumerate(itens_check)
+        for p in posicoes
     ]
+
+
+def comparar_pedido(
+    order: Order,
+    itens_check: list[dict],
+    cand: Candidato,
+    linhas: list[tuple],
+    fire: Any,
+    *,
+    importado_em: Any = None,
+    cnpjs_extra: Iterable[str] = (),
+) -> list[dict]:
+    """Liga `order` ao(s) pedido(s) do Fire e compara item a item, na ordem de
+    gravação do exportador. Devolve um registro por item (ordenado por índice).
+
+    - uma planilha só: um pedido do Fire com todos os itens, na ordem de
+      `ordem_de_insercao`;
+    - várias lojas: ou UM pedido do Fire com todos os itens (insert direto,
+      agrupado por loja), ou um pedido do Fire POR LOJA (planilhas); cada um é
+      pareado a uma loja pelo tamanho e pelo CNPJ do cliente, e só os itens
+      daquela loja entram na comparação. Pareamento duvidoso = `sem_pareamento`.
+
+    Candidatos: mesmo número, cliente esperado (cabeçalho, lojas ou revenda em
+    `cnpjs_extra`) e inserido de -5 min a +72 h depois de `importado_em`. Mais de um
+    candidato para o mesmo pedido = `ambiguo` (lista os CABs), nunca escolhe."""
+    kw = {"importado_em": importado_em, "cnpjs_extra": tuple(cnpjs_extra)}
+    n = len(itens_check)
+    todos = list(range(n))
+    try:
+        ordem = ordem_de_insercao(order)
+        ordem_ok = sorted(ordem) == todos
+    except Exception:  # noqa: BLE001 — sem a permutação, só dá para comparar por conjunto
+        ordem, ordem_ok = todos, False
+    try:
+        planilhas = posicoes_por_planilha(order)
+    except Exception:  # noqa: BLE001
+        planilhas = [todos]
+
+    if len(planilhas) <= 1:
+        veredito, codigos = ligar_unico(cand, linhas, **kw)
+        if veredito == "nenhum":
+            return _sem_comparacao(itens_check, todos, "sem_pedido_fire")
+        if veredito == "ambiguo":
+            return _sem_comparacao(itens_check, todos, "ambiguo", codigos)
+        codigo = codigos[0]
+        itens = comparar_em_ordem(
+            itens_check, ordem if ordem_ok else todos, fire.seqs_do_pedido(codigo),
+            posicional=ordem_ok,
+        )
+        return _com_fire(itens, codigo)
+
+    achados = ligar_todos(cand, linhas, **kw)
+    if not achados:
+        return _sem_comparacao(itens_check, todos, "sem_pedido_fire")
+    seqs = {codigo: fire.seqs_do_pedido(codigo) for codigo, _ in achados}
+
+    inteiros = [codigo for codigo, _ in achados if len(seqs[codigo]) == n]
+    if inteiros:  # insert direto: o pedido inteiro, agrupado por loja
+        if len(inteiros) > 1:
+            return _sem_comparacao(itens_check, todos, "sem_pareamento")
+        itens = comparar_em_ordem(
+            itens_check, ordem if ordem_ok else todos, seqs[inteiros[0]], posicional=ordem_ok
+        )
+        return _com_fire(itens, inteiros[0])
+
+    header = cnpj_digits(order.header.customer_cnpj)
+    lojas = []
+    for posicoes in planilhas:
+        cnpjs = {cnpj_digits(order.items[p].delivery_cnpj) for p in posicoes} - {""}
+        lojas.append((posicoes, cnpjs or ({header} - {""})))
+    livres = list(range(len(lojas)))
+    saida: list[dict] = []
+    ambiguas: set[int] = set()
+    for codigo, cnpj in achados:
+        cands = [
+            i for i in livres
+            if len(lojas[i][0]) == len(seqs[codigo]) and (not cnpj or cnpj in lojas[i][1])
+        ]
+        if len(cands) == 1:
+            i = cands[0]
+            livres.remove(i)
+            saida += _com_fire(
+                comparar_em_ordem(itens_check, lojas[i][0], seqs[codigo]), codigo
+            )
+        else:
+            ambiguas.update(cands)
+    for i in livres:
+        saida += _sem_comparacao(
+            itens_check, lojas[i][0], "sem_pareamento" if i in ambiguas else "sem_pedido_fire"
+        )
+    return sorted(saida, key=lambda r: r["indice"])
 
 
 def _motivo_erro_check(check: dict) -> str | None:
@@ -334,19 +589,60 @@ def _motivo_erro_check(check: dict) -> str | None:
     return None
 
 
+LIMITE_NAO_LIGADOS = 0.5
+
+
+def _cobertura(arquivos: list[dict]) -> dict:
+    """"Nada comparado" nunca pode parecer sucesso: sem nenhum arquivo comparado,
+    ou com mais da metade em sem_data / sem_pedido_fire / sem_pareamento / ambiguo,
+    a regressão falha, seja qual for o resto. `nao_enviado` (importação que nunca
+    foi para o Fire) não entra na conta."""
+    nao_enviados = sum(1 for a in arquivos if a["resultado"] == "nao_enviado")
+    total = len(arquivos) - nao_enviados
+    comparados = sum(1 for a in arquivos if a["resultado"] == "comparado")
+    nao_ligados = sum(
+        1
+        for a in arquivos
+        if a["resultado"] in ("sem_data", "sem_pedido_fire", "sem_pareamento", "ambiguo")
+    )
+    mensagem = None
+    if comparados == 0:
+        mensagem = (
+            f"NADA FOI COMPARADO: 0 de {total} arquivos chegaram a ser ligados a um pedido do Fire."
+        )
+    elif nao_ligados / total > LIMITE_NAO_LIGADOS:
+        mensagem = (
+            f"COBERTURA INSUFICIENTE: {nao_ligados} de {total} arquivos sem data, sem pedido no "
+            f"Fire, sem pareamento ou ambíguos (limite {int(LIMITE_NAO_LIGADOS * 100)}%). "
+            "O resultado não prova nada."
+        )
+    return {
+        "arquivos": len(arquivos),
+        "comparados": comparados,
+        "nao_ligados": nao_ligados,
+        "nao_enviados": nao_enviados,
+        "ok": mensagem is None,
+        "mensagem": mensagem,
+    }
+
+
 def executar(
     pedidos: dict[str, Order | None],
     *,
     checar: Callable[[Order], dict],
     fire: Any,
     importacoes: dict[str, dict],
+    cnpjs_revenda: Iterable[str] = (),
 ) -> dict:
     """Roda a regressão sobre `pedidos` (arquivo -> Order, ou None se não leu).
 
-    `importacoes`: arquivo -> {imported_at, order_number, customer_cnpj} da
-    importação dele. Sem ela (ou sem `imported_at`) o arquivo não liga ao Fire:
-    sem a janela de datas, um número que se repete entre anos ligaria ao pedido
-    errado — vai para `sem_data`."""
+    `importacoes`: arquivo -> {imported_at, order_number, customer_cnpj,
+    portal_status, fire_codigo, mapeamento} da importação dele. Sem ela (ou sem
+    `imported_at`) o arquivo não liga ao Fire: sem a data, um número que se repete
+    ligaria ao pedido errado — vai para `sem_data`. `cnpjs_revenda`: clientes
+    extras aceitos no Fire (a revenda intercompany: o pedido da MM pode estar no
+    nome dela). Importação `parsed` (nunca enviada ao Fire) sem pedido no Fire é
+    `nao_enviado`: esperado, e fora da conta de cobertura."""
     contados = (*BALDES_ITEM, "sem_parse", "erro_check")
     totais: Counter = Counter({b: 0 for b in contados})
     arquivos: list[dict] = []
@@ -367,28 +663,44 @@ def executar(
             continue
         itens_check = check.get("items") or []
         imp = importacoes.get(nome) or {}
-        data = (imp.get("imported_at") or "")[:10] or None
+        importado_em = imp.get("imported_at") or None
+        data = importado_em[:10] if importado_em else None
         cand = candidato_do_pedido(
             order,
             data_pedido=data,
             numero=imp.get("order_number"),
             cnpj=imp.get("customer_cnpj"),
         )
-        codigo = None
+        todos = list(range(len(itens_check)))
         if data is None:
-            resultado, itens = "sem_data", _itens_sem_comparacao(itens_check, "sem_data")
+            itens = _sem_comparacao(itens_check, todos, "sem_data")
         else:
             numeros = [v for v in variantes(cand.numero) if len(v) <= _TAMANHO_PEDIDO_CLIENTE]
-            codigo = ligar_pedido(cand, fire.pedidos_por_numero(numeros)) if numeros else None
-            if codigo is None:
-                resultado = "sem_pedido_fire"
-                itens = _itens_sem_comparacao(itens_check, "sem_pedido_fire")
+            if numeros:
+                itens = comparar_pedido(
+                    order, itens_check, cand, fire.pedidos_por_numero(numeros), fire,
+                    importado_em=importado_em, cnpjs_extra=tuple(cnpjs_revenda),
+                )
             else:
-                resultado = "comparado"
-                itens = comparar_itens(itens_check, fire.seqs_do_pedido(codigo))
+                itens = _sem_comparacao(itens_check, todos, "sem_pedido_fire")
+        statuses = {it["status"] for it in itens}
+        if "sem_data" in statuses:
+            resultado = "sem_data"
+        elif statuses - {"sem_pedido_fire", "sem_pareamento", "ambiguo"}:
+            resultado = "comparado"
+        elif "ambiguo" in statuses:
+            resultado = "ambiguo"
+        elif "sem_pareamento" in statuses:
+            resultado = "sem_pareamento"
+        elif imp.get("portal_status") == "parsed" and not imp.get("fire_codigo"):
+            resultado = "nao_enviado"  # a importação nunca foi para o Fire
+            for it in itens:
+                it["status"] = "nao_enviado"
+        else:
+            resultado = "sem_pedido_fire"
         for it in itens:
             totais[it["status"]] += 1
-            reg = {"arquivo": nome, "pedido": cand.numero, "fire_codigo": codigo, **it}
+            reg = {"arquivo": nome, "pedido": cand.numero, **it}
             if it["status"] == "ok_seq_diferente":
                 perigosos.append(reg)
             elif it["status"] == "suspeito":
@@ -398,12 +710,19 @@ def executar(
                 "arquivo": nome,
                 "resultado": resultado,
                 "pedido": cand.numero,
-                "fire_codigo": codigo,
+                "fire_codigos": sorted({it["fire_codigo"] for it in itens if it.get("fire_codigo")}),
+                "mapeamento": imp.get("mapeamento"),
+                "importacao": {
+                    k: imp.get(k) for k in ("imported_at", "portal_status", "fire_codigo")
+                },
                 "itens": itens,
             }
         )
+    cobertura = _cobertura(arquivos)
     return {
-        "ok": not (totais["ok_seq_diferente"] or totais["suspeito"] or totais["erro_check"]),
+        "ok": cobertura["ok"]
+        and not (totais["ok_seq_diferente"] or totais["suspeito"] or totais["erro_check"]),
+        "cobertura": cobertura,
         "totais": dict(totais),
         "perigosos": perigosos,
         "suspeitos": suspeitos,
@@ -501,33 +820,65 @@ def _basename(caminho: str | None) -> str:
     return re.split(r"[\\/]", caminho or "")[-1]
 
 
-def importacoes_dos_arquivos(db_path: Path, arquivos: list[Relido]) -> dict[str, dict]:
-    """chave do arquivo -> importação dele (imported_at, order_number,
-    customer_cnpj). Casa pelo nome GUARDADO contra o basename de
-    `imports.original_path` e, na falta, pelo sha256 do conteúdo. NUNCA por
-    `source_filename` (o nome original se repete entre pedidos). Várias
-    importações do mesmo arquivo: vale a mais recente."""
-    conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
-    try:
-        rows = conn.execute(
-            "SELECT original_path, file_sha256, imported_at, order_number, customer_cnpj "
-            "FROM imports ORDER BY imported_at"
-        ).fetchall()
-    finally:
-        conn.close()
-    por_nome: dict[str, dict] = {}
-    por_sha: dict[str, dict] = {}
-    for caminho, sha, quando, numero, cnpj in rows:  # crescente: a última vence
-        reg = {"imported_at": quando, "order_number": numero, "customer_cnpj": cnpj}
-        if caminho:
-            por_nome[_basename(caminho)] = reg
-        if sha:
-            por_sha[sha.strip().lower()] = reg
+def importacoes_dos_arquivos(
+    db_paths: Path | list[Path], arquivos: list[Relido]
+) -> dict[str, dict]:
+    """chave do arquivo -> importação dele, para TODO arquivo. Procura em cada
+    `--db` (as importações de uma empresa podem estar no banco de outra, por
+    roteamento) pelo nome GUARDADO contra o basename de `imports.original_path` e,
+    na falta, pelo sha256 do conteúdo. NUNCA por `source_filename` (o nome original
+    se repete entre pedidos). Várias importações do mesmo arquivo: vale a mais
+    recente. Sem achar, devolve a entrada sem `imported_at` (vira `sem_data`). Toda
+    entrada traz `mapeamento`: o que foi tentado, em quais bancos, e por qual via
+    casou — para diagnosticar `sem_data` sem adivinhar."""
+    caminhos = [db_paths] if isinstance(db_paths, Path) else list(db_paths)
+    colunas = (
+        "original_path, file_sha256, imported_at, order_number, customer_cnpj, "
+        "portal_status, fire_codigo"
+    )
+    indices: list[tuple[str, dict[str, dict], dict[str, dict], int]] = []
+    for caminho in caminhos:
+        conn = sqlite3.connect(f"{caminho.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(f"SELECT {colunas} FROM imports ORDER BY imported_at").fetchall()
+        finally:
+            conn.close()
+        por_nome: dict[str, dict] = {}
+        por_sha: dict[str, dict] = {}
+        for caminho_orig, sha, quando, numero, cnpj, status, fire_cod in rows:  # a última vence
+            reg = {
+                "imported_at": quando,
+                "order_number": numero,
+                "customer_cnpj": cnpj,
+                "portal_status": status,
+                "fire_codigo": fire_cod,
+            }
+            if caminho_orig:
+                por_nome[_basename(caminho_orig)] = reg
+            if sha:
+                por_sha[sha.strip().lower()] = reg
+        indices.append((caminho.name, por_nome, por_sha, len(rows)))
+
     out: dict[str, dict] = {}
     for a in arquivos:
-        achada = por_nome.get(a.guardado) or por_sha.get(a.sha256)
-        if achada is not None:
-            out[a.chave] = achada
+        achada: dict | None = None
+        via = achado_em = None
+        for nome_db, por_nome, por_sha, _ in indices:
+            if a.guardado in por_nome:
+                achada, via, achado_em = por_nome[a.guardado], "original_path", nome_db
+            elif a.sha256 in por_sha:
+                achada, via, achado_em = por_sha[a.sha256], "sha256", nome_db
+            if achada is not None:
+                break
+        mapeamento = {
+            "tentou": ["original_path (nome guardado)", "sha256 do conteúdo"],
+            "bancos": [{"db": n, "importacoes": total} for n, _, _, total in indices],
+            "por": via,
+            "achado_em": achado_em,
+            "nome_guardado": a.guardado,
+            "sha256": a.sha256,
+        }
+        out[a.chave] = {**(achada or {}), "mapeamento": mapeamento}
     return out
 
 
@@ -537,14 +888,33 @@ def _imprimir(out: dict) -> None:
     for b in BALDES_ITEM:
         print(f"  {b}: {t.get(b, 0)}")
     print(f"Arquivos: sem_parse={t.get('sem_parse', 0)} erro_check={t.get('erro_check', 0)}")
+    c = out["cobertura"]
+    print(f"Cobertura: {c['comparados']} comparados, {c['nao_ligados']} não ligados, de {c['arquivos']}")
+    if c["mensagem"]:
+        print(f"\n*** {c['mensagem']} ***")
     if t.get("sem_data"):
-        print("  (sem_data: arquivo sem importação correspondente em imports; não foi ligado)")
+        print("  (sem_data: nenhuma importação casou com o arquivo; não foi ligado)")
+        for a in out["arquivos"]:
+            if a["resultado"] == "sem_data":
+                m = a.get("mapeamento") or {}
+                dbs = ", ".join(f"{b['db']}({b['importacoes']})" for b in m.get("bancos", []))
+                print(f"    {a['arquivo']}: tentou original_path e sha256 em {dbs}")
+    if t.get("ambiguo"):
+        print("  (ambiguo: mais de um pedido do Fire serve; não escolhi nenhum)")
+        vistos = set()
+        for a in out["arquivos"]:
+            if a["resultado"] == "ambiguo" and a["arquivo"] not in vistos:
+                vistos.add(a["arquivo"])
+                cabs = (a["itens"][0].get("candidatos_fire") if a["itens"] else None) or []
+                print(f"    {a['arquivo']} pedido {a['pedido']}: CABs {cabs}")
+    if c_nao_env := out["cobertura"].get("nao_enviados"):
+        print(f"  (nao_enviado: {c_nao_env} arquivos de importação que nunca foi para o Fire)")
     if out["suspeitos"]:
         print("\nsuspeito (mesma contagem de itens, SEQ certo em OUTRA posição):")
         for p in out["suspeitos"]:
             print(
                 f"  {p['arquivo']} pedido {p['pedido']} item {p['indice']}: "
-                f"decidido {p['seq_decidido']} (Fire CAB {p['fire_codigo']})"
+                f"decidido {p['seq_decidido']} (Fire CAB {p.get('fire_codigo')})"
             )
     if out["perigosos"]:
         print("\nok_seq_diferente (decidiu um SEQ diferente do gravado no Fire):")
@@ -552,7 +922,7 @@ def _imprimir(out: dict) -> None:
             print(
                 f"  {p['arquivo']} pedido {p['pedido']} item {p['indice']}: "
                 f"decidido {p['seq_decidido']} x Fire {p['seq_fire']} "
-                f"(Fire CAB {p['fire_codigo']}, pareamento {p['pareamento']})"
+                f"(Fire CAB {p.get('fire_codigo')}, pareamento {p['pareamento']})"
             )
     else:
         print("\nok_seq_diferente: nenhum.")
@@ -563,7 +933,21 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("--recebidos", required=True, help="pasta com os arquivos originais")
-    ap.add_argument("--db", required=True, help="app_state_<slug>.db (cópia; abre só leitura)")
+    ap.add_argument(
+        "--db",
+        required=True,
+        action="append",
+        help="app_state_<slug>.db (cópia; abre só leitura). Repita para procurar as "
+        "importações em mais de um banco (roteamento); os vínculos v2 vêm do "
+        "app_state_<slug>.db, ou do primeiro",
+    )
+    ap.add_argument(
+        "--cnpj-revenda",
+        action="append",
+        default=[],
+        help="CNPJ da revenda intercompany, aceito como cliente no Fire (ex.: o da "
+        "Nasmar, 34513679000134, para arquivos da MM). Pode repetir",
+    )
     ap.add_argument("--slug", required=True, choices=["mm", "nasmar"])
     ap.add_argument("--fb-host", required=True)
     ap.add_argument("--fb-path", required=True, help="caminho do .fdb NO SERVIDOR")
@@ -577,10 +961,12 @@ def main(argv: list[str] | None = None) -> int:
     if not user or not password:
         print("exporte FB_USER e FB_PASSWORD (nunca na linha de comando)", file=sys.stderr)
         return 2
-    db_path = Path(args.db)
-    if not db_path.is_file():
-        print(f"--db não existe: {db_path}", file=sys.stderr)
-        return 2
+    db_paths = [Path(d) for d in args.db]
+    for d in db_paths:
+        if not d.is_file():
+            print(f"--db não existe: {d}", file=sys.stderr)
+            return 2
+    db_path = next((d for d in db_paths if d.name == f"app_state_{args.slug}.db"), db_paths[0])
 
     from app.erp import product_check
 
@@ -597,7 +983,8 @@ def main(argv: list[str] | None = None) -> int:
             {r.chave: r.order for r in relidos},
             checar=lambda o: product_check.check_order(o, env={"slug": args.slug}),
             fire=FireLeitura(conn),
-            importacoes=importacoes_dos_arquivos(db_path, relidos),
+            importacoes=importacoes_dos_arquivos(db_paths, relidos),
+            cnpjs_revenda=args.cnpj_revenda,
         )
     Path(args.saida).write_text(json.dumps(out, ensure_ascii=False, indent=2, default=str))
     _imprimir(out)
