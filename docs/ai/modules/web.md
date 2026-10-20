@@ -95,7 +95,8 @@ API pública para páginas-filho:
   gravar (sem gravação pela metade). `fire_codigo` do v2 = `codprod_altern` do
   catálogo local; `fire_descricao` = `nome`. Enquanto o `produto_chave_modo` não é
   `ligado` (`_trava_produto_ligada`), grava também o v1 (`produto_depara`) para o
-  check legado. Audit `produto_vinculo_criado` ou `produto_vinculo_trocado`
+  check legado — exceto em pedido intercompany (R13: o v1 é chaveado pela revenda);
+  o audit registra `v1: true|false`. Audit `produto_vinculo_criado` ou `produto_vinculo_trocado`
   (escopo, `chaves[{chave_tipo, chave_valor, fire_seq_antigo, fire_seq_novo}]`,
   `vinculo_ids`, pedido, usuário). Re-roda `check_order` deste pedido e, se ele veio
   `available`, de até 50 pedidos `parsed` do ambiente (mais antigos primeiro, R12)

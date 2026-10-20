@@ -3483,14 +3483,16 @@ def _chaves_do_item(item) -> list[tuple[str, str]]:
     return out
 
 
-def _cnpj_do_escopo(order, indice: int, env: dict | None) -> str | None:
+def _cnpj_do_escopo(order, indice: int, env: dict | None) -> tuple[str | None, bool]:
     """CNPJ que define o escopo do item na GRAVAÇÃO do vínculo (R11).
 
     Pedido intercompany (`resolucao_para` não é None) só grava com o cliente
     real resolvido: sem ele, o CNPJ do cabeçalho é o da revenda e o vínculo
     cairia no escopo errado. Falha de conexão → 503 (tente de novo); qualquer
     outro motivo (sem_chave, nao_encontrado, ambiguo...) → 422. A leitura do
-    check (`product_check._cnpj_real`) segue como está."""
+    check (`product_check._cnpj_real`) segue como está.
+
+    Devolve (cnpj, intercompany?)."""
     from app.erp import produto_escopo
 
     cnpj_real = None
@@ -3506,7 +3508,7 @@ def _cnpj_do_escopo(order, indice: int, env: dict | None) -> str | None:
                     raise HTTPException(status_code=503, detail=MSG_VINCULO_CLIENTE_REAL)
                 raise HTTPException(status_code=422, detail=MSG_VINCULO_REVENDA)
             cnpj_real = r.cnpj
-    return produto_escopo.cnpj_do_item(order, indice, cnpj_real=cnpj_real)
+    return produto_escopo.cnpj_do_item(order, indice, cnpj_real=cnpj_real), cnpj_real is not None
 
 
 def _conflito_json(v) -> dict:
@@ -3640,7 +3642,7 @@ def vincular_produto(
         raise HTTPException(status_code=422, detail="Produto não encontrado no catálogo local")
     fire_seq = int(prod["fire_produto_id"])
 
-    cnpj = _cnpj_do_escopo(order, body.item_index, env)
+    cnpj, intercompany = _cnpj_do_escopo(order, body.item_index, env)
     now = datetime.now().isoformat(timespec="seconds")
     with db.connect() as conn:
         escopo = produto_escopo.escopo_de_gravacao(conn, cnpj)
@@ -3684,7 +3686,10 @@ def vincular_produto(
             return JSONResponse(status_code=409, content=_conflito_json(exc.atual))
 
     # Check legado (v1) segue coerente enquanto a decisão nova não manda.
-    if not _trava_produto_ligada(env):
+    # R13: pedido intercompany não grava v1 — o v1 é chaveado pelo cliente do
+    # cabeçalho (a revenda) e valeria para todo cliente dela no caminho legado.
+    grava_v1 = not intercompany and not _trava_produto_ligada(env)
+    if grava_v1:
         ckey = produto_depara_repo.client_key(
             order.header.customer_cnpj, order.header.customer_name
         )
@@ -3726,6 +3731,7 @@ def vincular_produto(
                 "fire_nome": prod["nome"],
                 "chaves": trocas,
                 "vinculo_ids": [v.id for v in gravados],
+                "v1": grava_v1,
                 "pedido": order.header.order_number,
                 "user_id": user.id,
                 "user_email": user.email,

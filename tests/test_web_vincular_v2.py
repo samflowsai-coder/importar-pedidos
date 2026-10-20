@@ -343,6 +343,24 @@ def test_vincular_intercompany_resolvido_grava_no_escopo_do_cliente_real(
     assert r.status_code == 200, r.text
     assert {v.escopo for v in _vigentes()} == {"raiz:61585865"}
     assert {v["env"] for v in r.json()["vinculos"]} == {"test"}
+    # R13: sem v1 (chaveado pela revenda) em pedido intercompany
+    ckey = produto_depara_repo.client_key(RIACHUELO_LOJA_1, "RIACHUELO")
+    with db.connect() as conn:
+        assert produto_depara_repo.list_for_client(conn, ckey) == []
+        assert conn.execute("SELECT COUNT(*) FROM produto_depara").fetchone()[0] == 0
+    assert _audits(entry_id, "produto_vinculo_criado")[0]["detail"]["v1"] is False
+
+
+def test_vincular_nao_intercompany_em_desligado_grava_v1(check_fake, env_intercompany):
+    env_intercompany(None)  # resolucao_para None: pedido não é intercompany
+    _seed_catalogo()
+    entry_id = _seed_pedido(cnpj=RIACHUELO_LOJA_1, numero="R-1", itens=[_item()])
+
+    assert _vincular(entry_id).status_code == 200
+    ckey = produto_depara_repo.client_key(RIACHUELO_LOJA_1, "RIACHUELO")
+    with db.connect() as conn:
+        assert len(produto_depara_repo.list_for_client(conn, ckey)) == 2
+    assert _audits(entry_id, "produto_vinculo_criado")[0]["detail"]["v1"] is True
 
 
 def test_vincular_nao_recheca_com_fire_fora(monkeypatch):
