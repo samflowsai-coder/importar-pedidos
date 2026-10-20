@@ -187,6 +187,18 @@ CREATE TABLE IF NOT EXISTS erp_bases (
     UNIQUE (environment_id),
     UNIQUE (tenant_id, base)
 );
+
+-- Troca de interruptor do ambiente (M5: `produto_chave_modo`), auditável:
+-- antes, depois, quem e quando. Só INSERT; nunca apagado.
+CREATE TABLE IF NOT EXISTS ambiente_modo_audit (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    environment_id  TEXT NOT NULL,
+    campo           TEXT NOT NULL,
+    valor_antigo    TEXT,
+    valor_novo      TEXT NOT NULL,
+    alterado_por    TEXT NOT NULL,
+    alterado_em     TEXT NOT NULL
+);
 """
 
 INDEXES_SQL = """
@@ -221,6 +233,9 @@ CREATE INDEX IF NOT EXISTS idx_decisao_ambiente_env ON decisao_ambiente(env_slug
 
 CREATE INDEX IF NOT EXISTS idx_sombra_decidido_em ON roteamento_sombra(decidido_em DESC);
 CREATE INDEX IF NOT EXISTS idx_sombra_import_id   ON roteamento_sombra(import_id);
+
+CREATE INDEX IF NOT EXISTS idx_ambiente_modo_audit_env
+    ON ambiente_modo_audit(environment_id, alterado_em DESC);
 """
 
 # Migrações de coluna para shared.db — aplicadas se a coluna ainda não existir.

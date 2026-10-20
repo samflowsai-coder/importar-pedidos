@@ -384,16 +384,29 @@ def set_produto_chave_modo(env_id: str, valor: str, *, por: str) -> None:
     """Troca o interruptor do casamento de produto por chave exata do ambiente.
 
     `valor` fora de `PRODUTO_MODOS` levanta ValueError sem tocar no banco.
-    `por` (quem mudou) vai pro log: não existe audit de mudança de ambiente.
+    A troca grava `ambiente_modo_audit` (valor antigo, novo, `por`, quando) na
+    mesma transação do UPDATE (M5), além do log.
     """
     if valor not in PRODUTO_MODOS:
         raise ValueError(f"modo inválido: {valor!r} — use um de {PRODUTO_MODOS}")
+    agora = _now()
     with router.shared_connect() as conn:
+        row = conn.execute(
+            "SELECT produto_chave_modo FROM environments WHERE id = ?", (env_id,)
+        ).fetchone()
+        antigo = row[0] if row else None
         conn.execute(
             "UPDATE environments SET produto_chave_modo = ?, updated_at = ? WHERE id = ?",
-            (valor, _now(), env_id),
+            (valor, agora, env_id),
         )
-    logger.info("produto_chave_modo env_id={} -> {} por={}", env_id, valor, por)
+        if row is not None:
+            conn.execute(
+                "INSERT INTO ambiente_modo_audit "
+                "(environment_id, campo, valor_antigo, valor_novo, alterado_por, alterado_em) "
+                "VALUES (?, 'produto_chave_modo', ?, ?, ?, ?)",
+                (env_id, antigo, valor, por, agora),
+            )
+    logger.info("produto_chave_modo env_id={} {} -> {} por={}", env_id, antigo, valor, por)
 
 
 def set_preco_fonte_slug(env_id: str, slug: str | None, *, por: str) -> None:

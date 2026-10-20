@@ -170,6 +170,33 @@ def test_set_modo_aparece_no_get_get_by_slug_e_list(env):
     assert environments_repo.get_by_slug("mm")["produto_chave_modo"] == "observando"
 
 
+def _audit_modo():
+    with router.shared_connect() as conn:
+        return [
+            tuple(r)
+            for r in conn.execute(
+                "SELECT environment_id, campo, valor_antigo, valor_novo, alterado_por, "
+                "alterado_em IS NOT NULL FROM ambiente_modo_audit ORDER BY id"
+            ).fetchall()
+        ]
+
+
+def test_troca_de_modo_grava_audit_com_antes_depois_quem_e_quando(env):
+    """M5: a troca do interruptor é auditável (não só log)."""
+    environments_repo.set_produto_chave_modo(env["id"], "observando", por="admin@x.com")
+    environments_repo.set_produto_chave_modo(env["id"], "ligado", por="outro@x.com")
+    assert _audit_modo() == [
+        (env["id"], "produto_chave_modo", "desligado", "observando", "admin@x.com", 1),
+        (env["id"], "produto_chave_modo", "observando", "ligado", "outro@x.com", 1),
+    ]
+
+
+def test_modo_invalido_nao_grava_audit(env):
+    with pytest.raises(ValueError):
+        environments_repo.set_produto_chave_modo(env["id"], "talvez", por="x")
+    assert _audit_modo() == []
+
+
 def test_banco_antigo_migra_coluna(env):
     with router.shared_connect() as conn:
         conn.execute("ALTER TABLE environments DROP COLUMN produto_chave_modo")
