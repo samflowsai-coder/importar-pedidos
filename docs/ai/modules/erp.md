@@ -147,8 +147,10 @@ problema (`ambiguo`/`produto_bloqueado`) só deixa passar o SEQ que está entre 
 candidatos dela; fora disso, ou vínculos do código e do EAN diferentes →
 `chaves_discordam`. `ok` traz o candidato decidido em `candidatos`.
 `produto_conferencia_incompleta` (topo e `summary`) = `True` quando o vínculo v2
-não pôde ser lido (banco do ambiente fora, intercompany sem resposta); sem
-ambiente ativo não marca. Fire fora (`available=False`) ou falha só nesta passada →
+não pôde ser lido (banco do ambiente fora, intercompany sem resposta). Com
+`env` explícito o vínculo vem de `router.env_connect(env["slug"])`, não do
+contexto ativo, e qualquer falha marca. Sem `env`, `db.connect()`; sem ambiente
+ativo não marca. Fire fora (`available=False`) ou falha só nesta passada →
 `estado = "fire_indisponivel"` (do check, não de `decidir`). Os campos legados
 (`match`, `match_source`, `fire_product_id`, …) não mudam. Nada bloqueia ainda.
 

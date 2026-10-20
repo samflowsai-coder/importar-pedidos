@@ -23,7 +23,7 @@ from app.erp.produto_chave import (
     motivo_vinculo_invalido,
 )
 from app.models.order import Order
-from app.persistence import db, produto_depara_repo, produto_vinculo_repo
+from app.persistence import db, produto_depara_repo, produto_vinculo_repo, router
 from app.persistence.context import NoActiveEnvironmentError
 from app.persistence.produto_depara_repo import _norm_key as _depara_norm_key
 
@@ -226,18 +226,22 @@ def _vinculos_v2(
 ) -> tuple[list[tuple[int | None, int | None]], bool]:
     """((SEQ do vínculo do código, SEQ do vínculo do EAN) por item, completa?).
 
-    Lê o SQLite do ambiente ativo, no escopo de cada item. Sem ambiente ativo:
-    não há vínculo a ler, a conferência é completa. Qualquer outra falha (banco
+    Com `env` (slug): lê o SQLite DESSE ambiente (`router.env_connect`), não do
+    contexto ativo — quem chama com env pode estar fora de um contexto ativado
+    (R8). Sem `env`: o ambiente ativo (`db.connect()`); sem ambiente ativo não
+    há vínculo a ler e a conferência é completa. Qualquer outra falha (banco
     fora, intercompany sem resposta): segue sem vínculo e devolve completa=False,
     para a trava (Task 4) fechar em vez de confiar no resultado.
     """
     vazio: list[tuple[int | None, int | None]] = [(None, None)] * len(order.items)
     if not any(codigos) and not any(eans):
         return vazio, True
+    slug = (env or {}).get("slug")
+    cnpj_real, completa = _cnpj_real(order, env)
     try:
-        cnpj_real, completa = _cnpj_real(order, env)
         out = list(vazio)
-        with db.connect() as sconn:
+        abrir = (lambda: router.env_connect(slug)) if slug else db.connect
+        with abrir() as sconn:
             escopos_por_cnpj: dict[str | None, tuple[str, ...]] = {}
             grupos: dict[tuple[str, ...], list[int]] = {}
             for i in range(len(order.items)):
@@ -265,7 +269,14 @@ def _vinculos_v2(
                     )
         return out, completa
     except NoActiveEnvironmentError:
-        return vazio, True
+        if not slug:
+            # Sem env e sem ambiente ativo: não há vínculo a ler. Mantém uma
+            # falha anterior do intercompany.
+            return vazio, completa
+        from app.utils.logger import logger
+
+        logger.warning(f"vínculo v2 não pôde ser lido (slug={slug}): sem ambiente")
+        return vazio, False
     except Exception as exc:  # noqa: BLE001 — banco do ambiente fora: sem vínculo, incompleta
         from app.utils.logger import logger
 

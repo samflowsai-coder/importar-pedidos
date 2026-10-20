@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from app.erp import product_check, queries
 from app.models.order import Order, OrderHeader, OrderItem
+from app.persistence import produto_vinculo_repo as produto_vinculo_repo_mod
 
 
 def _order(items_kwargs: list[dict], *, customer_cnpj: str = "00000000000100") -> Order:
@@ -1039,11 +1042,11 @@ def test_check_banco_do_ambiente_fora_marca_conferencia_incompleta(mock_db, mock
 
 
 @patch("app.erp.product_check.FirebirdConnection")
-@patch("app.erp.product_check.db")
-def test_check_intercompany_sem_resposta_marca_conferencia_incompleta(mock_db, mock_fb):
+@patch("app.erp.product_check.router")
+def test_check_intercompany_sem_resposta_marca_conferencia_incompleta(mock_router, mock_fb):
     from app.erp.depara_cliente import ResolucaoCliente
 
-    mock_db.connect.return_value.__enter__.return_value = MagicMock()
+    mock_router.env_connect.return_value.__enter__.return_value = MagicMock()
     mock_fb.return_value.connect_with_config.return_value = _make_fb_ctx_chave()[0]
     with (
         patch("app.persistence.environments_repo.to_fb_config", return_value={"path": "x"}),
@@ -1066,3 +1069,114 @@ def test_check_indisponivel_conferencia_nao_marcada():
         report = product_check.check_order(_order([{"product_code": "X"}]))
     assert report["produto_conferencia_incompleta"] is False
     assert report["summary"]["produto_conferencia_incompleta"] is False
+
+
+# ---------------------------------------------------------------------------
+# R8: com env explícito, o vínculo v2 vem do banco DESSE ambiente
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _dados_em_tmp(tmp_path, monkeypatch):
+    """Nenhum teste deste arquivo escreve no data/ do repo (env_connect, shared)."""
+    from app.persistence import router
+
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    router.reset_init_cache()
+
+
+def _check_com_env(mock_fb, order, env, **rows):
+    mock_fb.return_value.connect_with_config.return_value = _make_fb_ctx_chave(**rows)[0]
+    with patch("app.persistence.environments_repo.to_fb_config", return_value={"path": "x"}):
+        return product_check.check_order(order, env=env)
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+def test_check_com_env_le_vinculo_do_banco_do_env_sem_contexto(mock_fb):
+    from app.persistence import context as env_context
+    from app.persistence import router
+
+    with router.env_connect("mm") as conn:
+        produto_vinculo_repo_mod.vincular(
+            conn,
+            escopo="raiz:00000000",
+            chave_tipo="codigo",
+            chave_valor="REF-X",
+            fire_seq=20,
+            fire_codigo="B1",
+            fire_descricao="B",
+            por="grazi@mm",
+            pedido_id=None,
+            agora="2026-10-19T10:00:00+00:00",
+        )
+    assert env_context.current() is None  # nenhum ambiente ativado
+    report = _check_com_env(
+        mock_fb,
+        _order([{"product_code": "ref-x", "unit_price": 2.0}]),
+        {"slug": "mm"},
+        seq_rows=[(20, 20, "B", 2.0, "PAR", "Nao", "B1")],
+    )
+    produto = report["items"][0]["produto"]
+    assert (produto["estado"], produto["fire_seq"], produto["fonte"]) == ("ok", 20, "depara")
+    assert report["produto_conferencia_incompleta"] is False
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.router")
+def test_check_com_env_banco_fora_marca_incompleta(mock_router, mock_fb):
+    import sqlite3
+
+    mock_router.env_connect.side_effect = sqlite3.OperationalError("unable to open database")
+    with patch("app.utils.logger.logger.warning") as warn:
+        report = _check_com_env(
+            mock_fb,
+            _order([{"product_code": "ABC", "unit_price": 1.0}]),
+            {"slug": "mm"},
+            code_rows=[("ABC", 5, "X", 1.0, "PAR", "Nao", "ABC")],
+        )
+    mock_router.env_connect.assert_called_with("mm")
+    assert report["produto_conferencia_incompleta"] is True
+    assert report["summary"]["produto_conferencia_incompleta"] is True
+    assert any("unable to open database" in str(c.args[0]) for c in warn.call_args_list)
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.router")
+def test_check_com_env_sem_ambiente_nao_e_silencioso(mock_router, mock_fb):
+    from app.persistence.context import NoActiveEnvironmentError
+
+    mock_router.env_connect.side_effect = NoActiveEnvironmentError("x")
+    report = _check_com_env(
+        mock_fb, _order([{"product_code": "ABC", "unit_price": 1.0}]), {"slug": "mm"}
+    )
+    assert report["produto_conferencia_incompleta"] is True
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.router")
+def test_check_intercompany_falhou_e_sem_ambiente_continua_incompleta(mock_router, mock_fb):
+    from app.erp.depara_cliente import ResolucaoCliente
+    from app.persistence.context import NoActiveEnvironmentError
+
+    mock_router.env_connect.side_effect = NoActiveEnvironmentError("x")
+    with patch(
+        "app.integrations.flowpcp.intercompany.resolucao_para",
+        return_value=ResolucaoCliente(False, motivo="erro_conexao"),
+    ):
+        report = _check_com_env(
+            mock_fb, _order([{"product_code": "ABC", "unit_price": 1.0}]), {"slug": "mm"}
+        )
+    assert report["produto_conferencia_incompleta"] is True
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.db")
+def test_check_sem_env_intercompany_nao_roda_e_sem_ambiente_fica_completa(mock_db, mock_fb):
+    """Sem env não há slug para o intercompany; sem ambiente ativo, completa."""
+    from app.persistence.context import NoActiveEnvironmentError
+
+    mock_db.connect.side_effect = NoActiveEnvironmentError("x")
+    with patch("app.integrations.flowpcp.intercompany.resolucao_para") as resolucao:
+        report, _ = _check(mock_fb, _order([{"product_code": "ABC", "unit_price": 1.0}]))
+    resolucao.assert_not_called()
+    assert report["produto_conferencia_incompleta"] is False
