@@ -80,7 +80,13 @@ def html() -> str:
         # Fire sem resposta
         "Não deu para conferir os produtos: o Fire não respondeu.",
         "Recarregar",
-        "Recarrega o que está salvo. Ao enviar, o Portal confere de novo no Fire.",
+        "Confere de novo no Fire e atualiza a tela.",
+        # I1: Recarregar reconfere de verdade; check salvo antes do pacote
+        "Conferindo…",
+        "/reconferir",
+        "Este pedido foi conferido antes da atualização. Clique em Conferir de novo.",
+        "check_antigo",
+        ">Conferir de novo</button>",
         "'Sem código para a planilha'",
         "Esse produto não está mais no catálogo do Fire. Escolha outro.",
         "Nenhum produto além dos",
@@ -212,8 +218,8 @@ def test_foco_inicial_sem_atalho_or(html):
 
 def test_sem_texto_antigo(html):
     assert "Você pode vincular mesmo assim" not in html
-    assert "Conferir de novo" not in html
-    assert "Conferindo…" not in html
+    # "Conferir de novo"/"Conferindo…" voltaram no I1: agora o botão reconfere no
+    # Fire de verdade (POST /reconferir), então o texto é verdadeiro.
     assert "'Chaves discordam'" not in html
 
 
@@ -351,3 +357,9 @@ def test_trava_do_preview_falha_fechada(monkeypatch, env_modo):
     trava = r.json()["produto_trava"]
     assert trava["bloqueado"] is True
     assert trava["reason"] == "fire_indisponivel"
+
+
+def test_recarregar_nao_promete_so_reler(html):
+    """I1: o texto antigo dizia que só relia o salvo; agora reconfere no Fire."""
+    assert "Recarrega o que está salvo" not in html
+    assert "Recarregando…" not in html

@@ -239,9 +239,18 @@ def _produto_trava_preview(check: dict | None, env: dict | None) -> dict:
     export_mode = "xlsx"
     try:
         export_mode = _export_mode_atual()
-        tp = produto_trava.avaliar(
-            check or {"items": []}, env=preco_trava.env_trava_produto(env), export_mode=export_mode
-        )
+        env_trava = preco_trava.env_trava_produto(env)
+        itens_check = (check or {}).get("items") or []
+        if (
+            produto_trava.modo(env_trava) != "desligado"
+            and itens_check
+            and not any(isinstance(it, dict) and "produto" in it for it in itens_check)
+        ):
+            # Check gravado antes do pacote da chave exata: nenhum item tem a
+            # decisão de produto. A tela não trava (o operador confere de novo);
+            # o portão do envio segue fechado, porque ele confere ao vivo.
+            return {"bloqueado": False, "reason": "check_antigo", "export_mode": export_mode, "itens": []}
+        tp = produto_trava.avaliar(check or {"items": []}, env=env_trava, export_mode=export_mode)
     except Exception as exc:  # noqa: BLE001 — a tela nunca quebra por isto, e trava
         from app.utils.logger import logger
 
@@ -4234,6 +4243,57 @@ def ack_sem_preco(
             "ack_by": fresh["sem_preco_ack_by"],
             "ack_at": fresh["sem_preco_ack_at"],
             "items_acked": items_acked,
+        }
+    )
+
+
+@app.post("/api/imported/{import_id}/reconferir")
+def reconferir_pedido(
+    import_id: str,
+    request: Request,
+    _user: User = Depends(require_user),
+    _env=Depends(env_do_pedido),
+) -> JSONResponse:
+    """Confere de novo no Fire o pedido em revisão (com as escolhas pontuais do
+    import), grava o check e devolve o check e a trava da tela. Sai do beco do
+    check salvo antes do pacote da chave exata (itens sem `produto`). Fire fora:
+    devolve o check indisponível e mantém o check salvo."""
+    from app.erp import preco_trava, product_check
+    from app.models.order import Order
+    from app.persistence import repo
+
+    entry = repo.get_import(import_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    if entry.get("portal_status") != "parsed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Pedido não está 'em revisão' (status atual: {entry.get('portal_status')})",
+        )
+    snapshot = entry.get("snapshot")
+    if not snapshot:
+        raise HTTPException(status_code=422, detail="Snapshot indisponível")
+    try:
+        order = Order.model_validate(snapshot)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Snapshot inválido: {exc}") from exc
+
+    env = _request_environment(request)
+    with with_trace_id(entry.get("trace_id")):
+        check = product_check.check_order(
+            order, env=env, escolhas=product_check.escolhas_do_import(entry)
+        )
+        if check.get("available"):
+            repo.update_fire_metadata(import_id, check=check)
+            check_preco = preco_trava.check_preco_para_gravar(order, env, entry)
+            if check_preco is not None:
+                repo.update_fire_metadata(import_id, check_preco=check_preco)
+    return JSONResponse(
+        {
+            "entry_id": import_id,
+            "check": check,
+            "produto_chave_modo": _produto_chave_modo(env),
+            "produto_trava": _produto_trava_preview(check, env),
         }
     )
 

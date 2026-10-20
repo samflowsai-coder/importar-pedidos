@@ -417,3 +417,17 @@ def test_ligado_rehydrate_preview_le_o_slug_da_empresa_do_pedido(portal, monkeyp
     r = portal.get("/api/imported/N1/preview")
     assert r.status_code == 200, r.text
     assert visto["slug"] == "nasmar"
+
+
+@pytest.mark.parametrize("cookie", [None, "mm"], ids=["sem-cookie", "cookie-da-outra-empresa"])
+def test_ligado_reconferir_roda_o_check_na_empresa_do_pedido(portal, espia, cookie):
+    """`Recarregar` (reconferir) roda o check com o env de NASMAR, nunca o da MM
+    nem `None`, e acha o pedido no SQLite dela."""
+    _grava("nasmar", "N1", snapshot=_snapshot("N1"))
+    roteamento_repo.set_modo(roteamento_repo.LIGADO, por="teste")
+    if cookie:
+        portal.cookies.set("portal_env", environments_repo.get_by_slug(cookie)["id"])
+
+    r = portal.post("/api/imported/N1/reconferir")
+    assert r.status_code == 200, r.text
+    assert espia["check"] == "nasmar"

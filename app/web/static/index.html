@@ -1926,11 +1926,27 @@ function focarItemDoPreview(idx) {
   });
 }
 
-// "Recarregar": traz de novo o que está salvo (não reconfere no Fire; o envio confere).
+// "Recarregar" / "Conferir de novo": confere de novo no Fire (com as escolhas
+// desta linha), o backend grava o check e a tela aplica check + trava da resposta.
 async function produtoConferirDeNovo(importId) {
   const btn = document.getElementById('pvConferirDeNovoBtn');
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Recarregando…'; }
-  await openImportDetail(importId);
+  const prev = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Conferindo…'; }
+  hidePreviewError();
+  try {
+    const body = await api('/api/imported/' + encodeURIComponent(importId) + '/reconferir', { method: 'POST' });
+    if (currentPreview && currentPreview.preview_id === importId) {
+      currentPreview.check = body.check;
+      if (body.produto_trava) currentPreview.produto_trava = body.produto_trava;
+      if (body.produto_chave_modo) currentPreview.produto_chave_modo = body.produto_chave_modo;
+      renderPreview(currentPreview);
+    }
+    loadImported();
+    loadFilaIdentificar();
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.innerHTML = prev; }
+    showPreviewError(err.message || 'Não deu para conferir de novo.');
+  }
 }
 
 async function sendToFire(importId) {
@@ -3659,11 +3675,18 @@ function produtoResumoBanner(data) {
   const ligado = data.produto_chave_modo === 'ligado';
   const fim = ligado ? 'O envio fica bloqueado até resolver.' : 'Em observação: o envio ainda não trava.';
   const partes = [];
+  const podeReconferir = data.portal_status === 'parsed';
+  if (data.produto_trava && data.produto_trava.reason === 'check_antigo') {
+    // Check salvo antes da atualização: nenhum item tem a decisão de produto.
+    // Não conta como "sem produto": o operador confere de novo.
+    return `<span class="pv-fire-off"><span style="color:var(--text);font-weight:600">Este pedido foi conferido antes da atualização. Clique em Conferir de novo.</span>
+      ${podeReconferir ? `<button class="btn btn-sm" id="pvConferirDeNovoBtn" onclick="produtoConferirDeNovo('${escJs(data.preview_id)}')">Conferir de novo</button>` : ''}</span>`;
+  }
   if (c.indisponiveis || !check.available) {
     // Fire sem resposta tem banner próprio: não é "sem produto confirmado".
     partes.push(`<span class="pv-fire-off"><span style="color:var(--text);font-weight:600">Não deu para conferir os produtos: o Fire não respondeu.</span>
-      ${data.portal_status ? `<button class="btn btn-sm" id="pvConferirDeNovoBtn" onclick="produtoConferirDeNovo('${escJs(data.preview_id)}')">Recarregar</button>
-        <span class="pv-fire-off-ajuda">Recarrega o que está salvo. Ao enviar, o Portal confere de novo no Fire.</span>` : ''}</span>`);
+      ${podeReconferir ? `<button class="btn btn-sm" id="pvConferirDeNovoBtn" onclick="produtoConferirDeNovo('${escJs(data.preview_id)}')">Recarregar</button>
+        <span class="pv-fire-off-ajuda">Confere de novo no Fire e atualiza a tela.</span>` : ''}</span>`);
   }
   if (check.produto_conferencia_incompleta) {
     partes.push(`<span style="color:var(--warn-strong);font-weight:600">⚠ Não consegui ler todos os vínculos salvos. Confira de novo antes de enviar.</span>`);

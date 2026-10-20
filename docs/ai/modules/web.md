@@ -79,6 +79,15 @@ API pública para páginas-filho:
   dicas (sem `q`) pra já mostrar candidatos. 400 só quando `q` < 2 **e** sem
   dicas. Itens de `results`/`suggestions`: `{fire_produto_id, fire_codigo,
   fire_ean, fire_codprod_altern, fire_nome, score?}`.
+- `POST /api/imported/{id}/reconferir` (`require_user`, `env_do_pedido`) — só
+  pedido `parsed` (senão **409**): roda `check_order(order, env, escolhas=escolhas_do_import(entry))`,
+  grava `check_json` (e `check_preco` da fonte, se houver) quando `available`, e
+  devolve `{entry_id, check, produto_chave_modo, produto_trava}`. É o botão
+  "Recarregar"/"Conferir de novo" da tela. Fire fora: devolve o check indisponível e
+  mantém o salvo. `produto_trava` do preview com check onde nenhum item tem
+  `produto` (gravado antes do pacote da chave exata), fora de `desligado`, é
+  `{bloqueado: false, reason: "check_antigo"}` — a tela pede "Conferir de novo";
+  o portão do envio segue fechado (confere ao vivo).
 - `POST /api/imported/{id}/vincular-produto` body
   `{item_index, fire_produto_id, substituir=false}` → vínculo v2
   (`produto_vinculo_v2`, `produto_vinculo_repo.vincular`) da chave exata do item
