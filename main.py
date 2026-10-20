@@ -6,6 +6,7 @@ import os
 import sys
 
 from app import config as app_config
+from app.erp import produto_trava
 from app.erp.product_check import check_order
 from app.exporters.erp_exporter import ERPExporter
 from app.ingestion.file_loader import FileLoader
@@ -16,21 +17,41 @@ INPUT_DIR = os.getenv("INPUT_DIR", "input/")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output/")
 
 
+# Trava de produto no CLI: só com PORTAL_PRODUTO_CHAVE_CLI=ligado. Ausente ou
+# qualquer outro valor = comportamento de hoje (nem chama o check_order).
+_ENV_TRAVA_CLI = "PORTAL_PRODUTO_CHAVE_CLI"
+
+
+def _trava_produto_cli_ligada() -> bool:
+    return os.getenv(_ENV_TRAVA_CLI) == "ligado"
+
+
 def _item_sem_produto_exato(order) -> bool:
-    """True (e loga) se o Fire respondeu e algum item está fora de `ok`."""
-    check = check_order(order)
-    if not check.get("available"):
+    """True (e loga) se o pedido não pode ir à planilha: mesma regra do
+    `produto_trava.avaliar` em `ligado`. Falha no check pula só este pedido."""
+    numero = order.header.order_number
+    try:
+        check = check_order(order)
+        tp = produto_trava.avaliar(check, env={"produto_chave_modo": "ligado"}, export_mode="xlsx")
+    except Exception as exc:  # noqa: BLE001 — um pedido não derruba o lote
+        logger.warning(
+            f"Pedido {numero} não exportado: falha ao conferir o produto ({type(exc).__name__})."
+        )
+        return True
+    if not tp.bloqueado:
         return False
-    for i, item in enumerate(check.get("items") or [], start=1):
-        produto = (item or {}).get("produto") or {}
-        if produto.get("estado") != "ok":
-            motivo = (produto.get("motivo") or "produto não identificado no Fire").rstrip(".")
-            logger.warning(
-                f"Pedido {order.header.order_number} não exportado: "
-                f"item {i} sem produto exato ({motivo})."
-            )
-            return True
-    return False
+    if tp.reason == "fire_indisponivel":
+        logger.warning(
+            f"Pedido {numero} não exportado: o produto dos itens não pôde ser conferido "
+            "(Fire indisponível ou vínculos ilegíveis)."
+        )
+        return True
+    primeiro = tp.itens[0] if tp.itens else {"index": 0, "motivo": None}
+    motivo = (primeiro.get("motivo") or "produto não identificado no Fire").rstrip(".")
+    logger.warning(
+        f"Pedido {numero} não exportado: item {primeiro['index'] + 1} sem produto exato ({motivo})."
+    )
+    return True
 
 
 def main() -> None:
@@ -42,6 +63,7 @@ def main() -> None:
 
     xlsx_exporter: ERPExporter | None = ERPExporter() if export_mode in ("xlsx", "both") else None
 
+    trava_produto = _trava_produto_cli_ligada()
     loader = FileLoader()
     files = loader.load_files(INPUT_DIR)
 
@@ -60,9 +82,9 @@ def main() -> None:
         if not order:
             continue
 
-        # Produto por chave exata: com o Fire respondendo, item sem produto exato
-        # não vai para a planilha (o CLI não tem revisão; o portal tem).
-        if xlsx_exporter and _item_sem_produto_exato(order):
+        # Produto por chave exata (só com PORTAL_PRODUTO_CHAVE_CLI=ligado): item
+        # sem produto exato não vai para a planilha (o CLI não tem revisão).
+        if xlsx_exporter and trava_produto and _item_sem_produto_exato(order):
             continue
 
         success += 1

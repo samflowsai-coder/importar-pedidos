@@ -177,81 +177,114 @@ def test_process_produto_fora_de_ligado_segue_como_hoje(tmp_path, modo):
 # ── CLI (main.py) ────────────────────────────────────────────────────────────
 
 
-def _cli(monkeypatch, tmp_path, orders, checks):
+def _cli(monkeypatch, tmp_path, orders, checks, *, trava=None):
+    """Roda o CLI com os pedidos dados; devolve (exportados, mensagens WARNING, chamadas
+    ao check). `checks[numero]` é o check ou uma exceção a levantar."""
     import main as cli
     from app.exporters.erp_exporter import ERPExporter
+    from app.utils.logger import logger
 
+    if trava is None:
+        monkeypatch.delenv("PORTAL_PRODUTO_CHAVE_CLI", raising=False)
+    else:
+        monkeypatch.setenv("PORTAL_PRODUTO_CHAVE_CLI", trava)
     monkeypatch.setattr(
         cli.app_config, "load", lambda: {"export_mode": "xlsx", "output_dir": str(tmp_path)}
     )
     monkeypatch.setattr(cli.FileLoader, "load_files", lambda self, d: list(orders))
     monkeypatch.setattr(cli, "process", lambda f: f)
-    monkeypatch.setattr(cli, "check_order", lambda order, **kw: checks[order.header.order_number])
+    chamadas: list[str] = []
+
+    def _check(order, **kw):
+        chamadas.append(order.header.order_number)
+        valor = checks[order.header.order_number]
+        if isinstance(valor, Exception):
+            raise valor
+        return valor
+
+    monkeypatch.setattr(cli, "check_order", _check)
     exportados: list[str] = []
     monkeypatch.setattr(
         ERPExporter,
         "export",
         lambda self, order, out: exportados.append(order.header.order_number) or [],
     )
-    cli.main()
-    return exportados
+    mensagens: list[str] = []
+    sink = logger.add(lambda m: mensagens.append(m.record["message"]), level="WARNING")
+    try:
+        cli.main()
+    finally:
+        logger.remove(sink)
+    return exportados, mensagens, chamadas
 
 
 def _item(estado, motivo=""):
     return {"produto": {"estado": estado, "motivo": motivo}}
 
 
+def _ok(*estados, available=True, incompleta=False):
+    return {
+        "available": available,
+        "produto_conferencia_incompleta": incompleta,
+        "items": [_item(e, "código C9 fora do Fire") for e in estados],
+    }
+
+
+@pytest.mark.parametrize("trava", [None, "", "desligado", "observando", "LIGADO"])
+def test_cli_sem_a_env_var_ligado_e_igual_a_hoje(monkeypatch, tmp_path, trava):
+    exportados, _, chamadas = _cli(
+        monkeypatch, tmp_path, [_order("P1")], {"P1": _ok("a_identificar")}, trava=trava
+    )
+    assert exportados == ["P1"]
+    assert chamadas == []  # nem consulta o Fire
+
+
 def test_cli_pula_pedido_com_item_pendente(monkeypatch, tmp_path):
-    from app.utils.logger import logger
-
-    mensagens: list[str] = []
-    sink = logger.add(lambda m: mensagens.append(m.record["message"]), level="WARNING")
-    try:
-        exportados = _cli(
-            monkeypatch,
-            tmp_path,
-            [_order("P1"), _order("P2")],
-            {
-                "P1": {
-                    "available": True,
-                    "items": [_item("ok"), _item("a_identificar", "código C9 fora do Fire")],
-                },
-                "P2": {"available": True, "items": [_item("ok")]},
-            },
-        )
-    finally:
-        logger.remove(sink)
-
+    exportados, mensagens, _ = _cli(
+        monkeypatch,
+        tmp_path,
+        [_order("P1"), _order("P2")],
+        {"P1": _ok("ok", "a_identificar"), "P2": _ok("ok")},
+        trava="ligado",
+    )
     assert exportados == ["P2"]
     assert (
         "Pedido P1 não exportado: item 2 sem produto exato (código C9 fora do Fire)." in mensagens
     )
 
 
-def test_cli_sem_fire_exporta_como_hoje(monkeypatch, tmp_path):
-    exportados = _cli(
+@pytest.mark.parametrize(
+    "check",
+    [_ok("fire_indisponivel", available=False), _ok("ok", incompleta=True)],
+    ids=["fire_fora", "conferencia_incompleta"],
+)
+def test_cli_ligado_pula_sem_conferencia(monkeypatch, tmp_path, check):
+    exportados, mensagens, _ = _cli(
         monkeypatch,
         tmp_path,
-        [_order("P1")],
-        {"P1": {"available": False, "items": [_item("fire_indisponivel")]}},
+        [_order("P1"), _order("P2")],
+        {"P1": check, "P2": _ok("ok")},
+        trava="ligado",
     )
-    assert exportados == ["P1"]
+    assert exportados == ["P2"]
+    assert any(m.startswith("Pedido P1 não exportado: o produto dos itens") for m in mensagens)
+
+
+def test_cli_ligado_erro_no_check_pula_so_o_pedido(monkeypatch, tmp_path):
+    exportados, mensagens, _ = _cli(
+        monkeypatch,
+        tmp_path,
+        [_order("P1"), _order("P2")],
+        {"P1": RuntimeError("fire caiu"), "P2": _ok("ok")},
+        trava="ligado",
+    )
+    assert exportados == ["P2"]
+    assert "Pedido P1 não exportado: falha ao conferir o produto (RuntimeError)." in mensagens
 
 
 def test_cli_motivo_com_ponto_nao_duplica_pontuacao(monkeypatch, tmp_path):
-    from app.utils.logger import logger
-
-    mensagens: list[str] = []
-    sink = logger.add(lambda m: mensagens.append(m.record["message"]), level="WARNING")
-    try:
-        _cli(
-            monkeypatch,
-            tmp_path,
-            [_order("P1")],
-            {"P1": {"available": True, "items": [_item("ambiguo", "O EAN 1 está em 2 produtos.")]}},
-        )
-    finally:
-        logger.remove(sink)
+    check = {"available": True, "items": [_item("ambiguo", "O EAN 1 está em 2 produtos.")]}
+    _, mensagens, _ = _cli(monkeypatch, tmp_path, [_order("P1")], {"P1": check}, trava="ligado")
     assert "Pedido P1 não exportado: item 1 sem produto exato (O EAN 1 está em 2 produtos)." in (
         mensagens
     )

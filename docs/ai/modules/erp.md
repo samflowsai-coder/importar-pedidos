@@ -178,8 +178,11 @@ sem `produto` conta como não resolvido), preenchido em `observando` e `ligado`;
 - `_run_exporters` (`/api/import`, `/api/reimport`): `ligado` não gera XLSX e devolve
   `xlsx_adiado: "produto_a_identificar"` (precede `trava_de_preco`); pedido fica em revisão.
 - `/api/process` (legado): `ligado` → 409 "Trava de produto ligada: use a revisão de pedidos."
-- `main.py` (CLI, só xlsx): `check_order(order)`; com `available` e item fora de `ok`, pula o
-  pedido e loga `Pedido N não exportado: item i sem produto exato (motivo).`
+- `main.py` (CLI, só xlsx): sem ambiente, logo sem interruptor no banco. Só com a env var
+  `PORTAL_PRODUTO_CHAVE_CLI=ligado` (ausente ou outro valor = hoje, nem chama `check_order`):
+  roda `check_order(order)` + `produto_trava.avaliar` com env sintético `ligado` e pula o pedido
+  (log `Pedido N não exportado: …`) se o Fire não respondeu, a conferência ficou incompleta ou
+  algum item está fora de `ok`. Erro no check pula só aquele pedido, nunca o lote.
 - Sem ambiente (sem cookie/legado): `preco_trava.env_trava_produto(None)` vale `ligado` se
   QUALQUER ambiente ativo estiver `ligado` (o mais restrito).
 
