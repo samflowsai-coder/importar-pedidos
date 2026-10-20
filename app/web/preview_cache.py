@@ -5,6 +5,7 @@ import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
+from typing import Any
 
 from app.models.order import Order
 
@@ -24,6 +25,10 @@ class PreviewEntry:
     check_env_slug: str | None = None  # empresa cujo Fire gerou o `check`
     consumed: bool = False
     trace_id: str | None = None     # minted antes do parse; segue até o commit
+    # Roteamento que o operador viu no preview (`_roteamento_para_preview`):
+    # o commit usa este em vez de decidir de novo. `None` = não decidido.
+    roteamento_modo: str | None = None
+    roteamento_decisao: Any = None  # app.routing.ambiente.Decisao | None
 
 
 class PreviewConsumedError(Exception):

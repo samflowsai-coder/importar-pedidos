@@ -351,7 +351,8 @@ def test_preview_nao_e_queimado_quando_o_commit_falha_e_a_escolha_do_commit_vale
     o bug: a decisao que vale e a do MOMENTO DO COMMIT, nunca a que o
     preview mostrou antes — aqui o operador escolhe "mm", ambiente
     DIFERENTE do "nasmar" que o preview tinha sugerido, e essa escolha e a
-    que entra.
+    que entra. (Preview sem decisão guardada no cache; com ela, vale a do
+    preview — ver `test_commit_usa_a_decisao_do_preview_sem_decidir_de_novo`.)
     """
     roteamento_repo.set_modo("ligado", por="t")
     c = portal["client"]
@@ -666,3 +667,107 @@ def test_ligado_check_do_destino_falha_grava_sem_check_e_importa(portal, monkeyp
     )
     assert c.post("/api/commit", json={"preview_id": pid}).status_code == 200
     assert _check_gravado("nasmar") is None
+
+
+# ── Revisão final (I1): o commit usa a decisão que o operador viu ──────────
+
+
+def _preview_com_decisao(portal, supplier_cnpj):
+    """Como os montadores de preview fresco: põe no cache e guarda a decisão."""
+    from app.web.preview_cache import get_cache
+    from app.web.server import _roteamento_para_preview
+
+    order = _order(supplier_cnpj)
+    entry = get_cache().put(
+        order=order,
+        source_filename="PEDIDO.pdf",
+        source_bytes=b"%PDF-1.4 fake",
+        source_ext=".pdf",
+        check=None,
+    )
+    rot = _roteamento_para_preview(order, entry=entry)
+    return entry.preview_id, rot
+
+
+def _roteador_proibido(monkeypatch):
+    def _proibido():
+        raise AssertionError("o commit não decide de novo: usa a decisão do preview")
+
+    monkeypatch.setattr(routing, "deps_padrao", _proibido)
+
+
+def test_commit_usa_a_decisao_do_preview_sem_decidir_de_novo(portal, monkeypatch):
+    roteamento_repo.set_modo("ligado", por="t")
+    _com_regra(monkeypatch, "nasmar", "Regra comercial: Kolosh, CNPJ faturado em MG → Nasmar")
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid, rot = _preview_com_decisao(portal, MM)
+    assert rot["env_slug"] == "nasmar"
+    _roteador_proibido(monkeypatch)  # sem I/O no Fire de novo no commit
+
+    r = c.post("/api/commit", json={"preview_id": pid})
+
+    assert r.status_code == 200
+    assert len(_import_do_ambiente("nasmar")) == 1
+    (reg,) = _rastro(r.json()["entry_id"])
+    assert reg["acao"] == "sugestao_aceita"
+    assert reg["degrau"] == "regra"
+    assert reg["env_sugerido"] == "nasmar"
+    assert reg["motivo"] == "Regra comercial: Kolosh, CNPJ faturado em MG → Nasmar"
+
+
+def test_commit_observando_grava_a_sombra_do_que_o_operador_viu(portal, monkeypatch):
+    roteamento_repo.set_modo("observando", por="t")
+    _com_regra(monkeypatch, "nasmar")
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid, _ = _preview_com_decisao(portal, MM)
+    _roteador_proibido(monkeypatch)
+
+    r = c.post("/api/commit", json={"preview_id": pid})
+
+    assert r.status_code == 200
+    (reg,) = _rastro(r.json()["entry_id"])
+    assert (reg["acao"], reg["env_sugerido"], reg["env_escolhido"]) == ("observando", "nasmar", "mm")
+
+
+@pytest.mark.parametrize(
+    ("no_preview", "no_commit"),
+    [("observando", "ligado"), ("desligado", "ligado"), ("ligado", "desligado")],
+)
+def test_modo_mudou_entre_preview_e_commit_pede_nova_conferencia(
+    portal, monkeypatch, no_preview, no_commit
+):
+    """O operador não viu a decisão que valeria agora: 409 sem queimar o
+    preview e sem gravar nada, em vez de decidir por ele."""
+    roteamento_repo.set_modo(no_preview, por="t")
+    _com_regra(monkeypatch, "nasmar")
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid, _ = _preview_com_decisao(portal, MM)
+    roteamento_repo.set_modo(no_commit, por="t")
+
+    r = c.post("/api/commit", json={"preview_id": pid})
+
+    assert r.status_code == 409
+    assert "modo do roteamento mudou" in r.json()["detail"]
+    assert _import_do_ambiente("mm") == [] and _import_do_ambiente("nasmar") == []
+    assert _rastro_total() == 0
+    from app.web.preview_cache import get_cache
+
+    assert get_cache().get(pid).consumed is False
+
+
+def test_commit_da_decisao_do_preview_para_empresa_que_ficou_inativa_e_412(portal, monkeypatch):
+    roteamento_repo.set_modo("ligado", por="t")
+    _com_regra(monkeypatch, "nasmar")
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid, _ = _preview_com_decisao(portal, MM)
+    environments_repo.soft_delete(portal["nasmar"]["id"])
+
+    r = c.post("/api/commit", json={"preview_id": pid})
+
+    assert r.status_code == 412
+    assert _import_do_ambiente("mm") == []
+    assert _rastro_total() == 0

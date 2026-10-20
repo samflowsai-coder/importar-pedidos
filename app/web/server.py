@@ -411,8 +411,11 @@ def _decidir_ambiente(order) -> tuple[str, Decisao | None]:
     return routing.decidir(order, origem="web")
 
 
-def _roteamento_para_preview(order) -> dict | None:
+def _roteamento_para_preview(order, *, entry=None) -> dict | None:
     """Bloco `roteamento` do payload do preview. `None` em 'desligado'.
+
+    `entry` (o `PreviewEntry` do cache): guarda o modo e a decisão que o
+    operador vai ver — o commit usa estes, não decide de novo.
 
     A UI nunca roteia em silêncio: mesmo quando a decisão é automática, o
     bloco viaja no preview para a faixa acima dos itens mostrar o ambiente
@@ -426,6 +429,9 @@ def _roteamento_para_preview(order) -> dict | None:
     from app.persistence import environments_repo, roteamento_repo
 
     modo, decisao = _decidir_ambiente(order)
+    if entry is not None:
+        entry.roteamento_modo = modo
+        entry.roteamento_decisao = decisao
     if decisao is None:
         return None
     env = environments_repo.get_by_slug(decisao.env_slug) if decisao.env_slug else None
@@ -2065,7 +2071,7 @@ async def preview_file(
     # `preview_pending`) — não em `_build_preview_payload`, que também
     # alimenta `rehydrate_preview` (pedido já commitado, ambiente definitivo,
     # nada a decidir ali — ver Achado 4 do fix round 1).
-    payload["roteamento"] = _roteamento_para_preview(order)
+    payload["roteamento"] = _roteamento_para_preview(order, entry=entry)
     payload["produto_chave_modo"] = _produto_chave_modo(request_env)
     payload["produto_trava"] = _produto_trava_preview(check, request_env)
     return JSONResponse(payload)
@@ -2170,7 +2176,7 @@ def preview_pending(
             )
         payload = _build_preview_payload(entry.preview_id, name, order, check)
         # Ver comentário equivalente em `preview_upload` (Achado 4, fix round 1).
-        payload["roteamento"] = _roteamento_para_preview(order)
+        payload["roteamento"] = _roteamento_para_preview(order, entry=entry)
     payload["produto_chave_modo"] = _produto_chave_modo(request_env)
     payload["produto_trava"] = _produto_trava_preview(check, request_env)
     return JSONResponse(payload)
@@ -2261,6 +2267,10 @@ def commit_preview(
        qualquer escrita, então a proteção contra clique duplo não se perde —
        só um request vence a corrida por `consume()`.
 
+    A decisão de empresa é a do preview (`entry.roteamento_decisao`, a que o
+    operador viu), não uma nova; se o modo do roteamento mudou desde o
+    preview, 409 pedindo nova conferência (antes de consumir).
+
     O check de produto gravado é sempre o da empresa onde o pedido entra: o
     do preview foi conferido no Fire de `entry.check_env_slug`; em 'ligado'
     com `env_alvo` diferente (roteado ou trocado pelo operador), é refeito no
@@ -2289,7 +2299,21 @@ def commit_preview(
     from app.persistence import roteamento_decisao_repo, roteamento_repo
     from app.routing.ambiente import cnpjs_do_pedido
 
-    modo, decisao = _decidir_ambiente(order)
+    # A decisão que o operador viu no preview vale (sem I/O de novo no Fire).
+    # Modo mudou desde então: a decisão de agora ele não viu — confere de novo.
+    # Sem decisão guardada (preview que não passou pelos montadores), decide.
+    if entry.roteamento_modo is None:
+        modo, decisao = _decidir_ambiente(order)
+    else:
+        modo, decisao = roteamento_repo.modo(), entry.roteamento_decisao
+        if modo != entry.roteamento_modo:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "O modo do roteamento mudou desde a conferência deste pedido."
+                    " Confira o arquivo de novo antes de gravar."
+                ),
+            )
     env_alvo = _resolver_env_alvo(request, body, modo, decisao)
 
     cnpj_cliente = (cnpjs_do_pedido(order) or [""])[0]
