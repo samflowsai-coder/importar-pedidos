@@ -4461,6 +4461,94 @@ def reconferir_pedido(
     )
 
 
+class MoverEmpresaRequest(BaseModel):
+    destino: str
+
+
+@app.post("/api/imported/{import_id}/mover-empresa")
+def mover_pedido_de_empresa(
+    import_id: str,
+    body: MoverEmpresaRequest,
+    user: User = Depends(require_user),
+) -> JSONResponse:
+    """Move o pedido em revisão para a outra empresa (`mover_pedido.mover_import`)
+    e confere de novo no destino, como o "Conferir de novo": check de produto
+    no Fire do destino (o de-para v2 lê o SQLite dele) e check de preço. Falha
+    da conferência não desfaz o mover — o pedido fica sem check e o detalhe
+    refaz. Só fora de `desligado`."""
+    from app.erp import preco_trava, product_check
+    from app.models.order import Order
+    from app.persistence import environments_repo, repo, roteamento_decisao_repo, roteamento_repo
+    from app.persistence.mover_pedido import PedidoNaoMovivel, mover_import
+    from app.utils.logger import logger
+
+    modo = roteamento_repo.modo()
+    if modo == roteamento_repo.DESLIGADO:
+        raise HTTPException(
+            status_code=409,
+            detail="Mover pedido entre empresas exige o roteamento em observando ou ligado",
+        )
+    envs = environments_repo.list_active()
+    if env_do_import_id(import_id, envs=envs) is None:
+        raise HTTPException(
+            status_code=404, detail="Pedido não encontrado em nenhuma empresa ativa"
+        )
+    destino = next((e for e in envs if e["slug"] == body.destino), None)
+    if destino is None:
+        raise HTTPException(status_code=422, detail="Empresa de destino inexistente ou inativa")
+    # A origem é a empresa que tem o pedido e NÃO é o destino: num mover
+    # interrompido ele está nos dois, e é assim que a segunda chamada conclui.
+    origem = env_do_import_id(import_id, envs=[e for e in envs if e["id"] != destino["id"]])
+    if origem is None:
+        raise HTTPException(status_code=422, detail="O pedido já está nessa empresa")
+
+    try:
+        movido = mover_import(import_id, origem=origem, destino=destino, por=user.email)
+    except PedidoNaoMovivel as exc:
+        return JSONResponse(
+            {"detail": f"O pedido não pode mudar de empresa: {exc.motivo}.", "motivo": exc.motivo},
+            status_code=409,
+        )
+
+    resposta = {"import_id": import_id, "de": origem["slug"], "para": destino["slug"]}
+    if not movido:  # outro clique já moveu: nada a refazer nem registrar
+        return JSONResponse(resposta)
+
+    with env_context.active_env(destino["id"], destino["slug"]):
+        try:
+            entry = repo.get_import(import_id)
+            order = Order.model_validate(entry["snapshot"])
+            with with_trace_id(entry.get("trace_id")):
+                check = product_check.check_order(
+                    order, env=destino, escolhas=product_check.escolhas_do_import(entry)
+                )
+                if check.get("available"):
+                    repo.update_fire_metadata(import_id, check=check)
+                check_preco = preco_trava.check_preco_para_gravar(order, destino, entry)
+                if check_preco is not None:
+                    repo.update_fire_metadata(import_id, check_preco=check_preco)
+        except Exception as exc:  # noqa: BLE001 — o pedido já mudou; o check é refeito depois
+            logger.warning(
+                "mover.check_destino_falhou import_id={} env={} erro={}",
+                import_id,
+                destino["slug"],
+                type(exc).__name__,
+            )
+
+    ultima = roteamento_decisao_repo.ultima(import_id)
+    roteamento_decisao_repo.registrar(
+        import_id=import_id,
+        modo=modo,
+        degrau=None,
+        env_sugerido=(ultima or {}).get("env_sugerido"),
+        env_escolhido=destino["slug"],
+        decidido_por=user.email,
+        motivo=f"movido de {origem['slug']} para {destino['slug']}",
+        acao="movido_apos_importar",
+    )
+    return JSONResponse(resposta)
+
+
 @app.get("/api/imported/{import_id}/preview")
 def rehydrate_preview(
     import_id: str,
