@@ -1046,7 +1046,7 @@
     <!-- ── Tab: Itens a identificar (fila do produto por chave exata) ── -->
     <div class="tab-panel" id="tab-identificar">
       <div class="toolbar">
-        <p class="fila-intro" id="filaIntro">Itens dos pedidos em revisão sem produto confirmado no Fire. Abra o item e escolha o produto: o vínculo vale para os próximos pedidos do cliente.</p>
+        <p class="fila-intro" id="filaIntro">Itens dos pedidos em revisão que ainda precisam de atenção antes de ir para o Fire.</p>
         <button class="btn" onclick="loadFilaIdentificar()">
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
             <path d="M11 6.5A4.5 4.5 0 112.5 4M2.5 1.5V4H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
@@ -2508,11 +2508,12 @@ function _ppMarcarSelecionado() {
 
 function selectProdutoRow(fireProdutoId, codigo, nome, ean) {
   ppState.selected = { fire_produto_id: fireProdutoId, fire_codigo: codigo, fire_nome: nome, fire_ean: ean };
+  const invalido = !!ppState.produtoInvalido && ppState.produtoInvalido === String(fireProdutoId);
   _ppMarcarSelecionado();
   document.getElementById('ppSelInfo').textContent = ppState.modoNovo
     ? `Escolhido: #${fireProdutoId} · ${nome}`
     : `Selecionado: ${codigo} · ${nome}`;
-  document.getElementById('ppConfirmBtn').disabled = false;
+  document.getElementById('ppConfirmBtn').disabled = invalido;
 }
 
 /* Atributos da descrição (mesma leitura da auditoria de 19/10): tamanho, número
@@ -2630,6 +2631,8 @@ function ppMostrarConfirmacao() {
   if (diverge) document.getElementById('ppVoltarBtn').focus();
   ppState.timerVincular = setTimeout(() => {
     ppState.timerVincular = null;
+    // Produto que o backend já recusou (sumiu do catálogo) não volta a liberar.
+    if (ppState.produtoInvalido && ppState.produtoInvalido === String(ppState.selected?.fire_produto_id)) return;
     vincular.disabled = false;
     if (!diverge) vincular.focus();
   }, 400);
@@ -2637,7 +2640,8 @@ function ppMostrarConfirmacao() {
 
 function ppVoltarEscolha() {
   _ppEtapa('escolha');
-  document.getElementById('ppConfirmBtn').disabled = !ppState.selected;
+  document.getElementById('ppConfirmBtn').disabled = !ppState.selected
+    || (!!ppState.produtoInvalido && ppState.produtoInvalido === String(ppState.selected.fire_produto_id));
   document.querySelector('#ppEscolha .dir-row.is-selected')?.focus();
 }
 
@@ -2658,8 +2662,9 @@ async function ppVincularConfirmado(ev) {
 }
 
 // Texto do erro para a pessoa (o detalhe técnico do backend vira frase de ação).
+const PP_ERRO_CATALOGO = 'Esse produto não está mais no catálogo do Fire. Escolha outro.';
 function _ppTextoErro(msg) {
-  if (/catálogo local/i.test(msg || '')) return 'Esse produto não está mais no catálogo do Fire. Escolha outro.';
+  if (/catálogo local/i.test(msg || '')) return PP_ERRO_CATALOGO;
   return msg;
 }
 
@@ -2670,6 +2675,13 @@ function _ppMostrarErro(msg) {
   if (erroConf && !conf.classList.contains('hidden')) {
     erroConf.textContent = msg;
     erroConf.classList.remove('hidden');
+    // Produto que sumiu do catálogo: tentar de novo não adianta. Só volta a
+    // liberar quando outro produto for escolhido.
+    if (msg === PP_ERRO_CATALOGO) {
+      ppState.produtoInvalido = String(ppState.selected?.fire_produto_id ?? '');
+      document.getElementById('ppVincularBtn').disabled = true;
+      document.getElementById('ppVoltarBtn').focus();
+    }
     return;
   }
   document.getElementById('ppStatus').innerHTML = `<span style="color:var(--error-strong)">${esc(msg)}</span>`;
@@ -2724,6 +2736,9 @@ async function ppVincular(substituir) {
   closeProductPicker();
   if (currentPreview) {
     currentPreview.check = body.check;
+    // A trava (bloqueio, estados de planilha) vem junto: sem ela a tela ficaria
+    // com a decisão de antes do vínculo.
+    if (body.produto_trava) currentPreview.produto_trava = body.produto_trava;
     renderPreview(currentPreview);
   }
   // Backend regravou o check deste pedido (e rechecou os parados da mesma
@@ -2912,8 +2927,8 @@ async function loadFilaIdentificar() {
   const itens = data.itens || [];
   document.getElementById('identificarCount').textContent = itens.length;
   document.getElementById('filaIntro').textContent = filaModo === 'ligado'
-    ? 'Itens dos pedidos em revisão sem produto confirmado. O pedido só sai depois de escolher o produto de cada item. O vínculo vale para os próximos pedidos do cliente.'
-    : 'Itens dos pedidos em revisão sem produto confirmado. Em observação: o envio ainda não trava. O vínculo vale para os próximos pedidos do cliente.';
+    ? 'Itens dos pedidos em revisão que ainda precisam de atenção antes de ir para o Fire. O pedido só sai depois de resolver cada um.'
+    : 'Itens dos pedidos em revisão que ainda precisam de atenção antes de ir para o Fire. Em observação: o envio ainda não trava.';
   renderFilaIdentificar(itens);
 }
 

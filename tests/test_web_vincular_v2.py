@@ -610,3 +610,33 @@ def test_fila_a_identificar_lista_so_pendentes_do_ambiente():
         "motivo": "Mais de um produto ativo com este código.",
         "importado_em": "2026-10-18T09:00:00",
     }
+
+
+@pytest.mark.parametrize(
+    ("export_mode", "bloqueado", "reason"), [("db", False, None), ("xlsx", True, "sem_codigo_fire")]
+)
+def test_vincular_devolve_a_trava_do_check_novo(
+    check_fake, monkeypatch, export_mode, bloqueado, reason
+):
+    """A tela troca a trava pela da resposta: ela precisa refletir o check DEPOIS
+    do vínculo (antes: produto_a_identificar)."""
+    from app.erp import preco_trava
+    from app.web import server
+
+    env = {"id": "test-env-id", "slug": "test", "produto_chave_modo": "ligado"}
+    monkeypatch.setattr(server, "_request_environment", lambda request: env)
+    monkeypatch.setattr(server, "_export_mode_atual", lambda: export_mode)
+    monkeypatch.setattr(preco_trava, "check_preco_para_gravar", lambda *a, **k: None)
+    monkeypatch.setattr(server, "resolucao_para", lambda order, *, slug: None)
+    _seed_catalogo()
+    entry_id = _seed_pedido(cnpj=RIACHUELO_LOJA_1, numero="R-1", itens=[_item()])
+
+    r = _vincular(entry_id)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["check"]["items"][0]["produto"]["estado"] == "ok"
+    trava = body["produto_trava"]
+    assert trava["bloqueado"] is bloqueado
+    assert trava["reason"] == reason
+    assert trava["export_mode"] == export_mode

@@ -305,3 +305,47 @@ def test_destaque_da_fila_nao_rola_ate_o_fim(html):
     i = html.index("function focarItemDoPreview(")
     corpo = html[i : html.index("\n}\n", i)]
     assert "inline: 'end'" not in corpo
+
+
+def test_vincular_aplica_a_trava_da_resposta(html):
+    """Depois do vínculo a tela usa a trava NOVA (senão o envio fica bloqueado)."""
+    i = html.index("async function ppVincular(")
+    corpo = html[i : html.index("\n}\n", i)]
+    assert "currentPreview.produto_trava = body.produto_trava" in corpo
+    assert corpo.index("currentPreview.produto_trava") < corpo.index(
+        "renderPreview(currentPreview)"
+    )
+
+
+def test_erro_de_catalogo_trava_o_vincular_ate_trocar_de_produto(html):
+    i = html.index("function _ppMostrarErro(")
+    corpo = html[i : html.index("\n}\n", i)]
+    assert "PP_ERRO_CATALOGO" in corpo
+    assert "ppVincularBtn').disabled = true" in corpo
+    assert "ppVoltarBtn').focus()" in corpo
+    assert "ppState.produtoInvalido" in html[html.index("function selectProdutoRow(") :]
+
+
+def test_fila_intro_nova(html):
+    assert (
+        "Itens dos pedidos em revisão que ainda precisam de atenção antes de ir para o Fire."
+        in html
+    )
+
+
+def test_trava_do_preview_falha_fechada(monkeypatch, env_modo):
+    from app.erp import produto_trava
+
+    def explode(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(produto_trava, "avaliar", explode)
+    env_modo("ligado")
+    entry_id = _seed({"estado": "a_identificar", "motivo": "x", "candidatos": []})
+
+    r = client.get(f"/api/imported/{entry_id}/preview")
+
+    assert r.status_code == 200, r.text
+    trava = r.json()["produto_trava"]
+    assert trava["bloqueado"] is True
+    assert trava["reason"] == "fire_indisponivel"

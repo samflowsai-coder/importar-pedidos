@@ -236,10 +236,17 @@ def _produto_trava_preview(check: dict | None, env: dict | None) -> dict:
     backend em vez de reimplementar a regra. Só leitura."""
     from app.erp import preco_trava, produto_trava
 
-    export_mode = _export_mode_atual()
-    tp = produto_trava.avaliar(
-        check or {"items": []}, env=preco_trava.env_trava_produto(env), export_mode=export_mode
-    )
+    export_mode = "xlsx"
+    try:
+        export_mode = _export_mode_atual()
+        tp = produto_trava.avaliar(
+            check or {"items": []}, env=preco_trava.env_trava_produto(env), export_mode=export_mode
+        )
+    except Exception as exc:  # noqa: BLE001 — a tela nunca quebra por isto, e trava
+        from app.utils.logger import logger
+
+        logger.warning(f"produto_trava do preview falhou ({type(exc).__name__}): {exc}")
+        return {"bloqueado": True, "reason": "fire_indisponivel", "export_mode": export_mode, "itens": []}
     return {
         "bloqueado": tp.bloqueado,
         "reason": tp.reason,
@@ -3843,6 +3850,9 @@ def vincular_produto(
                 for v in gravados
             ],
             "check": check,
+            # A tela lê a trava do produto daqui (bloqueio, estados de planilha):
+            # sem isto ela ficaria com a decisão de antes do vínculo.
+            "produto_trava": _produto_trava_preview(check, _request_environment(request)),
             "rechecados": rechecados,
         }
     )

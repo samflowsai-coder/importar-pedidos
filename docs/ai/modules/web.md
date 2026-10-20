@@ -103,7 +103,9 @@ API pública para páginas-filho:
   cujo check guardado tem item na mesma chave fora de `ok` e cujo escopo de busca
   inclui o escopo gravado. Resposta:
   `{entry_id, vinculos: [{id, env, escopo, chave_tipo, chave_valor}], check,
-  rechecados: [import_id…]}`. Só em `portal_status='parsed'`. 422 se o produto não
+  produto_trava, rechecados: [import_id…]}` (`produto_trava` = a mesma decisão do
+  preview sobre o check novo; a tela troca a dela por esta). `_produto_trava_preview`
+  falha fechado: exceção vira `{bloqueado: true, reason: "fire_indisponivel"}` + log. Só em `portal_status='parsed'`. 422 se o produto não
   existir no catálogo local (ou SEQ não numérico) ou item sem código nem EAN.
 - `DELETE /api/produtos/vinculo/{vinculo_id}?env=<slug>` → revoga o vínculo v2 (a
   linha fica, com `revogado_em/por`) no banco da empresa `env` (obrigatório; o id é
