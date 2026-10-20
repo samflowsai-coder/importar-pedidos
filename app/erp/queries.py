@@ -233,6 +233,38 @@ def find_products_by_seqs_sql(n: int) -> str:
     )
 
 
+# Busca de candidatos da chave exata (`product_check` → `produto_chave.decidir`).
+# Diferente dos builders acima: o chamador lê TODAS as linhas da chave (não fica
+# com a primeira; ambiguidade se decide em Python) e BLOQUEADO separa ativo de
+# bloqueado. Colunas, nas três:
+# (chave, SEQ, DESCRICAO, PRECO_VENDA, UNIDADE, BLOQUEADO, CODPROD_ALTERN).
+_COLS_CHAVE = "SEQ, DESCRICAO, PRECO_VENDA, UNIDADE, BLOQUEADO, CODPROD_ALTERN"
+
+
+def find_produtos_chave_por_ean_sql(n: int) -> str:
+    """Candidatos por EAN exato (TRIM na coluna; o parâmetro vem só com dígitos)."""
+    placeholders = ", ".join(["?"] * n)
+    return (
+        f"SELECT TRIM(CODIGO_EAN13), {_COLS_CHAVE} FROM PRODUTOS "
+        f"WHERE TRIM(CODIGO_EAN13) IN ({placeholders}) ORDER BY SEQ"
+    )
+
+
+def find_produtos_chave_por_codigo_sql(n: int) -> str:
+    """Candidatos por CODPROD_ALTERN exato (TRIM na coluna, nunca prefixo)."""
+    placeholders = ", ".join(["?"] * n)
+    return (
+        f"SELECT TRIM(CODPROD_ALTERN), {_COLS_CHAVE} FROM PRODUTOS "
+        f"WHERE TRIM(CODPROD_ALTERN) IN ({placeholders}) ORDER BY SEQ"
+    )
+
+
+def find_produtos_chave_por_seq_sql(n: int) -> str:
+    """Produto do vínculo de-para por SEQ. A chave (1ª coluna) é o próprio SEQ."""
+    placeholders = ", ".join(["?"] * n)
+    return f"SELECT SEQ, {_COLS_CHAVE} FROM PRODUTOS WHERE SEQ IN ({placeholders}) ORDER BY SEQ"
+
+
 # Insert sales order header (CAB_VENDAS).
 #
 # Colunas e valores conferidos contra 373 pedidos do .7 e 90 do .4 na Fire

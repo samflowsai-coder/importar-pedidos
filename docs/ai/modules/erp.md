@@ -130,6 +130,23 @@ E `summary.price_summary` agrega contagens.
 envio. Bloqueia em `mismatch`, `no_order_price`, ou `no_price_in_fire` não
 coberto por `ack_items`. `available=False` → não bloqueia (best-effort).
 
+### Produto por chave exata (`item["produto"]`, observado)
+
+`check_order` grava em todo item `produto = {estado, fire_seq, fonte, motivo,
+candidatos: [{seq, descricao, codprod_altern, bloqueado}]}` e
+`summary.items_produto_pendente` (estado ≠ `ok`). A decisão é a função pura
+`app/erp/produto_chave.decidir` (estados `ok | a_identificar | ambiguo |
+produto_bloqueado | vinculo_invalido | chaves_discordam`; fonte `ean | depara |
+codprod_altern`). Candidatos vêm de `find_produtos_chave_por_{ean,codigo,seq}_sql`
+(todas as linhas da chave + `BLOQUEADO`), numa passada batelada a mais no mesmo
+cursor. EAN = só dígitos, igual exato; código = `strip().upper()`, igual exato.
+O de-para é o v2 (`produto_vinculo_repo.lookup` no escopo de
+`produto_escopo.cnpj_do_item`/`escopos_para`, cliente real do intercompany via
+`resolucao_para`). Vínculo do código e do EAN para SEQs diferentes →
+`chaves_discordam`. Fire fora (`available=False`) ou falha só nesta passada →
+`estado = "fire_indisponivel"` (do check, não de `decidir`). Os campos legados
+(`match`, `match_source`, `fire_product_id`, …) não mudam. Nada bloqueia ainda.
+
 Os guards vivem em `_send_one_to_fire` e `_export_one_xlsx` (web). Audit
 events: `send_to_fire_blocked`, `xlsx_export_blocked`, `sem_preco_acknowledged`.
 Métricas: `portal_price_check_blocks_total{reason}`, `portal_price_check_acks_total`.

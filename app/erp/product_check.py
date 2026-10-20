@@ -13,11 +13,17 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.erp import queries
+from app.erp import produto_escopo, queries
 from app.erp.connection import FirebirdConnection
+from app.erp.produto_chave import Candidato, DecisaoProduto, decidir
 from app.models.order import Order
-from app.persistence import db, produto_depara_repo
+from app.persistence import db, produto_depara_repo, produto_vinculo_repo
 from app.persistence.produto_depara_repo import _norm_key as _depara_norm_key
+
+# Estado do item["produto"] quando o Fire não pôde ser consultado. Não é um
+# resultado de `decidir`: é do check, e nunca vale como produto conferido.
+FIRE_INDISPONIVEL = "fire_indisponivel"
+MOTIVO_FIRE_INDISPONIVEL = "O Fire não respondeu; o produto não pôde ser conferido."
 
 
 def _cnpj_digits(cnpj: str | None) -> str:
@@ -123,9 +129,208 @@ def _empty_item_result(
     }
 
 
+def _produto_indisponivel() -> dict:
+    return {
+        "estado": FIRE_INDISPONIVEL,
+        "fire_seq": None,
+        "fonte": None,
+        "motivo": MOTIVO_FIRE_INDISPONIVEL,
+        "candidatos": [],
+    }
+
+
+def _produto_dict(d: DecisaoProduto) -> dict:
+    return {
+        "estado": d.estado,
+        "fire_seq": d.fire_seq,
+        "fonte": d.fonte,
+        "motivo": d.motivo,
+        "candidatos": [
+            {
+                "seq": c.seq,
+                "descricao": c.descricao,
+                "codprod_altern": c.codprod_altern,
+                "bloqueado": c.bloqueado,
+            }
+            for c in d.candidatos
+        ],
+    }
+
+
+def _txt(value) -> str | None:
+    return (str(value).strip() or None) if value is not None else None
+
+
+def _candidato(row) -> Candidato:
+    """Linha de `find_produtos_chave_por_*_sql` (chave primeiro, 7 colunas)."""
+    _, seq, desc, preco, unidade, bloqueado, codprod = row
+    return Candidato(
+        seq=int(seq),
+        descricao=_txt(desc) or "",
+        codprod_altern=_txt(codprod),
+        # Fire grava 'Sim'/'Nao' ou NULL: ativo = qualquer coisa que não seja 'Sim'.
+        bloqueado=(_txt(bloqueado) or "").upper() == "SIM",
+        unidade=_txt(unidade),
+        preco_venda=float(preco) if preco is not None else None,
+    )
+
+
+def _candidatos_por_chave(cur, sql_builder, valores: list, chave_de) -> dict:
+    """{chave: [Candidato, ...]} com TODAS as linhas de cada chave, em ORDER BY SEQ."""
+    out: dict = {}
+    for chunk in _chunked(valores):
+        cur.execute(sql_builder(len(chunk)), tuple(chunk))
+        for row in cur.fetchall():
+            out.setdefault(chave_de(row[0]), []).append(_candidato(row))
+    return out
+
+
+def _cnpj_real(order: Order, env: dict | None) -> str | None:
+    """Cliente real do pedido intercompany (ruling R1). Falha vira None."""
+    slug = (env or {}).get("slug")
+    if not slug:
+        return None
+    try:
+        from app.integrations.flowpcp.intercompany import resolucao_para  # evita ciclo
+
+        r = resolucao_para(order, slug=slug)
+        return r.cnpj if r is not None and r.resolvido else None
+    except Exception as exc:  # noqa: BLE001 — o check nunca cai por causa do intercompany
+        from app.utils.logger import logger
+
+        logger.warning(f"check: cliente real do intercompany falhou ({type(exc).__name__}): {exc}")
+        return None
+
+
+def _vinculos_v2(
+    order: Order,
+    env: dict | None,
+    codigos: list[str | None],
+    eans: list[str | None],
+) -> list[tuple[int | None, int | None]]:
+    """(SEQ do vínculo do código, SEQ do vínculo do EAN) por item, no escopo do item.
+
+    Lê o SQLite do ambiente ativo. Sem ambiente / banco fora: nenhum vínculo
+    (o check segue só com as chaves do Fire, que nunca casam a mais por isso).
+    """
+    vazio: list[tuple[int | None, int | None]] = [(None, None)] * len(order.items)
+    if not any(codigos) and not any(eans):
+        return vazio
+    try:
+        cnpj_real = _cnpj_real(order, env)
+        out = list(vazio)
+        with db.connect() as sconn:
+            escopos_por_cnpj: dict[str | None, tuple[str, ...]] = {}
+            grupos: dict[tuple[str, ...], list[int]] = {}
+            for i in range(len(order.items)):
+                if not (codigos[i] or eans[i]):
+                    continue
+                cnpj = produto_escopo.cnpj_do_item(order, i, cnpj_real=cnpj_real)
+                if cnpj not in escopos_por_cnpj:
+                    escopos_por_cnpj[cnpj] = tuple(produto_escopo.escopos_para(sconn, cnpj))
+                escopos = escopos_por_cnpj[cnpj]
+                if escopos:
+                    grupos.setdefault(escopos, []).append(i)
+            for escopos, indices in grupos.items():
+                achados = produto_vinculo_repo.lookup(
+                    sconn,
+                    list(escopos),
+                    codigos=list(dict.fromkeys(c for i in indices if (c := codigos[i]))),
+                    eans=list(dict.fromkeys(e for i in indices if (e := eans[i]))),
+                )
+                for i in indices:
+                    vc = achados.get(("codigo", codigos[i])) if codigos[i] else None
+                    ve = achados.get(("ean", eans[i])) if eans[i] else None
+                    out[i] = (
+                        int(vc.fire_seq) if vc is not None else None,
+                        int(ve.fire_seq) if ve is not None else None,
+                    )
+        return out
+    except Exception as exc:  # noqa: BLE001 — sem ambiente ativo / db off: sem vínculo
+        from app.utils.logger import logger
+
+        logger.debug(f"vínculo v2 pulado: {type(exc).__name__}: {exc}")
+        return vazio
+
+
+def _decidir_itens(
+    cur,
+    order: Order,
+    codigos: list[str | None],
+    eans: list[str | None],
+    vinculos: list[tuple[int | None, int | None]],
+) -> list[dict]:
+    """item["produto"] de cada item: candidatos por chave exata, numa passada batelada."""
+    eans_q = list(dict.fromkeys(e for e in eans if e))
+    # Código maior que a coluna nunca é igual a nada (e estoura truncation no Fire).
+    cods_q = list(dict.fromkeys(c for c in codigos if c and len(c) <= _CODPROD_ALTERN_MAX))
+    seqs_q = list(dict.fromkeys(s for par in vinculos for s in par if s is not None))
+
+    por_ean = (
+        _candidatos_por_chave(
+            cur, queries.find_produtos_chave_por_ean_sql, eans_q, lambda k: (k or "").strip()
+        )
+        if eans_q
+        else {}
+    )
+    por_codigo = (
+        _candidatos_por_chave(
+            cur,
+            queries.find_produtos_chave_por_codigo_sql,
+            cods_q,
+            lambda k: (k or "").strip().upper(),
+        )
+        if cods_q
+        else {}
+    )
+    por_seq = (
+        _candidatos_por_chave(cur, queries.find_produtos_chave_por_seq_sql, seqs_q, int)
+        if seqs_q
+        else {}
+    )
+
+    out: list[dict] = []
+    for codigo, ean, (v_cod, v_ean) in zip(codigos, eans, vinculos, strict=True):
+        if v_cod is not None and v_ean is not None and v_cod != v_ean:
+            # Vínculo do código e vínculo do EAN apontam para produtos diferentes:
+            # nenhum ganha em silêncio.
+            candidatos = tuple(c for s in (v_ean, v_cod) for c in por_seq.get(s, [])[:1])
+            out.append(
+                _produto_dict(
+                    DecisaoProduto(
+                        "chaves_discordam",
+                        None,
+                        None,
+                        candidatos,
+                        "O EAN e o código apontam para produtos diferentes.",
+                    )
+                )
+            )
+            continue
+        vinculo_seq = v_cod if v_cod is not None else v_ean
+        vinculo_candidato = (
+            (por_seq.get(vinculo_seq) or [None])[0] if vinculo_seq is not None else None
+        )
+        decisao = decidir(
+            codigo=codigo,
+            ean=ean,
+            por_ean=por_ean.get(ean, []) if ean else [],
+            por_codigo=por_codigo.get(codigo, []) if codigo else [],
+            vinculo_seq=vinculo_seq,
+            vinculo_candidato=vinculo_candidato,
+        )
+        out.append(_produto_dict(decisao))
+    return out
+
+
 def check_order(order: Order, *, env: dict | None = None) -> dict:
     """Return match report for the order. Safe to call without Fire configured."""
     conn_mgr = FirebirdConnection()
+
+    def _item_indisponivel(it) -> dict:
+        entry = _empty_item_result(it.product_code, it.ean, it.unit_price)
+        entry["produto"] = _produto_indisponivel()
+        return entry
 
     unavailable: dict[str, Any] = {
         "available": False,
@@ -136,7 +341,7 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
             "razao_social": None,
             "cnpj": order.header.customer_cnpj,
         },
-        "items": [_empty_item_result(it.product_code, it.ean, it.unit_price) for it in order.items],
+        "items": [_item_indisponivel(it) for it in order.items],
         "summary": {
             "items_total": len(order.items),
             "items_matched": 0,
@@ -144,6 +349,7 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
             "client_matched": False,
             "items_troca_no_fire": 0,
             "troca_no_fire_checked": False,
+            "items_produto_pendente": len(order.items),
             "price_summary": {
                 "items_match": 0,
                 "items_mismatch": 0,
@@ -166,6 +372,14 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
         open_conn = conn_mgr.connect
     else:
         return unavailable
+
+    # Chave exata (spec §2): chaves normalizadas do item e vínculos v2 no escopo
+    # dele, resolvidos antes de abrir o Fire (SQLite + intercompany).
+    chave_codigos = [
+        produto_vinculo_repo.norm_chave("codigo", it.product_code) or None for it in order.items
+    ]
+    chave_eans = [produto_vinculo_repo.norm_chave("ean", it.ean) or None for it in order.items]
+    vinculos = _vinculos_v2(order, env, chave_codigos, chave_eans)
 
     try:
         with open_conn() as conn:
@@ -301,6 +515,19 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
 
             trocas, troca_checked = _marcar_trocas_no_fire(cur, items_report, codigos_xlsx)
 
+            # Decisão por chave exata (observada: não bloqueia nada aqui). Falha
+            # nesta passada não derruba os campos legados: o item fica
+            # fire_indisponivel, que nunca vale como produto conferido.
+            try:
+                produtos = _decidir_itens(cur, order, chave_codigos, chave_eans, vinculos)
+            except Exception as exc:  # noqa: BLE001
+                from app.utils.logger import logger
+
+                logger.warning(f"Busca por chave exata falhou ({type(exc).__name__}): {exc}")
+                produtos = [_produto_indisponivel() for _ in order.items]
+            for entry, produto in zip(items_report, produtos, strict=True):
+                entry["produto"] = produto
+
             cur.close()
     except Exception as exc:  # noqa: BLE001 — any Firebird failure downgrades to "check unavailable"
         from app.utils.logger import logger
@@ -329,6 +556,9 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
             "client_matched": client_id is not None,
             "items_troca_no_fire": trocas,
             "troca_no_fire_checked": troca_checked,
+            "items_produto_pendente": sum(
+                1 for e in items_report if e["produto"]["estado"] != "ok"
+            ),
             "price_summary": {
                 "items_match": price_match,
                 "items_mismatch": price_mismatch,
