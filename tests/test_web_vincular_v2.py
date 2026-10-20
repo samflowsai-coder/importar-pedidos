@@ -266,10 +266,41 @@ def test_vincular_sem_cnpj_422(check_fake):
     assert _vigentes() == []
 
 
-def test_vincular_intercompany_incompleto_503(check_fake, monkeypatch):
+CLIENTE_REAL = "61.585.865/0240-90"
+
+
+@pytest.fixture
+def env_intercompany(monkeypatch):
+    """Ambiente com slug no request (como o middleware/env_do_pedido poriam) e
+    `resolucao_para` controlável. Devolve o setter da resolução."""
+    from app.erp import preco_trava
+    from app.web import server
+
+    env = {"id": "test-env-id", "slug": "test", "produto_chave_modo": "desligado"}
+    monkeypatch.setattr(server, "_request_environment", lambda request: env)
+    monkeypatch.setattr(preco_trava, "check_preco_para_gravar", lambda *a, **k: None)
+    estado = {"r": None}
+    monkeypatch.setattr(server, "resolucao_para", lambda order, *, slug: estado["r"])
+
+    def definir(r):
+        estado["r"] = r
+
+    return definir
+
+
+def _nada_gravado(cnpj_header):
+    assert _vigentes() == []
+    ckey = produto_depara_repo.client_key(cnpj_header, "RIACHUELO")
+    with db.connect() as conn:
+        assert produto_depara_repo.list_for_client(conn, ckey) == []
+
+
+def test_vincular_intercompany_erro_conexao_503(check_fake, env_intercompany):
+    from app.erp.depara_cliente import ResolucaoCliente
+
+    env_intercompany(ResolucaoCliente(False, motivo="erro_conexao"))
     _seed_catalogo()
     entry_id = _seed_pedido(cnpj=RIACHUELO_LOJA_1, numero="R-1", itens=[_item()])
-    monkeypatch.setattr(product_check, "_cnpj_real", lambda order, env: (None, False))
 
     r = _vincular(entry_id)
 
@@ -277,7 +308,81 @@ def test_vincular_intercompany_incompleto_503(check_fake, monkeypatch):
     assert r.json()["detail"] == (
         "Não consegui confirmar o cliente real deste pedido agora; tente de novo."
     )
-    assert _vigentes() == []
+    _nada_gravado(RIACHUELO_LOJA_1)
+
+
+@pytest.mark.parametrize("motivo", ["nao_encontrado", "sem_chave"])
+def test_vincular_intercompany_sem_cliente_real_422(check_fake, env_intercompany, motivo):
+    from app.erp.depara_cliente import ResolucaoCliente
+
+    env_intercompany(ResolucaoCliente(False, motivo=motivo))
+    _seed_catalogo()
+    entry_id = _seed_pedido(cnpj=RIACHUELO_LOJA_1, numero="R-1", itens=[_item()])
+
+    r = _vincular(entry_id)
+
+    assert r.status_code == 422
+    assert r.json()["detail"] == (
+        "Não sei qual é o cliente real deste pedido (pedido da revenda); "
+        "o vínculo não pode ser salvo."
+    )
+    _nada_gravado(RIACHUELO_LOJA_1)
+
+
+def test_vincular_intercompany_resolvido_grava_no_escopo_do_cliente_real(
+    check_fake, env_intercompany
+):
+    from app.erp.depara_cliente import ResolucaoCliente
+
+    env_intercompany(ResolucaoCliente(True, cnpj=CLIENTE_REAL, motivo="ok"))
+    _seed_catalogo()
+    entry_id = _seed_pedido(cnpj=RIACHUELO_LOJA_1, numero="R-1", itens=[_item()])
+
+    r = _vincular(entry_id)
+
+    assert r.status_code == 200, r.text
+    assert {v.escopo for v in _vigentes()} == {"raiz:61585865"}
+    assert {v["env"] for v in r.json()["vinculos"]} == {"test"}
+
+
+def test_vincular_nao_recheca_com_fire_fora(monkeypatch):
+    chamados: list[str] = []
+
+    def fora(order, *, env=None):
+        chamados.append(order.header.order_number)
+        return {"available": False, "items": []}
+
+    monkeypatch.setattr(product_check, "check_order", fora)
+    _seed_catalogo()
+    p1 = _seed_pedido(cnpj=RIACHUELO_LOJA_1, numero="R-1", itens=[_item()])
+    _seed_pedido(cnpj=RIACHUELO_LOJA_2, numero="R-2", itens=[_item()])
+
+    r = _vincular(p1)
+
+    assert r.status_code == 200, r.text
+    assert r.json()["rechecados"] == []
+    assert chamados == ["R-1"]
+
+
+def test_vincular_recheca_no_maximo_50_mais_antigos(check_fake):
+    _seed_catalogo()
+    p1 = _seed_pedido(
+        cnpj=RIACHUELO_LOJA_1, numero="R-0", itens=[_item()], imported_at="2026-10-01T00:00:00"
+    )
+    outros = [
+        _seed_pedido(
+            cnpj=RIACHUELO_LOJA_2,
+            numero=f"R-{i}",
+            itens=[_item()],
+            imported_at=f"2026-10-02T00:{i:02d}:00",
+        )
+        for i in range(1, 53)
+    ]
+
+    r = _vincular(p1)
+
+    assert r.status_code == 200, r.text
+    assert r.json()["rechecados"] == outros[:50]
 
 
 def test_vincular_recheca_outros_pedidos_do_escopo(check_fake):
@@ -309,25 +414,128 @@ def test_vincular_recheca_outros_pedidos_do_escopo(check_fake):
     assert repo.get_import(outro)["check"]["items"][0]["produto"]["estado"] == "nao_encontrado"
 
 
-def test_revogar_audita_e_some_do_lookup(check_fake):
+def _cria_env(slug, tmp_path):
+    from app.persistence import environments_repo
+
+    pasta = tmp_path / slug
+    pasta.mkdir(parents=True, exist_ok=True)
+    return environments_repo.create(
+        slug=slug,
+        name=slug.upper(),
+        watch_dir=str(pasta),
+        output_dir=str(pasta),
+        fb_path=str(tmp_path / f"{slug}.fdb"),
+    )
+
+
+def test_revogar_audita_some_do_lookup_e_apaga_o_v1(check_fake, tmp_path):
+    _cria_env("test", tmp_path)
     _seed_catalogo()
     entry_id = _seed_pedido(cnpj=RIACHUELO_LOJA_1, numero="R-1", itens=[_item()])
-    assert _vincular(entry_id).status_code == 200
-    vid = next(v.id for v in _vigentes() if v.chave_tipo == "codigo")
+    r = _vincular(entry_id)
+    assert r.status_code == 200
+    vinc = next(v for v in r.json()["vinculos"] if v["chave_tipo"] == "codigo")
+    assert vinc["env"] == "test"
+    ckey = produto_depara_repo.client_key(RIACHUELO_LOJA_1, "RIACHUELO")
+    # v1 do mesmo cliente apontando para OUTRO produto não é tocado
+    with db.connect() as conn:
+        produto_depara_repo.upsert(
+            conn,
+            client_key=ckey,
+            chave_tipo="codigo",
+            chave_valor="OUTRA",
+            fire_produto_id="11",
+            fire_codigo="11",
+            fire_ean=None,
+            fire_nome="TENIS PRETO",
+            criado_em="2026-10-19T00:00:00",
+            criado_por="x",
+        )
 
-    r = client.delete(f"/api/produtos/vinculo/{vid}")
+    r = client.delete(f"/api/produtos/vinculo/{vinc['id']}?env={vinc['env']}")
 
     assert r.status_code == 200, r.text
-    assert r.json() == {"revogado": vid}
+    assert r.json() == {"revogado": vinc["id"]}
     with db.connect() as conn:
         achado = produto_vinculo_repo.lookup(conn, ["raiz:33200056"], codigos=["ABC123"], eans=[])
+        v1 = produto_depara_repo.lookup(conn, ckey, codigos=["ABC123", "OUTRA"], eans=[])
     assert achado == {}
+    assert set(v1) == {("codigo", "OUTRA")}  # o ABC123 -> 10 saiu, o EAN segue (outro vínculo)
     revogado = _audits(entry_id, "produto_vinculo_revogado")
     assert len(revogado) == 1
-    assert revogado[0]["detail"]["vinculo_id"] == vid
-    assert revogado[0]["detail"]["fire_seq"] == 10
+    d = revogado[0]["detail"]
+    assert d["vinculo_id"] == vinc["id"]
+    assert d["fire_seq"] == 10
+    assert d["env"] == "test"
+    assert [x["client_key"] for x in d["v1_apagados"]] == [ckey]
 
-    assert client.delete("/api/produtos/vinculo/999999").status_code == 404
+
+def test_revogar_em_ligado_nao_mexe_no_v1(check_fake, tmp_path):
+    from app.persistence import environments_repo
+
+    env = _cria_env("test", tmp_path)
+    _seed_catalogo()
+    entry_id = _seed_pedido(cnpj=RIACHUELO_LOJA_1, numero="R-1", itens=[_item()])
+    vid = next(
+        v["id"] for v in _vincular(entry_id).json()["vinculos"] if v["chave_tipo"] == "codigo"
+    )
+    environments_repo.set_produto_chave_modo(env["id"], "ligado", por="t")
+
+    assert client.delete(f"/api/produtos/vinculo/{vid}?env=test").status_code == 200
+    ckey = produto_depara_repo.client_key(RIACHUELO_LOJA_1, "RIACHUELO")
+    with db.connect() as conn:
+        assert produto_depara_repo.lookup(conn, ckey, codigos=["ABC123"], eans=[])
+
+
+def _vinculo_direto(slug, tmp_env_id):
+    from app.persistence import context
+
+    with context.active_env(tmp_env_id, slug), db.connect() as conn:
+        return produto_vinculo_repo.vincular(
+            conn,
+            escopo="raiz:33200056",
+            chave_tipo="codigo",
+            chave_valor="ABC123",
+            fire_seq=10,
+            fire_codigo=None,
+            fire_descricao="TENIS AZUL",
+            por="x",
+            pedido_id=None,
+            agora="2026-10-19T00:00:00",
+        )
+
+
+def test_revogar_usa_a_empresa_do_parametro_nao_a_do_cookie(tmp_path):
+    from app.persistence import context
+
+    mm = _cria_env("mm", tmp_path)
+    nasmar = _cria_env("nasmar", tmp_path)
+    v_mm = _vinculo_direto("mm", mm["id"])
+    v_nasmar = _vinculo_direto("nasmar", nasmar["id"])
+    assert v_mm.id == v_nasmar.id  # ids são por empresa
+
+    cli = TestClient(app)
+    cli.cookies.set("portal_env", mm["id"])
+    r = cli.delete(f"/api/produtos/vinculo/{v_nasmar.id}?env=nasmar")
+
+    assert r.status_code == 200, r.text
+    with context.active_env(nasmar["id"], "nasmar"), db.connect() as conn:
+        assert produto_vinculo_repo.listar(conn) == []
+    with context.active_env(mm["id"], "mm"), db.connect() as conn:
+        assert [v.id for v in produto_vinculo_repo.listar(conn)] == [v_mm.id]
+
+
+def test_revogar_id_inexistente_404_e_empresa_inacessivel_403(tmp_path):
+    from app.persistence import environments_repo
+
+    _cria_env("mm", tmp_path)
+    inativa = _cria_env("velha", tmp_path)
+    environments_repo.soft_delete(inativa["id"])
+
+    assert client.delete("/api/produtos/vinculo/999999?env=mm").status_code == 404
+    assert client.delete("/api/produtos/vinculo/1?env=velha").status_code == 403
+    assert client.delete("/api/produtos/vinculo/1?env=nao-existe").status_code == 403
+    assert client.delete("/api/produtos/vinculo/1").status_code == 422
 
 
 def test_fila_a_identificar_lista_so_pendentes_do_ambiente():

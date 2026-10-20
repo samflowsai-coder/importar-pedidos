@@ -3461,8 +3461,13 @@ MSG_VINCULO_SEM_CNPJ = "Este pedido não tem CNPJ do cliente; o vínculo não po
 MSG_VINCULO_CLIENTE_REAL = (
     "Não consegui confirmar o cliente real deste pedido agora; tente de novo."
 )
-# Teto de pedidos em revisão rechecados por vínculo (o mesmo da página do repo).
+MSG_VINCULO_REVENDA = (
+    "Não sei qual é o cliente real deste pedido (pedido da revenda); "
+    "o vínculo não pode ser salvo."
+)
+# Pedidos em revisão lidos (página máxima do repo) e rechecados (R12) por vínculo.
 _RECHECK_MAX_PEDIDOS = 500
+_RECHECK_MAX_POR_VINCULO = 50
 
 
 def _chaves_do_item(item) -> list[tuple[str, str]]:
@@ -3479,14 +3484,28 @@ def _chaves_do_item(item) -> list[tuple[str, str]]:
 
 
 def _cnpj_do_escopo(order, indice: int, env: dict | None) -> str | None:
-    """CNPJ que define o escopo do item, com o cliente real do intercompany
-    (mesma resolução do check). Resolução incompleta: 503 em vez de gravar o
-    vínculo no escopo da revenda (R11)."""
-    from app.erp import product_check, produto_escopo
+    """CNPJ que define o escopo do item na GRAVAÇÃO do vínculo (R11).
 
-    cnpj_real, conferiu = product_check._cnpj_real(order, env)
-    if not conferiu:
-        raise HTTPException(status_code=503, detail=MSG_VINCULO_CLIENTE_REAL)
+    Pedido intercompany (`resolucao_para` não é None) só grava com o cliente
+    real resolvido: sem ele, o CNPJ do cabeçalho é o da revenda e o vínculo
+    cairia no escopo errado. Falha de conexão → 503 (tente de novo); qualquer
+    outro motivo (sem_chave, nao_encontrado, ambiguo...) → 422. A leitura do
+    check (`product_check._cnpj_real`) segue como está."""
+    from app.erp import produto_escopo
+
+    cnpj_real = None
+    slug = (env or {}).get("slug")
+    if slug:
+        try:
+            r = resolucao_para(order, slug=slug)
+        except Exception as exc:  # noqa: BLE001 — resolucao_para não deveria levantar
+            raise HTTPException(status_code=503, detail=MSG_VINCULO_CLIENTE_REAL) from exc
+        if r is not None:
+            if not r.resolvido or not r.cnpj:
+                if r.motivo == "erro_conexao":
+                    raise HTTPException(status_code=503, detail=MSG_VINCULO_CLIENTE_REAL)
+                raise HTTPException(status_code=422, detail=MSG_VINCULO_REVENDA)
+            cnpj_real = r.cnpj
     return produto_escopo.cnpj_do_item(order, indice, cnpj_real=cnpj_real)
 
 
@@ -3514,7 +3533,8 @@ def _rechecar_pedidos_do_escopo(
 ) -> list[str]:
     """Recheca os pedidos em revisão do ambiente com item na mesma chave, fora
     de `ok`, cujo escopo de busca inclui `escopo`. Lê o check guardado (sem
-    Fire) para escolher; só os escolhidos passam pelo `check_order`."""
+    Fire) para escolher; só os escolhidos passam pelo `check_order`, no máximo
+    `_RECHECK_MAX_POR_VINCULO` por chamada, mais antigos primeiro (R12)."""
     from app.erp import product_check, produto_escopo
     from app.models.order import Order
     from app.persistence import db, repo
@@ -3524,6 +3544,8 @@ def _rechecar_pedidos_do_escopo(
     entries = repo.list_imports(portal_status="parsed", limit=_RECHECK_MAX_PEDIDOS)
     with db.connect() as conn:
         for entry in sorted(entries, key=lambda e: (e["imported_at"] or "", e["id"])):
+            if len(escolhidos) >= _RECHECK_MAX_POR_VINCULO:
+                break
             if entry["id"] == import_id or not entry.get("snapshot"):
                 continue
             itens_check = (entry.get("check") or {}).get("items") or []
@@ -3725,13 +3747,18 @@ def vincular_produto(
     check_preco = preco_trava.check_preco_para_gravar(order, env, entry)
     if check_preco is not None:
         repo.update_fire_metadata(import_id, check_preco=check_preco)
-    rechecados = _rechecar_pedidos_do_escopo(import_id, escopo, chaves, env)
+    # R12: Fire fora agora → os outros também dariam indisponível; não recheca.
+    rechecados = (
+        _rechecar_pedidos_do_escopo(import_id, escopo, chaves, env)
+        if check.get("available")
+        else []
+    )
     return JSONResponse(
         {
             "entry_id": import_id,
             "vinculos": [
-                {"id": v.id, "escopo": v.escopo, "chave_tipo": v.chave_tipo,
-                 "chave_valor": v.chave_valor}
+                {"id": v.id, "env": (env or {}).get("slug") or env_context.current_env_slug(),
+                 "escopo": v.escopo, "chave_tipo": v.chave_tipo, "chave_valor": v.chave_valor}
                 for v in gravados
             ],
             "check": check,
@@ -3740,40 +3767,104 @@ def vincular_produto(
     )
 
 
+def _v1_do_vinculo_revogado(conn, v, ckey_criador: str | None) -> list[dict]:
+    """Linhas do de-para v1 gravadas junto com o vínculo v2 revogado: mesma
+    chave (normalizada), mesmo SEQ e cliente do pedido que criou o vínculo ou
+    CNPJ do mesmo escopo. v1 apontando para outro SEQ fica intocado."""
+    from app.erp import produto_escopo
+    from app.persistence import produto_vinculo_repo
+
+    rows = conn.execute(
+        "SELECT id, client_key, chave_valor FROM produto_depara "
+        "WHERE chave_tipo = ? AND fire_produto_id = ?",
+        (v.chave_tipo, str(v.fire_seq)),
+    ).fetchall()
+    out = []
+    for row_id, ckey, valor in rows:
+        if produto_vinculo_repo.norm_chave(v.chave_tipo, valor) != v.chave_valor:
+            continue
+        mesmo_cliente = ckey_criador is not None and ckey == ckey_criador
+        mesmo_escopo = (
+            len(ckey) == 14
+            and ckey.isdigit()
+            and v.escopo in produto_escopo.escopos_para(conn, ckey)
+        )
+        if mesmo_cliente or mesmo_escopo:
+            out.append({"id": row_id, "client_key": ckey})
+    return out
+
+
 @app.delete("/api/produtos/vinculo/{vinculo_id}")
 def revogar_vinculo(
     vinculo_id: int,
+    env: str = Query(..., min_length=1, max_length=64, description="slug da empresa do vínculo"),
     user: User = Depends(require_user),
 ) -> JSONResponse:
-    """Revoga um vínculo v2 (a linha fica, com revogado_em/revogado_por).
-    Audita no pedido que criou o vínculo, quando ele ainda existe (o
-    `audit_log` exige um pedido); senão, log direto."""
-    from app.persistence import db, produto_vinculo_repo, repo
+    """Revoga um vínculo v2 (a linha fica, com revogado_em/revogado_por) no
+    banco da empresa `env` — o id do vínculo é por empresa, então a empresa
+    vem explícita e nunca do cookie. Empresa inexistente ou inativa: 403 (o
+    mesmo portão do middleware e do `env_do_pedido`: só empresa ativa).
+
+    Enquanto o `produto_chave_modo` da empresa não é `ligado`, apaga também o
+    de-para v1 gravado junto (senão o check legado seguiria casando). Audita no
+    pedido que criou o vínculo, quando ele ainda existe (o `audit_log` exige um
+    pedido); senão, log direto."""
+    from app.models.order import Order
+    from app.persistence import (
+        db,
+        environments_repo,
+        produto_depara_repo,
+        produto_vinculo_repo,
+        repo,
+    )
     from app.utils.logger import logger
 
+    alvo = environments_repo.get_by_slug(env)
+    if alvo is None or not alvo.get("is_active"):
+        raise HTTPException(status_code=403, detail="Empresa indisponível")
+
     now = datetime.now().isoformat(timespec="seconds")
-    with db.connect() as conn:
-        try:
-            v = produto_vinculo_repo.revogar(conn, vinculo_id, por=user.email, agora=now)
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail="Vínculo não encontrado") from exc
-        row = conn.execute(
-            "SELECT pedido_id FROM produto_vinculo_v2 WHERE id = ?", (vinculo_id,)
-        ).fetchone()
-    detalhe = {
-        "vinculo_id": v.id,
-        "escopo": v.escopo,
-        "chave_tipo": v.chave_tipo,
-        "chave_valor": v.chave_valor,
-        "fire_seq": v.fire_seq,
-        "user_id": user.id,
-        "user_email": user.email,
-    }
-    pedido_id = row[0] if row else None
-    if pedido_id and repo.get_import(pedido_id) is not None:
-        repo.append_audit(pedido_id, "produto_vinculo_revogado", detalhe)
-    else:
-        logger.info(f"produto_vinculo_revogado: {detalhe}")
+    with env_context.active_env(alvo["id"], alvo["slug"]):
+        with db.connect() as conn:
+            try:
+                v = produto_vinculo_repo.revogar(conn, vinculo_id, por=user.email, agora=now)
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail="Vínculo não encontrado") from exc
+            row = conn.execute(
+                "SELECT pedido_id FROM produto_vinculo_v2 WHERE id = ?", (vinculo_id,)
+            ).fetchone()
+        pedido_id = row[0] if row else None
+        pedido = repo.get_import(pedido_id) if pedido_id else None
+
+        v1_apagados: list[dict] = []
+        if not _trava_produto_ligada(alvo):
+            ckey = None
+            if pedido and pedido.get("snapshot"):
+                try:
+                    h = Order.model_validate(pedido["snapshot"]).header
+                    ckey = produto_depara_repo.client_key(h.customer_cnpj, h.customer_name)
+                except Exception:  # noqa: BLE001 — sem snapshot legível: só o escopo decide
+                    ckey = None
+            with db.connect() as conn:
+                v1_apagados = _v1_do_vinculo_revogado(conn, v, ckey)
+                for linha in v1_apagados:
+                    conn.execute("DELETE FROM produto_depara WHERE id = ?", (linha["id"],))
+
+        detalhe = {
+            "vinculo_id": v.id,
+            "env": alvo["slug"],
+            "escopo": v.escopo,
+            "chave_tipo": v.chave_tipo,
+            "chave_valor": v.chave_valor,
+            "fire_seq": v.fire_seq,
+            "v1_apagados": v1_apagados,
+            "user_id": user.id,
+            "user_email": user.email,
+        }
+        if pedido is not None:
+            repo.append_audit(pedido_id, "produto_vinculo_revogado", detalhe)
+        else:
+            logger.info(f"produto_vinculo_revogado: {detalhe}")
     return JSONResponse({"revogado": v.id})
 
 
