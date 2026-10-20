@@ -499,6 +499,8 @@ CREATE INDEX IF NOT EXISTS idx_cadastro_volta_produto  ON cadastro_volta(produto
 
 # Cada entrada: (table, column_name, ALTER TABLE DDL) — aplicada só se a coluna ainda não existir.
 COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    # Código alternativo do Fire (CODPROD_ALTERN): chave de casamento exato do item.
+    ("catalogo_fire", "codprod_altern", "ALTER TABLE catalogo_fire ADD COLUMN codprod_altern TEXT"),
     ("imports", "sem_preco_ack_by", "ALTER TABLE imports ADD COLUMN sem_preco_ack_by TEXT"),
     ("imports", "sem_preco_ack_at", "ALTER TABLE imports ADD COLUMN sem_preco_ack_at TEXT"),
     ("imports", "sem_preco_ack_items", "ALTER TABLE imports ADD COLUMN sem_preco_ack_items TEXT"),

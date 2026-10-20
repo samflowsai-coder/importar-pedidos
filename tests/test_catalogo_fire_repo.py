@@ -50,3 +50,14 @@ def test_replace_all_e_substitutivo(env_conn):
     rows = catalogo_fire_repo.list_all(env_conn)
     assert [r["fire_produto_id"] for r in rows] == ["3"]
     assert catalogo_fire_repo.count(env_conn) == 1
+
+
+def test_catalogo_persiste_codprod_altern(env_conn):
+    dto = ProdutoFireDTO(
+        fire_produto_id="9", codigo="9", nome="MEIA", unidade="PAR", ean=None,
+        ativo=True, tipo="simples", codigo_alternativo="KG02PR",
+    )
+    catalogo_fire_repo.replace_all(env_conn, [dto, _dto("10")], extraido_em="t1")
+    rows = {r["fire_produto_id"]: r for r in catalogo_fire_repo.list_all(env_conn)}
+    assert rows["9"]["codprod_altern"] == "KG02PR"
+    assert rows["10"]["codprod_altern"] is None

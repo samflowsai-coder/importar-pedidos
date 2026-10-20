@@ -3408,6 +3408,7 @@ def search_produtos(
                 "fire_produto_id": r["fire_produto_id"],
                 "fire_codigo": r["codigo"],
                 "fire_ean": r.get("ean"),
+                "fire_codprod_altern": r.get("codprod_altern"),
                 "fire_nome": r["nome"],
             }
             for r in rows
@@ -3424,6 +3425,7 @@ def search_produtos(
                 "fire_produto_id": r["fire_produto_id"],
                 "fire_codigo": r["codigo"],
                 "fire_ean": r.get("ean"),
+                "fire_codprod_altern": r.get("codprod_altern"),
                 "fire_nome": r["nome"],
                 "score": r["score"],
             }

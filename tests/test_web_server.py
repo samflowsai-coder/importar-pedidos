@@ -2107,6 +2107,7 @@ def _seed_catalogo_fire(rows: list[dict]) -> None:
             ean=r.get("ean"),
             ativo=r.get("ativo", True),
             tipo=r.get("tipo", "simples"),
+            codigo_alternativo=r.get("codprod_altern"),
         )
         for r in rows
     ]
@@ -2151,6 +2152,23 @@ def test_produtos_search_local():
     body = r.json()
     assert any(p["fire_codigo"] == "10" for p in body["results"])
     assert any(p["fire_nome"] == "TENIS AZUL" for p in body["results"])
+
+
+def test_produtos_search_devolve_codprod_altern():
+    _seed_catalogo_fire(
+        [
+            {
+                "fire_produto_id": "10",
+                "codigo": "10",
+                "nome": "MEIA CANO ALTO",
+                "ean": "789",
+                "codprod_altern": "KG02PR",
+            }
+        ]
+    )
+    body = client.get("/api/produtos/search?q=meia&desc=meia%20cano%20alto").json()
+    assert body["results"][0]["fire_codprod_altern"] == "KG02PR"
+    assert body["suggestions"][0]["fire_codprod_altern"] == "KG02PR"
 
 
 def test_produtos_search_requires_min_length():

@@ -69,7 +69,8 @@ API pública para páginas-filho:
   Body vazio. Pre: `portal_status='parsed'`. Re-roda check, persiste lista
   em `imports.sem_preco_ack_*`, audit `sem_preco_acknowledged`. 503 se Fire offline.
 - `GET /api/produtos/search?q=&desc=&code=&ean_item=&limit=` → busca na cópia
-  local do catálogo (`catalogo_fire`, zero Firebird — funciona offline). Requer
+  local do catálogo (`catalogo_fire`, zero Firebird — funciona offline; cada item
+  devolve também `fire_codprod_altern`). Requer
   auth; clamp `limit` em [1, 50]. `q` é **opcional**: com `q` ≥ 2 chars popula
   `results` (busca por nome/código/EAN). As dicas do item do pedido (`desc`,
   `code`, `ean_item`) — quando ao menos uma vier — populam `suggestions` (top 5

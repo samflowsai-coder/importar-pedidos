@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
     from app.erp.catalog_extract import ProdutoFireDTO
 
-_COLS = ("fire_produto_id", "codigo", "nome", "unidade", "ean", "ativo", "tipo", "extraido_em")
+_COLS = ("fire_produto_id", "codigo", "nome", "unidade", "ean", "ativo", "tipo", "codprod_altern", "extraido_em")
 
 
 def replace_all(
@@ -25,7 +25,7 @@ def replace_all(
         f"INSERT INTO catalogo_fire ({', '.join(_COLS)}) VALUES ({', '.join('?' * len(_COLS))})",
         [
             (d.fire_produto_id, d.codigo, d.nome, d.unidade, d.ean,
-             1 if d.ativo else 0, d.tipo, extraido_em)
+             1 if d.ativo else 0, d.tipo, d.codigo_alternativo, extraido_em)
             for d in dtos
         ],
     )
