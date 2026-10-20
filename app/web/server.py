@@ -2667,6 +2667,22 @@ def _registrar_aplicados(import_id: str, decisao) -> None:
         logger.warning(f"audit preco_aplicado falhou ({type(exc).__name__}): {exc}")
 
 
+_MOVER_INACABADO = "Mover inacabado: conclua o mover do pedido antes de enviar."
+
+
+def _mover_inacabado(import_id: str) -> bool:
+    """O pedido também está em OUTRA empresa ativa (mover interrompido): as
+    duas cópias estão em revisão e qualquer uma poderia ir ao Fire. Vale em
+    todos os modos; custa uma busca por empresa por envio."""
+    from app.persistence import environments_repo
+
+    atual = env_context.current()
+    if atual is None:
+        return False
+    outras = [e for e in environments_repo.list_active() if e["slug"] != atual["slug"]]
+    return env_do_import_id(import_id, envs=outras) is not None
+
+
 def _com_trava_do_pedido(outcome_cls):
     """Envio que leva o pedido para fora do Portal segura a trava do pedido da
     leitura do estado até gravar o resultado: o mover de empresa não corre no
@@ -2724,6 +2740,10 @@ def _send_one_to_fire(
     if entry is None:
         return _FireSendOutcome(
             False, reason="not_found", http_status=404, detail="Pedido não encontrado"
+        )
+    if _mover_inacabado(import_id):
+        return _FireSendOutcome(
+            False, reason="mover_inacabado", http_status=409, detail=_MOVER_INACABADO
         )
     if entry.get("portal_status") != "parsed":
         return _FireSendOutcome(
@@ -2962,6 +2982,10 @@ def _export_one_xlsx(
     if entry is None:
         return _XlsxExportOutcome(
             False, reason="not_found", http_status=404, detail="Pedido não encontrado"
+        )
+    if _mover_inacabado(import_id):
+        return _XlsxExportOutcome(
+            False, reason="mover_inacabado", http_status=409, detail=_MOVER_INACABADO
         )
     if entry.get("portal_status") == "found_in_fire":
         return _XlsxExportOutcome(
@@ -4536,7 +4560,10 @@ def mover_pedido_de_empresa(
     e confere de novo no destino, como o "Conferir de novo": check de produto
     no Fire do destino (o de-para v2 lê o SQLite dele) e check de preço. Falha
     da conferência não desfaz o mover — o pedido fica sem check e o detalhe
-    refaz. Só fora de `desligado`."""
+    refaz. Só fora de `desligado` — lá, só CONCLUI um mover interrompido
+    (pedido já no destino e na origem), nunca começa um."""
+    import sqlite3
+
     from app.erp import preco_trava, product_check
     from app.models.order import Order
     from app.persistence import decisao_ambiente_repo as memoria
@@ -4546,27 +4573,38 @@ def mover_pedido_de_empresa(
     from app.utils.logger import logger
 
     modo = roteamento_repo.modo()
-    if modo == roteamento_repo.DESLIGADO:
+    envs = environments_repo.list_active()
+    destino = next((e for e in envs if e["slug"] == body.destino), None)
+    # Empresas que têm o pedido: uma, ou duas num mover interrompido.
+    onde = [e for e in envs if env_do_import_id(import_id, envs=[e]) is not None]
+    concluir = destino in onde and len(onde) > 1
+    if modo == roteamento_repo.DESLIGADO and not concluir:
         raise HTTPException(
             status_code=409,
             detail="Mover pedido entre empresas exige o roteamento em observando ou ligado",
         )
-    envs = environments_repo.list_active()
-    if env_do_import_id(import_id, envs=envs) is None:
+    if not onde:
         raise HTTPException(
             status_code=404, detail="Pedido não encontrado em nenhuma empresa ativa"
         )
-    destino = next((e for e in envs if e["slug"] == body.destino), None)
     if destino is None:
         raise HTTPException(status_code=422, detail="Empresa de destino inexistente ou inativa")
     # A origem é a empresa que tem o pedido e NÃO é o destino: num mover
     # interrompido ele está nos dois, e é assim que a segunda chamada conclui.
-    origem = env_do_import_id(import_id, envs=[e for e in envs if e["id"] != destino["id"]])
-    if origem is None:
+    origens = [e for e in onde if e["id"] != destino["id"]]
+    if not origens:
         raise HTTPException(status_code=422, detail="O pedido já está nessa empresa")
+    if len(origens) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "O pedido está em duas empresas; conclua o mover anterior antes de mover de novo."
+            ),
+        )
+    (origem,) = origens
 
     try:
-        movido = mover_import(import_id, origem=origem, destino=destino, por=user.email)
+        estado = mover_import(import_id, origem=origem, destino=destino, por=user.email)
     except PedidoNaoMovivel as exc:
         return JSONResponse(
             {"detail": f"O pedido não pode mudar de empresa: {exc.motivo}.", "motivo": exc.motivo},
@@ -4577,9 +4615,18 @@ def mover_pedido_de_empresa(
             {"detail": "O pedido está sendo enviado agora; tente de novo em instantes."},
             status_code=409,
         )
+    except sqlite3.OperationalError as exc:
+        if "locked" not in str(exc):
+            raise
+        # Banco de uma das empresas ocupado além do timeout: nada foi apagado
+        # na origem (a cópia, se houve, a próxima chamada conclui).
+        return JSONResponse(
+            {"detail": "O banco da empresa está ocupado; tente de novo em instantes."},
+            status_code=409,
+        )
 
     resposta = {"import_id": import_id, "de": origem["slug"], "para": destino["slug"]}
-    if not movido:  # outro clique já moveu: nada a refazer nem registrar
+    if estado == "ja_movido":  # outro clique já moveu: nada a refazer nem registrar
         return JSONResponse(resposta)
 
     order = None
@@ -4620,6 +4667,15 @@ def mover_pedido_de_empresa(
             "mover.ultima_decisao_falhou import_id={} erro={}", import_id, type(exc).__name__
         )
         ultima = None
+    # Rastro e memória uma vez por mover: concluir um interrompido só registra
+    # se o rastro ainda não tem este mover (o interrompido não chegou a gravar).
+    if (
+        estado == "concluido"
+        and ultima is not None
+        and ultima.get("acao") == "movido_apos_importar"
+        and ultima.get("env_escolhido") == destino["slug"]
+    ):
+        return JSONResponse(resposta)
     roteamento_decisao_repo.registrar(
         import_id=import_id,
         modo=modo,

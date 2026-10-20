@@ -35,7 +35,7 @@ from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from app.persistence import router
 from app.utils.logger import logger
@@ -208,7 +208,9 @@ def _copiar_faltantes(
 
 def _copiar_no_destino(
     oconn: sqlite3.Connection, row: sqlite3.Row, *, origem: dict, destino: dict, por: str
-) -> None:
+) -> bool:
+    """Copia o pedido no destino. True = mover novo; False = o destino já tinha
+    este mesmo mover (origem→destino): é a conclusão de um interrompido."""
     iid = row["id"]
     linha = dict(row) | dict.fromkeys(_ZERADAS_NO_DESTINO) | {"environment_id": destino["id"]}
     audit = oconn.execute(
@@ -240,7 +242,11 @@ def _copiar_no_destino(
             (iid,),
         ).fetchone()
         ultimo_mover = json.loads(ultimo[0]) if ultimo and ultimo[0] else {}
-        if (ultimo_mover.get("de"), ultimo_mover.get("para")) != (origem["slug"], destino["slug"]):
+        novo = (ultimo_mover.get("de"), ultimo_mover.get("para")) != (
+            origem["slug"],
+            destino["slug"],
+        )
+        if novo:
             dconn.execute(
                 "INSERT INTO audit_log (environment_id, import_id, event_type, detail_json,"
                 " created_at) VALUES (?, ?, 'movido_de_empresa', ?, ?)",
@@ -254,6 +260,7 @@ def _copiar_no_destino(
                     datetime.now().isoformat(timespec="seconds"),
                 ),
             )
+    return novo
 
 
 def _apagar_pedido(conn: sqlite3.Connection, import_id: str) -> None:
@@ -285,12 +292,17 @@ def _desfazer_copia(import_id: str, destino: dict) -> None:
     logger.warning("mover.copia_desfeita import_id={} destino={}", import_id, destino["slug"])
 
 
+EstadoMover = Literal["movido", "concluido", "ja_movido"]
+
+
 def mover_import(
     import_id: str, *, origem: dict[str, Any], destino: dict[str, Any], por: str
-) -> bool:
-    """Move o pedido de `origem` para `destino`. True = moveu agora; False = já
-    estava movido (só no destino). `PedidoNaoMovivel` = nada mudou na origem.
-    `PedidoOcupado` = um envio segura o pedido além de `_ESPERA_S`; nada mudou."""
+) -> EstadoMover:
+    """Move o pedido de `origem` para `destino`. "movido" = mover novo, feito
+    agora; "concluido" = terminou um mover interrompido (o destino já tinha a
+    cópia deste mesmo mover); "ja_movido" = já estava só no destino.
+    `PedidoNaoMovivel` = nada mudou na origem. `PedidoOcupado` = um envio
+    segura o pedido além de `_ESPERA_S`; nada mudou."""
     with (
         trava_do_pedido(import_id, espera=_ESPERA_S),
         _MOVER_LOCK,
@@ -304,19 +316,21 @@ def mover_import(
                     "SELECT 1 FROM imports WHERE id = ?", (import_id,)
                 ).fetchone()
             if no_destino is not None:
-                return False
+                return "ja_movido"
             raise PedidoNaoMovivel("não encontrado")
         motivo = _motivo(oconn, row)
         if motivo is not None:
             _desfazer_copia(import_id, destino)
             raise PedidoNaoMovivel(motivo)
-        _copiar_no_destino(oconn, row, origem=origem, destino=destino, por=por)
+        novo = _copiar_no_destino(oconn, row, origem=origem, destino=destino, por=por)
         _apagar_na_origem(oconn, import_id)
+    estado: EstadoMover = "movido" if novo else "concluido"
     logger.info(
-        "mover.pedido import_id={} de={} para={} por={}",
+        "mover.pedido import_id={} de={} para={} por={} estado={}",
         import_id,
         origem["slug"],
         destino["slug"],
         por,
+        estado,
     )
-    return True
+    return estado

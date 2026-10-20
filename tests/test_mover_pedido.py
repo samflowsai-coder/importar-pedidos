@@ -119,7 +119,7 @@ def _mover(envs, de="mm", para="nasmar"):
 def test_move_pedido_em_revisao_com_audit_e_eventos(envs_mm_nasmar):
     _semear(envs_mm_nasmar["mm"])
 
-    assert _mover(envs_mm_nasmar) is True
+    assert _mover(envs_mm_nasmar) == "movido"
 
     assert _linha("mm") == []
     (dest,) = _linha("nasmar")
@@ -229,7 +229,7 @@ def test_nao_move_pedido_exportado_xlsx(envs_mm_nasmar):
 @pytest.mark.parametrize("output", [None, "", "[]"])
 def test_output_vazio_nao_conta_como_exportado(envs_mm_nasmar, output):
     _semear(envs_mm_nasmar["mm"], output_files_json=output)
-    assert _mover(envs_mm_nasmar) is True
+    assert _mover(envs_mm_nasmar) == "movido"
 
 
 def test_nao_move_pedido_fora_de_revisao(envs_mm_nasmar):
@@ -313,7 +313,7 @@ def test_mover_interrompido_conclui_sem_duplicar(envs_mm_nasmar, monkeypatch):
     assert len(_linha("nasmar")) == 1
 
     monkeypatch.setattr(mp, "_apagar_na_origem", real)
-    assert _mover(envs_mm_nasmar) is True
+    assert _mover(envs_mm_nasmar) == "concluido"
 
     assert _linha("mm") == []
     assert len(_linha("nasmar")) == 1
@@ -345,8 +345,8 @@ def test_mover_interrompido_e_origem_saiu_desfaz_a_copia(envs_mm_nasmar, monkeyp
 
 def test_mover_de_novo_depois_de_movido_nao_faz_nada(envs_mm_nasmar):
     _semear(envs_mm_nasmar["mm"])
-    assert _mover(envs_mm_nasmar) is True
-    assert _mover(envs_mm_nasmar) is False
+    assert _mover(envs_mm_nasmar) == "movido"
+    assert _mover(envs_mm_nasmar) == "ja_movido"
     assert len(_linha("nasmar")) == 1
     assert len(_linha("nasmar", "audit_log", "import_id")) == 3
 
@@ -535,6 +535,11 @@ def test_rota_conclui_mover_interrompido(client_ligado, envs_mm_nasmar, check_fa
     assert r.status_code == 200
     assert _linha("mm") == []
     assert len(_linha("nasmar")) == 1
+    from app.persistence import roteamento_decisao_repo
+
+    # O interrompido não deixou rastro: o que conclui registra, uma vez.
+    (reg,) = roteamento_decisao_repo.listar_por_import(IMPORT_ID)
+    assert reg["acao"] == "movido_apos_importar" and reg["env_escolhido"] == "nasmar"
 
 
 # ── Fix round 1: trava por pedido, inversão, rastro e memória ────────────────
@@ -650,7 +655,7 @@ def test_mandar_de_volta_na_janela_do_interrompido_registra_a_volta(envs_mm_nasm
         _mover(envs_mm_nasmar)
     monkeypatch.setattr(mp, "_apagar_na_origem", real)
 
-    assert _mover(envs_mm_nasmar, de="nasmar", para="mm") is True
+    assert _mover(envs_mm_nasmar, de="nasmar", para="mm") == "movido"
 
     assert _linha("nasmar") == []
     assert len(_linha("mm")) == 1
@@ -862,3 +867,128 @@ def test_envio_desiste_com_erro_claro_quando_a_trava_nao_sai(envs_mm_nasmar, mon
     assert "em andamento" in r.detail
     assert _linha("mm")[0]["fire_codigo"] is None
     assert mp._TRAVAS == {}
+
+
+# ── Revisão final: mover inacabado (I2), duas origens (M2), banco ocupado
+#    (M3) e concluir sem repetir rastro (M4) ─────────────────────────────────
+
+
+def _interromper(envs_mm_nasmar, monkeypatch):
+    """mm→nasmar interrompido: o pedido fica nos dois bancos."""
+    real = mp._apagar_na_origem
+    monkeypatch.setattr(mp, "_apagar_na_origem", lambda conn, import_id: 1 / 0)  # noqa: ARG005
+    with pytest.raises(ZeroDivisionError):
+        _mover(envs_mm_nasmar)
+    monkeypatch.setattr(mp, "_apagar_na_origem", real)
+    assert len(_linha("mm")) == 1 and len(_linha("nasmar")) == 1
+
+
+@pytest.mark.parametrize("modo", ["desligado", "observando", "ligado"])
+@pytest.mark.parametrize("envio", ["_send_one_to_fire", "_export_one_xlsx"])
+def test_envio_recusa_pedido_com_mover_inacabado(envs_mm_nasmar, monkeypatch, envio, modo):
+    """I2: pedido nas duas empresas não vai ao Fire nem vira planilha em
+    nenhuma delas, em qualquer modo."""
+    from app.exporters import erp_exporter, firebird_exporter
+    from app.persistence import context as env_context
+    from app.web import server
+
+    def _proibido(*a, **kw):
+        raise AssertionError("não pode ir ao Fire/planilha")
+
+    monkeypatch.setattr(firebird_exporter, "FirebirdExporter", _proibido)
+    monkeypatch.setattr(erp_exporter, "ERPExporter", _proibido)
+    roteamento_repo.set_modo(modo, por="t")
+    _semear(envs_mm_nasmar["mm"])
+    _interromper(envs_mm_nasmar, monkeypatch)
+
+    for slug in ("mm", "nasmar"):
+        env = envs_mm_nasmar[slug]
+        with env_context.active_env(env["id"], env["slug"]):
+            r = getattr(server, envio)(IMPORT_ID, {"export_mode": "db"}, request_env=env)
+        assert r.ok is False
+        assert r.reason == "mover_inacabado"
+        assert r.http_status == 409
+        assert r.detail == "Mover inacabado: conclua o mover do pedido antes de enviar."
+
+
+def test_rota_conclui_mover_interrompido_em_desligado(client, envs_mm_nasmar, check_falso, monkeypatch):
+    """I2: em desligado a rota só conclui (pedido já nos dois bancos)."""
+    _semear(envs_mm_nasmar["mm"])
+    _interromper(envs_mm_nasmar, monkeypatch)
+    roteamento_repo.set_modo("desligado", por="t")
+
+    r = _post(client)
+
+    assert r.status_code == 200
+    assert _linha("mm") == []
+    assert len(_linha("nasmar")) == 1
+
+
+def test_rota_desligado_nao_comeca_mover_novo_nem_no_sentido_inverso(
+    client, envs_mm_nasmar, monkeypatch
+):
+    _semear(envs_mm_nasmar["mm"])
+    _interromper(envs_mm_nasmar, monkeypatch)
+    roteamento_repo.set_modo("desligado", por="t")
+    # Destino sem cópia do pedido: é mover novo, recusado em desligado.
+    environments_repo.create(
+        slug="terceira", name="Terceira", watch_dir="/x/t/in", output_dir="/x/t/out",
+        fb_path="/x/t.fdb",
+    )
+    assert _post(client, "terceira").status_code == 409
+    assert len(_linha("mm")) == 1 and len(_linha("nasmar")) == 1
+
+
+def test_rota_pedido_em_duas_origens_e_409(client_ligado, envs_mm_nasmar, monkeypatch):
+    """M2: pedido em mais de uma empresa além do destino: não escolhe uma."""
+    terceira = environments_repo.create(
+        slug="terceira", name="Terceira", watch_dir="/x/t/in", output_dir="/x/t/out",
+        fb_path="/x/t.fdb",
+    )
+    _semear(envs_mm_nasmar["mm"])
+    _semear(terceira)
+
+    r = _post(client_ligado)
+
+    assert r.status_code == 409
+    assert r.json()["detail"] == (
+        "O pedido está em duas empresas; conclua o mover anterior antes de mover de novo."
+    )
+    assert len(_linha("mm")) == 1 and _linha("nasmar") == []
+
+
+def test_rota_banco_ocupado_e_409(client_ligado, envs_mm_nasmar, monkeypatch):
+    """M3: "database is locked" no mover vira 409 para tentar de novo, nunca 500."""
+    import sqlite3
+
+    def _travado(*a, **kw):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(mp, "mover_import", _travado)
+    _semear(envs_mm_nasmar["mm"])
+
+    r = _post(client_ligado)
+
+    assert r.status_code == 409
+    assert "tente de novo em instantes" in r.json()["detail"]
+
+
+def test_rota_conclui_sem_segundo_rastro_nem_memoria(
+    client_ligado, envs_mm_nasmar, check_falso, monkeypatch
+):
+    """M4: o rastro já tem este mover: concluir não grava outro nem ensina de novo."""
+    from app.persistence import decisao_ambiente_repo, roteamento_decisao_repo
+
+    _semear(envs_mm_nasmar["mm"])
+    _interromper(envs_mm_nasmar, monkeypatch)
+    roteamento_decisao_repo.registrar(
+        import_id=IMPORT_ID, modo="ligado", degrau=None, env_sugerido=None,
+        env_escolhido="nasmar", decidido_por="ana@mm", motivo="movido de mm para nasmar",
+        acao="movido_apos_importar",
+    )
+
+    assert _post(client_ligado).status_code == 200
+
+    assert len(roteamento_decisao_repo.listar_por_import(IMPORT_ID)) == 1
+    assert decisao_ambiente_repo.lembrada("11222333000181") is None
+    assert _linha("mm") == []
