@@ -231,7 +231,63 @@ def test_bloco_de_roteamento_pede_escolha_quando_ligado_e_mudo(portal):
     roteamento_repo.set_modo("ligado", por="t")
     rot = _roteamento_para_preview(_order(None))
     assert rot["precisa_escolher"] is True
+    assert rot["pode_trocar"] is False
     assert {o["slug"] for o in rot["opcoes"]} == {"nasmar", "mm"}
+
+
+def _com_regra(monkeypatch, env_slug, explicacao="Regra comercial: teste"):
+    """A escada do fixture `portal`, com o degrau `regra` respondendo `env_slug`."""
+    from app.routing.regra import ResultadoRegra
+
+    base = routing.deps_padrao()  # já é a versão sem Firebird do fixture
+    monkeypatch.setattr(
+        routing,
+        "deps_padrao",
+        lambda: routing.Deps(
+            env_por_cnpj=base.env_por_cnpj,
+            historico=base.historico,
+            memoria=base.memoria,
+            regra=lambda order: ResultadoRegra(env_slug=env_slug, explicacao=explicacao),  # noqa: ARG005
+        ),
+    )
+
+
+def test_preview_ligado_resolvido_pode_trocar(portal):
+    from app.web.server import _roteamento_para_preview
+
+    roteamento_repo.set_modo("ligado", por="t")
+    rot = _roteamento_para_preview(_order(NASMAR))
+    assert rot["env_slug"] == "nasmar"
+    assert rot["precisa_escolher"] is False
+    assert rot["pode_trocar"] is True
+    assert rot["contraria"] is None
+    assert rot["contraria_nome"] is None
+    assert {o["slug"] for o in rot["opcoes"]} == {"nasmar", "mm"}
+
+
+def test_preview_observando_nao_pode_trocar(portal):
+    from app.web.server import _roteamento_para_preview
+
+    roteamento_repo.set_modo("observando", por="t")
+    rot = _roteamento_para_preview(_order(NASMAR))
+    assert rot["env_slug"] == "nasmar"
+    assert rot["pode_trocar"] is False
+
+
+def test_preview_leva_contraria_com_nome(portal, monkeypatch):
+    """Regra manda pra Nasmar, o documento traz o CNPJ da MM: o preview leva
+    o que o documento apontaria, com o nome legível."""
+    from app.web.server import _roteamento_para_preview
+
+    roteamento_repo.set_modo("ligado", por="t")
+    _com_regra(monkeypatch, "nasmar", "Regra comercial: Kolosh, CNPJ faturado em MG → Nasmar")
+    rot = _roteamento_para_preview(_order(MM))
+    assert rot["degrau"] == "regra"
+    assert rot["env_slug"] == "nasmar"
+    assert rot["env_nome"] == "Nasmar"
+    assert rot["contraria"] == "mm"
+    assert rot["contraria_nome"] == "MM Americanense"
+    assert rot["pode_trocar"] is True
 
 
 def test_decidir_ambiente_em_observando_engole_excecao_e_pedido_segue(portal, monkeypatch):

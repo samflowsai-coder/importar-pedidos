@@ -416,6 +416,11 @@ def _roteamento_para_preview(order) -> dict | None:
     A UI nunca roteia em silêncio: mesmo quando a decisão é automática, o
     bloco viaja no preview para a faixa acima dos itens mostrar o ambiente
     de destino e o degrau que decidiu.
+
+    `contraria`: o que o documento apontaria quando a regra decidiu outra
+    empresa. `pode_trocar`: só em 'ligado' com decisão resolvida — a
+    sugestão vem pré-selecionada e o operador pode trocar (o commit aceita
+    `environment_slug`). Em 'observando' a sugestão é só informação.
     """
     from app.persistence import environments_repo, roteamento_repo
 
@@ -423,6 +428,7 @@ def _roteamento_para_preview(order) -> dict | None:
     if decisao is None:
         return None
     env = environments_repo.get_by_slug(decisao.env_slug) if decisao.env_slug else None
+    contraria = environments_repo.get_by_slug(decisao.contraria) if decisao.contraria else None
     return {
         "modo": modo,
         "degrau": decisao.degrau,
@@ -430,7 +436,10 @@ def _roteamento_para_preview(order) -> dict | None:
         "env_nome": env["name"] if env else None,
         "explicacao": decisao.explicacao,
         "divergiu_de": decisao.divergiu_de,
+        "contraria": decisao.contraria,
+        "contraria_nome": contraria["name"] if contraria else None,
         "precisa_escolher": modo == roteamento_repo.LIGADO and not decisao.resolveu,
+        "pode_trocar": modo == roteamento_repo.LIGADO and decisao.resolveu,
         "opcoes": [{"slug": e["slug"], "name": e["name"]} for e in environments_repo.list_active()],
     }
 
