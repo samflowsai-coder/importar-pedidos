@@ -2195,3 +2195,77 @@ def test_decidir_envio_desligado_igual_hoje(monkeypatch, modo_produto):
         labels,
     )
     assert _audits(import_id) == []
+
+
+# ── Produto ligado: a trava de preço avalia o produto decidido (Task 6, R15a) ──
+
+
+def _check_decidido_por_vinculo(unidade):
+    """Item casa direto (legado) no SEQ 123 em KIT, mas a chave exata decidiu o SEQ
+    456 por vínculo v2, com a unidade do 456 lida do Fire no mesmo check."""
+    c = _com_produto(_check(), "ok")
+    c["items"][0]["produto"].update(
+        {
+            "fire_seq": 456,
+            "fonte": "depara",
+            "candidatos": [
+                {"seq": 456, "descricao": "B", "codprod_altern": "B", "unidade": unidade}
+            ],
+        }
+    )
+    return c
+
+
+@pytest.mark.parametrize(("unidade", "bloqueia"), [("KIT", False), ("PACK", True)])
+def test_produto_ligado_preco_usa_unidade_do_decidido(monkeypatch, unidade, bloqueia):
+    _precos_por_produto({"123": 9900, "456": 5400})
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check_decidido_por_vinculo(unidade))
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env_produto("ligado", "ligado"), agora=AGORA
+    )
+
+    assert d.avaliacao.itens[0].fire_produto_id == "456"
+    assert d.bloqueado is bloqueia
+    if bloqueia:
+        assert d.avaliacao.itens[0].motivo == "unidade_divergente"
+    else:
+        assert d.avaliacao.itens[0].situacao == "ok"
+
+
+@pytest.mark.parametrize(("unidade", "estado"), [("KIT", "ok"), ("PACK", "nao_avaliado")])
+def test_produto_ligado_preview_usa_unidade_do_decidido(unidade, estado):
+    from app.erp import produto_trava
+
+    _precos_por_produto({"123": 9900, "456": 5400})
+    order = _order((54.0,))
+    check = _check_decidido_por_vinculo(unidade)
+    import_id, entry = _seed(order, check=check)
+    _, mapa = produto_trava.produtos_decididos(check)
+
+    preco = preco_trava.preview_preco(
+        import_id,
+        entry,
+        order,
+        env=_env_produto("ligado", "ligado"),
+        agora=AGORA,
+        produtos_por_item=mapa,
+    )
+
+    assert preco["itens"][0]["estado"] == estado
+
+
+def test_produto_desligado_vinculo_v1_continua_zerando_a_unidade(monkeypatch):
+    """Fora de `ligado` nada muda: o candidato não é usado."""
+    _precos_por_produto({"456": 5400})
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check_decidido_por_vinculo("KIT"))
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env("ligado"), agora=AGORA, produtos_por_item={0: 456}
+    )
+
+    assert d.avaliacao.itens[0].motivo == "unidade_divergente"

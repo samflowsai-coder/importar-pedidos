@@ -179,12 +179,21 @@ vivo que a trava aprovou (None fora de `ligado`). `produto_trava.produtos_decidi
 -> (vinculos, produtos_por_item)`: todo item `ok` (inclusive quando o código do cliente já
 é o `CODPROD_ALTERN`) vira um vínculo no formato do `depara_apply.aplicar`
 (`fire_codigo` = `CODPROD_ALTERN` do candidato decidido, lido do Fire no check, nunca do
-catálogo local; `fire_ean` None; `orig` = código do cliente, que vai na OBS como
-`ref cliente: …`) e `{posição: SEQ}`. Sem `CODPROD_ALTERN` o código do cliente fica (só
+catálogo local; `fire_ean` = EAN do candidato ou "" com `substitui_ean: True`, e o
+`aplicar` troca ou LIMPA o EAN do cliente, nunca o mantém — o v1, sem a flag, segue como
+antes; `orig` = código do cliente, que vai na OBS como `ref cliente: …`) e
+`{posição: SEQ}`. Os candidatos em `item["produto"]["candidatos"]` levam também
+`unidade` e `ean` (os builders `find_produtos_chave_por_*_sql` trazem
+`TRIM(CODIGO_EAN13)` como 8ª coluna; os builders legados não mudam). Sem `CODPROD_ALTERN` o código do cliente fica (só
 o insert aceita esse item). Em `ligado`, `decidir_envio` avalia o preço por esse mapa (o
 de-para v1 passado é ignorado), e `_send_one_to_fire`/`_export_one_xlsx` (via
 `_saida_do_envio`) aplicam ESSE mapa no `depara_apply.aplicar` e no
-`FirebirdExporter.export(produtos_por_item=…)`, sem segundo `check_order`. O preview
+`FirebirdExporter.export(produtos_por_item=…)`, sem segundo `check_order` e sem ler o
+de-para v1 (`_vinculos_antes_do_portao` só chama `_vinculos_de_para` fora de `ligado`;
+se o modo mudou no meio, `_saida_do_envio` lê o v1 na hora). Na trava de preço,
+`_com_vinculos(..., decidido=True)` (produto `ligado`, envio e preview) pega
+`fire_unidade`/`fire_description` do candidato decidido em vez de zerar quando o
+`fire_product_id` legado é outro SEQ. O preview
 avalia o preço pelo `produtos_decididos(entry["check"])`. `decidir_envio(...,
 export_mode=)`: o que o caminho gera (None = `EXPORT_MODE`); `/export-xlsx` passa sempre
 `"xlsx"`. O CLI em `ligado` aplica o mesmo mapa antes da planilha. `desligado` e

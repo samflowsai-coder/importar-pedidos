@@ -48,14 +48,21 @@ def _check_fire(produtos, order: Order, **kw) -> tuple[dict, dict]:
         return product_check.check_order(order), estado
 
 
-def _ok(seq, codprod, *, codigo="C1", troca=None, **extra):
+def _ok(seq, codprod, *, codigo="C1", troca=None, unidade="PAR", ean=None, **extra):
     produto = {
         "estado": "ok",
         "fire_seq": seq,
         "fonte": "ean",
         "motivo": "",
         "candidatos": [
-            {"seq": seq, "descricao": "D", "codprod_altern": codprod, "bloqueado": False}
+            {
+                "seq": seq,
+                "descricao": "D",
+                "codprod_altern": codprod,
+                "bloqueado": False,
+                "unidade": unidade,
+                "ean": ean,
+            }
         ],
         "troca_no_fire": troca,
     }
@@ -217,18 +224,23 @@ def test_desligado_ignora_as_regras_da_planilha():
 
 def test_produtos_decididos_cobre_todo_item_ok():
     pendente = {"product_code": "Z", "produto": {"estado": "ambiguo", "fire_seq": None}}
-    check = _check(_ok(10, "A", codigo="CLI-A"), pendente, _ok(30, "C", codigo="C"))
+    check = _check(
+        _ok(10, "A", codigo="CLI-A", ean="7891234567890"), pendente, _ok(30, "C", codigo="C")
+    )
     vinculos, mapa = produto_trava.produtos_decididos(check)
     assert mapa == {0: 10, 2: 30}
+    comum = {"substitui_ean": True}
     assert vinculos == [
         {
             "item_index": 0,
             "fire_produto_id": 10,
             "fire_codigo": "A",
-            "fire_ean": None,
+            "fire_ean": "7891234567890",
             "orig": "CLI-A",
-        },
-        {"item_index": 2, "fire_produto_id": 30, "fire_codigo": "C", "fire_ean": None, "orig": "C"},
+        }
+        | comum,
+        {"item_index": 2, "fire_produto_id": 30, "fire_codigo": "C", "fire_ean": "", "orig": "C"}
+        | comum,
     ]
 
 
@@ -385,6 +397,16 @@ def _sem_depara_v1(monkeypatch):
     monkeypatch.setattr(server_mod, "_vinculos_de_para", lambda order, caminho: (v1, {0: 777}))
 
 
+def _nunca_v1(monkeypatch):
+    """Em `ligado` o de-para v1 nem é lido."""
+    from app.web import server as server_mod
+
+    def _nunca(order, caminho):
+        raise AssertionError(f"leu o de-para v1 em ligado ({caminho})")
+
+    monkeypatch.setattr(server_mod, "_vinculos_de_para", _nunca)
+
+
 def test_insert_direto_usa_seq_de_todo_item_ok(monkeypatch, tmp_path):
     from app.exporters import firebird_exporter
     from app.exporters.firebird_exporter import FirebirdExportResult
@@ -392,7 +414,7 @@ def test_insert_direto_usa_seq_de_todo_item_ok(monkeypatch, tmp_path):
 
     env = _env_ligado(tmp_path)
     _config(monkeypatch, tmp_path, "db")
-    _sem_depara_v1(monkeypatch)
+    _nunca_v1(monkeypatch)
     order = _order({"product_code": "CLI-A"}, {"product_code": "B"})
     import_id = _seed(order)
     check = _check(_ok(10, "A", codigo="CLI-A"), _ok(20, None, codigo="B"))
@@ -416,7 +438,7 @@ def test_export_xlsx_leva_o_codigo_decidido(monkeypatch, tmp_path):
 
     env = _env_ligado(tmp_path)
     _config(monkeypatch, tmp_path, "xlsx")
-    _sem_depara_v1(monkeypatch)
+    _nunca_v1(monkeypatch)
     order = _order({"product_code": "REF-9", "ean": "7891234567890"})
     import_id = _seed(order)
     monkeypatch.setattr(
@@ -434,6 +456,8 @@ def test_export_xlsx_leva_o_codigo_decidido(monkeypatch, tmp_path):
     (saiu,) = vistos
     assert saiu.items[0].product_code == "KG02PR"
     assert saiu.items[0].obs == "ref cliente: REF-9"
+    # O produto decidido não tem EAN: o do cliente não vai na planilha.
+    assert saiu.items[0].ean is None
 
 
 def test_export_xlsx_com_export_mode_db_ainda_aplica_regra_da_planilha(monkeypatch, tmp_path):
@@ -536,3 +560,134 @@ def test_detalhe_com_varios_itens_da_planilha(monkeypatch):
             },
         ]
     }
+
+
+# ── EAN da planilha = EAN do produto decidido (R15b) ────────────────────────
+
+
+def test_aplicar_decidido_troca_ou_limpa_o_ean_do_cliente():
+    order = _order(
+        {"product_code": "A", "ean": "1111111111111"}, {"product_code": "B", "ean": "2222"}
+    )
+    check = _check(_ok(10, "FA", ean="7890000000001"), _ok(20, "FB"))
+    depara_apply.aplicar(order, produto_trava.produtos_decididos(check)[0])
+    assert [it.ean for it in order.items] == ["7890000000001", None]
+
+
+def test_aplicar_v1_sem_ean_mantem_o_ean_do_cliente():
+    """De-para v1 (fora de `ligado`): comportamento de hoje."""
+    order = _order({"product_code": "A", "ean": "1111111111111"})
+    v1 = [
+        {"item_index": 0, "fire_produto_id": 7, "fire_codigo": "7", "fire_ean": None, "orig": "A"}
+    ]
+    depara_apply.aplicar(order, v1)
+    assert order.items[0].ean == "1111111111111"
+    v1[0]["fire_ean"] = ""
+    depara_apply.aplicar(order, v1)
+    assert order.items[0].ean == "1111111111111"
+
+
+def test_planilha_leva_o_ean_do_fire_lido_no_check():
+    """Casado pelo código; o EAN que o cliente mandou não existe no Fire."""
+    produtos = [(2077, "KG02PR", "KIT GRAZI", 1.0, "7891234567890")]
+    order = _order({"product_code": "KG02PR", "ean": "7890000000999"})
+    check, _ = _check_fire(produtos, order)
+    assert check["items"][0]["produto"]["fonte"] == "codprod_altern"
+    depara_apply.aplicar(order, produto_trava.produtos_decididos(check)[0])
+    (row,) = ERPExporter()._to_erp_rows(order, order.items)
+    assert (row.codigo_produto, row.ean) == ("KG02PR", "7891234567890")
+
+
+# ── Pedido de duas lojas: o split reordena, cada linha leva o seu produto (R15d) ──
+
+LOJA_1 = "11111111000111"
+LOJA_2 = "22222222000122"
+
+
+def _pedido_duas_lojas() -> tuple[Order, dict]:
+    order = Order(
+        header=OrderHeader(order_number="P2", customer_cnpj="00000000000100", customer_name="ACME"),
+        items=[
+            OrderItem(
+                description=d,
+                quantity=1.0,
+                unit_price=1.0,
+                product_code=f"CLI-{d}",
+                delivery_cnpj=loja,
+            )
+            for d, loja in (("A", LOJA_1), ("B", LOJA_2), ("C", LOJA_1), ("D", LOJA_2))
+        ],
+    )
+    check = _check(
+        _ok(10, "FA", codigo="CLI-A", ean="7890000000010"),
+        _ok(20, "FB", codigo="CLI-B", ean="7890000000020"),
+        _ok(30, "FC", codigo="CLI-C"),
+        _ok(40, "FD", codigo="CLI-D", ean="7890000000040"),
+    )
+    return order, check
+
+
+ESPERADO = {
+    "A": (10, "FA", "7890000000010"),
+    "B": (20, "FB", "7890000000020"),
+    "C": (30, "FC", None),
+    "D": (40, "FD", "7890000000040"),
+}
+
+
+@pytest.mark.parametrize("export_mode", ["xlsx", "db"])
+def test_pedido_duas_lojas_cada_linha_leva_o_seu_produto(monkeypatch, tmp_path, export_mode):
+    import openpyxl
+
+    from app.exporters import firebird_exporter
+    from app.exporters.firebird_exporter import FirebirdExportResult, _to_erp_rows_indexados
+    from app.web import server as server_mod
+
+    env = _env_ligado(tmp_path)
+    _config(monkeypatch, tmp_path, export_mode)
+    _nunca_v1(monkeypatch)
+    order, check = _pedido_duas_lojas()
+    import_id = _seed(order)
+    monkeypatch.setattr(product_check, "check_order", lambda o, **kw: check)
+    inseridos = []
+
+    def _export(self, order, *, override_client_id=None, produtos_por_item=None):
+        # Mesma indexação do insert real (posição em order.items pela identidade).
+        for idx, row in _to_erp_rows_indexados(order):
+            inseridos.append((row.descricao, produtos_por_item[idx], row.codigo_produto))
+        return FirebirdExportResult("P2", 0, skipped=True, skip_reason="TESTE")
+
+    monkeypatch.setattr(firebird_exporter.FirebirdExporter, "export", _export)
+    cfg = {"output_dir": str(tmp_path / "out"), "export_mode": export_mode}
+    server_mod._send_one_to_fire(import_id, cfg, request_env=env)
+
+    # Insert: o split por loja reordena (A, C | B, D) e cada linha leva o seu SEQ.
+    assert [d for d, _, _ in inseridos] == ["A", "C", "B", "D"]
+    assert {d: (seq, cod) for d, seq, cod in inseridos} == {
+        d: (seq, cod) for d, (seq, cod, _) in ESPERADO.items()
+    }
+
+    planilhas = sorted((tmp_path / "out").glob("*.xlsx"))
+    if export_mode == "db":
+        assert planilhas == []
+        return
+    assert len(planilhas) == 2
+    linhas = {}
+    for p in planilhas:
+        ws = openpyxl.load_workbook(p).active
+        cab = [c.value for c in ws[1]]
+        for r in ws.iter_rows(min_row=2, values_only=True):
+            linha = dict(zip(cab, r, strict=True))
+            linhas[linha["DESCRICAO"]] = (
+                linha["CODIGO_PRODUTO"],
+                linha["EAN"] or None,
+                linha["CNPJ_LOCAL_ENTREGA"],
+                linha["OBS"],
+            )
+    lojas = {"A": LOJA_1, "B": LOJA_2, "C": LOJA_1, "D": LOJA_2}
+    assert set(linhas) == set(ESPERADO)
+    for d, (_, cod, ean) in ESPERADO.items():
+        codigo, ean_xlsx, loja, obs = linhas[d]
+        assert (codigo, ean_xlsx) == (cod, ean)
+        assert "".join(ch for ch in str(loja) if ch.isdigit()) == lojas[d]
+        assert obs.endswith(f"ref cliente: CLI-{d}")

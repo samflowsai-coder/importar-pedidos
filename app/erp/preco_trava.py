@@ -120,22 +120,46 @@ def _check_utilizavel(check: dict | None, order: Order) -> dict | None:
     return check
 
 
-def _com_vinculos(check: dict | None, produtos_por_item: dict[int, int] | None) -> dict | None:
+def _produto_ligado(env: dict | None) -> bool:
+    return produto_trava.modo(env_trava_produto(env)) == "ligado"
+
+
+def _com_vinculos(
+    check: dict | None, produtos_por_item: dict[int, int] | None, *, decidido: bool = False
+) -> dict | None:
     """Check com o SEQ do vínculo de-para nos itens vinculados: o Fire recebe
     esse SEQ (`FirebirdExporter(produtos_por_item=...)`) e o XLSX o código
     dele, então é ele que a trava avalia, mesmo quando o item também casa
     direto por EAN/código com outro produto. Nesse caso a `fire_unidade` do
-    check é a do OUTRO produto: sai (unidade desconhecida bloqueia)."""
+    check é a do OUTRO produto: sai (unidade desconhecida bloqueia).
+
+    `decidido` (`produto_chave_modo` `ligado`): o mapa é o do produto decidido, e
+    a unidade/descrição vêm do candidato decidido (lido do Fire no mesmo check),
+    em vez de sair. Sem esse candidato, sai como antes."""
     if check is None or not produtos_por_item:
         return check
     itens = [dict(it) for it in check.get("items") or []]
     for i, seq in produtos_por_item.items():
         if 0 <= i < len(itens):
             if str(itens[i].get("fire_product_id")) != str(seq):
-                itens[i]["fire_unidade"] = None
-                itens[i]["fire_description"] = None
+                cand = _candidato_do_seq(itens[i], seq) if decidido else None
+                if cand is not None:
+                    itens[i]["fire_unidade"] = (cand.get("unidade") or "").strip() or None
+                    itens[i]["fire_description"] = cand.get("descricao")
+                else:
+                    itens[i]["fire_unidade"] = None
+                    itens[i]["fire_description"] = None
             itens[i]["fire_product_id"] = seq
     return {**check, "items": itens}
+
+
+def _candidato_do_seq(item: dict, seq: int) -> dict | None:
+    """Candidato decidido do item `ok` quando ele é o `seq` e traz a unidade."""
+    produto = item.get("produto") if isinstance(item.get("produto"), dict) else {}
+    if produto.get("estado") != "ok" or str(produto.get("fire_seq")) != str(seq):
+        return None
+    cand = produto_trava.candidato_decidido(produto)
+    return cand if cand is not None and "unidade" in cand else None
 
 
 def _fonte(env: dict | None) -> str | None:
@@ -176,6 +200,7 @@ def _check_para_preco(
         return _com_vinculos(
             _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order),
             produtos_por_item,
+            decidido=_produto_ligado(env),
         )
     return _check_utilizavel(_check_da_fonte(order, fonte), order)
 
@@ -192,7 +217,11 @@ def _check_salvo_para_preco(
     se foi gerado por essa mesma fonte; de outra fonte = sem avaliação."""
     fonte = _fonte(env)
     if fonte is None or _eh_intercompany(order, entry, grupo):
-        return _com_vinculos(_check_utilizavel(entry.get("check"), order), produtos_por_item)
+        return _com_vinculos(
+            _check_utilizavel(entry.get("check"), order),
+            produtos_por_item,
+            decidido=_produto_ligado(env),
+        )
     salvo = entry.get("check_preco")
     if not salvo or salvo.get("preco_fonte_slug") != fonte:
         return None
@@ -835,6 +864,7 @@ def _decidir_ligado(
     check_hoje = _com_vinculos(
         _check_utilizavel(live, order) or _check_utilizavel(entry.get("check"), order),
         produtos_por_item,
+        decidido=_produto_ligado(env),
     )
     vazio = Avaliacao(rede=None, cnpj_rede=None)
     revisao: dict | None = None
@@ -1049,7 +1079,7 @@ def decidir_envio(
     )
     if bloqueio_produto is not None:
         return bloqueio_produto
-    if produto_trava.modo(env_trava_produto(env)) != "ligado":
+    if not _produto_ligado(env):
         return _decidir_preco(import_id, order, entry, live, env, agora, produtos_por_item)
     # ligado: o SEQ avaliado e o gravado saem do mesmo check que a trava aprovou.
     _, decididos = produto_trava.produtos_decididos(live)

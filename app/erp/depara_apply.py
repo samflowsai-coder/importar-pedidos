@@ -76,7 +76,11 @@ def aplicar(order: Order, vinculos: list[dict]) -> list[dict]:
     for v in vinculos:
         it = order.items[v["item_index"]]
         it.product_code = v["fire_codigo"]
-        if v.get("fire_ean"):
+        if v.get("substitui_ean"):
+            # Produto decidido (`produto_trava.produtos_decididos`): o EAN dele,
+            # ou nenhum — nunca fica o EAN do cliente.
+            it.ean = v.get("fire_ean") or None
+        elif v.get("fire_ean"):
             it.ean = v["fire_ean"]
         ref_note = f"ref cliente: {v['orig']}"
         it.obs = f"{it.obs} | {ref_note}" if it.obs else ref_note

@@ -237,8 +237,11 @@ def find_products_by_seqs_sql(n: int) -> str:
 # Diferente dos builders acima: o chamador lê TODAS as linhas da chave (não fica
 # com a primeira; ambiguidade se decide em Python) e BLOQUEADO separa ativo de
 # bloqueado. Colunas, nas três:
-# (chave, SEQ, DESCRICAO, PRECO_VENDA, UNIDADE, BLOQUEADO, CODPROD_ALTERN).
-_COLS_CHAVE = "SEQ, DESCRICAO, PRECO_VENDA, UNIDADE, BLOQUEADO, CODPROD_ALTERN"
+# (chave, SEQ, DESCRICAO, PRECO_VENDA, UNIDADE, BLOQUEADO, CODPROD_ALTERN, EAN).
+# O EAN (TRIM) é o do produto: a planilha em `ligado` leva o EAN do decidido.
+_COLS_CHAVE = (
+    "SEQ, DESCRICAO, PRECO_VENDA, UNIDADE, BLOQUEADO, CODPROD_ALTERN, TRIM(CODIGO_EAN13)"
+)
 
 
 def find_produtos_chave_por_ean_sql(n: int) -> str:

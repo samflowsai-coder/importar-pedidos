@@ -2410,19 +2410,36 @@ def _vinculos_de_para(order, caminho: str) -> tuple[list[dict], dict[int, int]]:
         return [], {}
 
 
+def _vinculos_antes_do_portao(
+    order, caminho: str, env: dict | None
+) -> tuple[list[dict] | None, dict[int, int] | None]:
+    """De-para v1 para o portão, só fora de `produto_chave_modo` `ligado`. Em
+    `ligado` o v1 nem é lido (None, None): a saída é o produto decidido."""
+    if _trava_produto_ligada(env):
+        return None, None
+    return _vinculos_de_para(order, caminho)
+
+
 def _saida_do_envio(
-    decisao, vinculos: list[dict], produtos_por_item: dict[int, int]
+    decisao,
+    order,
+    caminho: str,
+    vinculos: list[dict] | None,
+    produtos_por_item: dict[int, int] | None,
 ) -> tuple[list[dict], dict[int, int]]:
     """O que vai ao Fire depois do portão. Em `produto_chave_modo` `ligado`
     (`decisao.check` preenchido), o produto decidido de todo item `ok` do MESMO
     check que a trava aprovou: o insert entra pelo SEQ e a planilha leva o
-    `CODPROD_ALTERN`, com o código do cliente na OBS. Fora de `ligado`, os
-    vínculos de-para de hoje (`_vinculos_de_para`)."""
-    if decisao.check is None:
-        return vinculos, produtos_por_item
-    from app.erp import produto_trava
+    `CODPROD_ALTERN` e o EAN dele, com o código do cliente na OBS. Fora de
+    `ligado`, os vínculos de-para de hoje (`_vinculos_de_para`); se o modo mudou
+    entre o portão e aqui e o v1 não foi lido, lê agora."""
+    if decisao.check is not None:
+        from app.erp import produto_trava
 
-    return produto_trava.produtos_decididos(decisao.check)
+        return produto_trava.produtos_decididos(decisao.check)
+    if vinculos is None or produtos_por_item is None:
+        return _vinculos_de_para(order, caminho)
+    return vinculos, produtos_por_item
 
 
 def _registrar_aplicados(import_id: str, decisao) -> None:
@@ -2489,7 +2506,7 @@ def _send_one_to_fire(
     from app.observability import metrics
 
     export_mode = cfg.get("export_mode", "xlsx")
-    vinculos, produtos_por_item = _vinculos_de_para(order, "envio")
+    vinculos, produtos_por_item = _vinculos_antes_do_portao(order, "envio", request_env)
     decisao = preco_trava.decidir_envio(
         import_id,
         order,
@@ -2507,7 +2524,9 @@ def _send_one_to_fire(
             False, reason=decisao.reason, http_status=409, detail=decisao.detalhe
         )
     preco_trava.aplicar_precos(order, decisao.precos_aplicar)
-    vinculos, produtos_por_item = _saida_do_envio(decisao, vinculos, produtos_por_item)
+    vinculos, produtos_por_item = _saida_do_envio(
+        decisao, order, "envio", vinculos, produtos_por_item
+    )
 
     # Reuse the trace_id minted on commit so logs across commit→send-to-fire
     # are correlated for the same pedido.
@@ -2724,7 +2743,7 @@ def _export_one_xlsx(
     from app.erp import preco_trava
     from app.observability import metrics
 
-    vinculos, produtos_por_item = _vinculos_de_para(order, "export")
+    vinculos, produtos_por_item = _vinculos_antes_do_portao(order, "export", request_env)
     decisao = preco_trava.decidir_envio(
         import_id,
         order,
@@ -2743,7 +2762,7 @@ def _export_one_xlsx(
             False, reason=decisao.reason, http_status=409, detail=decisao.detalhe
         )
     preco_trava.aplicar_precos(order, decisao.precos_aplicar)
-    vinculos, _ = _saida_do_envio(decisao, vinculos, produtos_por_item)
+    vinculos, _ = _saida_do_envio(decisao, order, "export", vinculos, produtos_por_item)
 
     with with_trace_id(entry.get("trace_id")):
         # Identidade do Fire onde há vínculo de-para (ou, em `ligado`, o produto

@@ -38,6 +38,7 @@ class Candidato:
     bloqueado: bool
     unidade: str | None
     preco_venda: float | None
+    ean: str | None = None
 
 
 @dataclass(frozen=True)

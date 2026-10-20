@@ -436,8 +436,8 @@ def _fire_fisico(produtos, *, client_row=(1, "ACME"), falha_previsao=False):
     cat = [(*p[:4], p[4] if len(p) > 4 else None, p[5] if len(p) > 5 else "Nao") for p in produtos]
     por_seq = sorted(cat)
 
-    def chave(k, s, c, d, p, b):
-        return (k, s, d, p, "PAR", b, c)
+    def chave(k, s, c, d, p, b, e):
+        return (k, s, d, p, "PAR", b, c, e)
 
     def execute(sql, params=()):
         if "FROM CADASTRO" in sql:
@@ -452,19 +452,19 @@ def _fire_fisico(produtos, *, client_row=(1, "ACME"), falha_previsao=False):
                 for seq, cod, desc, *_ in cat
                 if any(cod.startswith(p) for p in params)
             ]
-        elif "BLOQUEADO" in sql and "CODIGO_EAN13" in sql:
+        elif "BLOQUEADO" in sql and "CODIGO_EAN13) IN" in sql:
             estado["rows"] = [
-                chave(e, s, c, d, p, b) for s, c, d, p, e, b in por_seq if e in params
+                chave(e, s, c, d, p, b, e) for s, c, d, p, e, b in por_seq if e in params
             ]
         elif "BLOQUEADO" in sql and "CODPROD_ALTERN) IN" in sql:
             estado["rows"] = [
-                chave(c.strip(), s, c, d, p, b)
+                chave(c.strip(), s, c, d, p, b, e)
                 for s, c, d, p, e, b in por_seq
                 if c.strip() in params
             ]
         elif "BLOQUEADO" in sql and "SEQ IN" in sql:
             estado["rows"] = [
-                chave(s, s, c, d, p, b) for s, c, d, p, e, b in por_seq if s in params
+                chave(s, s, c, d, p, b, e) for s, c, d, p, e, b in por_seq if s in params
             ]
         elif "CODIGO_EAN13" in sql and " IN " in sql:
             estado["rows"] = [(e, s, d, p, "PAR") for s, c, d, p, e, b in por_seq if e in params]
@@ -665,12 +665,17 @@ def _make_fb_ctx_chave(*, ean_rows=None, code_rows=None, seq_rows=None, client_r
     """Cursor fake roteado pelos builders da chave exata.
 
     Linhas de 7 colunas: (chave, SEQ, DESCRICAO, PRECO_VENDA, UNIDADE, BLOQUEADO,
-    CODPROD_ALTERN). As queries antigas recebem as mesmas linhas cortadas no
-    formato delas, então os campos legados saem do mesmo catálogo fake.
+    CODPROD_ALTERN), mais o EAN do produto opcional (8ª; ausente = None). As
+    queries antigas recebem as mesmas linhas cortadas no formato delas, então os
+    campos legados saem do mesmo catálogo fake.
     """
-    ean_rows = list(ean_rows or [])
-    code_rows = list(code_rows or [])
-    seq_rows = list(seq_rows or [])
+
+    def _oito(rows):
+        return [tuple(r) if len(r) == 8 else (*r, None) for r in rows or []]
+
+    ean_rows = _oito(ean_rows)
+    code_rows = _oito(code_rows)
+    seq_rows = _oito(seq_rows)
     cur = MagicMock()
     state = {"rows": []}
 
@@ -745,7 +750,14 @@ def test_check_grava_produto_ok_por_codprod_altern(mock_fb):
         "fonte": "codprod_altern",
         "motivo": "",
         "candidatos": [
-            {"seq": 42, "descricao": "KIT GRAZI", "codprod_altern": "KG02PR", "bloqueado": False}
+            {
+                "seq": 42,
+                "descricao": "KIT GRAZI",
+                "codprod_altern": "KG02PR",
+                "bloqueado": False,
+                "unidade": "KIT",
+                "ean": None,
+            }
         ],
         "troca_no_fire": None,
     }
@@ -770,8 +782,10 @@ def test_check_ean_duplicado_nao_escolhe_menor_seq(mock_fb):
     assert item["produto"]["estado"] == "ambiguo"
     assert item["produto"]["fire_seq"] is None
     assert item["produto"]["candidatos"] == [
-        {"seq": 10, "descricao": "A", "codprod_altern": "A1", "bloqueado": False},
-        {"seq": 20, "descricao": "B", "codprod_altern": "B1", "bloqueado": False},
+        {"seq": 10, "descricao": "A", "codprod_altern": "A1", "bloqueado": False}
+        | {"unidade": "PAR", "ean": None},
+        {"seq": 20, "descricao": "B", "codprod_altern": "B1", "bloqueado": False}
+        | {"unidade": "PAR", "ean": None},
     ]
     assert report["summary"]["items_produto_pendente"] == 1
 

@@ -78,9 +78,10 @@ def produtos_decididos(check: dict | None) -> tuple[list[dict], dict[int, int]]:
     """(vínculos para `depara_apply.aplicar`, {posição: SEQ}) de todo item `ok`.
 
     Todo item `ok` entra, mesmo quando o código do cliente já é o `CODPROD_ALTERN`
-    (a OBS ganha "ref cliente: ..." e a planilha leva o mesmo código). `fire_ean` é
-    None: o EAN do cliente fica (no `ok` ele é do produto decidido ou não existe no
-    Fire). Sem `CODPROD_ALTERN`, o código do cliente fica: só o insert, que entra pelo
+    (a OBS ganha "ref cliente: ..." e a planilha leva o mesmo código). `fire_ean` é o
+    EAN do produto decidido, lido do Fire no check, ou "" (sem EAN): com
+    `substitui_ean`, o `aplicar` troca ou limpa o EAN do cliente, nunca o mantém.
+    Sem `CODPROD_ALTERN`, o código do cliente fica: só o insert, que entra pelo
     SEQ, aceita esse item (a planilha trava em `sem_codigo_fire`)."""
     vinculos: list[dict] = []
     mapa: dict[int, int] = {}
@@ -95,7 +96,8 @@ def produtos_decididos(check: dict | None) -> tuple[list[dict], dict[int, int]]:
                 "item_index": i,
                 "fire_produto_id": seq,
                 "fire_codigo": codigo_decidido(produto) or item.get("product_code"),
-                "fire_ean": None,
+                "fire_ean": ((candidato_decidido(produto) or {}).get("ean") or "").strip(),
+                "substitui_ean": True,
                 "orig": orig,
             }
         )

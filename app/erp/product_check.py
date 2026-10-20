@@ -159,6 +159,10 @@ def _produto_dict(d: DecisaoProduto) -> dict:
                 "descricao": c.descricao,
                 "codprod_altern": c.codprod_altern,
                 "bloqueado": c.bloqueado,
+                # Do Fire, na hora: a trava de preço e a planilha em `ligado` usam a
+                # unidade e o EAN do produto decidido.
+                "unidade": c.unidade,
+                "ean": c.ean,
             }
             for c in d.candidatos
         ],
@@ -172,8 +176,8 @@ def _txt(value) -> str | None:
 
 
 def _candidato(row) -> Candidato:
-    """Linha de `find_produtos_chave_por_*_sql` (chave primeiro, 7 colunas)."""
-    _, seq, desc, preco, unidade, bloqueado, codprod = row
+    """Linha de `find_produtos_chave_por_*_sql` (chave primeiro, 8 colunas)."""
+    _, seq, desc, preco, unidade, bloqueado, codprod, ean = row
     return Candidato(
         seq=int(seq),
         descricao=_txt(desc) or "",
@@ -182,6 +186,7 @@ def _candidato(row) -> Candidato:
         bloqueado=(_txt(bloqueado) or "").upper() == "SIM",
         unidade=_txt(unidade),
         preco_venda=float(preco) if preco is not None else None,
+        ean=_txt(ean),
     )
 
 
