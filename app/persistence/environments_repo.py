@@ -66,8 +66,11 @@ _PUBLIC_FIELDS = (
     # Trava de preço por rede (desligado | observando | ligado) e ambiente-fonte da tabela.
     "preco_trava_modo",
     "preco_fonte_slug",
+    # Casamento de produto só por chave exata (desligado | observando | ligado).
+    "produto_chave_modo",
 )
 PRECO_MODOS = ("desligado", "observando", "ligado")
+PRODUTO_MODOS = ("desligado", "observando", "ligado")
 
 
 class SlugTaken(Exception):
@@ -375,6 +378,22 @@ def set_preco_trava_modo(env_id: str, valor: str, *, por: str) -> None:
             (valor, _now(), env_id),
         )
     logger.info("preco_trava_modo env_id={} -> {} por={}", env_id, valor, por)
+
+
+def set_produto_chave_modo(env_id: str, valor: str, *, por: str) -> None:
+    """Troca o interruptor do casamento de produto por chave exata do ambiente.
+
+    `valor` fora de `PRODUTO_MODOS` levanta ValueError sem tocar no banco.
+    `por` (quem mudou) vai pro log: não existe audit de mudança de ambiente.
+    """
+    if valor not in PRODUTO_MODOS:
+        raise ValueError(f"modo inválido: {valor!r} — use um de {PRODUTO_MODOS}")
+    with router.shared_connect() as conn:
+        conn.execute(
+            "UPDATE environments SET produto_chave_modo = ?, updated_at = ? WHERE id = ?",
+            (valor, _now(), env_id),
+        )
+    logger.info("produto_chave_modo env_id={} -> {} por={}", env_id, valor, por)
 
 
 def set_preco_fonte_slug(env_id: str, slug: str | None, *, por: str) -> None:

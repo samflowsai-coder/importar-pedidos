@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS environments (
     preco_trava_modo          TEXT NOT NULL DEFAULT 'desligado',
     -- Slug do ambiente cuja cópia de tabela de preço vale para este. NULL = o próprio.
     preco_fonte_slug          TEXT,
+    -- Casamento de produto só por chave exata: desligado | observando | ligado.
+    produto_chave_modo        TEXT NOT NULL DEFAULT 'desligado',
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -261,6 +263,9 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
      "ALTER TABLE environments ADD COLUMN preco_trava_modo TEXT NOT NULL DEFAULT 'desligado'"),
     ("environments", "preco_fonte_slug",
      "ALTER TABLE environments ADD COLUMN preco_fonte_slug TEXT"),
+    # Casamento de produto só por chave exata (interruptor de 3 estados).
+    ("environments", "produto_chave_modo",
+     "ALTER TABLE environments ADD COLUMN produto_chave_modo TEXT NOT NULL DEFAULT 'desligado'"),
     # CNPJ da empresa do ambiente, só dígitos — chave de `find_by_cnpj`.
     ("environments", "cnpj",
      "ALTER TABLE environments ADD COLUMN cnpj TEXT"),

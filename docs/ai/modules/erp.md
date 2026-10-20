@@ -152,7 +152,19 @@ não pôde ser lido (banco do ambiente fora, intercompany sem resposta). Com
 contexto ativo, e qualquer falha marca. Sem `env`, `db.connect()`; sem ambiente
 ativo não marca. Fire fora (`available=False`) ou falha só nesta passada →
 `estado = "fire_indisponivel"` (do check, não de `decidir`). Os campos legados
-(`match`, `match_source`, `fire_product_id`, …) não mudam. Nada bloqueia ainda.
+(`match`, `match_source`, `fire_product_id`, …) não mudam. Nada bloqueia ainda
+(o portão `avaliar` existe, mas ainda não está ligado em nenhum caminho).
+
+**Interruptor `environments.produto_chave_modo`** (`desligado` nasce | `observando` |
+`ligado`): troca só por `PATCH /api/admin/environments/{id}/produto-chave`
+(admin, `{modo}`; 404/422; log via `set_produto_chave_modo`). Portão puro em
+`app/erp/produto_trava.py`: `modo(env)` (None/inválido → desligado) e
+`avaliar(check, *, env, export_mode) -> TravaProduto(bloqueado, reason, itens)`.
+`itens` = `[{index, estado, motivo}]` de todo item com `produto.estado != "ok"` (item
+sem `produto` conta como não resolvido), preenchido em `observando` e `ligado`; em
+`desligado` vem vazio. Só `ligado` bloqueia: `fire_indisponivel` (check
+`available` falso/ausente ou `produto_conferencia_incompleta`) tem precedência sobre
+`produto_a_identificar`. `troca_no_fire`/`sem_codigo_fire` (xlsx) vêm na Task 6.
 
 Os guards vivem em `_send_one_to_fire` e `_export_one_xlsx` (web). Audit
 events: `send_to_fire_blocked`, `xlsx_export_blocked`, `sem_preco_acknowledged`.
