@@ -23,8 +23,11 @@ Estado = Literal[
 ]
 Fonte = Literal["ean", "depara", "codprod_altern"]
 
-# Prioridade quando nenhuma chave deu produto.
-_PRIORIDADE_PROBLEMA: tuple[Estado, ...] = ("vinculo_invalido", "ambiguo", "produto_bloqueado")
+# Prioridade quando nenhuma chave deu produto (vinculo_invalido já é final antes).
+_PRIORIDADE_PROBLEMA: tuple[Estado, ...] = ("ambiguo", "produto_bloqueado")
+MOTIVO_CHAVES_DISCORDAM = (
+    "As chaves do item (EAN, código ou vínculo salvo) apontam para produtos diferentes."
+)
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,20 @@ def _por_chave(nome: str, valor: str | None, candidatos: list[Candidato]):
     )
 
 
+def motivo_vinculo_invalido(seq: int) -> str:
+    return f"O vínculo salvo aponta para o produto {seq}, que não existe mais ou está bloqueado."
+
+
+def _todos_candidatos(resultados) -> tuple[Candidato, ...]:
+    """Candidatos de todas as chaves, na ordem das chaves, sem repetir SEQ."""
+    vistos: dict[int, Candidato] = {}
+    for _, r in resultados:
+        lista = (r,) if isinstance(r, Candidato) else r.candidatos if r is not None else ()
+        for c in lista:
+            vistos.setdefault(c.seq, c)
+    return tuple(vistos.values())
+
+
 def _por_vinculo(vinculo_seq: int | None, candidato: Candidato | None):
     if vinculo_seq is None:
         return None
@@ -80,8 +97,7 @@ def _por_vinculo(vinculo_seq: int | None, candidato: Candidato | None):
         return _Problema(
             "vinculo_invalido",
             (candidato,) if candidato is not None else (),
-            f"O vínculo salvo aponta para o produto {vinculo_seq}, "
-            "que não existe mais ou está bloqueado.",
+            motivo_vinculo_invalido(vinculo_seq),
         )
     return candidato
 
@@ -101,24 +117,29 @@ def decidir(
         ("codprod_altern", _por_chave("código", codigo, por_codigo)),
     ]
 
+    # R7(a): vínculo inválido é final. A pessoa escolheu um produto que não vale
+    # mais; nenhuma outra chave passa por cima disso.
+    for _, r in resultados:
+        if isinstance(r, _Problema) and r.estado == "vinculo_invalido":
+            return DecisaoProduto(r.estado, None, None, r.candidatos, r.motivo)
+
     produtos: dict[int, tuple[Fonte, Candidato]] = {}
     for fonte, r in resultados:
         if isinstance(r, Candidato):
             produtos.setdefault(r.seq, (fonte, r))
+    problemas = [r for _, r in resultados if isinstance(r, _Problema)]
 
+    # R7(b): uma chave com problema só deixa passar o SEQ que está entre os
+    # candidatos dela (ex.: EAN ambíguo resolvido pelo vínculo).
     if len(produtos) == 1:
-        ((seq, (fonte, _)),) = produtos.items()
-        return DecisaoProduto("ok", seq, fonte, (), "")
-    if len(produtos) > 1:
+        ((seq, (fonte, escolhido)),) = produtos.items()
+        if all(seq in {c.seq for c in p.candidatos} for p in problemas):
+            return DecisaoProduto("ok", seq, fonte, (escolhido,), "")
+    if produtos:
         return DecisaoProduto(
-            "chaves_discordam",
-            None,
-            None,
-            tuple(c for _, c in produtos.values()),
-            "O EAN e o código apontam para produtos diferentes.",
+            "chaves_discordam", None, None, _todos_candidatos(resultados), MOTIVO_CHAVES_DISCORDAM
         )
 
-    problemas = [r for _, r in resultados if isinstance(r, _Problema)]
     for estado in _PRIORIDADE_PROBLEMA:
         for p in problemas:
             if p.estado == estado:

@@ -713,9 +713,13 @@ def test_check_grava_produto_ok_por_codprod_altern(mock_fb):
         "fire_seq": 42,
         "fonte": "codprod_altern",
         "motivo": "",
-        "candidatos": [],
+        "candidatos": [
+            {"seq": 42, "descricao": "KIT GRAZI", "codprod_altern": "KG02PR", "bloqueado": False}
+        ],
     }
     assert report["summary"]["items_produto_pendente"] == 0
+    assert report["produto_conferencia_incompleta"] is False
+    assert report["summary"]["produto_conferencia_incompleta"] is False
 
 
 @patch("app.erp.product_check.FirebirdConnection")
@@ -909,3 +913,156 @@ def test_check_vinculos_do_codigo_e_do_ean_discordam(mock_db, mock_fb, mock_vinc
     assert produto["estado"] == "chaves_discordam"
     assert produto["fire_seq"] is None
     assert [c["seq"] for c in produto["candidatos"]] == [20, 21]
+    assert produto["motivo"] == product_check.MOTIVO_CHAVES_DISCORDAM
+
+
+def _vinculos_patch(mock_db, mock_vinc, mock_rede, achados):
+    from app.persistence.produto_vinculo_repo import norm_chave
+
+    mock_db.connect.return_value.__enter__.return_value = MagicMock()
+    mock_rede.return_value = None
+    mock_vinc.norm_chave.side_effect = norm_chave
+    mock_vinc.lookup.return_value = achados
+
+
+@patch("app.persistence.precos_repo.resolver_rede")
+@patch("app.erp.product_check.produto_vinculo_repo")
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.db")
+def test_check_vinculos_discordam_com_um_sumido_e_invalido(mock_db, mock_fb, mock_vinc, mock_rede):
+    from types import SimpleNamespace
+
+    _vinculos_patch(
+        mock_db,
+        mock_vinc,
+        mock_rede,
+        {
+            ("codigo", "REF-X"): SimpleNamespace(fire_seq=21),  # sumiu do Fire
+            ("ean", "789"): SimpleNamespace(fire_seq=20),
+        },
+    )
+    report, _ = _check(
+        mock_fb,
+        _order([{"product_code": "REF-X", "ean": "789", "unit_price": 1.0}]),
+        seq_rows=[(20, 20, "B", 2.0, "PAR", "Nao", "B1")],
+    )
+    produto = report["items"][0]["produto"]
+    assert produto["estado"] == "vinculo_invalido"
+    assert produto["candidatos"] == []
+    assert "21" in produto["motivo"]
+
+
+@patch("app.persistence.precos_repo.resolver_rede")
+@patch("app.erp.product_check.produto_vinculo_repo")
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.db")
+def test_check_vinculos_discordam_com_um_bloqueado_e_invalido(
+    mock_db, mock_fb, mock_vinc, mock_rede
+):
+    from types import SimpleNamespace
+
+    _vinculos_patch(
+        mock_db,
+        mock_vinc,
+        mock_rede,
+        {
+            ("codigo", "REF-X"): SimpleNamespace(fire_seq=21),
+            ("ean", "789"): SimpleNamespace(fire_seq=20),
+        },
+    )
+    report, _ = _check(
+        mock_fb,
+        _order([{"product_code": "REF-X", "ean": "789", "unit_price": 1.0}]),
+        seq_rows=[
+            (20, 20, "B", 2.0, "PAR", "Sim", "B1"),
+            (21, 21, "C", 2.0, "PAR", "Nao", "C1"),
+        ],
+    )
+    produto = report["items"][0]["produto"]
+    assert produto["estado"] == "vinculo_invalido"
+    assert [c["seq"] for c in produto["candidatos"]] == [20]
+
+
+@patch("app.persistence.precos_repo.resolver_rede")
+@patch("app.erp.product_check.produto_vinculo_repo")
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.db")
+def test_check_vinculo_invalido_vence_codigo_que_casa(mock_db, mock_fb, mock_vinc, mock_rede):
+    from types import SimpleNamespace
+
+    _vinculos_patch(
+        mock_db, mock_vinc, mock_rede, {("codigo", "ABC"): SimpleNamespace(fire_seq=999)}
+    )
+    report, _ = _check(
+        mock_fb,
+        _order([{"product_code": "ABC", "unit_price": 1.0}]),
+        code_rows=[("ABC", 5, "X", 1.0, "PAR", "Nao", "ABC")],
+    )
+    item = report["items"][0]
+    assert item["match_source"] == "codprod_altern"  # legado inalterado
+    assert item["produto"]["estado"] == "vinculo_invalido"
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.db")
+def test_check_sem_ambiente_ativo_conferencia_completa(mock_db, mock_fb):
+    from app.persistence.context import NoActiveEnvironmentError
+
+    mock_db.connect.side_effect = NoActiveEnvironmentError("sem ambiente")
+    report, _ = _check(
+        mock_fb,
+        _order([{"product_code": "ABC", "unit_price": 1.0}]),
+        code_rows=[("ABC", 5, "X", 1.0, "PAR", "Nao", "ABC")],
+    )
+    assert report["items"][0]["produto"]["estado"] == "ok"
+    assert report["produto_conferencia_incompleta"] is False
+    assert report["summary"]["produto_conferencia_incompleta"] is False
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.db")
+def test_check_banco_do_ambiente_fora_marca_conferencia_incompleta(mock_db, mock_fb):
+    import sqlite3
+
+    mock_db.connect.side_effect = sqlite3.OperationalError("database is locked")
+    with patch("app.utils.logger.logger.warning") as warn:
+        report, _ = _check(
+            mock_fb,
+            _order([{"product_code": "ABC", "unit_price": 1.0}]),
+            code_rows=[("ABC", 5, "X", 1.0, "PAR", "Nao", "ABC")],
+        )
+    assert report["available"] is True
+    assert report["items"][0]["produto"]["estado"] == "ok"  # mantém o calculado
+    assert report["produto_conferencia_incompleta"] is True
+    assert report["summary"]["produto_conferencia_incompleta"] is True
+    assert any("database is locked" in str(c.args[0]) for c in warn.call_args_list)
+
+
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.db")
+def test_check_intercompany_sem_resposta_marca_conferencia_incompleta(mock_db, mock_fb):
+    from app.erp.depara_cliente import ResolucaoCliente
+
+    mock_db.connect.return_value.__enter__.return_value = MagicMock()
+    mock_fb.return_value.connect_with_config.return_value = _make_fb_ctx_chave()[0]
+    with (
+        patch("app.persistence.environments_repo.to_fb_config", return_value={"path": "x"}),
+        patch(
+            "app.integrations.flowpcp.intercompany.resolucao_para",
+            return_value=ResolucaoCliente(False, motivo="erro_conexao"),
+        ),
+        patch("app.erp.product_check.produto_vinculo_repo.lookup", return_value={}),
+        patch("app.persistence.precos_repo.resolver_rede", return_value=None),
+    ):
+        report = product_check.check_order(
+            _order([{"product_code": "ABC", "unit_price": 1.0}]), env={"slug": "mm"}
+        )
+    assert report["produto_conferencia_incompleta"] is True
+
+
+def test_check_indisponivel_conferencia_nao_marcada():
+    with patch("app.erp.product_check.FirebirdConnection") as mock_fb:
+        mock_fb.return_value.is_configured.return_value = False
+        report = product_check.check_order(_order([{"product_code": "X"}]))
+    assert report["produto_conferencia_incompleta"] is False
+    assert report["summary"]["produto_conferencia_incompleta"] is False

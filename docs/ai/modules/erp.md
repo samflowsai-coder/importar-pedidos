@@ -142,8 +142,13 @@ codprod_altern`). Candidatos vêm de `find_produtos_chave_por_{ean,codigo,seq}_s
 cursor. EAN = só dígitos, igual exato; código = `strip().upper()`, igual exato.
 O de-para é o v2 (`produto_vinculo_repo.lookup` no escopo de
 `produto_escopo.cnpj_do_item`/`escopos_para`, cliente real do intercompany via
-`resolucao_para`). Vínculo do código e do EAN para SEQs diferentes →
-`chaves_discordam`. Fire fora (`available=False`) ou falha só nesta passada →
+`resolucao_para`). Vínculo inválido (SEQ sumido/bloqueado) é final. Chave com
+problema (`ambiguo`/`produto_bloqueado`) só deixa passar o SEQ que está entre os
+candidatos dela; fora disso, ou vínculos do código e do EAN diferentes →
+`chaves_discordam`. `ok` traz o candidato decidido em `candidatos`.
+`produto_conferencia_incompleta` (topo e `summary`) = `True` quando o vínculo v2
+não pôde ser lido (banco do ambiente fora, intercompany sem resposta); sem
+ambiente ativo não marca. Fire fora (`available=False`) ou falha só nesta passada →
 `estado = "fire_indisponivel"` (do check, não de `decidir`). Os campos legados
 (`match`, `match_source`, `fire_product_id`, …) não mudam. Nada bloqueia ainda.
 

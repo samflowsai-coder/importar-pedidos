@@ -15,9 +15,16 @@ from typing import Any
 
 from app.erp import produto_escopo, queries
 from app.erp.connection import FirebirdConnection
-from app.erp.produto_chave import Candidato, DecisaoProduto, decidir
+from app.erp.produto_chave import (
+    MOTIVO_CHAVES_DISCORDAM,
+    Candidato,
+    DecisaoProduto,
+    decidir,
+    motivo_vinculo_invalido,
+)
 from app.models.order import Order
 from app.persistence import db, produto_depara_repo, produto_vinculo_repo
+from app.persistence.context import NoActiveEnvironmentError
 from app.persistence.produto_depara_repo import _norm_key as _depara_norm_key
 
 # Estado do item["produto"] quando o Fire não pôde ser consultado. Não é um
@@ -185,21 +192,30 @@ def _candidatos_por_chave(cur, sql_builder, valores: list, chave_de) -> dict:
     return out
 
 
-def _cnpj_real(order: Order, env: dict | None) -> str | None:
-    """Cliente real do pedido intercompany (ruling R1). Falha vira None."""
+def _cnpj_real(order: Order, env: dict | None) -> tuple[str | None, bool]:
+    """(cliente real do pedido intercompany, conferiu?) — ruling R1.
+
+    Falha vira (None, False): o escopo cai no cliente do pedido, e o check
+    marca a conferência como incompleta (o vínculo do cliente real pode existir).
+    """
     slug = (env or {}).get("slug")
     if not slug:
-        return None
+        return None, True
     try:
         from app.integrations.flowpcp.intercompany import resolucao_para  # evita ciclo
 
         r = resolucao_para(order, slug=slug)
-        return r.cnpj if r is not None and r.resolvido else None
     except Exception as exc:  # noqa: BLE001 — o check nunca cai por causa do intercompany
         from app.utils.logger import logger
 
         logger.warning(f"check: cliente real do intercompany falhou ({type(exc).__name__}): {exc}")
-        return None
+        return None, False
+    if r is None:
+        return None, True
+    if r.resolvido:
+        return r.cnpj, True
+    # resolucao_para engole a própria falha e devolve erro_conexao.
+    return None, r.motivo != "erro_conexao"
 
 
 def _vinculos_v2(
@@ -207,17 +223,19 @@ def _vinculos_v2(
     env: dict | None,
     codigos: list[str | None],
     eans: list[str | None],
-) -> list[tuple[int | None, int | None]]:
-    """(SEQ do vínculo do código, SEQ do vínculo do EAN) por item, no escopo do item.
+) -> tuple[list[tuple[int | None, int | None]], bool]:
+    """((SEQ do vínculo do código, SEQ do vínculo do EAN) por item, completa?).
 
-    Lê o SQLite do ambiente ativo. Sem ambiente / banco fora: nenhum vínculo
-    (o check segue só com as chaves do Fire, que nunca casam a mais por isso).
+    Lê o SQLite do ambiente ativo, no escopo de cada item. Sem ambiente ativo:
+    não há vínculo a ler, a conferência é completa. Qualquer outra falha (banco
+    fora, intercompany sem resposta): segue sem vínculo e devolve completa=False,
+    para a trava (Task 4) fechar em vez de confiar no resultado.
     """
     vazio: list[tuple[int | None, int | None]] = [(None, None)] * len(order.items)
     if not any(codigos) and not any(eans):
-        return vazio
+        return vazio, True
     try:
-        cnpj_real = _cnpj_real(order, env)
+        cnpj_real, completa = _cnpj_real(order, env)
         out = list(vazio)
         with db.connect() as sconn:
             escopos_por_cnpj: dict[str | None, tuple[str, ...]] = {}
@@ -245,12 +263,39 @@ def _vinculos_v2(
                         int(vc.fire_seq) if vc is not None else None,
                         int(ve.fire_seq) if ve is not None else None,
                     )
-        return out
-    except Exception as exc:  # noqa: BLE001 — sem ambiente ativo / db off: sem vínculo
+        return out, completa
+    except NoActiveEnvironmentError:
+        return vazio, True
+    except Exception as exc:  # noqa: BLE001 — banco do ambiente fora: sem vínculo, incompleta
         from app.utils.logger import logger
 
-        logger.debug(f"vínculo v2 pulado: {type(exc).__name__}: {exc}")
-        return vazio
+        logger.warning(f"vínculo v2 não pôde ser lido ({type(exc).__name__}): {exc}")
+        return vazio, False
+
+
+def _vinculos_discordam(v_cod: int, v_ean: int, por_seq: dict) -> DecisaoProduto:
+    """Vínculo do código e vínculo do EAN apontam para SEQs diferentes.
+
+    R7(a): vínculo inválido é final, então um dos dois sumido/bloqueado dá
+    vinculo_invalido. Os dois válidos: chaves_discordam, nenhum ganha em silêncio.
+    """
+    for seq in (v_cod, v_ean):
+        c = (por_seq.get(seq) or [None])[0]
+        if c is None or c.bloqueado:
+            return DecisaoProduto(
+                "vinculo_invalido",
+                None,
+                None,
+                (c,) if c is not None else (),
+                motivo_vinculo_invalido(seq),
+            )
+    return DecisaoProduto(
+        "chaves_discordam",
+        None,
+        None,
+        (por_seq[v_ean][0], por_seq[v_cod][0]),
+        MOTIVO_CHAVES_DISCORDAM,
+    )
 
 
 def _decidir_itens(
@@ -292,20 +337,7 @@ def _decidir_itens(
     out: list[dict] = []
     for codigo, ean, (v_cod, v_ean) in zip(codigos, eans, vinculos, strict=True):
         if v_cod is not None and v_ean is not None and v_cod != v_ean:
-            # Vínculo do código e vínculo do EAN apontam para produtos diferentes:
-            # nenhum ganha em silêncio.
-            candidatos = tuple(c for s in (v_ean, v_cod) for c in por_seq.get(s, [])[:1])
-            out.append(
-                _produto_dict(
-                    DecisaoProduto(
-                        "chaves_discordam",
-                        None,
-                        None,
-                        candidatos,
-                        "O EAN e o código apontam para produtos diferentes.",
-                    )
-                )
-            )
+            out.append(_produto_dict(_vinculos_discordam(v_cod, v_ean, por_seq)))
             continue
         vinculo_seq = v_cod if v_cod is not None else v_ean
         vinculo_candidato = (
@@ -335,6 +367,7 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
     unavailable: dict[str, Any] = {
         "available": False,
         "reason": "FB_DATABASE_NOT_SET",
+        "produto_conferencia_incompleta": False,
         "client": {
             "match": False,
             "fire_id": None,
@@ -350,6 +383,7 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
             "items_troca_no_fire": 0,
             "troca_no_fire_checked": False,
             "items_produto_pendente": len(order.items),
+            "produto_conferencia_incompleta": False,
             "price_summary": {
                 "items_match": 0,
                 "items_mismatch": 0,
@@ -379,7 +413,7 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
         produto_vinculo_repo.norm_chave("codigo", it.product_code) or None for it in order.items
     ]
     chave_eans = [produto_vinculo_repo.norm_chave("ean", it.ean) or None for it in order.items]
-    vinculos = _vinculos_v2(order, env, chave_codigos, chave_eans)
+    vinculos, vinculos_completos = _vinculos_v2(order, env, chave_codigos, chave_eans)
 
     try:
         with open_conn() as conn:
@@ -542,6 +576,7 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
     return {
         "available": True,
         "reason": None,
+        "produto_conferencia_incompleta": not vinculos_completos,
         "client": {
             "match": client_id is not None,
             "fire_id": client_id,
@@ -559,6 +594,7 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
             "items_produto_pendente": sum(
                 1 for e in items_report if e["produto"]["estado"] != "ok"
             ),
+            "produto_conferencia_incompleta": not vinculos_completos,
             "price_summary": {
                 "items_match": price_match,
                 "items_mismatch": price_mismatch,
