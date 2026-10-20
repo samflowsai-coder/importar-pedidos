@@ -12,6 +12,10 @@ Conectar no Firebird (embedded ou TCP) e inserir pedidos preservando o schema le
 - `app/erp/fiscal.py` — `PerfilFiscal` + `perfil_para(env)`: constantes fiscais do
   pedido faturável, por ambiente (`CODFIGFISCAL` difere: 1 na MM, 5 na Nasmar).
 - `app/exporters/firebird_exporter.py` — orquestrador, chamado pelo pipeline com `EXPORT_MODE=db|both`.
+- `app/erp/produto_chave.py` (decisão pura por chave exata), `produto_escopo.py` (escopo rede/raiz do vínculo),
+  `produto_trava.py` (portão por `produto_chave_modo` e mapa do produto decidido),
+  `app/persistence/produto_vinculo_repo.py` (de-para v2) — ver "Produto por chave exata" e o runbook abaixo.
+- `tools/migrar_produto_vinculo_v2.py`, `tools/regressao_chave_exata.py` — migração v1→v2 e regressão só leitura.
 - `tools/explore_firebird.py` — gera schema_report a partir de `.fdb` (rodar SEMPRE em cópia, nunca em produção).
 
 ## Padrões reais de produção (não inventar)
@@ -67,6 +71,7 @@ FB_HOST=192.168.1.10  # omitir = embedded
 FB_PORT=3050
 FB_USER=SYSDBA
 FB_PASSWORD=masterkey
+PORTAL_PRODUTO_CHAVE_CLI=   # ligado = trava de produto no main.py (CLI); ausente = comportamento de hoje
 ```
 
 ## Configuração via UI (`/configuracoes/banco`)
@@ -256,6 +261,51 @@ Os guards vivem em `_send_one_to_fire` e `_export_one_xlsx` (web). Audit
 events: `send_to_fire_blocked`, `xlsx_export_blocked`, `sem_preco_acknowledged`.
 Métricas: `portal_price_check_blocks_total{reason}`, `portal_price_check_acks_total`.
 
+### Runbook: ligar o casamento por chave exata
+
+Sequência operacional (cada passo com OK do Samuel; nada daqui roda sozinho):
+
+1. **Deploy** do pacote pelo `/admin/atualizacao`. Cria a tabela `produto_vinculo_v2` e as
+   colunas novas (`environments.produto_chave_modo`, `imports.produto_escolhido_json`). O
+   interruptor nasce `desligado`: comportamento idêntico ao de antes.
+2. **Migração do de-para v1** (por ambiente, `mm` e depois `nasmar`):
+   `python tools/migrar_produto_vinculo_v2.py --slug mm` é DRY-RUN (só mostra); com
+   `--aplicar` grava pelo `produto_vinculo_repo.vincular` (origem `migrado_v1`, uma
+   transação por vínculo). Nunca apaga o v1, nunca sobrescreve v2 que aponte para outro
+   produto, não recria chave já revogada (`revogado_antes`) e é idempotente. Linha v1 só com
+   nome vai para `sem_cnpj_unico` (a operação vincula de novo na tela) e a da revenda
+   intercompany não migra (`revenda_intercompany`).
+3. **`observando`** por alguns dias (`PATCH /api/admin/environments/{id}/produto-chave`
+   `{modo: "observando"}`): o check calcula e a tela mostra, a saída continua igual à de
+   hoje. Ler o audit `produto_observado` (itens que `ligado` travaria) e a fila
+   `GET /api/produtos/a-identificar`.
+4. **`ligado`** só depois de (a) o `observando` limpo, (b) a regressão com cobertura
+   (abaixo) e (c) a revisão da chave repetida/escolha pontual. Reverter = voltar o
+   interruptor para `observando`/`desligado`; vínculos v2 nunca são apagados (só revogados).
+
+**Regressão real** (`tools/regressao_chave_exata.py`, SÓ LEITURA): relê os originais
+guardados (`--recebidos data/recebidos`, varredura recursiva) por `pipeline.process` com o
+LLM desligado, roda o `check_order` novo contra cópias dos `app_state_<slug>.db` (`--db`,
+repetível) e do Fire (`FB_USER`/`FB_PASSWORD` no ambiente; `--fb-host --fb-path`), acha o
+pedido que o importador gravou e compara SEQ decidido x gravado item a item. Baldes:
+`ok_igual`, `ok_igual_conjunto`, `suspeito`, `ok_seq_diferente` (tem que dar zero),
+`pendente`, `sem_pedido_fire`, `ambiguo`, `nao_enviado`, `sem_pareamento`, `sem_data`.
+Exit 0 só sem `ok_seq_diferente`/`suspeito`/`erro_check` e com cobertura (no máximo 50%
+dos arquivos fora de comparação). Teste: `tests/test_regressao_chave_exata.py`.
+
+**Variável de ambiente nova:** `PORTAL_PRODUTO_CHAVE_CLI` (`ligado` aplica a trava de
+produto no `main.py`; ausente ou outro valor = CLI de hoje). Única da feature: o
+interruptor do web é por ambiente (banco), não por env var.
+
+### Testes (chave exata)
+`tests/test_produto_chave.py`, `tests/test_produto_chave_repetida.py`,
+`tests/test_produto_depara.py`, `tests/test_produto_escopo.py`,
+`tests/test_produto_vinculo_repo.py`, `tests/test_produto_trava.py`,
+`tests/test_produto_trava_wiring.py`, `tests/test_produto_saida.py`,
+`tests/test_firebird_exporter_produto.py`, `tests/test_migrar_produto_vinculo_v2.py`,
+`tests/test_regressao_chave_exata.py`; web em `tests/test_web_vincular_v2.py` e
+`tests/test_web_static_produto.py`.
+
 ## Troca de produto pelo importador de Excel do Fire (`troca_no_fire`)
 
 O importador de Excel do Fire (`MECANICO=99`) não casa o código exato: pega o
@@ -298,6 +348,9 @@ dentro do Fire).
   item vinculado sai com o SEQ em texto e pode casar por prefixo com outro
   produto (310 SEQs na MM e 176 na Nasmar são prefixo de algum código). Se ele
   tentar SEQ antes, o aviso nesse caso é falso positivo. BACKLOG 2.15.
+  **Com `produto_chave_modo=ligado` isso deixa de valer:** a planilha leva o `CODPROD_ALTERN`
+  do produto decidido (nunca `str(SEQ)`) e a trava recusa `troca_no_fire`/`sem_codigo_fire`
+  em vez de avisar. O aviso acima segue só em `desligado`/`observando`.
 
 ## De-para de cliente intercompany (Nasmar → cliente real)
 

@@ -356,3 +356,16 @@ com item fora de `ok` não vai ao Flow.
   item que hoje está certo no Fire continua `ok` com o mesmo SEQ, e os 18 da
   Riachuelo de 19/10 saem `a_identificar`. Isso usa a cópia da auditoria de 19/10,
   fora do git.
+
+## 11. Mudanças durante a implementação
+
+Rulings que mudaram o comportamento descrito acima (ledger completo em `.superpowers/sdd/2026-10-19-casamento-produto-chave-exata/progress.md`):
+
+- **R7, combinação endurecida (§2):** `vinculo_invalido` é sempre final; chave com problema só deixa sair `ok` se o SEQ único das outras chaves está entre os candidatos dela, senão `chaves_discordam`; `ok` devolve o candidato decidido.
+- **R14, saída (§6):** em `ligado` o mapa SEQ/código que vai ao Fire sai do MESMO check que a trava aprovou (`DecisaoEnvio.check`), sem segundo `check_order`.
+- **R18, chave repetida e escolha pontual (§2, §5):** chave que se repete em 2+ linhas do mesmo pedido com descrições diferentes vira `chave_repetida`; a escolha dessas linhas é pontual (`imports.produto_escolhido_json`), nunca vínculo reaproveitável.
+- **R20, escolha pontual fora de `ligado`:** também vale na saída em `desligado`/`observando`, como o v1 valia antes.
+- **R21, escolha pontual sem `CODPROD_ALTERN`:** nunca sai em planilha em nenhum modo (`sem_codigo_fire`, 409); `db` segue por SEQ.
+- **R10, CLI (§5.2):** `main.py` só aplica a trava com `PORTAL_PRODUTO_CHAVE_CLI=ligado`; ausente = comportamento de hoje.
+- **R11/R13, intercompany (§4.1):** falha ao resolver o cliente real responde 503 em vez de gravar na revenda; pedido intercompany grava só o v2 no escopo do cliente real, nunca o v1.
+- **Task 9, contrato com o Flow (§7) adiada:** o Portal ainda não manda `erpProdutoId`/`confiancaParser`; fica para um PR seguinte, junto do plano do pcp-app (BACKLOG 2.20).
