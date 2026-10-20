@@ -382,7 +382,7 @@ def _enviar_espelho(envs, fb_m, lote_id: int):
     if entry is None:
         raise RuntimeError(f"espelho {ident} não materializado no ambiente mm")
     order = Order.model_validate(entry["snapshot"])
-    envio = integracao.preparar_envio_espelho(ident, order, {}, env)
+    envio = integracao.preparar_envio_espelho(ident, order, env)
     if not isinstance(envio, integracao.EnvioEspelho):
         raise RuntimeError(f"espelho bloqueado: {envio}")
     result = _exporter(env, fb_m).export(order, obs=envio.obs)

@@ -351,11 +351,11 @@ Confirmar com o Elias (fiscal MM) antes de subir o pacote.
 ### 3.8 Lote intercompany: portão antes de ligar em produção
 O espelho (preço × 0,93) passa pelo portão de preço (`preco_trava.decidir_envio`). A trava
 por rede (PR #90) deixa intercompany fora da tabela, mas em todos os modos ele cai na regra
-de hoje (`is_blocking`): se o preço do espelho não bater com o preço do Fire da MM, o envio
-é bloqueado (`price_check_failed`) e não há confirmação para divergência. A spec da trava
-deixou o preço da perna intercompany "para o desenho do lote" (§fora de escopo, chamada 8).
-**Decisão pendente:** o que o portão faz com o espelho do lote (aceitar o preço do lote,
-que já é auditável pela composição, ou exigir que bata com o Fire). Medir antes na cópia.
+de hoje (`is_blocking`), que compara com `PRODUTOS.PRECO_VENDA` da MM. Medido na cópia do
+`.7` (19/10): `PRECO_VENDA` vazio em 3.421 de 3.421 produtos, então cada linha do espelho sai
+`no_price_in_fire` e o envio pede a mesma confirmação "sem preço no Fire" que qualquer pedido
+da MM pede hoje (não é divergência). **Decisão pendente:** manter a confirmação manual no
+espelho ou dispensá-la (o preço do lote já é auditável pela composição).
 
 ---
 
