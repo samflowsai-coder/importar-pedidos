@@ -3612,6 +3612,84 @@ def _conflito_json(v) -> dict:
     }
 
 
+def _item_em_chave_repetida(entry: dict, order, indice: int, env: dict | None) -> bool:
+    """O item está em `chave_repetida` (R18), ou já tem escolha pontual (trocar
+    a escolha também é pontual)? Lê o check guardado; se ele não diz e a chave do
+    item se repete no pedido com descrições diferentes, confirma no check
+    recalculado (sem a escolha desta linha) — check guardado de antes da regra."""
+    from app.erp import product_check
+    from app.erp.produto_chave import chaves_repetidas
+    from app.persistence import produto_vinculo_repo
+
+    itens_check = (entry.get("check") or {}).get("items") or []
+    salvo = (itens_check[indice] or {}).get("produto") if indice < len(itens_check) else None
+    if isinstance(salvo, dict) and (
+        salvo.get("estado") == "chave_repetida" or salvo.get("fonte") == "escolha_pontual"
+    ):
+        return True
+
+    def chaves(it):
+        return (
+            produto_vinculo_repo.norm_chave("codigo", it.product_code) or None,
+            produto_vinculo_repo.norm_chave("ean", it.ean) or None,
+        )
+
+    repetidas = chaves_repetidas([(*chaves(it), it.description) for it in order.items])
+    codigo, ean = chaves(order.items[indice])
+    if ("codigo", codigo) not in repetidas and ("ean", ean) not in repetidas:
+        return False
+    outras = {
+        k: v for k, v in product_check.escolhas_do_import(entry).items() if k != indice
+    }
+    check = product_check.check_order(order, env=env, escolhas=outras)
+    itens = check.get("items") or []
+    produto = (itens[indice] or {}).get("produto") if indice < len(itens) else None
+    return isinstance(produto, dict) and produto.get("estado") == "chave_repetida"
+
+
+def _escolher_pontual(
+    entry: dict, order, indice: int, prod: dict, fire_seq: int, user: User, env: dict | None
+) -> JSONResponse:
+    """Grava a escolha pontual da linha (só neste import), audita
+    `produto_escolha_pontual` e devolve o check novo com as escolhas do import.
+    Nenhum outro pedido é rechecado: a escolha não vale para eles."""
+    from app.erp import product_check
+    from app.persistence import repo
+
+    import_id = entry["id"]
+    repo.set_produto_escolha(
+        import_id, indice, fire_seq=fire_seq, por=user.email, descricao=prod["nome"] or ""
+    )
+    with with_trace_id(entry.get("trace_id")):
+        repo.append_audit(
+            import_id,
+            "produto_escolha_pontual",
+            {
+                "item_index": indice,
+                "fire_produto_id": fire_seq,
+                "fire_nome": prod["nome"],
+                "pedido": order.header.order_number,
+                "user_id": user.id,
+                "user_email": user.email,
+            },
+        )
+    # Relê: a escolha de outra linha gravada ao mesmo tempo entra também.
+    escolhas = product_check.escolhas_do_import(repo.get_import(import_id))
+    check = product_check.check_order(order, env=env, escolhas=escolhas)
+    if check.get("available"):
+        repo.update_fire_metadata(import_id, check=check)
+    return JSONResponse(
+        {
+            "entry_id": import_id,
+            "pontual": True,
+            "vinculos": [],
+            "check": check,
+            "produto_trava": _produto_trava_preview(check, env),
+            "rechecados": [],
+        }
+    )
+
+
 def _rechecar_pedidos_do_escopo(
     import_id: str, escopo: str, chaves: list[tuple[str, str]], env: dict | None
 ) -> list[str]:
@@ -3624,7 +3702,7 @@ def _rechecar_pedidos_do_escopo(
     from app.persistence import db, repo
 
     alvo = set(chaves)
-    escolhidos: list[tuple[str, Order]] = []
+    escolhidos: list[tuple[str, Order, dict[int, int]]] = []
     entries = repo.list_imports(portal_status="parsed", limit=_RECHECK_MAX_PEDIDOS)
     with db.connect() as conn:
         for entry in sorted(entries, key=lambda e: (e["imported_at"] or "", e["id"])):
@@ -3655,11 +3733,11 @@ def _rechecar_pedidos_do_escopo(
                 )
                 for i in indices
             ):
-                escolhidos.append((entry["id"], order))
+                escolhidos.append((entry["id"], order, product_check.escolhas_do_import(entry)))
 
     rechecados: list[str] = []
-    for outro_id, order in escolhidos:
-        check = product_check.check_order(order, env=env)
+    for outro_id, order, escolhas in escolhidos:
+        check = product_check.check_order(order, env=env, escolhas=escolhas)
         if check.get("available"):
             repo.update_fire_metadata(outro_id, check=check)
             rechecados.append(outro_id)
@@ -3679,7 +3757,11 @@ def vincular_produto(
     dele. Chave já vinculada a outro produto: 409 com o vínculo atual, e só
     troca com `substituir`. Enquanto o modo do ambiente não é `ligado`, grava
     também o de-para v1 do check legado. Audita, recheca este pedido e os
-    pedidos em revisão do mesmo escopo. Só em pedidos em revisão."""
+    pedidos em revisão do mesmo escopo. Só em pedidos em revisão.
+
+    Item em `chave_repetida` (R18) ou já com escolha pontual: não grava v1 nem
+    v2; grava a escolha só desta linha deste import (`_escolher_pontual`) e a
+    resposta traz `"pontual": true`."""
     from app.erp import product_check, produto_escopo
     from app.models.order import Order
     from app.persistence import (
@@ -3723,6 +3805,12 @@ def vincular_produto(
     if prod is None or not str(prod["fire_produto_id"]).isdigit():
         raise HTTPException(status_code=422, detail="Produto não encontrado no catálogo local")
     fire_seq = int(prod["fire_produto_id"])
+
+    # R18: chave repetida no pedido com descrições diferentes não separa as
+    # linhas; um vínculo dela valeria para todas. A escolha fica só nesta linha
+    # deste pedido (sem v1, sem v2, sem conflito).
+    if _item_em_chave_repetida(entry, order, body.item_index, env):
+        return _escolher_pontual(entry, order, body.item_index, prod, fire_seq, user, env)
 
     cnpj, intercompany = _cnpj_do_escopo(order, body.item_index, env)
     now = datetime.now().isoformat(timespec="seconds")
@@ -4066,8 +4154,10 @@ def ack_sem_preco(
         raise HTTPException(status_code=422, detail=f"Snapshot inválido: {exc}") from exc
 
     request_env = getattr(request.state, "environment", None)
+    from app.erp.product_check import escolhas_do_import
+
     with with_trace_id(entry.get("trace_id")):
-        check = check_order(order, env=request_env)
+        check = check_order(order, env=request_env, escolhas=escolhas_do_import(entry))
         if not check.get("available"):
             raise HTTPException(status_code=503, detail="Fire indisponível para validar ack")
 

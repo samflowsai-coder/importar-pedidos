@@ -683,7 +683,7 @@ def _stub_fire_success(monkeypatch):
         ),
     )
     # Neutraliza price-check (sem Fire real) — deterministico.
-    monkeypatch.setattr("app.erp.product_check.check_order", lambda order, env=None: {})
+    monkeypatch.setattr("app.erp.product_check.check_order", lambda order, env=None, escolhas=None: {})
     monkeypatch.setattr(
         "app.erp.product_check.is_blocking", lambda check, ack_items=None: (False, {})
     )
@@ -2719,7 +2719,7 @@ def test_send_to_fire_item_vinculado_vai_pelo_seq_do_depara(monkeypatch):
         )
 
     monkeypatch.setattr(fb_mod.FirebirdExporter, "export", _fake_export)
-    monkeypatch.setattr("app.erp.product_check.check_order", lambda order, env=None: {})
+    monkeypatch.setattr("app.erp.product_check.check_order", lambda order, env=None, escolhas=None: {})
     monkeypatch.setattr(
         "app.erp.product_check.is_blocking", lambda check, ack_items=None: (False, {})
     )

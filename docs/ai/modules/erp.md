@@ -136,8 +136,8 @@ coberto por `ack_items`. `available=False` → não bloqueia (best-effort).
 candidatos: [{seq, descricao, codprod_altern, bloqueado}]}` e
 `summary.items_produto_pendente` (estado ≠ `ok`). A decisão é a função pura
 `app/erp/produto_chave.decidir` (estados `ok | a_identificar | ambiguo |
-produto_bloqueado | vinculo_invalido | chaves_discordam`; fonte `ean | depara |
-codprod_altern`). Candidatos vêm de `find_produtos_chave_por_{ean,codigo,seq}_sql`
+produto_bloqueado | vinculo_invalido | chaves_discordam | chave_repetida`; fonte
+`ean | depara | codprod_altern | escolha_pontual`). Candidatos vêm de `find_produtos_chave_por_{ean,codigo,seq}_sql`
 (todas as linhas da chave + `BLOQUEADO`), numa passada batelada a mais no mesmo
 cursor. EAN = só dígitos, igual exato; código = `strip().upper()`, igual exato.
 O de-para é o v2 (`produto_vinculo_repo.lookup` no escopo de
@@ -146,6 +146,23 @@ O de-para é o v2 (`produto_vinculo_repo.lookup` no escopo de
 problema (`ambiguo`/`produto_bloqueado`) só deixa passar o SEQ que está entre os
 candidatos dela; fora disso, ou vínculos do código e do EAN diferentes →
 `chaves_discordam`. `ok` traz o candidato decidido em `candidatos`.
+**Chave repetida no pedido (R18, `produto_chave.desambiguar`):** chave do cliente
+(código normalizado, EAN) que aparece em 2+ itens do MESMO pedido com descrições
+diferentes (`descricao_normalizada`: maiúsculas, sem acento, espaços colapsados;
+`chaves_repetidas`) não discrimina. Item `ok` cujo SEQ só vinha dela (fonte `ean`,
+`codprod_altern`, ou `depara` cujo vínculo é dessa chave) vira `chave_repetida`,
+`fire_seq` None, `candidatos` = o produto que a chave achava, motivo "O código X
+aparece em N linhas com descrições diferentes; escolha o produto de cada linha."
+(ou "O EAN X …"). Outra chave do item concordante e não repetida mantém o `ok` por
+ela. Mesma chave e mesma descrição (ex.: uma linha por loja) segue igual.
+**Escolha pontual:** `check_order(order, env=..., escolhas={posição: SEQ})` —
+`escolhas_do_import(entry)` lê `imports.produto_escolhido_json`. Item com escolha
+decide antes de qualquer chave (`decidir_escolha`): SEQ ativo → `ok` com fonte
+`escolha_pontual`; sumido/bloqueado → `vinculo_invalido` ("A escolha desta linha
+aponta para o produto X, que não existe mais ou está bloqueado."). Vale só para
+aquele import: todo chamador que confere um import salvo passa as escolhas dele
+(`decidir_envio`, recheck do vincular, ack-sem-preço, a própria rota); o check da
+fonte de preço (`_check_da_fonte`) não (SEQs de outro Fire).
 `produto_conferencia_incompleta` (topo e `summary`) = `True` quando o vínculo v2
 não pôde ser lido (banco do ambiente fora, intercompany sem resposta). Com
 `env` explícito o vínculo vem de `router.env_connect(env["slug"])`, não do

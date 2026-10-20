@@ -6,11 +6,17 @@ descrição, semelhança, prefixo ou IA, e nunca escolhe entre dois produtos
 ativos (o menor SEQ não vence nada).
 
 Ordem das chaves, que é também a fonte registrada: ean → depara → codprod_altern.
+
+R18: chave que se repete no MESMO pedido com descrições diferentes não
+discrimina (`chave_repetida`, `desambiguar`); a pessoa escolhe o produto de cada
+linha, só naquele pedido (`decidir_escolha`, fonte `escolha_pontual`).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+import unicodedata
+from dataclasses import dataclass, replace
 from typing import Literal
 
 Estado = Literal[
@@ -20,8 +26,10 @@ Estado = Literal[
     "produto_bloqueado",
     "vinculo_invalido",
     "chaves_discordam",
+    "chave_repetida",
 ]
-Fonte = Literal["ean", "depara", "codprod_altern"]
+Fonte = Literal["ean", "depara", "codprod_altern", "escolha_pontual"]
+Chave = tuple[Literal["codigo", "ean"], str]
 
 # Prioridade quando nenhuma chave deu produto (vinculo_invalido já é final antes).
 _PRIORIDADE_PROBLEMA: tuple[Estado, ...] = ("ambiguo", "produto_bloqueado")
@@ -152,3 +160,110 @@ def decidir(
         else "O item veio sem código e sem EAN cadastrado no Fire."
     )
     return DecisaoProduto("a_identificar", None, None, (), motivo)
+
+
+# ── R18: chave repetida no pedido e escolha pontual ──────────────────────────
+
+
+def descricao_normalizada(descricao: str | None) -> str:
+    """Maiúsculas, sem acento, espaços colapsados. Só para comparar linhas do
+    MESMO pedido entre si; nunca para casar produto."""
+    sem_acento = "".join(
+        ch
+        for ch in unicodedata.normalize("NFKD", descricao or "")
+        if not unicodedata.combining(ch)
+    )
+    return re.sub(r"\s+", " ", sem_acento).strip().upper()
+
+
+def chaves_repetidas(
+    itens: list[tuple[str | None, str | None, str | None]],
+) -> dict[Chave, int]:
+    """{chave: nº de linhas} das chaves (já normalizadas) que aparecem em 2+
+    itens do pedido com descrições normalizadas DIFERENTES. `itens`: (código,
+    EAN, descrição) por item. Mesma chave e mesma descrição em linhas separadas
+    (ex.: uma por loja) é a mesma coisa pedida: não entra."""
+    linhas: dict[Chave, list[str]] = {}
+    for codigo, ean, descricao in itens:
+        desc = descricao_normalizada(descricao)
+        for chave in (("codigo", codigo), ("ean", ean)):
+            if chave[1]:
+                linhas.setdefault(chave, []).append(desc)
+    return {k: len(d) for k, d in linhas.items() if len(set(d)) > 1}
+
+
+def motivo_chave_repetida(chave: Chave, n: int) -> str:
+    nome = "código" if chave[0] == "codigo" else "EAN"
+    return (
+        f"O {nome} {chave[1]} aparece em {n} linhas com descrições diferentes; "
+        "escolha o produto de cada linha."
+    )
+
+
+def desambiguar(
+    decisao: DecisaoProduto,
+    *,
+    codigo: str | None,
+    ean: str | None,
+    por_ean: list[Candidato],
+    por_codigo: list[Candidato],
+    vinculo_codigo: int | None,
+    vinculo_ean: int | None,
+    repetidas: dict[Chave, int],
+) -> DecisaoProduto:
+    """Tira o `ok` que só vinha de chave repetida (R18).
+
+    Cada fonte que deu o SEQ decidido carrega a(s) chave(s) do cliente de onde
+    veio: o EAN, o código, ou a chave do vínculo salvo (o vínculo do código
+    repetido também não separa as linhas). Fonte cuja chave se repete não vale;
+    sobrando outra fonte concordante, o item fica `ok` por ela. Sem nenhuma,
+    `chave_repetida` com o produto que a chave achava como candidato."""
+    if decisao.estado != "ok" or not repetidas:
+        return decisao
+    seq = decisao.fire_seq
+    fontes: list[tuple[Fonte, tuple[Chave, ...]]] = []
+    u = _por_chave("EAN", ean, por_ean)
+    if isinstance(u, Candidato) and u.seq == seq:
+        fontes.append(("ean", (("ean", ean),)))
+    chaves_vinculo = tuple(
+        chave
+        for chave, v in ((("codigo", codigo), vinculo_codigo), (("ean", ean), vinculo_ean))
+        if v is not None and v == seq
+    )
+    if chaves_vinculo:
+        fontes.append(("depara", chaves_vinculo))
+    u = _por_chave("código", codigo, por_codigo)
+    if isinstance(u, Candidato) and u.seq == seq:
+        fontes.append(("codprod_altern", (("codigo", codigo),)))
+    if not fontes:
+        return decisao
+    validas = [f for f, chaves in fontes if any(c not in repetidas for c in chaves)]
+    if validas:
+        return decisao if validas[0] == decisao.fonte else replace(decisao, fonte=validas[0])
+    # O motivo cita a chave da fonte que decidia (a primeira na ordem das chaves).
+    chave = (dict(fontes).get(decisao.fonte) or fontes[0][1])[0]
+    return DecisaoProduto(
+        "chave_repetida",
+        None,
+        None,
+        decisao.candidatos,
+        motivo_chave_repetida(chave, repetidas[chave]),
+    )
+
+
+def motivo_escolha_invalida(seq: int) -> str:
+    return f"A escolha desta linha aponta para o produto {seq}, que não existe mais ou está bloqueado."
+
+
+def decidir_escolha(seq: int, candidato: Candidato | None) -> DecisaoProduto:
+    """Escolha pontual da linha (só neste pedido): `ok` se o SEQ existe e está
+    ativo no Fire; sumido ou bloqueado é `vinculo_invalido`, como o vínculo salvo."""
+    if candidato is None or candidato.bloqueado:
+        return DecisaoProduto(
+            "vinculo_invalido",
+            None,
+            None,
+            (candidato,) if candidato is not None else (),
+            motivo_escolha_invalida(seq),
+        )
+    return DecisaoProduto("ok", seq, "escolha_pontual", (candidato,), "")

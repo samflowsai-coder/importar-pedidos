@@ -1715,7 +1715,7 @@ def _checks_por_ambiente(monkeypatch, *, proprio, fonte, ambientes=None):
     monkeypatch.setattr(environments_repo, "get_by_slug", lambda s: ambientes.get(s))
     chamadas = []
 
-    def fake(order, *, env=None):
+    def fake(order, *, env=None, escolhas=None):
         ativo = env_context.current()
         chamadas.append(((env or {}).get("slug"), ativo["slug"] if ativo else None))
         return copy.deepcopy(fonte if (env or {}).get("slug") == "mm" else proprio)

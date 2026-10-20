@@ -49,6 +49,8 @@ def html() -> str:
         "'Produto bloqueado'",
         "'Vínculo inválido'",
         "'Código e EAN apontam para produtos diferentes'",
+        "'Código repetido no pedido'",
+        "Esta escolha vale só para esta linha deste pedido.",
         "'Fire grava outro produto'",
         "'Fire sem resposta'",
         # picker: as 3 seções, nesta ordem no código

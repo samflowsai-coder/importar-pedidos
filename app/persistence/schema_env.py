@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS imports (
     sem_preco_ack_by         TEXT,
     sem_preco_ack_at         TEXT,
     sem_preco_ack_items      TEXT,
-    check_preco_json         TEXT
+    check_preco_json         TEXT,
+    produto_escolhido_json   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -514,6 +515,9 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # Trava de preço: check do ambiente fonte da chave do produto (Nasmar → MM),
     # gravado no commit e no vínculo de-para; o preview avalia por ele.
     ("imports", "check_preco_json", "ALTER TABLE imports ADD COLUMN check_preco_json TEXT"),
+    # R18: escolha pontual do produto por linha (chave repetida no pedido), só
+    # deste import: {"<item_index>": {fire_seq, por, em, descricao}}.
+    ("imports", "produto_escolhido_json", "ALTER TABLE imports ADD COLUMN produto_escolhido_json TEXT"),
     # SP1 — eco: o que a decisão do Flow mudou no ERP. `erp_codigos_json` porque
     # o UPDATE por PEDIDO_CLIENTE + CLIENTE pode tocar mais de um pedido
     # (BACKLOG 1.5); `erp_codigo` só quando tocou exatamente um.

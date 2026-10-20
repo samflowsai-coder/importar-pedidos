@@ -37,7 +37,7 @@ def check_fake(monkeypatch):
 
     chamados: list[str] = []
 
-    def fake(order, *, env=None):
+    def fake(order, *, env=None, escolhas=None):
         chamados.append(order.header.order_number)
         items = []
         with db.connect() as conn:
@@ -366,7 +366,7 @@ def test_vincular_nao_intercompany_em_desligado_grava_v1(check_fake, env_interco
 def test_vincular_nao_recheca_com_fire_fora(monkeypatch):
     chamados: list[str] = []
 
-    def fora(order, *, env=None):
+    def fora(order, *, env=None, escolhas=None):
         chamados.append(order.header.order_number)
         return {"available": False, "items": []}
 

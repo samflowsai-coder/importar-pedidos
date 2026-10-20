@@ -19,7 +19,10 @@ from app.erp.produto_chave import (
     MOTIVO_CHAVES_DISCORDAM,
     Candidato,
     DecisaoProduto,
+    chaves_repetidas,
     decidir,
+    decidir_escolha,
+    desambiguar,
     motivo_vinculo_invalido,
 )
 from app.models.order import Order
@@ -323,12 +326,22 @@ def _decidir_itens(
     codigos: list[str | None],
     eans: list[str | None],
     vinculos: list[tuple[int | None, int | None]],
+    escolhas: dict[int, int] | None = None,
 ) -> list[dict]:
-    """item["produto"] de cada item: candidatos por chave exata, numa passada batelada."""
+    """item["produto"] de cada item: candidatos por chave exata, numa passada batelada.
+
+    `escolhas` ({posição: SEQ}, R18): a escolha pontual da linha neste pedido
+    decide antes de qualquer chave. Sem ela, a chave que se repete no pedido com
+    descrições diferentes não dá `ok` sozinha (`chave_repetida`)."""
+    escolhas = escolhas or {}
     eans_q = list(dict.fromkeys(e for e in eans if e))
     # Código maior que a coluna nunca é igual a nada (e estoura truncation no Fire).
     cods_q = list(dict.fromkeys(c for c in codigos if c and len(c) <= _CODPROD_ALTERN_MAX))
-    seqs_q = list(dict.fromkeys(s for par in vinculos for s in par if s is not None))
+    seqs_q = list(
+        dict.fromkeys(
+            [*(s for par in vinculos for s in par if s is not None), *escolhas.values()]
+        )
+    )
 
     por_ean = (
         _candidatos_por_chave(
@@ -353,8 +366,18 @@ def _decidir_itens(
         else {}
     )
 
+    repetidas = chaves_repetidas(
+        [
+            (codigo, ean, it.description)
+            for codigo, ean, it in zip(codigos, eans, order.items, strict=True)
+        ]
+    )
     out: list[dict] = []
-    for codigo, ean, (v_cod, v_ean) in zip(codigos, eans, vinculos, strict=True):
+    for i, (codigo, ean, (v_cod, v_ean)) in enumerate(zip(codigos, eans, vinculos, strict=True)):
+        if i in escolhas:
+            seq = escolhas[i]
+            out.append(_produto_dict(decidir_escolha(seq, (por_seq.get(seq) or [None])[0])))
+            continue
         if v_cod is not None and v_ean is not None and v_cod != v_ean:
             out.append(_produto_dict(_vinculos_discordam(v_cod, v_ean, por_seq)))
             continue
@@ -370,12 +393,42 @@ def _decidir_itens(
             vinculo_seq=vinculo_seq,
             vinculo_candidato=vinculo_candidato,
         )
+        decisao = desambiguar(
+            decisao,
+            codigo=codigo,
+            ean=ean,
+            por_ean=por_ean.get(ean, []) if ean else [],
+            por_codigo=por_codigo.get(codigo, []) if codigo else [],
+            vinculo_codigo=v_cod,
+            vinculo_ean=v_ean,
+            repetidas=repetidas,
+        )
         out.append(_produto_dict(decisao))
     return out
 
 
-def check_order(order: Order, *, env: dict | None = None) -> dict:
-    """Return match report for the order. Safe to call without Fire configured."""
+def escolhas_do_import(entry: dict | None) -> dict[int, int]:
+    """{posição: SEQ} das escolhas pontuais gravadas no import
+    (`imports.produto_escolhido_json`, R18). Entrada fora do formato é ignorada:
+    a linha volta a pedir escolha, nunca ganha um SEQ inventado."""
+    bruto = (entry or {}).get("produto_escolhido")
+    if not isinstance(bruto, dict):
+        return {}
+    out: dict[int, int] = {}
+    for chave, valor in bruto.items():
+        seq = valor.get("fire_seq") if isinstance(valor, dict) else None
+        if str(chave).isdigit() and str(seq).isdigit():
+            out[int(chave)] = int(seq)
+    return out
+
+
+def check_order(
+    order: Order, *, env: dict | None = None, escolhas: dict[int, int] | None = None
+) -> dict:
+    """Return match report for the order. Safe to call without Fire configured.
+
+    `escolhas`: as escolhas pontuais do import salvo (`escolhas_do_import`), que
+    valem só para ele. Mexe só em `item["produto"]`; os campos legados não mudam."""
     conn_mgr = FirebirdConnection()
 
     def _item_indisponivel(it) -> dict:
@@ -570,7 +623,9 @@ def check_order(order: Order, *, env: dict | None = None) -> dict:
             # nesta passada não derruba os campos legados: o item fica
             # fire_indisponivel, que nunca vale como produto conferido.
             try:
-                produtos = _decidir_itens(cur, order, chave_codigos, chave_eans, vinculos)
+                produtos = _decidir_itens(
+                    cur, order, chave_codigos, chave_eans, vinculos, escolhas
+                )
             except Exception as exc:  # noqa: BLE001
                 from app.utils.logger import logger
 

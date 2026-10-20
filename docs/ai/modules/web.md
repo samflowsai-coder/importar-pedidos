@@ -107,6 +107,17 @@ API pública para páginas-filho:
   preview sobre o check novo; a tela troca a dela por esta). `_produto_trava_preview`
   falha fechado: exceção vira `{bloqueado: true, reason: "fire_indisponivel"}` + log. Só em `portal_status='parsed'`. 422 se o produto não
   existir no catálogo local (ou SEQ não numérico) ou item sem código nem EAN.
+  **Escolha pontual (R18):** item em `chave_repetida` no check guardado, ou já com
+  fonte `escolha_pontual`, ou — check guardado de antes da regra — cuja chave se
+  repete no pedido com descrições diferentes e o check recalculado (sem a escolha
+  desta linha) dá `chave_repetida` (`_item_em_chave_repetida`): NÃO grava v1 nem v2
+  nem dá 409; grava `imports.produto_escolhido_json["<item_index>"] = {fire_seq, por,
+  em, descricao}` (`repo.set_produto_escolha`, um `json_set`), audita
+  `produto_escolha_pontual` (item_index, fire_produto_id, fire_nome, pedido,
+  usuário), re-roda o check com as escolhas do import, regrava o check se
+  `available` e responde `{entry_id, pontual: true, vinculos: [], check,
+  produto_trava, rechecados: []}` (`_escolher_pontual`). Os outros itens da mesma
+  chave continuam pedindo escolha; nenhum outro pedido é rechecado.
 - `DELETE /api/produtos/vinculo/{vinculo_id}?env=<slug>` → revoga o vínculo v2 (a
   linha fica, com `revogado_em/por`) no banco da empresa `env` (obrigatório; o id é
   por empresa, o cookie não decide). Empresa inexistente/inativa → 403; id
@@ -163,6 +174,7 @@ item):
   `a_identificar` "Escolher produto", `ambiguo` "Mais de um produto com essa chave",
   `produto_bloqueado` "Produto bloqueado", `vinculo_invalido` "Vínculo inválido",
   `chaves_discordam` "Código e EAN apontam para produtos diferentes",
+  `chave_repetida` "Código repetido no pedido" (≡, tom de pendência),
   `fire_indisponivel` "Fire sem resposta"; o `ok` que `produto_trava.itens` lista vira
   "Fire grava outro produto" ou "Sem código para a planilha", em tom de aviso —
   `produtoEstadoTela`), ícone por
@@ -183,7 +195,10 @@ item):
   vira "Vincular mesmo assim" (secundário, borda de aviso) e o foco começa em
   "Voltar". Quem grava é o `#ppVincularBtn`, que nasce desabilitado por 400 ms (duplo
   clique no "Confirmar" não pula a confirmação). Erro do vínculo aparece em
-  `#ppConfErro`, dentro da confirmação.
+  `#ppConfErro`, dentro da confirmação. Linha em `chave_repetida` ou com fonte
+  `escolha_pontual` (`_ppPontual`): a nota diz "Esta escolha vale só para esta linha
+  deste pedido." e o botão "Usar nesta linha"/"Usar mesmo assim"; o `ok` por
+  escolha pontual mostra "escolhido para esta linha" e o botão "Trocar escolha".
 - 409 `conflito`: painel `#ppConflito` na página ("O código X de CLIENTE já aponta
   para…", com as linhas Cliente pediu / Vínculo atual / Você escolheu e a divergência
   marcada); "Manter" é o primário e fecha sem gravar, "Trocar vínculo" reenvia com

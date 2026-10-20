@@ -2572,11 +2572,20 @@ function _ppCliente() {
   return (currentPreview?.header?.customer_name) || 'este cliente';
 }
 
-function _ppConfirmacaoHtml(it, sel, div) {
+// Linha cuja chave se repete no pedido (R18), ou que já tem escolha pontual: o
+// backend grava a escolha só nesta linha, sem vínculo (e sem conflito).
+function _ppPontual() {
+  const p = produtoDoItem(currentPreview, ppState.itemIndex);
+  return !!p && (p.estado === 'chave_repetida' || p.fonte === 'escolha_pontual');
+}
+
+function _ppConfirmacaoHtml(it, sel, div, pontual) {
   const nomes = { tamanho: 'Tamanho', pares: 'Pares', cor: 'Cor' };
   const linhas = Object.keys(nomes).filter(k => div[k])
     .map(k => `<li>${nomes[k]}: cliente <strong style="display:inline">${esc(div[k][0])}</strong>, produto <strong style="display:inline">${esc(div[k][1])}</strong>.</li>`);
-  const consequencia = `Este vínculo vale para os próximos pedidos de ${_ppCliente()} com ${_ppChaveTexto(it)}.`;
+  const consequencia = pontual
+    ? 'Esta escolha vale só para esta linha deste pedido.'
+    : `Este vínculo vale para os próximos pedidos de ${_ppCliente()} com ${_ppChaveTexto(it)}.`;
   const alerta = linhas.length
     ? `<div class="pp-alerta" role="note"><strong>A descrição não bate em ${linhas.length === 1 ? '1 ponto' : linhas.length + ' pontos'}.</strong><ul>${linhas.join('')}</ul><p class="pp-alerta-nota">${esc(consequencia)}</p></div>`
     : `<div class="pp-alerta pp-alerta-ok" role="note">Nenhuma divergência de tamanho, pares ou cor nas duas descrições.</div>
@@ -2617,13 +2626,16 @@ function ppMostrarConfirmacao() {
   if (!it || !ppState.selected) return;
   const div = divergenciasAtributos(it.description, ppState.selected.fire_nome);
   const diverge = !!(div.tamanho || div.pares || div.cor);
-  document.getElementById('ppConfirmacao').innerHTML = _ppConfirmacaoHtml(it, ppState.selected, div);
+  const pontual = _ppPontual();
+  document.getElementById('ppConfirmacao').innerHTML = _ppConfirmacaoHtml(it, ppState.selected, div, pontual);
   _ppEtapa('confirmacao');
   // Com divergência o botão que grava perde o destaque e diz o que faz;
   // o foco começa no "Voltar".
   const vincular = document.getElementById('ppVincularBtn');
   vincular.className = diverge ? 'btn btn-sm btn-warn' : 'btn btn-primary btn-sm';
-  vincular.textContent = diverge ? 'Vincular mesmo assim' : 'Vincular produto';
+  vincular.textContent = pontual
+    ? (diverge ? 'Usar mesmo assim' : 'Usar nesta linha')
+    : (diverge ? 'Vincular mesmo assim' : 'Vincular produto');
   // Nasce desabilitado: o 2º clique de um duplo clique no "Confirmar" não grava.
   // Botão desabilitado não recebe foco: sem divergência ele ganha o foco quando libera.
   vincular.disabled = true;
@@ -2695,7 +2707,7 @@ async function ppVincular(substituir) {
   const fireProdutoId = ppState.selected.fire_produto_id;
   btn.disabled = true;
   const prev = btn.innerHTML;
-  btn.innerHTML = '<span class="spin"></span> Vinculando…';
+  btn.innerHTML = _ppPontual() ? '<span class="spin"></span> Salvando…' : '<span class="spin"></span> Vinculando…';
   const falha = (msg) => {
     btn.disabled = false;
     btn.innerHTML = prev;
@@ -2745,7 +2757,9 @@ async function ppVincular(substituir) {
   // chave): recarrega a lista e a fila sem precisar de refresh manual.
   loadImported();
   loadFilaIdentificar();
-  if (window.appShell?.showSuccess) {
+  if (body.pontual) {
+    window.appShell?.showSuccess?.('Produto escolhido para esta linha deste pedido.');
+  } else if (window.appShell?.showSuccess) {
     const outros = (body.rechecados || []).filter(id => id !== importId).length;
     window.appShell.showSuccess(outros
       ? `Produto vinculado. ${plural(outros, 'outro pedido conferido', 'outros pedidos conferidos')} de novo.`
@@ -2826,12 +2840,17 @@ const PRODUTO_ESTADO = {
   produto_bloqueado: ['Produto bloqueado', 'error', '×'],
   vinculo_invalido: ['Vínculo inválido', 'error', '!'],
   chaves_discordam: ['Código e EAN apontam para produtos diferentes', 'warn', '⇄'],
+  // R18: o mesmo código/EAN em linhas com descrições diferentes (uma por cor).
+  chave_repetida: ['Código repetido no pedido', 'warn', '≡'],
   // Não é estado do backend: item `ok` cujo código, na planilha, o Fire troca.
   troca_no_fire: ['Fire grava outro produto', 'warn', '≠'],
   sem_codigo_fire: ['Sem código para a planilha', 'warn', '#'],
   fire_indisponivel: ['Fire sem resposta', 'muted', '…'],
 };
-const PRODUTO_FONTE = { ean: 'pelo EAN', depara: 'pelo vínculo salvo', codprod_altern: 'pelo código do Fire' };
+const PRODUTO_FONTE = {
+  ean: 'pelo EAN', depara: 'pelo vínculo salvo', codprod_altern: 'pelo código do Fire',
+  escolha_pontual: 'escolhido para esta linha',
+};
 
 function produtoEstadoInfo(estado) {
   return PRODUTO_ESTADO[estado] || PRODUTO_ESTADO.a_identificar;
@@ -2863,6 +2882,8 @@ function produtoBadge(produto, opts) {
     acao = `<button class="btn btn-sm pb-acao" onclick="openProductPicker(${Number(acaoIdx)})">Escolher</button>`;
   } else if (podeAgir && produto.fonte === 'depara') {
     acao = `<button class="btn btn-sm pb-acao" onclick="openProductPicker(${Number(acaoIdx)})">Trocar vínculo</button>`;
+  } else if (podeAgir && produto.fonte === 'escolha_pontual') {
+    acao = `<button class="btn btn-sm pb-acao" onclick="openProductPicker(${Number(acaoIdx)})">Trocar escolha</button>`;
   }
   return `<div class="pb pb-${tom}">
       <span class="pb-label"><span class="pb-ico${ico.length > 1 ? ' pb-ico-2' : ''}" aria-hidden="true"><span>${ico}</span></span>${esc(label)}</span>

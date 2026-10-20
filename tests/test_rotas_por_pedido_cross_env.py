@@ -190,7 +190,7 @@ def espia(monkeypatch, tmp_path):
         lambda: {"watch_dir": str(legado), "output_dir": str(legado), "export_mode": "xlsx"},
     )
 
-    def _check(order, *, env=None):
+    def _check(order, *, env=None, escolhas=None):
         visto["check"] = (env or {}).get("slug")
         # `available: False` e o proprio sintoma do cenario B (is_blocking
         # devolve (False, ...) pra check indisponivel): nao bloqueia, entao a

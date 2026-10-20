@@ -1070,8 +1070,13 @@ def decidir_envio(
     Antes de qualquer lógica de preço, a trava de produto (`produto_chave_modo`,
     `_portao_produto`) sobre o check do ambiente do pedido: em `ligado` bloqueia
     com `reason` `fire_indisponivel`/`produto_a_identificar` e `metric_labels`
-    `["produto"]`; em `observando` só grava o audit `produto_observado`."""
-    live = pc.check_order(order, env=env)
+    `["produto"]`; em `observando` só grava o audit `produto_observado`.
+
+    O check ao vivo leva as escolhas pontuais do import (`entry["produto_escolhido"]`,
+    R18); o check do ambiente fonte de preço não (os SEQs são do Fire do pedido)."""
+    # R18: a escolha pontual de cada linha (só deste import) entra no MESMO check
+    # que a trava avalia e de onde sai o produto gravado.
+    live = pc.check_order(order, env=env, escolhas=pc.escolhas_do_import(entry))
     # Trava de produto antes de qualquer lógica de preço, em todo modo de preço:
     # usa o check do PRÓPRIO ambiente do pedido (não o da fonte de preço).
     bloqueio_produto = _portao_produto(
