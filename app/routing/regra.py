@@ -119,16 +119,24 @@ def _uf_no_fire(env: dict, cnpj: str) -> list[str | None]:
     """UF(s) do CNPJ no Firebird do ambiente. Somente leitura."""
     from app.erp.connection import FirebirdConnection
     from app.persistence import environments_repo
-    from app.routing.ambiente import _fmt
 
     cfg = environments_repo.to_fb_config(env)
     with FirebirdConnection().connect_somente_leitura(cfg) as conn:
         cur = conn.cursor()
         try:
-            cur.execute(queries.UF_CLIENTE_POR_CNPJ, (_fmt(cnpj), cnpj))
+            cur.execute(queries.UF_CLIENTE_POR_CNPJ, (_mascarar(cnpj), cnpj))
             return [r[0] for r in cur.fetchall()]
         finally:
             cur.close()
+
+
+def _mascarar(doc: str) -> str:
+    """Como o Fire guarda: CNPJ `NN.NNN.NNN/NNNN-NN`, CPF `NNN.NNN.NNN-NN`."""
+    if len(doc) == 11:
+        return f"{doc[:3]}.{doc[3:6]}.{doc[6:9]}-{doc[9:]}"
+    from app.routing.ambiente import _fmt
+
+    return _fmt(doc)
 
 
 def ler_uf(

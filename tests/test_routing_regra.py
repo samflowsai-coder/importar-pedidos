@@ -245,3 +245,38 @@ def test_uf_no_fire_binda_cnpj_mascarado_e_so_digitos(monkeypatch):
     ((sql, params),) = executados
     assert sql is queries.UF_CLIENTE_POR_CNPJ
     assert params == ("11.222.333/0001-81", CLIENTE)
+
+
+def test_uf_no_fire_binda_cpf_mascarado_e_so_digitos(monkeypatch):
+    """Pessoa física (11 dígitos): o Fire guarda `NNN.NNN.NNN-NN`; o bind cru não casava."""
+    from contextlib import contextmanager
+
+    from app.erp import connection
+    from app.persistence import environments_repo
+
+    executados = []
+
+    class _Cur:
+        def execute(self, sql, params):
+            executados.append(params)
+
+        def fetchall(self):
+            return [("SP",)]
+
+        def close(self):
+            pass
+
+    class _Conn:
+        def cursor(self):
+            return _Cur()
+
+    class _Fb:
+        @contextmanager
+        def connect_somente_leitura(self, cfg):
+            yield _Conn()
+
+    monkeypatch.setattr(connection, "FirebirdConnection", _Fb)
+    monkeypatch.setattr(environments_repo, "to_fb_config", lambda env: {})
+
+    assert regra._uf_no_fire({"slug": "mm"}, "12345678909") == ["SP"]
+    assert executados == [("123.456.789-09", "12345678909")]
