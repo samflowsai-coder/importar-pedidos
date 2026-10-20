@@ -225,6 +225,29 @@ def _produto_chave_modo(env: dict | None) -> str:
     return produto_trava.modo(preco_trava.env_trava_produto(env))
 
 
+def _export_mode_atual() -> str:
+    """`export_mode` que o envio vai usar (o portão de produto depende dele)."""
+    return _get_cfg().get("export_mode", "xlsx")
+
+
+def _produto_trava_preview(check: dict | None, env: dict | None) -> dict:
+    """A decisão da trava de produto para o check guardado, com a MESMA regra do
+    portão (`produto_trava.avaliar`, inclusive o export_mode): a tela espelha o
+    backend em vez de reimplementar a regra. Só leitura."""
+    from app.erp import preco_trava, produto_trava
+
+    export_mode = _export_mode_atual()
+    tp = produto_trava.avaliar(
+        check or {"items": []}, env=preco_trava.env_trava_produto(env), export_mode=export_mode
+    )
+    return {
+        "bloqueado": tp.bloqueado,
+        "reason": tp.reason,
+        "export_mode": export_mode,
+        "itens": tp.itens,
+    }
+
+
 def _cfg_para_env(env: dict) -> dict:
     """Cfg legado com as pastas DESTA empresa. Usado pelo lote agrupado, onde
     cada grupo escreve na pasta da sua empresa e não na do cookie."""
@@ -2017,6 +2040,7 @@ async def preview_file(
     # nada a decidir ali — ver Achado 4 do fix round 1).
     payload["roteamento"] = _roteamento_para_preview(order)
     payload["produto_chave_modo"] = _produto_chave_modo(request_env)
+    payload["produto_trava"] = _produto_trava_preview(check, request_env)
     return JSONResponse(payload)
 
 
@@ -2120,6 +2144,7 @@ def preview_pending(
         # Ver comentário equivalente em `preview_upload` (Achado 4, fix round 1).
         payload["roteamento"] = _roteamento_para_preview(order)
     payload["produto_chave_modo"] = _produto_chave_modo(request_env)
+    payload["produto_trava"] = _produto_trava_preview(check, request_env)
     return JSONResponse(payload)
 
 
@@ -3932,17 +3957,32 @@ def produtos_a_identificar(
     """Itens a identificar dos pedidos em revisão do ambiente ativo: lê o check
     guardado (`produto.estado` diferente de `ok`), sem ir ao Fire. Mais antigos
     primeiro."""
+    from app.erp import produto_trava
     from app.persistence import repo
 
+    # Com planilha, o item `ok` que a planilha não aponta (sem código) ou que o
+    # importador do Fire trocaria também para o envio: entra na fila, com o
+    # mesmo estado e motivo do portão.
+    planilha = _export_mode_atual() in ("xlsx", "both")
     entries = repo.list_imports(portal_status="parsed", limit=_RECHECK_MAX_PEDIDOS)
     linhas = []
     for entry in sorted(entries, key=lambda e: (e["imported_at"] or "", e["id"])):
-        itens_check = (entry.get("check") or {}).get("items") or []
+        check = entry.get("check") or {}
+        itens_check = check.get("items") or []
         itens = ((entry.get("snapshot") or {}).get("items")) or []
+        da_planilha = {}
+        if planilha:
+            sem_codigo, trocas = produto_trava.itens_planilha(check)
+            da_planilha = {x["index"]: x for x in sem_codigo + trocas}
         for i, ic in enumerate(itens_check):
             produto = (ic or {}).get("produto") if isinstance(ic, dict) else None
-            if not isinstance(produto, dict) or produto.get("estado") == "ok":
+            if not isinstance(produto, dict):
                 continue
+            estado, motivo = produto.get("estado"), produto.get("motivo")
+            if estado == "ok":
+                if i not in da_planilha:
+                    continue
+                estado, motivo = da_planilha[i]["estado"], da_planilha[i]["motivo"]
             it = itens[i] if i < len(itens) and isinstance(itens[i], dict) else {}
             linhas.append(
                 {
@@ -3953,8 +3993,8 @@ def produtos_a_identificar(
                     "codigo": it.get("product_code"),
                     "ean": it.get("ean"),
                     "descricao": it.get("description"),
-                    "estado": produto.get("estado"),
-                    "motivo": produto.get("motivo"),
+                    "estado": estado,
+                    "motivo": motivo,
                     "importado_em": entry.get("imported_at"),
                 }
             )
@@ -4079,6 +4119,7 @@ def rehydrate_preview(
     payload["fire_status_last_seen"] = entry.get("fire_status_last_seen")
     payload["arquivo_original"] = _arquivo_original_info(entry)
     payload["produto_chave_modo"] = _produto_chave_modo(_request_environment(request))
+    payload["produto_trava"] = _produto_trava_preview(check, _request_environment(request))
     # Situação de preço por item (trava). Só leitura; ausente em `desligado` e
     # em qualquer falha — o preview sempre renderiza.
     try:

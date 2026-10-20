@@ -77,7 +77,11 @@ def html() -> str:
         "tamanho, pares e cor batem",
         # Fire sem resposta
         "Não deu para conferir os produtos: o Fire não respondeu.",
-        "Conferir de novo",
+        "Recarregar",
+        "Recarrega o que está salvo. Ao enviar, o Portal confere de novo no Fire.",
+        "'Sem código para a planilha'",
+        "Esse produto não está mais no catálogo do Fire. Escolha outro.",
+        "Nenhum produto além dos",
         "Aguardando o Fire",
         "substituir: true",
         # fila
@@ -206,4 +210,98 @@ def test_foco_inicial_sem_atalho_or(html):
 
 def test_sem_texto_antigo(html):
     assert "Você pode vincular mesmo assim" not in html
+    assert "Conferir de novo" not in html
+    assert "Conferindo…" not in html
     assert "'Chaves discordam'" not in html
+
+
+# ── Fix round 2: a tela espelha a trava do backend (export mode incluído) ────
+
+_OK_COM_TROCA = {
+    "estado": "ok",
+    "fire_seq": 10,
+    "fonte": "ean",
+    "motivo": None,
+    "candidatos": [{"seq": 10, "descricao": "TENIS", "codprod_altern": "TA-10"}],
+    "troca_no_fire": {"seq_previsto": 99, "codigo": "TA-10"},
+}
+_OK_SEM_CODIGO = {
+    "estado": "ok",
+    "fire_seq": 11,
+    "fonte": "ean",
+    "motivo": None,
+    "candidatos": [{"seq": 11, "descricao": "TENIS", "codprod_altern": None}],
+    "troca_no_fire": None,
+}
+
+
+@pytest.fixture
+def export_mode(monkeypatch):
+    from app.web import server
+
+    estado = {"m": "xlsx"}
+    monkeypatch.setattr(server, "_export_mode_atual", lambda: estado["m"])
+
+    def definir(m):
+        estado["m"] = m
+
+    return definir
+
+
+@pytest.mark.parametrize(
+    ("modo_export", "produto", "bloqueado", "reason"),
+    [
+        ("xlsx", _OK_COM_TROCA, True, "troca_no_fire"),
+        ("both", _OK_COM_TROCA, True, "troca_no_fire"),
+        ("db", _OK_COM_TROCA, False, None),
+        ("xlsx", _OK_SEM_CODIGO, True, "sem_codigo_fire"),
+        ("db", _OK_SEM_CODIGO, False, None),
+    ],
+)
+def test_preview_expoe_trava_do_produto(
+    env_modo, export_mode, modo_export, produto, bloqueado, reason
+):
+    env_modo("ligado")
+    export_mode(modo_export)
+    entry_id = _seed(produto)
+
+    trava = client.get(f"/api/imported/{entry_id}/preview").json()["produto_trava"]
+
+    assert trava["bloqueado"] is bloqueado
+    assert trava["reason"] == reason
+    assert trava["export_mode"] == modo_export
+
+
+def test_preview_trava_em_observando_lista_sem_bloquear(env_modo, export_mode):
+    env_modo("observando")
+    entry_id = _seed(_OK_COM_TROCA)
+
+    trava = client.get(f"/api/imported/{entry_id}/preview").json()["produto_trava"]
+
+    assert trava["bloqueado"] is False
+    assert [(i["index"], i["estado"]) for i in trava["itens"]] == [(0, "troca_no_fire")]
+
+
+@pytest.mark.parametrize(("modo_export", "esperado"), [("xlsx", ["troca_no_fire"]), ("db", [])])
+def test_fila_inclui_troca_no_fire_quando_sai_planilha(
+    env_modo, export_mode, modo_export, esperado
+):
+    env_modo("observando")
+    export_mode(modo_export)
+    _seed(_OK_COM_TROCA)
+
+    itens = client.get("/api/produtos/a-identificar").json()["itens"]
+
+    assert [i["estado"] for i in itens] == esperado
+    if esperado:
+        assert itens[0]["motivo"] == "O importador do Fire trocaria este código pelo produto 99."
+
+
+def test_tela_usa_a_trava_do_backend(html):
+    assert "data.produto_trava" in html
+
+
+def test_destaque_da_fila_nao_rola_ate_o_fim(html):
+    i = html.index("function focarItemDoPreview(")
+    corpo = html[i : html.index("\n}\n", i)]
+    assert "inline: 'end'" not in corpo

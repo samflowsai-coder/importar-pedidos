@@ -116,7 +116,10 @@ API pública para páginas-filho:
 - `GET /api/produtos/a-identificar` → fila: itens com `produto.estado` ≠ `ok` no
   `check_json` guardado dos pedidos `parsed` do ambiente ativo (sem Fire). Resposta
   `{"modo", "itens": [{import_id, pedido, cliente, item_index, codigo, ean, descricao,
-  estado, motivo, importado_em}]}`, por `importado_em` crescente. `modo` =
+  estado, motivo, importado_em}]}`, por `importado_em` crescente. Com
+  `export_mode` xlsx/both, o item `ok` que a planilha não aponta ou que o importador
+  do Fire trocaria também entra, com `estado` `sem_codigo_fire`/`troca_no_fire` e o
+  motivo do portão (`produto_trava.itens_planilha`). `modo` =
   `produto_chave_modo` do ambiente do request (`_produto_chave_modo`: mesma regra do
   portão, sem ambiente vale o mais restrito); a tela só mostra a aba fora de `desligado`.
 - `DELETE /api/produtos/depara/{depara_id}` → desfaz um vínculo v1. Log direto
@@ -147,7 +150,10 @@ API pública para páginas-filho:
 
 ## Tela: produto por chave exata (`index.html`)
 Os 3 payloads de preview (`preview_file`, `preview_pending`, `rehydrate_preview`)
-trazem `produto_chave_modo` (`_produto_chave_modo(request_env)`). Em `desligado` a
+trazem `produto_chave_modo` (`_produto_chave_modo(request_env)`) e `produto_trava`
+(`_produto_trava_preview`: `produto_trava.avaliar` sobre o check guardado, com o
+`export_mode` do envio → `{bloqueado, reason, export_mode, itens}`). A tela espelha
+essa decisão (estados de planilha por item e o bloqueio do rodapé), não refaz a regra. Em `desligado` a
 tela é a de sempre (coluna "Fire" com ✓/✗, picker com busca no topo e confirmar
 direto). Em `observando`/`ligado`, com `check.items[i].produto` (índice = posição do
 item):
@@ -155,12 +161,13 @@ item):
   `a_identificar` "Escolher produto", `ambiguo` "Mais de um produto com essa chave",
   `produto_bloqueado` "Produto bloqueado", `vinculo_invalido` "Vínculo inválido",
   `chaves_discordam` "Código e EAN apontam para produtos diferentes",
-  `fire_indisponivel` "Fire sem resposta"; `ok` com `troca_no_fire` vira o estado de
-  tela "Fire grava outro produto", em tom de aviso — `produtoEstadoTela`), ícone por
+  `fire_indisponivel` "Fire sem resposta"; o `ok` que `produto_trava.itens` lista vira
+  "Fire grava outro produto" ou "Sem código para a planilha", em tom de aviso —
+  `produtoEstadoTela`), ícone por
   forma + cor, motivo logo abaixo. Linha travada ganha faixa à esquerda. Banner
   (`produtoContagem`: pendentes, trocas e Fire sem resposta contados à parte, plural
-  de verdade) e rodapé resumem; Fire sem resposta tem banner próprio com "Conferir de
-  novo" (recarrega o preview; o check guardado só muda quando alguém reconfere). Em
+  de verdade) e rodapé resumem; Fire sem resposta tem banner próprio com "Recarregar" (traz o que está salvo;
+  quem reconfere no Fire é o envio). Em
   `ligado` o botão de envio fica desabilitado com o motivo (o backend decide, a tela
   só antecipa). Telefone: coluna Produto presa à direita, botões de ação com 44px.
 - Picker (`openProductPicker`): 3 seções na ordem "Candidatos exatos"

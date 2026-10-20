@@ -143,6 +143,12 @@ def _itens_planilha(check: dict) -> tuple[list[dict], list[dict]]:
     return sem_codigo, trocas
 
 
+def itens_planilha(check: dict) -> tuple[list[dict], list[dict]]:
+    """(sem código no Fire, troca no importador) dos itens `ok`, com a mesma regra
+    do portão. Público para a fila da tela."""
+    return _itens_planilha(check)
+
+
 def avaliar(check: dict, *, env: dict | None, export_mode: str) -> TravaProduto:
     """Decide se o pedido pode seguir para o ERP. Ver o docstring do módulo.
 

@@ -564,7 +564,14 @@ def test_fila_a_identificar_lista_so_pendentes_do_ambiente():
         numero="R-1",
         itens=[_item(codigo="A1", ean=None, desc="TENIS A"), _item(codigo="B2", desc="TENIS B")],
         produtos=[
-            {"estado": "ok", "fire_seq": 1, "candidatos": []},
+            # ok de verdade: código no Fire e sem troca pela planilha (senão a
+            # fila também lista o item quando sai planilha — ver test_web_static_produto)
+            {
+                "estado": "ok",
+                "fire_seq": 1,
+                "candidatos": [{"seq": 1, "codprod_altern": "A1"}],
+                "troca_no_fire": None,
+            },
             _pendente("Mais de um produto ativo com este código."),
         ],
         imported_at="2026-10-18T09:00:00",
