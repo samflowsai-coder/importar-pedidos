@@ -199,6 +199,86 @@ CREATE TABLE IF NOT EXISTS ambiente_modo_audit (
     alterado_por    TEXT NOT NULL,
     alterado_em     TEXT NOT NULL
 );
+
+-- Regra comercial de faturamento MM x Nasmar. Política única (id=1): empresa
+-- para destino em SP e fora de SP; `ativa` nasce 0 e a regra só liga com todas
+-- as redes com chave. Sem linha = regra desligada.
+CREATE TABLE IF NOT EXISTS regra_faturamento_config (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    env_sp       TEXT NOT NULL,
+    env_fora_sp  TEXT NOT NULL,
+    ativa        INTEGER NOT NULL DEFAULT 0,
+    alterado_por TEXT NOT NULL,
+    alterado_em  TEXT NOT NULL
+);
+
+-- Redes que faturam sempre numa empresa fixa, independente da UF.
+CREATE TABLE IF NOT EXISTS regra_faturamento_rede (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    nome         TEXT NOT NULL UNIQUE,
+    env_slug     TEXT NOT NULL,
+    alterado_por TEXT NOT NULL,
+    alterado_em  TEXT NOT NULL
+);
+
+-- Chaves de uma rede: raiz do CNPJ (8 dígitos) ou CNPJ completo (14). Uma
+-- chave pertence a no máximo uma rede (PK).
+CREATE TABLE IF NOT EXISTS regra_faturamento_chave (
+    rede_id INTEGER NOT NULL REFERENCES regra_faturamento_rede(id) ON DELETE CASCADE,
+    tipo    TEXT NOT NULL CHECK (tipo IN ('raiz', 'cnpj')),
+    chave   TEXT NOT NULL,
+    PRIMARY KEY (tipo, chave)
+);
+
+-- Rastro de cada decisão de empresa (quem, quando, por qual degrau, o que foi
+-- sugerido x escolhido). Só INSERT.
+CREATE TABLE IF NOT EXISTS roteamento_decisao (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    import_id     TEXT NOT NULL,
+    decidido_em   TEXT NOT NULL,
+    modo          TEXT NOT NULL,
+    degrau        TEXT,
+    env_sugerido  TEXT,
+    env_escolhido TEXT NOT NULL,
+    decidido_por  TEXT NOT NULL,
+    motivo        TEXT,
+    acao          TEXT NOT NULL CHECK (acao IN (
+        'sugestao_aceita', 'troca_no_preview', 'escolha_sem_sugestao',
+        'movido_apos_importar', 'automatico', 'observando'))
+);
+
+-- Semente das 4 redes fixas (chaves: evidência da Task 0 na Fire de produção).
+-- Roda a cada init, mas só semeia a rede se a tabela estiver VAZIA: rede que o
+-- admin remover depois não volta, a menos que ele esvazie a tabela inteira.
+-- As chaves só entram para rede ainda marcada 'semente' e sem nenhuma chave;
+-- salvar_rede troca alterado_por, então rede editada pelo admin não é refeita.
+INSERT INTO regra_faturamento_rede (nome, env_slug, alterado_por, alterado_em)
+SELECT nome, 'mm', 'semente', strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')
+FROM (SELECT 'Centauro' AS nome UNION ALL SELECT 'Riachuelo'
+      UNION ALL SELECT 'Kallan' UNION ALL SELECT 'Sam''s Club')
+WHERE NOT EXISTS (SELECT 1 FROM regra_faturamento_rede);
+
+INSERT OR IGNORE INTO regra_faturamento_chave (rede_id, tipo, chave)
+SELECT r.id, k.tipo, k.chave
+FROM (
+    SELECT 'Centauro' AS nome, 'raiz' AS tipo, '06347409' AS chave
+    UNION ALL SELECT 'Riachuelo', 'raiz', '33200056'
+    UNION ALL SELECT 'Kallan', 'raiz', '51540219'
+    UNION ALL SELECT 'Sam''s Club', 'cnpj', '00063960000109'
+    UNION ALL SELECT 'Sam''s Club', 'cnpj', '00063960004864'
+    UNION ALL SELECT 'Sam''s Club', 'cnpj', '00063960006131'
+    UNION ALL SELECT 'Sam''s Club', 'cnpj', '00063960006999'
+    UNION ALL SELECT 'Sam''s Club', 'cnpj', '00063960009408'
+    UNION ALL SELECT 'Sam''s Club', 'cnpj', '00063960012298'
+    UNION ALL SELECT 'Sam''s Club', 'cnpj', '00063960057984'
+    UNION ALL SELECT 'Sam''s Club', 'cnpj', '00063960058018'
+    UNION ALL SELECT 'Sam''s Club', 'cnpj', '00063960058794'
+    UNION ALL SELECT 'Sam''s Club', 'cnpj', '00063960058875'
+    UNION ALL SELECT 'Sam''s Club', 'cnpj', '00063960058956'
+    UNION ALL SELECT 'Sam''s Club', 'cnpj', '00063960059170'
+) k
+JOIN regra_faturamento_rede r ON r.nome = k.nome AND r.alterado_por = 'semente'
+WHERE NOT EXISTS (SELECT 1 FROM regra_faturamento_chave c WHERE c.rede_id = r.id);
 """
 
 INDEXES_SQL = """
@@ -236,6 +316,9 @@ CREATE INDEX IF NOT EXISTS idx_sombra_import_id   ON roteamento_sombra(import_id
 
 CREATE INDEX IF NOT EXISTS idx_ambiente_modo_audit_env
     ON ambiente_modo_audit(environment_id, alterado_em DESC);
+
+CREATE INDEX IF NOT EXISTS idx_roteamento_decisao_import
+    ON roteamento_decisao(import_id, decidido_em);
 """
 
 # Migrações de coluna para shared.db — aplicadas se a coluna ainda não existir.
