@@ -254,7 +254,7 @@ export_mode=)`: o que o caminho gera (None = `EXPORT_MODE`); `/export-xlsx` pass
   produto_a_identificar, detalhe="Item N: <motivo>" [+ "Mais K item(ns)…"], block_detail=
   {"produto": itens}, metric_labels=["produto"])`; o chamador audita
   (`send_to_fire_blocked`/`xlsx_export_blocked`), conta `portal_price_check_blocks_total
-  {reason="produto"}` e responde 409. `observando` → audit `produto_observado {itens}`
+  {reason="produto"}` e responde 409. `observando` → audit `produto_observado {itens}` (só quando `itens` não é vazio)
   (falha nunca muda o envio).
 - `_run_exporters` (`/api/import`, `/api/reimport`): `ligado` não gera XLSX e devolve
   `xlsx_adiado: "produto_a_identificar"` (precede `trava_de_preco`); pedido fica em revisão.
@@ -277,7 +277,11 @@ Sequência operacional (cada passo com OK do Samuel; nada daqui roda sozinho):
 
 1. **Deploy** do pacote pelo `/admin/atualizacao`. Cria a tabela `produto_vinculo_v2` e as
    colunas novas (`environments.produto_chave_modo`, `imports.produto_escolhido_json`). O
-   interruptor nasce `desligado`: comportamento idêntico ao de antes.
+   interruptor nasce `desligado`: comportamento idêntico ao de antes. Cria também
+   `ambiente_modo_audit` no `app_shared.db` (troca do interruptor, M5).
+   **Logo depois de aplicar, rodar o sync do catálogo** (M3): o catálogo local
+   existente fica com `codprod_altern` NULL até o próximo sync, e o picker e o v2
+   gravam o código do Fire a partir dele.
 2. **Migração do de-para v1** (por ambiente, `mm` e depois `nasmar`):
    `python tools/migrar_produto_vinculo_v2.py --slug mm` é DRY-RUN (só mostra); com
    `--aplicar` grava pelo `produto_vinculo_repo.vincular` (origem `migrado_v1`, uma
@@ -290,7 +294,9 @@ Sequência operacional (cada passo com OK do Samuel; nada daqui roda sozinho):
    hoje. Ler o audit `produto_observado` (itens que `ligado` travaria) e a fila
    `GET /api/produtos/a-identificar`.
 4. **`ligado`** só depois de (a) o `observando` limpo, (b) a regressão com cobertura
-   (abaixo) e (c) a revisão da chave repetida/escolha pontual. Reverter = voltar o
+   (abaixo) e (c) a revisão da chave repetida/escolha pontual. **Nasmar fica em
+   `observando`** até a regressão dela ter cobertura suficiente (M8: na regressão 2,
+   48 arquivos sem pedido no Fire na janela de 72 h); a MM pode ir antes. Reverter = voltar o
    interruptor para `observando`/`desligado`; vínculos v2 nunca são apagados (só revogados).
 
 **Regressão real** (`tools/regressao_chave_exata.py`, SÓ LEITURA): relê os originais

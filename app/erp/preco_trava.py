@@ -1045,7 +1045,7 @@ def _portao_produto(
     import_id: str, live: dict, env: dict | None, export_mode: str
 ) -> DecisaoEnvio | None:
     """Trava de produto por chave exata (`produto_chave_modo`). Em `ligado` devolve
-    o bloqueio; em `observando` grava `produto_observado` e segue; `desligado` é
+    o bloqueio; em `observando` grava `produto_observado` (só com itens) e segue; `desligado` é
     inerte (nada lido, nada gravado)."""
     env = env_trava_produto(env)
     m = produto_trava.modo(env)
@@ -1054,7 +1054,8 @@ def _portao_produto(
     if m == "observando":
         try:
             tp = produto_trava.avaliar(live, env=env, export_mode=export_mode)
-            repo.append_audit(import_id, "produto_observado", {"itens": tp.itens})
+            if tp.itens:  # nada travaria: sem audit (M6)
+                repo.append_audit(import_id, "produto_observado", {"itens": tp.itens})
         except Exception as exc:  # noqa: BLE001 — observando nunca muda o envio
             from app.utils.logger import logger
 

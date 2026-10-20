@@ -2159,6 +2159,20 @@ def test_decidir_envio_produto_observando_audita_e_segue(monkeypatch):
     ]
 
 
+def test_decidir_envio_produto_observando_sem_itens_nao_audita(monkeypatch):
+    """M6: nada travaria → nenhum `produto_observado` (sem ruído no audit)."""
+    order = _order()
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _com_produto(_check(), "ok"))
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env_produto("desligado", "observando"), agora=AGORA
+    )
+
+    assert d.bloqueado is False
+    assert _audits(import_id, "produto_observado") == []
+
+
 def test_decidir_envio_produto_observando_falha_no_audit_nao_muda_o_envio(monkeypatch):
     order = _order()
     import_id, entry = _seed(order)
