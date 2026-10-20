@@ -147,7 +147,11 @@ API pública para páginas-filho:
   portão, sem ambiente vale o mais restrito); a tela só mostra a aba fora de `desligado`.
 - `DELETE /api/produtos/depara/{depara_id}` → desfaz um vínculo v1. Log direto
   via `logger.info` (não `audit_log` — `import_id` é `NOT NULL` com FK pra
-  `imports`, e o undo não tem um import associado).
+  `imports`, e o undo não tem um import associado). **M4:** revoga também o v2 gêmeo
+  (vigente, mesma chave normalizada, mesmo SEQ, escopo em `escopos_para(client_key)`),
+  com audit `produto_vinculo_revogado` (`origem: "depara_v1_removido"`) no pedido que
+  criou o v2 (senão log). `client_key` sem CNPJ: v2 fica e a resposta traz `aviso`.
+  Resposta `{deleted, v2_revogados: [ids], aviso}`.
 - Guards de preço em `_send_one_to_fire` / `_export_one_xlsx`: re-roda
   `check_order` + `is_blocking`; bloqueia 409 com audit `send_to_fire_blocked` /
   `xlsx_export_blocked` quando há mismatch / no_order_price / no_price_unacked.

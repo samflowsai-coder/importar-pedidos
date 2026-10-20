@@ -4197,15 +4197,73 @@ def delete_depara(
     request: Request,
     user: User = Depends(require_user),
 ) -> JSONResponse:
-    """Desfaz um vínculo de-para. Log direto (não audit_log — sem import_id
-    associado, e `audit_log.import_id` é NOT NULL com FK pra `imports`)."""
-    from app.persistence import db, produto_depara_repo
+    """Desfaz um vínculo de-para v1. Log direto (não audit_log — sem import_id
+    associado, e `audit_log.import_id` é NOT NULL com FK pra `imports`).
+
+    M4: revoga também o vínculo v2 gêmeo — vigente, mesma chave (normalizada),
+    mesmo SEQ, num escopo do CNPJ do `client_key` do v1 — e audita a revogação no
+    pedido que criou o v2 (senão log). `client_key` sem CNPJ (nome do cliente): o
+    escopo não sai dele; o v2 fica e a resposta traz `aviso`."""
+    from app.erp import produto_escopo
+    from app.persistence import db, produto_depara_repo, produto_vinculo_repo, repo
     from app.utils.logger import logger
 
+    now = datetime.now().isoformat(timespec="seconds")
+    revogados = []
+    aviso = None
     with db.connect() as conn:
+        row = conn.execute(
+            "SELECT client_key, chave_tipo, chave_valor, fire_produto_id "
+            "FROM produto_depara WHERE id = ?",
+            (depara_id,),
+        ).fetchone()
         produto_depara_repo.delete(conn, depara_id)
-    logger.info(f"produto_vinculo_removido: depara_id={depara_id} user={user.email}")
-    return JSONResponse({"deleted": depara_id})
+        if row is not None:
+            ckey, tipo, valor, seq = row
+            escopos = produto_escopo.escopos_para(conn, ckey)
+            if not escopos:
+                aviso = (
+                    "O vínculo novo deste cliente não foi revogado (o de-para antigo não "
+                    "tem CNPJ). Revogue pela fila de produtos, se precisar."
+                )
+            else:
+                chave = produto_vinculo_repo.norm_chave(tipo, valor)
+                gemeos = [
+                    v
+                    for e in escopos
+                    for v in produto_vinculo_repo.listar(conn, escopo=e)
+                    if v.chave_tipo == tipo and v.chave_valor == chave and str(v.fire_seq) == str(seq)
+                ]
+                for v in gemeos:
+                    pedido = conn.execute(
+                        "SELECT pedido_id FROM produto_vinculo_v2 WHERE id = ?", (v.id,)
+                    ).fetchone()
+                    produto_vinculo_repo.revogar(conn, v.id, por=user.email, agora=now)
+                    revogados.append((v, pedido[0] if pedido else None))
+    for v, pedido_id in revogados:
+        detalhe = {
+            "vinculo_id": v.id,
+            "env": env_context.current_env_slug(),
+            "escopo": v.escopo,
+            "chave_tipo": v.chave_tipo,
+            "chave_valor": v.chave_valor,
+            "fire_seq": v.fire_seq,
+            "origem": "depara_v1_removido",
+            "depara_id": depara_id,
+            "user_id": user.id,
+            "user_email": user.email,
+        }
+        if pedido_id and repo.get_import(pedido_id) is not None:
+            repo.append_audit(pedido_id, "produto_vinculo_revogado", detalhe)
+        else:
+            logger.info(f"produto_vinculo_revogado: {detalhe}")
+    logger.info(
+        f"produto_vinculo_removido: depara_id={depara_id} user={user.email} "
+        f"v2_revogados={[v.id for v, _ in revogados]}"
+    )
+    return JSONResponse(
+        {"deleted": depara_id, "v2_revogados": [v.id for v, _ in revogados], "aviso": aviso}
+    )
 
 
 @app.post("/api/imported/{import_id}/ack-sem-preco")

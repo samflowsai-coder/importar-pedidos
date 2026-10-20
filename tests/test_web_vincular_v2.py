@@ -640,3 +640,97 @@ def test_vincular_devolve_a_trava_do_check_novo(
     assert trava["bloqueado"] is bloqueado
     assert trava["reason"] == reason
     assert trava["export_mode"] == export_mode
+
+
+# ── M4: DELETE do de-para v1 revoga o vínculo v2 gêmeo ───────────────────────
+
+
+def _v1_e_v2(client_key, *, seq=10, escopo="raiz:33200056", pedido_id=None, chave="ABC123"):
+    agora = "2026-10-19T10:00:00"
+    with db.connect() as conn:
+        produto_depara_repo.upsert(
+            conn,
+            client_key=client_key,
+            chave_tipo="codigo",
+            chave_valor=chave,
+            fire_produto_id=str(seq),
+            fire_codigo="A",
+            fire_ean=None,
+            fire_nome="TENIS",
+            criado_em=agora,
+            criado_por="t@x",
+        )
+        conn.commit()
+        dep_id = conn.execute(
+            "SELECT id FROM produto_depara WHERE client_key = ? AND chave_valor = ?",
+            (client_key, chave),
+        ).fetchone()[0]
+        v = produto_vinculo_repo.vincular(
+            conn,
+            escopo=escopo,
+            chave_tipo="codigo",
+            chave_valor=chave,
+            fire_seq=seq,
+            fire_codigo="A",
+            fire_descricao="TENIS",
+            por="t@x",
+            pedido_id=pedido_id,
+            agora=agora,
+        )
+    return dep_id, v
+
+
+def test_delete_depara_revoga_o_v2_gemeo_e_audita():
+    entry_id = _seed_pedido(cnpj=RIACHUELO_LOJA_1, numero="R-9", itens=[_item()])
+    dep_id, v = _v1_e_v2("33200056000149", pedido_id=entry_id)
+    # Outro SEQ no mesmo escopo e chave? Não pode existir vigente; outro escopo fica.
+    _, outro = _v1_e_v2("11222333000144", escopo="raiz:11222333")
+
+    r = client.delete(f"/api/produtos/depara/{dep_id}")
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["deleted"] == dep_id
+    assert body["v2_revogados"] == [v.id]
+    assert body.get("aviso") is None
+    assert [x.id for x in _vigentes()] == [outro.id]
+    (audit,) = _audits(entry_id, "produto_vinculo_revogado")
+    assert audit["detail"]["vinculo_id"] == v.id
+    assert audit["detail"]["origem"] == "depara_v1_removido"
+
+
+def test_delete_depara_nao_revoga_v2_de_outro_seq():
+    dep_id, _ = _v1_e_v2("33200056000149", seq=10)
+    with db.connect() as conn:
+        # v2 do mesmo escopo e chave foi trocado para outro SEQ depois.
+        v_atual = produto_vinculo_repo.vincular(
+            conn,
+            escopo="raiz:33200056",
+            chave_tipo="codigo",
+            chave_valor="ABC123",
+            fire_seq=20,
+            fire_codigo="B",
+            fire_descricao="OUTRO",
+            por="t@x",
+            pedido_id=None,
+            substituir=True,
+            agora="2026-10-19T11:00:00",
+        )
+
+    r = client.delete(f"/api/produtos/depara/{dep_id}")
+
+    assert r.status_code == 200, r.text
+    assert r.json()["v2_revogados"] == []
+    assert [x.id for x in _vigentes()] == [v_atual.id]
+
+
+def test_delete_depara_sem_cnpj_deixa_o_v2_e_avisa():
+    dep_id, v = _v1_e_v2("RIACHUELO")
+
+    r = client.delete(f"/api/produtos/depara/{dep_id}")
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["v2_revogados"] == []
+    assert body["aviso"]
+    assert [x.id for x in _vigentes()] == [v.id]
