@@ -91,8 +91,7 @@ def _preview_com_fornecedor(portal, supplier_cnpj, **kw):
         source_filename="PEDIDO.pdf",
         source_bytes=b"%PDF-1.4 fake",
         source_ext=".pdf",
-        check=None,
-        **kw,
+        **({"check": None} | kw),
     )
     return entry.preview_id
 
@@ -407,3 +406,263 @@ def test_divergencia_contra_a_memoria_e_gravada_no_commit(portal):
     assert d["env_slug"] == "nasmar"  # a memoria em si nao muda
     assert d["divergiu_de"] == "nasmar"  # mas a divergencia fica marcada
     assert d["divergiu_em"]
+
+
+# ── Task 6: a escolha do operador vence e fica registrada ──────────────────
+
+EMAIL = "test@portal.local"  # usuário sintético do TEST_AUTH_BYPASS
+
+
+def _rastro(import_id):
+    from app.persistence import roteamento_decisao_repo
+
+    return roteamento_decisao_repo.listar_por_import(import_id)
+
+
+def _rastro_total():
+    with router.shared_connect() as conn:
+        return conn.execute("SELECT COUNT(*) FROM roteamento_decisao").fetchone()[0]
+
+
+def _audit_roteamento(slug, import_id):
+    from app.persistence import context as env_context
+    from app.persistence import repo
+
+    env = environments_repo.get_by_slug(slug)
+    with env_context.active_env(env["id"], env["slug"]):
+        ev = [a for a in repo.list_audit(import_id) if a["event_type"] == "imported_to_portal"]
+    return ev[0]["detail"]["roteamento"]
+
+
+def test_ligado_operador_troca_sugestao_vence_e_registra(portal, monkeypatch):
+    from app.persistence import decisao_ambiente_repo as memoria
+
+    roteamento_repo.set_modo("ligado", por="t")
+    _com_regra(monkeypatch, "nasmar", "Regra comercial: Kolosh, CNPJ faturado em MG → Nasmar")
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid = _preview_com_fornecedor(portal, MM)
+    r = c.post("/api/commit", json={"preview_id": pid, "environment_slug": "mm"})
+    assert r.status_code == 200
+    import_id = r.json()["entry_id"]
+
+    assert len(_import_do_ambiente("mm")) == 1
+    assert _import_do_ambiente("nasmar") == []
+    (reg,) = _rastro(import_id)
+    assert reg["acao"] == "troca_no_preview"
+    assert reg["modo"] == "ligado"
+    assert reg["degrau"] == "regra"
+    assert reg["env_sugerido"] == "nasmar"
+    assert reg["env_escolhido"] == "mm"
+    assert reg["decidido_por"] == EMAIL
+    assert reg["motivo"] == "Regra comercial: Kolosh, CNPJ faturado em MG → Nasmar"
+    assert memoria.lembrada("11222333000181")["env_slug"] == "mm"
+    rot = _audit_roteamento("mm", import_id)
+    assert rot["contraria"] == "mm"
+    assert rot["decidido_por"] == EMAIL
+
+
+@pytest.mark.parametrize("escolha", [None, "nasmar"])
+def test_ligado_sem_escolha_aceita_sugestao_e_registra(portal, escolha):
+    """Sem escolha, ou escolhendo a própria sugestão: aceitou. A memória não
+    aprende nada (o degrau que decidiu já sabe responder sozinho)."""
+    from app.persistence import decisao_ambiente_repo as memoria
+
+    roteamento_repo.set_modo("ligado", por="t")
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid = _preview_com_fornecedor(portal, NASMAR)
+    body = {"preview_id": pid} | ({"environment_slug": escolha} if escolha else {})
+    r = c.post("/api/commit", json=body)
+    assert r.status_code == 200
+
+    assert len(_import_do_ambiente("nasmar")) == 1
+    (reg,) = _rastro(r.json()["entry_id"])
+    assert reg["acao"] == "sugestao_aceita"
+    assert reg["degrau"] == "documento"
+    assert reg["env_sugerido"] == reg["env_escolhido"] == "nasmar"
+    assert reg["decidido_por"] == EMAIL
+    assert memoria.lembrada("11222333000181") is None
+
+
+def test_ligado_nao_resolvido_com_escolha_registra_escolha_sem_sugestao(portal):
+    from app.persistence import decisao_ambiente_repo as memoria
+
+    roteamento_repo.set_modo("ligado", por="t")
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid = _preview_com_fornecedor(portal, None)
+    r = c.post("/api/commit", json={"preview_id": pid, "environment_slug": "nasmar"})
+    assert r.status_code == 200
+
+    (reg,) = _rastro(r.json()["entry_id"])
+    assert reg["acao"] == "escolha_sem_sugestao"
+    assert reg["degrau"] == "perguntar"
+    assert reg["env_sugerido"] is None
+    assert reg["env_escolhido"] == "nasmar"
+    assert reg["decidido_por"] == EMAIL
+    assert memoria.lembrada("11222333000181")["env_slug"] == "nasmar"
+
+
+def test_observando_continua_no_cookie_e_registra_observando(portal):
+    roteamento_repo.set_modo("observando", por="t")
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid = _preview_com_fornecedor(portal, NASMAR)
+    # Em observando a escolha do corpo é ignorada: o cookie manda, como hoje.
+    r = c.post("/api/commit", json={"preview_id": pid, "environment_slug": "nasmar"})
+    assert r.status_code == 200
+
+    assert len(_import_do_ambiente("mm")) == 1
+    assert _import_do_ambiente("nasmar") == []
+    (reg,) = _rastro(r.json()["entry_id"])
+    assert reg["acao"] == "observando"
+    assert reg["modo"] == "observando"
+    assert reg["env_sugerido"] == "nasmar"
+    assert reg["env_escolhido"] == "mm"
+    assert reg["decidido_por"] == EMAIL
+    assert roteamento_repo.taxa()["total"] == 1  # a sombra continua
+
+
+def test_desligado_nao_registra_nada(portal):
+    from app.persistence import decisao_ambiente_repo as memoria
+
+    roteamento_repo.set_modo("desligado", por="t")
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid = _preview_com_fornecedor(portal, NASMAR)
+    r = c.post("/api/commit", json={"preview_id": pid, "environment_slug": "nasmar"})
+    assert r.status_code == 200
+
+    assert len(_import_do_ambiente("mm")) == 1
+    assert _import_do_ambiente("nasmar") == []
+    assert _rastro_total() == 0
+    assert memoria.lembrada("11222333000181") is None
+    assert _audit_roteamento("mm", r.json()["entry_id"]) is None
+
+
+def test_ligado_escolha_para_empresa_inativa_da_412_sem_consumir_preview(portal, tmp_path):
+    roteamento_repo.set_modo("ligado", por="t")
+    velha = environments_repo.create(
+        slug="velha",
+        name="Empresa Velha",
+        watch_dir=str(tmp_path / "v_in"),
+        output_dir=str(tmp_path / "v_out"),
+        fb_path=str(tmp_path / "v.fdb"),
+    )
+    environments_repo.soft_delete(velha["id"])
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid = _preview_com_fornecedor(portal, NASMAR)
+
+    r1 = c.post("/api/commit", json={"preview_id": pid, "environment_slug": "velha"})
+    assert r1.status_code == 412
+    assert _rastro_total() == 0
+
+    r2 = c.post("/api/commit", json={"preview_id": pid})
+    assert r2.status_code == 200
+    assert len(_import_do_ambiente("nasmar")) == 1
+
+
+# ── O check gravado é sempre o da empresa onde o pedido entra ──────────────
+
+
+@pytest.fixture
+def check_falso(monkeypatch):
+    """`check_order` sem Fire: devolve um check marcado com a empresa
+    consultada e com o ambiente ativo no contextvar (o de-para lê o SQLite
+    dele), e conta as chamadas."""
+    from app.erp import product_check
+    from app.persistence import context as env_context
+
+    chamadas = []
+
+    def _fake(order, *, env=None, escolhas=None):  # noqa: ARG001
+        slug = (env or {}).get("slug")
+        chamadas.append((slug, env_context.current_env_slug()))
+        return {"available": True, "de": slug, "summary": {"items_total": len(order.items)}}
+
+    monkeypatch.setattr(product_check, "check_order", _fake)
+    return chamadas
+
+
+def _check_gravado(slug):
+    (imp,) = _import_do_ambiente(slug)
+    from app.persistence import context as env_context
+    from app.persistence import repo
+
+    env = environments_repo.get_by_slug(slug)
+    with env_context.active_env(env["id"], env["slug"]):
+        return repo.get_import(imp["id"])["check"]
+
+
+def test_ligado_pedido_em_outra_empresa_regrava_check_no_destino(portal, check_falso, monkeypatch):
+    """Preview conferido na MM (cookie), pedido roteado pra Nasmar: o check
+    gravado é o do Fire da Nasmar, nunca o da MM (SEQs de outro banco). O
+    `check_preco` já era calculado contra o destino — confirmado aqui."""
+    from app.erp import preco_trava
+
+    preco_envs = []
+    monkeypatch.setattr(
+        preco_trava,
+        "check_preco_para_gravar",
+        lambda order, env, entry=None: preco_envs.append(env["slug"]),  # noqa: ARG005
+    )
+    roteamento_repo.set_modo("ligado", por="t")
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid = _preview_com_fornecedor(
+        portal, NASMAR, check={"available": True, "de": "mm"}, check_env_slug="mm"
+    )
+    assert c.post("/api/commit", json={"preview_id": pid}).status_code == 200
+
+    assert check_falso == [("nasmar", "nasmar")]
+    assert _check_gravado("nasmar")["de"] == "nasmar"
+    assert preco_envs == ["nasmar"]
+
+
+def test_ligado_troca_para_a_empresa_do_preview_reusa_o_check(portal, check_falso):
+    roteamento_repo.set_modo("ligado", por="t")
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid = _preview_com_fornecedor(
+        portal, NASMAR, check={"available": True, "de": "mm"}, check_env_slug="mm"
+    )
+    r = c.post("/api/commit", json={"preview_id": pid, "environment_slug": "mm"})
+    assert r.status_code == 200
+
+    assert check_falso == []  # nenhuma consulta nova
+    assert _check_gravado("mm")["de"] == "mm"
+
+
+def test_desligado_grava_o_check_do_preview_sem_consultar(portal, check_falso):
+    roteamento_repo.set_modo("desligado", por="t")
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid = _preview_com_fornecedor(
+        portal, NASMAR, check={"available": True, "de": "outra"}, check_env_slug="outra"
+    )
+    assert c.post("/api/commit", json={"preview_id": pid}).status_code == 200
+
+    assert check_falso == []
+    assert _check_gravado("mm")["de"] == "outra"
+
+
+def test_ligado_check_do_destino_falha_grava_sem_check_e_importa(portal, monkeypatch):
+    """O preview já foi consumido quando o check do destino roda: falha ali
+    (ex.: senha do Fire não decifra) não derruba o commit nem deixa o check
+    da outra empresa — grava sem check, e "Conferir de novo" refaz."""
+    from app.erp import product_check
+
+    def _explode(order, *, env=None, escolhas=None):  # noqa: ARG001
+        raise RuntimeError("senha do Fire não decifra")
+
+    monkeypatch.setattr(product_check, "check_order", _explode)
+    roteamento_repo.set_modo("ligado", por="t")
+    c = portal["client"]
+    c.cookies.set("portal_env", portal["mm"]["id"])
+    pid = _preview_com_fornecedor(
+        portal, NASMAR, check={"available": True, "de": "mm"}, check_env_slug="mm"
+    )
+    assert c.post("/api/commit", json={"preview_id": pid}).status_code == 200
+    assert _check_gravado("nasmar") is None

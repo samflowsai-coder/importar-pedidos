@@ -21,6 +21,7 @@ class PreviewEntry:
     original_path: str | None = None  # cópia imutável em <APP_DATA_DIR>/recebidos
     file_sha256: str | None = None
     check: dict | None = None       # product-match report against Fire
+    check_env_slug: str | None = None  # empresa cujo Fire gerou o `check`
     consumed: bool = False
     trace_id: str | None = None     # minted antes do parse; segue até o commit
 
@@ -59,6 +60,7 @@ class PreviewCache:
         original_path: str | None = None,
         file_sha256: str | None = None,
         trace_id: str | None = None,
+        check_env_slug: str | None = None,
     ) -> PreviewEntry:
         preview_id = str(uuid.uuid4())
         entry = PreviewEntry(
@@ -73,6 +75,7 @@ class PreviewCache:
             original_path=original_path,
             file_sha256=file_sha256,
             trace_id=trace_id,
+            check_env_slug=check_env_slug,
         )
         with self._lock:
             self._evict_expired_locked()

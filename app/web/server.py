@@ -2057,6 +2057,7 @@ async def preview_file(
             original_path=str(recebido.path),
             file_sha256=recebido.sha256,
             trace_id=trace_id,
+            check_env_slug=slug,
         )
     payload = _build_preview_payload(entry.preview_id, filename, order, check)
     # Bloco `roteamento`: só nos dois montadores de preview FRESCO (aqui e em
@@ -2164,6 +2165,7 @@ def preview_pending(
                 original_path=str(recebido.path),
                 file_sha256=recebido.sha256,
                 trace_id=trace_id,
+                check_env_slug=slug,
             )
         payload = _build_preview_payload(entry.preview_id, name, order, check)
         # Ver comentário equivalente em `preview_upload` (Achado 4, fix round 1).
@@ -2175,9 +2177,9 @@ def preview_pending(
 
 class CommitRequest(BaseModel):
     preview_id: str
-    # Resposta do operador quando o roteamento (modo 'ligado') não soube
-    # decidir sozinho. Ignorado nos outros modos — lá o ambiente é sempre o
-    # do cookie, como sempre foi.
+    # Escolha do operador em 'ligado': a resposta quando o roteamento não
+    # soube decidir sozinho, ou a troca da empresa sugerida. Ignorado nos
+    # outros modos — lá o ambiente é sempre o do cookie, como sempre foi.
     environment_slug: str | None = None
 
 
@@ -2187,9 +2189,11 @@ def _resolver_env_alvo(
     """O ambiente onde ESTE commit vai gravar. Nunca chuta em 'ligado'.
 
     Fora de `'ligado'` é sempre o ambiente do cookie (`None` se não houver
-    nenhum) — idêntico ao que já era antes desta feature. Em `'ligado'`
-    segue a escada: decisão resolvida > escolha do operador
-    (`body.environment_slug`) > pergunta (409). Os 409/412 daqui rodam ANTES
+    nenhum) — idêntico ao que já era antes desta feature. Em `'ligado'`:
+    escolha explícita do operador (`body.environment_slug`) > decisão
+    resolvida (a sugestão do preview) > pergunta (409). A escolha vence
+    porque o operador pode trocar qualquer sugestão (spec §10.1); o rastro
+    (`roteamento_decisao`) registra a troca. Os 409/412 daqui rodam ANTES
     de `get_cache().consume()` no chamador — não queimam o preview (ver
     docstring de `commit_preview`, ponto 3).
     """
@@ -2199,10 +2203,10 @@ def _resolver_env_alvo(
     if modo != roteamento_repo.LIGADO:
         return env_alvo
 
-    if decisao.resolveu:
-        env_alvo = environments_repo.get_by_slug(decisao.env_slug)
-    elif body.environment_slug:
+    if body.environment_slug:
         env_alvo = environments_repo.get_by_slug(body.environment_slug)
+    elif decisao.resolveu:
+        env_alvo = environments_repo.get_by_slug(decisao.env_slug)
     else:
         # Sem resposta NÃO vira ambiente default. Pergunta.
         raise HTTPException(
@@ -2256,9 +2260,17 @@ def commit_preview(
        qualquer escrita, então a proteção contra clique duplo não se perde —
        só um request vence a corrida por `consume()`.
 
+    O check de produto gravado é sempre o da empresa onde o pedido entra: o
+    do preview foi conferido no Fire de `entry.check_env_slug`; em 'ligado'
+    com `env_alvo` diferente (roteado ou trocado pelo operador), é refeito no
+    Fire do destino — SEQs de um Fire não valem no outro.
+
+    Fora de 'desligado', cada commit deixa uma linha em `roteamento_decisao`
+    (sugestão, escolha, quem decidiu e a ação).
+
     Em modo 'desligado' (default) `env_alvo` é sempre o ambiente do cookie —
-    idêntico ao comportamento anterior a esta feature — e nenhuma sombra ou
-    memória é gravada.
+    idêntico ao comportamento anterior a esta feature — e nenhuma sombra,
+    memória ou rastro é gravado.
     """
     cfg = _get_cfg_for_request(request)
 
@@ -2273,13 +2285,26 @@ def commit_preview(
     from contextlib import nullcontext
 
     from app.persistence import decisao_ambiente_repo as memoria
-    from app.persistence import roteamento_repo
+    from app.persistence import roteamento_decisao_repo, roteamento_repo
     from app.routing.ambiente import cnpjs_do_pedido
 
     modo, decisao = _decidir_ambiente(order)
     env_alvo = _resolver_env_alvo(request, body, modo, decisao)
 
     cnpj_cliente = (cnpjs_do_pedido(order) or [""])[0]
+
+    # Ação do rastro (`roteamento_decisao`). `None` em 'desligado' e sem
+    # ambiente resolvido — nada a registrar.
+    acao: str | None = None
+    if decisao is not None and env_alvo is not None:
+        if modo == roteamento_repo.OBSERVANDO:
+            acao = "observando"
+        elif not decisao.resolveu:
+            acao = "escolha_sem_sugestao"
+        elif env_alvo["slug"] == decisao.env_slug:
+            acao = "sugestao_aceita"
+        else:
+            acao = "troca_no_preview"
 
     # Armadilha 2: as pastas seguem o pedido roteado, não o cookie. Quando
     # não há ambiente nenhum resolvido (deploy single-tenant legado, sem
@@ -2324,7 +2349,29 @@ def commit_preview(
                 original_path=entry.original_path,
             )
             log_entry["portal_status"] = "parsed"
-            log_entry["check"] = entry.check
+            # Pedido em empresa diferente da conferida no preview: refaz o check
+            # no Fire do destino, sob o contexto dele (o de-para lê o SQLite do
+            # destino). Só em 'ligado' — nos outros modos `env_alvo` é o cookie.
+            # O preview já foi consumido: falha aqui grava SEM check (o
+            # "Conferir de novo" refaz), nunca com o da outra empresa.
+            check = entry.check
+            if (
+                modo == roteamento_repo.LIGADO
+                and env_alvo is not None
+                and env_alvo["slug"] != entry.check_env_slug
+            ):
+                from app.erp import product_check
+
+                try:
+                    check = product_check.check_order(order, env=env_alvo)
+                except Exception as exc:  # noqa: BLE001 — o pedido entra; o check é refeito depois
+                    from app.utils.logger import logger
+
+                    logger.warning(
+                        "commit.check_destino_falhou env={} erro={!r}", env_alvo["slug"], exc
+                    )
+                    check = None
+            log_entry["check"] = check
             if env_alvo is not None:
                 log_entry["environment_id"] = env_alvo["id"]
             # Trava de preço com ambiente fonte (Nasmar → MM): o check do Fire da
@@ -2345,7 +2392,7 @@ def commit_preview(
                     "source": "preview_commit",
                     "items": len(order.items),
                     "from_watch": entry.source_path is not None,
-                    "check": entry.check.get("summary") if entry.check else None,
+                    "check": check.get("summary") if check else None,
                     # ACHADO 3 da revisão final: sem isto, um pedido roteado
                     # em 'ligado' não deixava registro de POR QUE foi pra
                     # esta empresa — só `environment_id` (o resultado), nunca
@@ -2364,6 +2411,8 @@ def commit_preview(
                             "degrau": decisao.degrau,
                             "env_slug": decisao.env_slug,
                             "explicacao": decisao.explicacao,
+                            "contraria": decisao.contraria,
+                            "decidido_por": user.email,
                         }
                         if decisao is not None
                         else None
@@ -2377,7 +2426,7 @@ def commit_preview(
                 payload={
                     "items": len(order.items),
                     "from_watch": entry.source_path is not None,
-                    "check_summary": entry.check.get("summary") if entry.check else None,
+                    "check_summary": check.get("summary") if check else None,
                 },
             )
 
@@ -2391,11 +2440,24 @@ def commit_preview(
                     )
                 if decisao.divergiu_de and cnpj_cliente:
                     memoria.marcar_divergencia(cnpj_cliente=cnpj_cliente, de=decisao.divergiu_de)
-                if modo == roteamento_repo.LIGADO and not decisao.resolveu and cnpj_cliente:
+                # A memória aprende com o operador: quando o roteador não
+                # soube, e quando ele trocou a sugestão.
+                if acao in ("escolha_sem_sugestao", "troca_no_preview") and cnpj_cliente:
                     memoria.lembrar(
                         cnpj_cliente=cnpj_cliente,
                         env_slug=env_alvo["slug"],
                         por=user.email,
+                    )
+                if acao is not None:
+                    roteamento_decisao_repo.registrar(
+                        import_id=log_entry["id"],
+                        modo=modo,
+                        degrau=decisao.degrau,
+                        env_sugerido=decisao.env_slug,
+                        env_escolhido=env_alvo["slug"],
+                        decidido_por=user.email,
+                        motivo=decisao.explicacao,
+                        acao=acao,
                     )
 
             # Only move the source after persistence succeeded. `cfg` já
