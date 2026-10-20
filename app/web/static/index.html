@@ -3555,7 +3555,10 @@ async function renderRoutingHistory(data) {
   const el = document.getElementById('pvRoutingHistory');
   if (!el) return;
   const importId = data.preview_id;
-  if (!data.portal_status) {
+  // Em 'desligado' (ou sem modo no payload) não há rastro nem mover: nenhuma
+  // requisição, o detalhe fica igual a antes do roteamento.
+  const modo = data.roteamento_modo;
+  if (!data.portal_status || (modo !== 'observando' && modo !== 'ligado')) {
     rotHist = null;
     el.classList.add('hidden');
     el.innerHTML = '';
@@ -3563,6 +3566,7 @@ async function renderRoutingHistory(data) {
   }
   if (rotHist && rotHist.importId === importId) {
     rotHist.data = data;
+    rotHist.modo = modo;
     desenharRoutingHistory();
     return;
   }
@@ -3573,11 +3577,10 @@ async function renderRoutingHistory(data) {
   moverErro = '';
   el.classList.add('hidden');
   el.innerHTML = '';
-  let decisoes, modo, envs;
+  let decisoes, envs;
   try {
-    [decisoes, modo, envs] = await Promise.all([
+    [decisoes, envs] = await Promise.all([
       api('/api/roteamento/decisoes?import_id=' + encodeURIComponent(importId)),
-      api('/api/roteamento/modo').then(r => r.modo),
       api('/api/env/list'),
     ]);
   } catch (_) {

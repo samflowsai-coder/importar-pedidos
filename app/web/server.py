@@ -2643,23 +2643,41 @@ def _registrar_aplicados(import_id: str, decisao) -> None:
         logger.warning(f"audit preco_aplicado falhou ({type(exc).__name__}): {exc}")
 
 
-def _com_trava_do_pedido(fn):
+def _com_trava_do_pedido(outcome_cls):
     """Envio que leva o pedido para fora do Portal segura a trava do pedido da
     leitura do estado até gravar o resultado: o mover de empresa não corre no
     meio (`mover_pedido.trava_do_pedido`). Pedido movido antes de a trava sair
-    some desta empresa: a leitura devolve `not_found` sem ir ao Fire."""
+    some desta empresa: a leitura devolve `not_found` sem ir ao Fire. Vale em
+    todos os modos (só serializa o mesmo pedido). A espera tem teto
+    (`_ESPERA_ENVIO_S`): estourou, `outcome_cls` 409 `pedido_ocupado`."""
 
-    @functools.wraps(fn)
-    def _com_trava(import_id: str, *args, **kwargs):
-        from app.persistence.mover_pedido import trava_do_pedido
+    def _decorar(fn):
+        @functools.wraps(fn)
+        def _com_trava(import_id: str, *args, **kwargs):
+            from app.persistence import mover_pedido
 
-        with trava_do_pedido(import_id):
-            return fn(import_id, *args, **kwargs)
+            try:
+                with mover_pedido.trava_do_pedido(
+                    import_id, espera=mover_pedido._ESPERA_ENVIO_S
+                ):
+                    return fn(import_id, *args, **kwargs)
+            except mover_pedido.PedidoOcupado:
+                return outcome_cls(
+                    False,
+                    reason="pedido_ocupado",
+                    http_status=409,
+                    detail=(
+                        "Outro envio ou mover deste pedido está em andamento há mais de"
+                        " 2 minutos; tente de novo em instantes."
+                    ),
+                )
 
-    return _com_trava
+        return _com_trava
+
+    return _decorar
 
 
-@_com_trava_do_pedido
+@_com_trava_do_pedido(_FireSendOutcome)
 def _send_one_to_fire(
     import_id: str, cfg: dict, *, request_env: dict | None = None
 ) -> _FireSendOutcome:
@@ -2903,7 +2921,7 @@ class _XlsxExportOutcome:
         self.detail = detail
 
 
-@_com_trava_do_pedido
+@_com_trava_do_pedido(_XlsxExportOutcome)
 def _export_one_xlsx(
     import_id: str, cfg: dict, *, request_env: dict | None = None
 ) -> _XlsxExportOutcome:
@@ -4668,13 +4686,29 @@ def rehydrate_preview(
     payload["env_name"] = _env.get("name") if _env is not None else None
     # Empresa onde o pedido está (a do pedido em 'ligado', senão a do cookie)
     # e se o "Mover para" pode ser oferecido: mesma guarda do mover, para a
-    # tela não prometer o que a rota recusa (ex.: XLSX já exportado).
-    from app.persistence.mover_pedido import motivo_nao_move
+    # tela não prometer o que a rota recusa (ex.: XLSX já exportado). Em
+    # 'desligado' nada disso roda (o mover não existe); `roteamento_modo`
+    # diz à tela que não há rastro a buscar. Erro aqui nunca impede abrir o
+    # pedido: sem mover.
+    from app.persistence import mover_pedido, roteamento_repo
 
     _onde = _env if _env is not None else _request_environment(request)
     payload["env_slug"] = _onde.get("slug") if _onde is not None else None
-    payload["motivo_nao_move"] = motivo_nao_move(import_id)
-    payload["pode_mover"] = payload["motivo_nao_move"] is None
+    payload["roteamento_modo"] = None
+    payload["motivo_nao_move"] = None
+    payload["pode_mover"] = False
+    try:
+        payload["roteamento_modo"] = roteamento_repo.modo()
+        if payload["roteamento_modo"] != roteamento_repo.DESLIGADO:
+            motivo = mover_pedido.motivo_nao_move(import_id)
+            payload["motivo_nao_move"] = motivo
+            payload["pode_mover"] = motivo is None
+    except Exception as exc:  # noqa: BLE001 — o detalhe abre sem o "Mover para"
+        from app.utils.logger import logger
+
+        logger.warning(
+            "preview.guarda_mover_falhou import_id={} erro={}", import_id, type(exc).__name__
+        )
 
     # Surface the manual cliente override into the check banner so the UI shows
     # it in green instead of the original "✗ Cliente não encontrado" red flag.

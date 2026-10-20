@@ -789,6 +789,7 @@ def test_detalhe_expoe_empresa_e_pode_mover(client_ligado, envs_mm_nasmar):
     assert body["env_slug"] == "mm"
     assert body["pode_mover"] is True
     assert body["motivo_nao_move"] is None
+    assert body["roteamento_modo"] == "ligado"
 
 
 @pytest.mark.parametrize(
@@ -803,3 +804,61 @@ def test_detalhe_usa_a_mesma_guarda_do_mover(client_ligado, envs_mm_nasmar, cols
     body = _detalhe(client_ligado)
     assert body["pode_mover"] is False
     assert body["motivo_nao_move"] == motivo
+
+
+# ── Revisão final: desligado bit-a-bit no detalhe e teto da espera do envio ──
+
+
+def test_detalhe_em_desligado_nao_calcula_mover(client, envs_mm_nasmar, monkeypatch):
+    """C1: em desligado o detalhe não lê a guarda do mover (zero I/O novo) e
+    não oferece mover; o modo viaja no payload para a tela não buscar nada."""
+
+    def _proibido(import_id):  # noqa: ARG001
+        raise AssertionError("desligado não calcula a guarda do mover")
+
+    monkeypatch.setattr(mp, "motivo_nao_move", _proibido)
+    roteamento_repo.set_modo("desligado", por="t")
+    _semear(envs_mm_nasmar["mm"])
+    client.cookies.set("portal_env", envs_mm_nasmar["mm"]["id"])
+
+    body = _detalhe(client)
+
+    assert body["roteamento_modo"] == "desligado"
+    assert body["pode_mover"] is False
+    assert body["motivo_nao_move"] is None
+
+
+def test_detalhe_com_guarda_quebrada_abre_sem_mover(client_ligado, envs_mm_nasmar, monkeypatch):
+    """C1: erro na guarda do mover nunca derruba a abertura do pedido."""
+
+    def _explode(import_id):  # noqa: ARG001
+        raise RuntimeError("banco travado")
+
+    monkeypatch.setattr(mp, "motivo_nao_move", _explode)
+    _semear(envs_mm_nasmar["mm"])
+
+    body = _detalhe(client_ligado)
+
+    assert body["pode_mover"] is False
+    assert body["motivo_nao_move"] is None
+
+
+@pytest.mark.parametrize("envio", ["_send_one_to_fire", "_export_one_xlsx"])
+def test_envio_desiste_com_erro_claro_quando_a_trava_nao_sai(envs_mm_nasmar, monkeypatch, envio):
+    """R13/M8: a espera do envio pela trava do pedido tem teto: estourou,
+    recusa com mensagem clara, sem ir ao Fire nem gerar planilha."""
+    from app.persistence import context as env_context
+    from app.web import server
+
+    monkeypatch.setattr(mp, "_ESPERA_ENVIO_S", 0.05)
+    _semear(envs_mm_nasmar["mm"])
+    mm = envs_mm_nasmar["mm"]
+    with mp.trava_do_pedido(IMPORT_ID), env_context.active_env(mm["id"], mm["slug"]):
+        r = getattr(server, envio)(IMPORT_ID, {"export_mode": "db"}, request_env=mm)
+
+    assert r.ok is False
+    assert r.reason == "pedido_ocupado"
+    assert r.http_status == 409
+    assert "em andamento" in r.detail
+    assert _linha("mm")[0]["fire_codigo"] is None
+    assert mp._TRAVAS == {}

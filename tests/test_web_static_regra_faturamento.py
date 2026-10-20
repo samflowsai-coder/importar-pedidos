@@ -113,3 +113,13 @@ def test_empresa_do_pedido_nao_casa_por_nome():
 def test_selects_da_regra_nao_salvam_no_change():
     corpo = _corpo_da_funcao(_ler("admin-roteamento.html"), "onRegraEmpresaChange")
     assert "salvarRegraConfig" not in corpo
+
+
+def test_rastro_do_pedido_nao_busca_nada_em_desligado():
+    """C1: o modo vem no payload do detalhe; em desligado (ou sem modo) a tela
+    não faz requisição nenhuma do rastro."""
+    corpo = _corpo_da_funcao(_ler("index.html"), "renderRoutingHistory")
+    assert "/api/roteamento/modo" not in corpo
+    guarda = corpo.index("data.roteamento_modo")
+    assert guarda < corpo.index("api(")
+    assert "'observando'" in corpo[guarda : corpo.index("api(")]

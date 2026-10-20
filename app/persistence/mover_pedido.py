@@ -48,6 +48,10 @@ _TRAVAS_GUARD = threading.Lock()
 # Quanto o mover espera um envio em andamento antes de desistir (409).
 _ESPERA_S = 2.0
 
+# Quanto o envio (Fire/XLSX) espera a trava do pedido: longo (um envio de
+# outra aba leva segundos no Fire), mas finito — nunca um request pendurado.
+_ESPERA_ENVIO_S = 120.0
+
 # Um mover por vez na parte de banco: cada mover trava a própria origem e pede
 # o banco do outro — dois em sentidos opostos (X mm→nasmar, Y nasmar→mm) se
 # prenderiam até o timeout do SQLite ("database is locked") e parariam toda
@@ -100,7 +104,8 @@ class PedidoOcupado(Exception):  # noqa: N818 — par de PedidoNaoMovivel
 @contextmanager
 def trava_do_pedido(import_id: str, *, espera: float | None = None) -> Iterator[None]:
     """Exclusão mútua por pedido entre mover e envio. `espera=None` espera o
-    quanto for (o envio: o mover é curto); com espera, `PedidoOcupado` ao estourar."""
+    quanto for; com espera (o envio usa `_ESPERA_ENVIO_S`), `PedidoOcupado` ao
+    estourar."""
     with _TRAVAS_GUARD:
         par = _TRAVAS.setdefault(import_id, [threading.Lock(), 0])
         par[1] += 1
