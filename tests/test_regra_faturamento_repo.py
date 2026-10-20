@@ -179,12 +179,12 @@ def test_nao_liga_com_rede_de_empresa_inativa(shared_db, envs_mm_nasmar):
 
 def test_politica_nao_decide_por_rede_de_empresa_inativa(shared_db, envs_mm_nasmar, monkeypatch):
     """I5: empresa da rede desativada com a regra ligada: a rede sai da decisão
-    (com aviso no log) e os pedidos dela não caem na regra por UF."""
+    (com aviso no log, só em `avaliar`) e os pedidos dela não caem na regra por UF."""
     from app.models.order import Order, OrderHeader, OrderItem
     from app.routing import regra
 
     avisos = []
-    monkeypatch.setattr(repo.logger, "warning", lambda msg, *a, **k: avisos.append(msg))
+    monkeypatch.setattr(regra.logger, "warning", lambda msg, *a, **k: avisos.append(msg))
     environments_repo.create(
         slug="terceira",
         name="Terceira",
@@ -199,7 +199,7 @@ def test_politica_nao_decide_por_rede_de_empresa_inativa(shared_db, envs_mm_nasm
     pol = repo.politica()
 
     assert "terceira" not in pol.ativos
-    assert any("Rede T" in a for a in avisos)
+    assert avisos == []
     pedido = Order(
         header=OrderHeader(order_number="1", customer_cnpj="12345678000195", customer_name="X"),
         items=[OrderItem(description="Meia", quantity=1)],
@@ -209,6 +209,7 @@ def test_politica_nao_decide_por_rede_de_empresa_inativa(shared_db, envs_mm_nasm
         raise AssertionError("pedido da rede órfã não pode cair na UF")
 
     assert regra.avaliar(pedido, pol, _nao_ler) is None
+    assert len(avisos) == 1 and "Rede T" in avisos[0]
 
 
 def test_nao_remove_rede_com_regra_ligada(shared_db, envs_mm_nasmar):
@@ -221,3 +222,19 @@ def test_nao_remove_rede_com_regra_ligada(shared_db, envs_mm_nasmar):
     repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=False, por="a@x")
     repo.remover_rede(rid)
     assert "Kallan" not in [r["nome"] for r in repo.listar_redes()]
+
+
+def test_politica_nao_avisa_rede_de_empresa_inativa(shared_db, envs_mm_nasmar, monkeypatch):
+    """O aviso sai uma vez, em `avaliar`; carregar a política não repete por pedido."""
+    from app.utils.logger import logger
+
+    repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=True, por="a@x")
+    so_nasmar = [e for e in environments_repo.list_active() if e["slug"] == "nasmar"]
+    monkeypatch.setattr(environments_repo, "list_active", lambda: so_nasmar)
+    avisos: list[str] = []
+    sink = logger.add(avisos.append, level="WARNING")
+    try:
+        assert repo.politica() is not None
+    finally:
+        logger.remove(sink)
+    assert avisos == []

@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any
 
 from app.erp.cnpj import cnpj_digits
 from app.persistence import environments_repo, router
-from app.utils.logger import logger
 
 if TYPE_CHECKING:
     from app.routing.regra import Politica
@@ -181,11 +180,6 @@ def politica() -> Politica | None:
         for r in listar_redes()
     )
     nomes = {e["slug"]: e["name"] for e in environments_repo.list_active()}
-    for rede in redes:
-        if rede.env_slug not in nomes:
-            logger.warning(
-                f"regra_faturamento.rede_empresa_inativa rede={rede.nome!r} env={rede.env_slug}"
-            )
     return Politica(
         env_sp=cfg["env_sp"],
         env_fora_sp=cfg["env_fora_sp"],
