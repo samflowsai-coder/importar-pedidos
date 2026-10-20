@@ -30,6 +30,7 @@ _COLS = (
 )
 _SELECT = f"SELECT {', '.join(_COLS)} FROM produto_vinculo_v2"
 _TIPOS = ("codigo", "ean")
+_ORIGENS = ("manual", "migrado_v1")
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,22 @@ def lookup(
     return out
 
 
+def _abrir_transacao(conn: sqlite3.Connection) -> None:
+    """O repo é dono da transação de `vincular`/`revogar`: com uma transação do
+    chamador aberta, commit/rollback aqui efetivaria ou descartaria escritas que
+    não são dele. Falha alto em vez de adivinhar."""
+    if conn.in_transaction:
+        raise RuntimeError(
+            "produto_vinculo_repo precisa da própria transação: "
+            "faça commit ou rollback antes de chamar"
+        )
+    conn.execute("BEGIN IMMEDIATE")
+
+
+def _eh_unico_do_vinculo(exc: sqlite3.IntegrityError) -> bool:
+    return "UNIQUE constraint failed: produto_vinculo_v2" in str(exc)
+
+
 def vincular(
     conn: sqlite3.Connection,
     *,
@@ -126,16 +143,23 @@ def vincular(
 ) -> Vinculo:
     """Grava o vínculo vigente da chave, numa transação só.
 
+    Contrato de transação: o repo abre e fecha a própria transação. Com uma
+    transação já aberta na conexão (`conn.in_transaction`), levanta
+    `RuntimeError` sem tocar em nada.
+
     Mesmo SEQ já vigente: devolve o vigente. Outro SEQ: `VinculoConflito`, a
-    menos que `substituir` — aí o antigo é revogado e o novo entra."""
+    menos que `substituir` — aí o antigo é revogado e o novo entra. Violação do
+    índice único (corrida com outro escritor) também vira `VinculoConflito`;
+    qualquer outro erro de integridade sobe como está, com rollback."""
     if chave_tipo not in _TIPOS:
         raise ValueError(f"chave_tipo inválido: {chave_tipo!r}")
+    if origem not in _ORIGENS:
+        raise ValueError(f"origem inválida: {origem!r}")
     valor = norm_chave(chave_tipo, chave_valor)
     if not valor:
         raise ValueError("chave vazia")
 
-    if not conn.in_transaction:
-        conn.execute("BEGIN IMMEDIATE")
+    _abrir_transacao(conn)
     try:
         atual = _vigente(conn, escopo, chave_tipo, valor)
         if atual is not None:
@@ -170,8 +194,10 @@ def vincular(
         )
         novo_id = cur.lastrowid
         conn.commit()
-    except sqlite3.IntegrityError:
+    except sqlite3.IntegrityError as exc:
         conn.rollback()
+        if not _eh_unico_do_vinculo(exc):
+            raise
         # corrida: outro escritor gravou o vigente entre a leitura e o insert
         atual = _vigente(conn, escopo, chave_tipo, valor)
         if atual is None:
@@ -186,16 +212,24 @@ def vincular(
 
 def revogar(conn: sqlite3.Connection, vinculo_id: int, *, por: str, agora: str) -> Vinculo:
     """Revoga o vínculo (preserva a linha). Já revogado: devolve sem alterar.
-    Inexistente: `LookupError`."""
-    row = conn.execute(f"{_SELECT} WHERE id = ?", (vinculo_id,)).fetchone()
-    if row is None:
-        raise LookupError(f"vínculo {vinculo_id} não existe")
-    conn.execute(
-        "UPDATE produto_vinculo_v2 SET revogado_em = ?, revogado_por = ? "
-        "WHERE id = ? AND revogado_em IS NULL",
-        (agora, por, vinculo_id),
-    )
-    conn.commit()
+    Inexistente: `LookupError`.
+
+    Mesmo contrato de transação de `vincular`: o repo é dono da transação e
+    levanta `RuntimeError` se já houver uma aberta na conexão."""
+    _abrir_transacao(conn)
+    try:
+        row = conn.execute(f"{_SELECT} WHERE id = ?", (vinculo_id,)).fetchone()
+        if row is None:
+            raise LookupError(f"vínculo {vinculo_id} não existe")
+        conn.execute(
+            "UPDATE produto_vinculo_v2 SET revogado_em = ?, revogado_por = ? "
+            "WHERE id = ? AND revogado_em IS NULL",
+            (agora, por, vinculo_id),
+        )
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
     return _vinculo(row)
 
 

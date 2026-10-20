@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from app.persistence import produto_vinculo_repo as repo
@@ -170,3 +172,55 @@ def test_chave_vazia_e_recusada(env_conn):
 def test_origem_migrado_v1(env_conn):
     v = _vincular(env_conn, origem="migrado_v1")
     assert v.origem == "migrado_v1"
+
+
+def test_transacao_aberta_do_chamador_nao_e_tocada(env_conn):
+    env_conn.execute(
+        "INSERT INTO produto_vinculo_v2 (escopo, chave_tipo, chave_valor, fire_seq, "
+        "fire_descricao, origem, criado_em) VALUES ('rede:1','codigo','X',1,'d','manual','t')"
+    )
+    assert env_conn.in_transaction
+
+    with pytest.raises(RuntimeError):
+        _vincular(env_conn, chave_valor="OUTRA")
+    with pytest.raises(RuntimeError):
+        repo.revogar(env_conn, 1, por="x", agora="2026-10-19T13:00:00")
+
+    # a escrita do chamador segue pendente: nem efetivada nem descartada
+    assert env_conn.in_transaction
+    env_conn.rollback()
+    assert env_conn.execute("SELECT COUNT(*) FROM produto_vinculo_v2").fetchone()[0] == 0
+
+
+def test_origem_invalida_e_recusada_sem_revogar_o_antigo(env_conn):
+    _vincular(env_conn, fire_seq=10)
+    with pytest.raises(ValueError):
+        _vincular(env_conn, fire_seq=11, substituir=True, origem="inventada")
+    assert [v.fire_seq for v in repo.listar(env_conn)] == [10]
+
+
+def test_corrida_no_indice_unico_vira_conflito(env_conn, monkeypatch):
+    existente = _vincular(env_conn, fire_seq=10)
+    leitura_real = repo._vigente
+    chamadas = []
+
+    def vigente_cego_na_primeira(*args, **kwargs):
+        chamadas.append(1)
+        return None if len(chamadas) == 1 else leitura_real(*args, **kwargs)
+
+    monkeypatch.setattr(repo, "_vigente", vigente_cego_na_primeira)
+
+    with pytest.raises(repo.VinculoConflito) as exc:
+        _vincular(env_conn, fire_seq=11)
+    assert exc.value.atual == existente
+    assert [v.fire_seq for v in repo.listar(env_conn)] == [10]
+
+
+def test_integrity_error_que_nao_e_unico_sobe_e_faz_rollback(env_conn):
+    antigo = _vincular(env_conn, fire_seq=10)
+    with pytest.raises(sqlite3.IntegrityError) as exc:
+        _vincular(env_conn, fire_seq=11, substituir=True, fire_descricao=None)
+    assert not isinstance(exc.value, repo.VinculoConflito)
+    # o rollback desfez a revogação do antigo
+    assert [v.id for v in repo.listar(env_conn)] == [antigo.id]
+    assert not env_conn.in_transaction
