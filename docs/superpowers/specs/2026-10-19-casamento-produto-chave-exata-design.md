@@ -26,8 +26,8 @@ O que aconteceu e o que existe hoje:
 - **Portal → Fire, auditoria de 19/10:** relendo os 338 arquivos guardados desde 09/09,
   nenhum pedido ficou com produto errado. Mas o caminho tem três brechas:
   1. **Item sem produto não trava.** A trava de hoje (`preco_trava.decidir_envio`,
-     chamada em `server.py:2463` e `:2697`) só olha preço. O `POST /api/commit` não
-     confere produto. Resultado: em 19/10, 18
+     chamada em `server.py:2463` e `:2697`) só olha preço. O caminho que gera a
+     planilha sem revisão (`/api/import`) não confere produto. Resultado: em 19/10, 18
      pedidos da Riachuelo (MM 5091–5108) foram para o Fire com um item sem produto, e
      o importador de Excel do Fire gravou `CODPRODUTO = -1`.
   2. **Chave repetida decide em silêncio.** EAN ou `CODPROD_ALTERN` com dois ou mais
@@ -222,14 +222,18 @@ A trava fica no mesmo ponto da trava de preço (`preco_trava.decidir_envio` e se
 chamadores), e não no `is_blocking`, que ninguém chama. Ela vale em **todo** caminho
 que gera planilha ou grava no Fire:
 
-- `POST /api/commit` (gera a planilha na hora via `_run_exporters`,
-  `server.py:477-481`);
-- `POST /api/imported/{id}/send-to-fire` e `/export-xlsx`, com os lotes;
-- os caminhos sem preview: `POST /api/import` (`server.py:1396` → `_process_file`
-  `:558`), `POST /api/reimport` (`:1730`), `POST /api/process` (`:3740`, `:3770`), o
-  worker `scan_environments.py:161` e o CLI `main.py:25`. Nesses, o pedido travado
-  fica salvo em revisão sem planilha. O CLI, que não tem revisão, pula o pedido e
-  diz por quê.
+- `POST /api/imported/{id}/send-to-fire` e `/export-xlsx`, com os lotes. Todos
+  passam por `decidir_envio`, que recebe a trava de produto na frente da de preço;
+- os caminhos que exportam sem preview: `POST /api/import` e `POST /api/reimport`
+  (`_process_file` → `_run_exporters`, `server.py:456-495`), que passam a adiar a
+  planilha (`xlsx_adiado = "produto_a_identificar"`) como já fazem com o preço;
+  `POST /api/process` (`:3740`), que já recusa com 409 quando a trava de preço está
+  ativa e passa a recusar também pela de produto; e o CLI `main.py`, que não tem
+  revisão: pula o pedido e diz por quê.
+
+O `POST /api/commit` só salva o pedido em revisão e não gera planilha
+(`commit_preview`, `server.py:2153`). O worker `scan_environments.py` também só salva.
+Os dois não precisam de trava.
 
 O envio para o Flow só acontece depois do Fire ou da planilha
 (`flowpcp/hook.py:3-6`), então já fica coberto pela mesma trava.
@@ -272,9 +276,9 @@ Na tela do pedido, que já tem o picker de produto (`openProductPicker`,
 O produto decidido precisa ser o produto gravado. Por caminho:
 
 - **Insert direto (`EXPORT_MODE=db`):** entra pelo SEQ (`produtos_por_item`), como já
-  faz a branch `fix/depara-fire-direto` (393ceeb, 02f7f9d). O SEQ passa a vir de todo
-  item `ok`, não só do de-para. SEQ inexistente recusa o pedido inteiro, como a
-  branch já faz.
+  faz hoje para o de-para (`FirebirdExporter.export(..., produtos_por_item=...)`,
+  `firebird_exporter.py:136`). O SEQ passa a vir de todo item `ok`, não só do de-para.
+  SEQ inexistente recusa o pedido inteiro, como já acontece.
 - **Planilha (`EXPORT_MODE=xlsx`, o modo de produção hoje):** a coluna de código passa
   a levar o `CODPROD_ALTERN` do produto decidido, não o código do cliente nem o SEQ
   em texto que o `depara_apply` escreve hoje. O catálogo local (`catalogo_fire`) não
