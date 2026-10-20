@@ -926,7 +926,7 @@ def test_rota_conclui_mover_interrompido_em_desligado(
     assert len(_linha("nasmar")) == 1
 
 
-def test_rota_desligado_nao_comeca_mover_novo_nem_no_sentido_inverso(
+def test_rota_desligado_recusa_mover_novo_para_empresa_sem_copia(
     client, envs_mm_nasmar, monkeypatch
 ):
     _semear(envs_mm_nasmar["mm"])
@@ -942,6 +942,23 @@ def test_rota_desligado_nao_comeca_mover_novo_nem_no_sentido_inverso(
     )
     assert _post(client, "terceira").status_code == 409
     assert len(_linha("mm")) == 1 and len(_linha("nasmar")) == 1
+
+
+def test_rota_desligado_aceita_mandar_de_volta_durante_mover_interrompido(
+    client, envs_mm_nasmar, check_falso, monkeypatch
+):
+    """R21: em desligado, mover interrompido mm→nasmar e pedir o destino original (mm)
+    é aceito: desfaz a duplicata e não vai ao Fire."""
+    _semear(envs_mm_nasmar["mm"])
+    _interromper(envs_mm_nasmar, monkeypatch)
+    roteamento_repo.set_modo("desligado", por="t")
+
+    r = _post(client, "mm")
+
+    assert r.status_code == 200
+    assert len(_linha("mm")) == 1
+    assert _linha("nasmar") == []
+    assert _linha("mm")[0]["fire_codigo"] is None
 
 
 def test_rota_pedido_em_duas_origens_e_409(client_ligado, envs_mm_nasmar, monkeypatch):
