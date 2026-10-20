@@ -17,6 +17,11 @@ from app.erp.cnpj import cnpj_digits
 from app.models.order import Order
 from app.utils.logger import logger
 
+# As 27 UFs + "EX" (exterior). Qualquer outro valor: a regra não responde.
+UFS_VALIDAS = frozenset(
+    "AC AL AM AP BA CE DF ES GO MA MG MS MT PA PB PE PI PR RJ RN RO RR RS SC SE SP TO EX".split()
+)
+
 
 @dataclass(frozen=True)
 class RedeFixa:
@@ -95,6 +100,8 @@ def avaliar(
     if len(ufs) != 1 or "" in ufs:
         return None
     (uf,) = ufs
+    if uf not in UFS_VALIDAS:  # lixo no cadastro não vira "fora de SP"
+        return None
     slug = politica.env_sp if uf == "SP" else politica.env_fora_sp
     return ResultadoRegra(
         slug, f"Regra comercial: CNPJ faturado {_fmt(cnpj)} em {uf} → {politica.nome(slug)}"
@@ -105,12 +112,13 @@ def _uf_no_fire(env: dict, cnpj: str) -> list[str | None]:
     """UF(s) do CNPJ no Firebird do ambiente. Somente leitura."""
     from app.erp.connection import FirebirdConnection
     from app.persistence import environments_repo
+    from app.routing.ambiente import _fmt
 
     cfg = environments_repo.to_fb_config(env)
     with FirebirdConnection().connect_somente_leitura(cfg) as conn:
         cur = conn.cursor()
         try:
-            cur.execute(queries.UF_CLIENTE_POR_CNPJ, (cnpj,))
+            cur.execute(queries.UF_CLIENTE_POR_CNPJ, (_fmt(cnpj), cnpj))
             return [r[0] for r in cur.fetchall()]
         finally:
             cur.close()
@@ -139,21 +147,26 @@ def ler_uf(
 
 
 _TTL_CACHE_UF_S = 600.0
+# Falha também fica em cache, curto: Fire fora do ar não paga um timeout de
+# conexão por pedido, e volta a ser tentado em 1 minuto.
+_TTL_CACHE_UF_FALHA_S = 60.0
 _cache_uf: dict[tuple[str, tuple[str, ...]], tuple[float, tuple[UfLida, ...]]] = {}
 _cache_uf_lock = threading.Lock()
 
 
 def ler_uf_com_cache(cnpj: str, envs: Sequence[dict]) -> tuple[UfLida, ...]:
-    """`ler_uf` com cache em memória (TTL 600 s). Não guarda `indisponivel`."""
+    """`ler_uf` com cache em memória: 600 s a leitura boa, 60 s a `indisponivel`."""
     cnpj = cnpj_digits(cnpj)
     chave = (cnpj, tuple(e["slug"] for e in envs))
     agora = time.monotonic()
     with _cache_uf_lock:
         hit = _cache_uf.get(chave)
-        if hit and agora - hit[0] < _TTL_CACHE_UF_S:
-            return hit[1]
+        if hit:
+            falhou = any(le.indisponivel for le in hit[1])
+            ttl = _TTL_CACHE_UF_FALHA_S if falhou else _TTL_CACHE_UF_S
+            if agora - hit[0] < ttl:
+                return hit[1]
     leituras = ler_uf(cnpj, envs=envs)
-    if not any(le.indisponivel for le in leituras):
-        with _cache_uf_lock:
-            _cache_uf[chave] = (agora, leituras)
+    with _cache_uf_lock:
+        _cache_uf[chave] = (agora, leituras)
     return leituras

@@ -145,7 +145,7 @@ def test_ler_uf_erro_vira_indisponivel():
     assert avaliar(_pedido(), _politica(), lambda c: r) is None
 
 
-def test_cache_nao_guarda_indisponivel_e_expira(monkeypatch):
+def test_cache_indisponivel_60s_e_ok_600s(monkeypatch):
     chamadas = []
     estado = {"falha": True, "t": 1000.0}
 
@@ -159,16 +159,20 @@ def test_cache_nao_guarda_indisponivel_e_expira(monkeypatch):
 
     regra.ler_uf_com_cache(CLIENTE, ENVS)
     regra.ler_uf_com_cache(CLIENTE, ENVS)
-    assert len(chamadas) == 2  # indisponível não foi guardado
+    assert len(chamadas) == 1  # indisponível guardado, mas só por 60 s
 
+    estado["t"] += 61
     estado["falha"] = False
     regra.ler_uf_com_cache(CLIENTE, ENVS)
-    regra.ler_uf_com_cache(CLIENTE, ENVS)
-    assert len(chamadas) == 3  # o ok foi guardado
+    assert len(chamadas) == 2  # a falha expirou em 60 s
 
-    estado["t"] += 601
+    estado["t"] += 599
     regra.ler_uf_com_cache(CLIENTE, ENVS)
-    assert len(chamadas) == 4  # expirou
+    assert len(chamadas) == 2  # o ok vale 600 s
+
+    estado["t"] += 2
+    regra.ler_uf_com_cache(CLIENTE, ENVS)
+    assert len(chamadas) == 3  # expirou
     regra._cache_uf.clear()
 
 
@@ -189,3 +193,57 @@ def test_explicacao_usa_o_nome_da_empresa():
 def test_explicacao_sem_nome_cai_no_slug():
     r = avaliar(_pedido(), _politica(), _ler(mm={"SP"}))
     assert r.explicacao.endswith("em SP → mm")
+
+
+# ── Revisão final: UF válida e SQL por CPF_CNPJ indexado ─────────────────────
+import pytest  # noqa: E402
+
+from app.erp import queries  # noqa: E402
+
+
+@pytest.mark.parametrize("uf", ["XX", "SAO PAULO", "S", "BR", "0"])
+def test_uf_invalida_nao_responde(uf):
+    """UF fora das 27 + EX não vira "fora de SP"."""
+    assert avaliar(_pedido(), _politica(), _ler(mm={uf})) is None
+
+
+def test_uf_ex_vale_como_fora_de_sp():
+    r = avaliar(_pedido(), _politica(), _ler(mm={"EX"}))
+    assert r is not None and r.env_slug == "nasmar"
+
+
+def test_uf_no_fire_binda_cnpj_mascarado_e_so_digitos(monkeypatch):
+    from contextlib import contextmanager
+
+    from app.erp import connection
+    from app.persistence import environments_repo
+
+    executados = []
+
+    class _Cur:
+        def execute(self, sql, params):
+            executados.append((sql, params))
+
+        def fetchall(self):
+            return [("SP",)]
+
+        def close(self):
+            pass
+
+    class _Conn:
+        def cursor(self):
+            return _Cur()
+
+    class _Fb:
+        @contextmanager
+        def connect_somente_leitura(self, cfg):
+            yield _Conn()
+
+    monkeypatch.setattr(connection, "FirebirdConnection", _Fb)
+    monkeypatch.setattr(environments_repo, "to_fb_config", lambda env: {})
+
+    assert regra._uf_no_fire({"slug": "mm"}, CLIENTE) == ["SP"]
+    ((sql, params),) = executados
+    assert sql is queries.UF_CLIENTE_POR_CNPJ
+    assert params == ("11.222.333/0001-81", CLIENTE)
+
