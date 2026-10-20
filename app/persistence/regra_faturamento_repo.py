@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.erp.cnpj import cnpj_digits
 from app.persistence import environments_repo, router
+from app.utils.logger import logger
 
 if TYPE_CHECKING:
     from app.routing.regra import Politica
@@ -70,6 +71,11 @@ def set_config(*, env_sp: str, env_fora_sp: str, ativa: bool, por: str) -> None:
         for r in listar_redes():
             if not r["chaves"]:
                 raise ValueError(f"a rede {r['nome']!r} está sem chave; cadastre antes de ligar")
+            if not _ambiente_ativo(r["env_slug"]):
+                raise ValueError(
+                    f"a rede {r['nome']!r} fatura pela empresa {r['env_slug']!r}, que não é"
+                    " um ambiente ativo; corrija antes de ligar"
+                )
     with router.shared_connect() as conn:
         conn.execute(
             """INSERT INTO regra_faturamento_config
@@ -148,6 +154,10 @@ def salvar_rede(
 
 
 def remover_rede(rede_id: int) -> None:
+    # Com a regra ligada, os pedidos da rede removida cairiam na regra por UF.
+    cfg = config()
+    if cfg and cfg["ativa"]:
+        raise ValueError("Desligue a regra antes de remover uma rede.")
     with router.shared_connect() as conn:
         conn.execute("DELETE FROM regra_faturamento_rede WHERE id = ?", (rede_id,))
 
@@ -169,6 +179,15 @@ def politica() -> Politica | None:
         for r in listar_redes()
     )
     nomes = {e["slug"]: e["name"] for e in environments_repo.list_active()}
+    for rede in redes:
+        if rede.env_slug not in nomes:
+            logger.warning(
+                f"regra_faturamento.rede_empresa_inativa rede={rede.nome!r} env={rede.env_slug}"
+            )
     return Politica(
-        env_sp=cfg["env_sp"], env_fora_sp=cfg["env_fora_sp"], redes=redes, nomes=nomes
+        env_sp=cfg["env_sp"],
+        env_fora_sp=cfg["env_fora_sp"],
+        redes=redes,
+        nomes=nomes,
+        ativos=frozenset(nomes),
     )

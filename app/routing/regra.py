@@ -42,6 +42,9 @@ class Politica:
     redes: tuple[RedeFixa, ...]
     # slug -> nome da empresa, só para a explicação ("pela MM", não "por mm").
     nomes: dict[str, str] = field(default_factory=dict, hash=False, compare=False)
+    # Slugs dos ambientes ativos; `None` = não conferido (testes puros). Rede
+    # cuja empresa não está aqui não decide (nunca por slug fantasma).
+    ativos: frozenset[str] | None = field(default=None, hash=False, compare=False)
 
     def nome(self, slug: str) -> str:
         return self.nomes.get(slug) or slug
@@ -85,6 +88,12 @@ def avaliar(
     from app.routing.ambiente import _fmt
 
     rede = rede_fixa_do_pedido(order, politica)
+    if rede is not None and politica.ativos is not None and rede.env_slug not in politica.ativos:
+        # Nem a rede (empresa inexistente) nem a UF (a rede é exceção a ela).
+        logger.warning(
+            f"routing.regra.rede_empresa_inativa rede={rede.nome!r} env={rede.env_slug}"
+        )
+        return None
     if rede is not None:
         return ResultadoRegra(
             rede.env_slug,

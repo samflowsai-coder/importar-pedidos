@@ -149,3 +149,12 @@ def test_rede_sem_chave_com_regra_ligada_e_400(client):
     r = client.put(f"{BASE}/redes/{rid}", json={"nome": "Kallan", "env_slug": "mm", "chaves": []})
     assert r.status_code == 400
     assert r.json()["detail"] == "Com a regra ligada, toda rede precisa de ao menos uma chave."
+
+
+def test_delete_com_regra_ligada_e_400(client):
+    assert client.put(BASE, json={"env_sp": "mm", "env_fora_sp": "nasmar", "ativa": True}).status_code == 200
+    rid = next(r["id"] for r in repo.listar_redes() if r["nome"] == "Kallan")
+    r = client.delete(f"{BASE}/redes/{rid}")
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Desligue a regra antes de remover uma rede."
+    assert "Kallan" in [x["nome"] for x in repo.listar_redes()]

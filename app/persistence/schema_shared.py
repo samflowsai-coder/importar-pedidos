@@ -248,15 +248,17 @@ CREATE TABLE IF NOT EXISTS roteamento_decisao (
 );
 
 -- Semente das 4 redes fixas (chaves: evidência da Task 0 na Fire de produção).
--- Roda a cada init, mas só semeia a rede se a tabela estiver VAZIA: rede que o
--- admin remover depois não volta, a menos que ele esvazie a tabela inteira.
+-- Roda a cada init, mas só semeia com a tabela de redes VAZIA e a política
+-- nunca salva: rede removida não volta, e depois que o admin configurou a
+-- regra nada mais é semeado, nem com as 4 redes apagadas.
 -- As chaves só entram para rede ainda marcada 'semente' e sem nenhuma chave;
 -- salvar_rede troca alterado_por, então rede editada pelo admin não é refeita.
 INSERT INTO regra_faturamento_rede (nome, env_slug, alterado_por, alterado_em)
 SELECT nome, 'mm', 'semente', strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')
 FROM (SELECT 'Centauro' AS nome UNION ALL SELECT 'Riachuelo'
       UNION ALL SELECT 'Kallan' UNION ALL SELECT 'Sam''s Club')
-WHERE NOT EXISTS (SELECT 1 FROM regra_faturamento_rede);
+WHERE NOT EXISTS (SELECT 1 FROM regra_faturamento_rede)
+  AND NOT EXISTS (SELECT 1 FROM regra_faturamento_config);
 
 INSERT OR IGNORE INTO regra_faturamento_chave (rede_id, tipo, chave)
 SELECT r.id, k.tipo, k.chave

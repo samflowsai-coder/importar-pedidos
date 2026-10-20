@@ -133,3 +133,72 @@ def test_com_regra_ligada_rede_nao_fica_sem_chave(shared_db, envs_mm_nasmar):
     assert _rede("Kallan")["chaves"] == [{"tipo": "raiz", "chave": "51540219"}]
     with pytest.raises(ValueError, match="ao menos uma chave"):
         repo.salvar_rede(nome="Nova", env_slug="mm", chaves=[], por="a@x")
+
+
+# ── Revisão final ────────────────────────────────────────────────────────────
+
+
+def test_semente_nao_volta_depois_que_o_admin_configurou(shared_db, envs_mm_nasmar):
+    """M1: o admin apagou as 4 redes depois de configurar a regra: nunca mais semeia."""
+    repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=False, por="a@x")
+    for r in repo.listar_redes():
+        repo.remover_rede(r["id"])
+    router.reset_init_cache()
+    with router.shared_connect():
+        pass
+    assert repo.listar_redes() == []
+
+
+def test_nao_liga_com_rede_de_empresa_inativa(shared_db, envs_mm_nasmar):
+    """I5: rede apontando para empresa que não é ambiente ativo barra o ligar."""
+    repo.salvar_rede(nome="Rede Órfã", env_slug="fantasma", chaves=[("raiz", "12345678")],
+                     por="a@x")
+    with pytest.raises(ValueError, match="Rede Órfã"):
+        repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=True, por="a@x")
+    assert repo.config() is None
+    # Desligada a regra continua configurável.
+    repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=False, por="a@x")
+
+
+def test_politica_nao_decide_por_rede_de_empresa_inativa(shared_db, envs_mm_nasmar, monkeypatch):
+    """I5: empresa da rede desativada com a regra ligada: a rede sai da decisão
+    (com aviso no log) e os pedidos dela não caem na regra por UF."""
+    from app.models.order import Order, OrderHeader, OrderItem
+    from app.routing import regra
+
+    avisos = []
+    monkeypatch.setattr(repo.logger, "warning", lambda msg, *a, **k: avisos.append(msg))
+    environments_repo.create(
+        slug="terceira", name="Terceira", watch_dir="/x/t/in", output_dir="/x/t/out",
+        fb_path="/x/t.fdb",
+    )
+    repo.salvar_rede(nome="Rede T", env_slug="terceira", chaves=[("raiz", "12345678")],
+                     por="a@x")
+    repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=True, por="a@x")
+    environments_repo.soft_delete(environments_repo.get_by_slug("terceira")["id"])
+
+    pol = repo.politica()
+
+    assert "terceira" not in pol.ativos
+    assert any("Rede T" in a for a in avisos)
+    pedido = Order(
+        header=OrderHeader(order_number="1", customer_cnpj="12345678000195", customer_name="X"),
+        items=[OrderItem(description="Meia", quantity=1)],
+    )
+
+    def _nao_ler(cnpj):
+        raise AssertionError("pedido da rede órfã não pode cair na UF")
+
+    assert regra.avaliar(pedido, pol, _nao_ler) is None
+
+
+def test_nao_remove_rede_com_regra_ligada(shared_db, envs_mm_nasmar):
+    """I6: remover rede com a regra ligada mandaria a rede para a regra por UF."""
+    repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=True, por="a@x")
+    rid = _rede("Kallan")["id"]
+    with pytest.raises(ValueError, match="Desligue a regra antes de remover uma rede."):
+        repo.remover_rede(rid)
+    assert _rede("Kallan")
+    repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=False, por="a@x")
+    repo.remover_rede(rid)
+    assert "Kallan" not in [r["nome"] for r in repo.listar_redes()]

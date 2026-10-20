@@ -152,7 +152,10 @@ def put_rede(rede_id: int, payload: RedeRequest, user: User = Depends(require_ad
 def delete_rede(rede_id: int, _=Depends(require_admin)):
     if not _rede_existe(rede_id):
         raise HTTPException(status_code=404, detail="Rede não encontrada.")
-    regra_faturamento_repo.remover_rede(rede_id)
+    try:
+        regra_faturamento_repo.remover_rede(rede_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True}
 
 
