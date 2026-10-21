@@ -1171,3 +1171,37 @@ def test_cliente_2xx_fora_do_contrato_guarda_o_bruto_com_teto():
         _cliente_http(handler).post_precos_aprovacao(EXEMPLOS["aprovacaoPedido"])
     assert exc.value.error == "resposta_fora_do_contrato"
     assert len(exc.value.body) == 64 * 1024
+
+
+# ── Retenção das tabelas preco_* (pendência 5) ──────────────────────────────
+
+
+def test_retencao_roda_no_maximo_uma_vez_por_dia_com_retention_days(mm, flow, monkeypatch):
+    monkeypatch.setenv("RETENTION_DAYS", "30")
+    cortes = []
+    monkeypatch.setattr(
+        revs, "reter", lambda conn, *, corte, **kw: cortes.append(corte) or {"revisoes": 0}
+    )
+    precos.rodar(AGORA)
+    precos.rodar(AGORA + timedelta(hours=23))
+    assert cortes == [AGORA - timedelta(days=30)]
+    precos.rodar(AGORA + timedelta(hours=24, seconds=1))
+    assert len(cortes) == 2
+
+
+def test_retencao_que_falha_nao_derruba_a_volta(mm, flow, monkeypatch):
+    def _falha(conn, **kw):
+        raise RuntimeError("disco cheio")
+
+    monkeypatch.setattr(revs, "reter", _falha)
+    _revisao()
+    precos.rodar(AGORA)
+    assert _situacoes() == [(1, "enviada")]
+
+
+def test_retencao_nao_roda_com_a_trava_desligada(shared, flow, monkeypatch):
+    _env("mm", MM, modo="desligado")
+    chamadas = []
+    monkeypatch.setattr(revs, "reter", lambda conn, **kw: chamadas.append(kw) or {})
+    precos.rodar(AGORA)
+    assert chamadas == []

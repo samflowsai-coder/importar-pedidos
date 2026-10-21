@@ -486,3 +486,62 @@ def test_desbloquear_locais_limpa_so_as_pendentes_bloqueadas(conn):
     assert rev.contagem_por_situacao(conn).get("bloqueada_local", 0) == 0
     assert [p["import_id"] for p in rev.pendentes_envio(conn, 10)] == ["imp-a", "imp-b"]
     assert rev.desbloquear_locais(conn) == 0
+
+
+# ── Retenção (pendência 5) ──────────────────────────────────────────────────
+
+
+def _cenario_retencao(conn):
+    """IMP: rev1 e rev2 conhecidas pelo Flow, rev3 vigente ainda não enviada;
+    imp-b: rev1 retirada e avisada (última do pedido)."""
+    for n, h in ((1, "sha256:a"), (2, "sha256:b"), (3, "sha256:c")):
+        rev.garantir_revisao(conn, IMP, _corpo(h), h, agora=AGORA)
+        if n < 3:
+            rev.marcar_tentada(conn, IMP, n, em=AGORA)
+            rev.marcar_enviada(conn, IMP, n, {"ok": True}, em=AGORA)
+    rev.garantir_revisao(conn, "imp-b", _corpo(), "sha256:a", agora=AGORA)
+    rev.marcar_tentada(conn, "imp-b", 1, em=AGORA)
+    rev.retirar(conn, "imp-b", "cancelado", em=AGORA)
+    rev.marcar_retirada_enviada(conn, "imp-b", 1, em=AGORA)
+    rev.gravar_decisao(conn, _decisao("d-velha", 1), agora=AGORA)
+    rev.gravar_decisao(conn, _decisao("d-vigente", 3), agora=AGORA)
+    rev.gravar_decisao(conn, _decisao("d-sem-confirmar", 2), agora=AGORA)
+    rev.marcar_confirmada(conn, ["d-velha", "d-vigente"], em=AGORA)
+
+
+def _chaves(conn):
+    revisoes = sorted(
+        (r[0], r[1]) for r in conn.execute("SELECT import_id, revisao FROM preco_revisao")
+    )
+    decisoes = sorted(r[0] for r in conn.execute("SELECT decisao_id FROM preco_decisao"))
+    return revisoes, decisoes
+
+
+def test_retencao_apaga_so_o_que_nao_decide_mais_nada(conn):
+    _cenario_retencao(conn)
+    apagadas = rev.reter(conn, corte=AGORA + timedelta(days=1), lote=1)
+    assert apagadas == {"revisoes": 1, "decisoes": 1}
+    revisoes, decisoes = _chaves(conn)
+    # rev1 sai (substituída, nem a última nem a última conhecida pelo Flow); rev2 fica
+    # (alvo de uma retirada futura), rev3 fica (vigente), imp-b/1 fica (última).
+    assert revisoes == [("imp-1", 2), ("imp-1", 3), ("imp-b", 1)]
+    # decisão confirmada de revisão que não é a vigente sai; a da vigente e a
+    # ainda não confirmada ficam.
+    assert decisoes == ["d-sem-confirmar", "d-vigente"]
+    assert rev.vigente(conn, IMP)["revisao"] == 3
+    assert rev.reter(conn, corte=AGORA + timedelta(days=1)) == {"revisoes": 0, "decisoes": 0}
+
+
+def test_retencao_nao_apaga_o_que_e_mais_novo_que_o_corte(conn):
+    _cenario_retencao(conn)
+    antes = _chaves(conn)
+    assert rev.reter(conn, corte=AGORA - timedelta(days=1)) == {"revisoes": 0, "decisoes": 0}
+    assert _chaves(conn) == antes
+
+
+def test_retencao_para_no_limite_de_lotes(conn):
+    _cenario_retencao(conn)
+    assert rev.reter(conn, corte=AGORA + timedelta(days=1), lote=1, max_lotes=0) == {
+        "revisoes": 0,
+        "decisoes": 0,
+    }

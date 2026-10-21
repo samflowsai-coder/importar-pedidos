@@ -528,3 +528,59 @@ def zerar_tentativas(conn: sqlite3.Connection, import_id: str, revisao: int) -> 
             " WHERE import_id = ? AND revisao = ? AND tentativas <> 0",
             (import_id, revisao),
         )
+
+
+# Revisão que não decide mais nada: encerrada (`substituida`/`retirada`), nem
+# a última do pedido (vigente, piso, número da próxima) nem a última que o
+# Flow pode conhecer (alvo de retirada futura; guarda do mover de pedido).
+_REVISAO_ANTIGA_SQL = """
+    SELECT r.rowid FROM preco_revisao r
+     WHERE r.situacao IN ('substituida', 'retirada')
+       AND r.criado_em < ?
+       AND r.revisao < (SELECT MAX(r2.revisao) FROM preco_revisao r2
+                         WHERE r2.import_id = r.import_id)
+       AND NOT ((r.enviada_em IS NOT NULL OR r.tentada_em IS NOT NULL)
+                AND r.revisao = (SELECT MAX(r3.revisao) FROM preco_revisao r3
+                                  WHERE r3.import_id = r.import_id
+                                    AND (r3.enviada_em IS NOT NULL
+                                         OR r3.tentada_em IS NOT NULL)))
+     LIMIT ?
+"""
+
+# Decisão já confirmada ao Flow que não é da revisão vigente do pedido (a
+# vigente é a que o portão lê em `decisoes_da_vigente`).
+_DECISAO_ANTIGA_SQL = f"""
+    SELECT d.rowid FROM preco_decisao d
+     WHERE d.confirmada_em IS NOT NULL
+       AND d.recebida_em < ?
+       AND NOT EXISTS (SELECT 1 FROM preco_revisao r
+                        WHERE r.import_id = d.import_id AND r.revisao = d.revisao
+                          AND r.situacao IN {_ATIVAS_SQL})
+     LIMIT ?
+"""  # noqa: S608 — constante
+
+
+def reter(
+    conn: sqlite3.Connection, *, corte: datetime, lote: int = 500, max_lotes: int = 20
+) -> dict[str, int]:
+    """Retenção (`RETENTION_DAYS`): apaga, em lotes de `lote` (uma transação
+    cada, no máximo `max_lotes` por tabela), revisões encerradas mais velhas
+    que `corte` que não decidem mais nada (`_REVISAO_ANTIGA_SQL`) e decisões
+    já confirmadas que não são da revisão vigente. Nunca toca a vigente, a
+    última revisão de um pedido, a última conhecida pelo Flow, decisão não
+    confirmada nem a cópia da tabela. Devolve quantas apagou por tabela."""
+    feitas = {"revisoes": 0, "decisoes": 0}
+    for chave, tabela, sql in (
+        ("revisoes", "preco_revisao", _REVISAO_ANTIGA_SQL),
+        ("decisoes", "preco_decisao", _DECISAO_ANTIGA_SQL),
+    ):
+        for _ in range(max_lotes):
+            with conn:
+                cur = conn.execute(
+                    f"DELETE FROM {tabela} WHERE rowid IN ({sql})",  # noqa: S608 — constantes
+                    (corte.isoformat(), lote),
+                )
+            feitas[chave] += cur.rowcount
+            if cur.rowcount < lote:
+                break
+    return feitas

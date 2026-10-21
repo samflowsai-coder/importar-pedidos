@@ -168,6 +168,9 @@ entrada dessa tupla, nunca solta no `TABLES_SQL`.
   fila, a mais antiga primeiro; limpa no sucesso). Repo: `preco_revisao_repo`.
 - `preco_revisao_piso` — PK `import_id`: piso vindo do 409 `revisao_obsoleta` (a próxima
   revisão nasce acima dele).
+- Retenção (`preco_revisao_repo.reter`, chamada 1x por dia pela thread da trava com
+  `RETENTION_DAYS`): revisões encerradas que não são a última nem a última conhecida pelo
+  Flow, e decisões confirmadas fora da revisão vigente. Detalhe em `modules/flowpcp.md` §6.
 - `preco_decisao` — PK `decisao_id` (idempotente): decisão do Flow por `item_chave`
   (`resultado`, `preco_aprovado_centavos`, `motivo_recusa`, `decidido_em`) e a `confirmacao`
   a devolver (`aplicada | descartada`, `confirmada_em`).

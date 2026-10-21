@@ -466,6 +466,13 @@ cópia no db do próprio ambiente):
   passageiras da mesma revisão (`preco_revisao.tentativas`, zera em qualquer outra resposta) →
   aviso único no log (por processo). Decisão de revisão acima da maior local → `descartada`
   e aviso no log (sinal de restore de backup do SQLite).
+- Retenção (`RETENTION_DAYS`, padrão 180, a mesma do worker): no máximo 1x por dia por ambiente
+  (memória do processo; reiniciar roda de novo, é idempotente), `preco_revisao_repo.reter` apaga
+  em lotes de 500 (até 20 lotes por tabela) as revisões `substituida`/`retirada` mais velhas que
+  o corte que não são a última do pedido nem a última conhecida pelo Flow, e as decisões já
+  confirmadas que não são da revisão vigente. Não toca a cópia da tabela (`preco_*_v1`: rede e
+  chaves são upsert, `preco_tabela_v1` é a cópia append-only do Flow), o piso (1 linha por
+  pedido) nem decisão não confirmada. Não há log de sync em tabela. Falha só loga.
 - Estado (`gerado_em`, último erro, `pendente_envio`/`bloqueada_local`/`recusada_flow`) no log
   `flowpcp.precos estado env=…`, só quando muda. Tentativas e retiradas presas sobrevivem ao
   reinício (SQLite do ambiente); pausas, intervalos, capacidades e avisos vivem na memória do
