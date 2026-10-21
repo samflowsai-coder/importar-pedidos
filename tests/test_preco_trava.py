@@ -2528,6 +2528,27 @@ def test_check_preco_gravado_marca_a_escolha_resolvida_e_o_preview_avalia(monkey
     assert preco["itens"][0]["estado"] == "ok"
 
 
+def test_check_preco_salvo_de_outra_escolha_fica_sem_avaliacao(monkeypatch):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, check=_check(2), produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(monkeypatch, _produto_ok(777))
+    salvo = preco_trava.check_preco_para_gravar(order, _env_nasmar("ligado"), entry, _vivo(2))
+    assert (salvo["items"][0]["escolha_seq"], salvo["items"][0]["escolha_codigo"]) == (
+        456,
+        "AF-123",
+    )
+    entry["check_preco"] = salvo
+
+    # Escolha trocada depois: o check salvo é de outra escolha → sem avaliação.
+    entry["produto_escolhido"] = {"0": {**_ESCOLHA_COD["0"], "fire_seq": 457}}
+    preco = preco_trava.preview_preco(
+        import_id, entry, order, env=_env_nasmar("ligado"), agora=AGORA
+    )
+    assert preco["itens"][0]["estado"] == "nao_avaliado"
+    assert preco["itens"][0]["motivo"] == "escolha_pontual_sem_fonte"
+
+
 def test_check_preco_para_gravar_sem_check_ao_vivo_deixa_a_escolha_sem_chave(monkeypatch):
     order = _order((54.0, 54.0))
     _, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)

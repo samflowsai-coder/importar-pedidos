@@ -223,17 +223,26 @@ def _pedido_para_a_fonte(
     return novo, escolhas, vivos
 
 
-def _marcar_escolhas_na_fonte(check: dict | None, escolhas: dict[int, int]) -> dict | None:
+def _marcar_escolhas_na_fonte(
+    check: dict | None, escolhas: dict[int, int], vivos: dict[int, dict | None]
+) -> dict | None:
     """Item com escolha só vale se a fonte o resolveu pelo código a um único
     produto ativo (`produto.estado` `ok`, fonte `codprod_altern`): o SEQ e a
     unidade vêm desse produto e o item ganha `escolha_na_fonte: True`. Senão
-    fica sem produto e `escolha_na_fonte: False` (o avaliador não o avalia)."""
+    fica sem produto e `escolha_na_fonte: False` (o avaliador não o avalia).
+    Todo item com escolha leva `escolha_seq` (o SEQ escolhido) e
+    `escolha_codigo` (o código usado na fonte): o avaliador só aceita a marca
+    se a escolha atual do import for a mesma."""
     if not check or not escolhas:
         return check
     itens = [dict(it) for it in check.get("items") or []]
     for i in escolhas:
         if not 0 <= i < len(itens):
             continue
+        itens[i]["escolha_seq"] = escolhas[i]
+        itens[i]["escolha_codigo"] = (
+            (vivos.get(i) or {}).get("codprod_altern") or ""
+        ).strip() or None
         produto = itens[i].get("produto") if isinstance(itens[i].get("produto"), dict) else {}
         cand = produto_trava.candidato_decidido(produto)
         if (
@@ -268,13 +277,13 @@ def _check_da_fonte(
     amb = environments_repo.get_by_slug(fonte)
     if amb is None:
         return None
-    pedido, escolhas, _ = _pedido_para_a_fonte(order, entry, live)
+    pedido, escolhas, vivos = _pedido_para_a_fonte(order, entry, live)
     with (
         env_context.active_env(amb["id"], amb["slug"]),
         limite_de_conexao(LIMITE_CONEXAO_FONTE_S),
     ):
         check = pc.check_order(pedido, env=amb)
-    return _marcar_escolhas_na_fonte(check, escolhas)
+    return _marcar_escolhas_na_fonte(check, escolhas, vivos)
 
 
 def _check_para_preco(
@@ -410,7 +419,11 @@ def _avaliar_local(
     escolhas = {
         i: seq
         for i, seq in escolhas.items()
-        if not (i < len(itens_check) and itens_check[i].get("escolha_na_fonte") is True)
+        if not (
+            i < len(itens_check)
+            and itens_check[i].get("escolha_na_fonte") is True
+            and str(itens_check[i].get("escolha_seq")) == str(seq)
+        )
     }
     itens = [
         dataclasses.replace(

@@ -176,7 +176,9 @@ próprio, a linha com escolha vai à fonte com o `CODPROD_ALTERN` do produto esc
 bloqueia. As rotas de escolha, vincular e mover passam o check fresco como `live`. Se a fonte resolve a um
 único produto ativo pelo código (`estado` `ok`, fonte `codprod_altern`), o item é
 avaliado normalmente com esse SEQ (`escolha_na_fonte: True` no check; conforme ou
-divergente → Flow como qualquer item). Senão (sem código, ambíguo, só por de-para,
+divergente → Flow como qualquer item). Todo item com escolha leva no check da fonte
+`escolha_seq`/`escolha_codigo`; a marca só vale se `escolha_seq` for a escolha atual do
+import (check salvo de uma escolha antiga = sem avaliação). Senão (sem código, ambíguo, só por de-para,
 check salvo sem a marca) sai `nao_avaliado`/`escolha_pontual_sem_fonte`: portão
 bloqueia e o preview diz o que fazer (cadastrar/ajustar o código na fonte ou deixar a
 empresa em `observando`). A escolha regrava o `check_preco`. Intercompany não muda. A linha com escolha
