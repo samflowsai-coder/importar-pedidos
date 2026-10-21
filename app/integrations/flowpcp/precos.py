@@ -423,7 +423,8 @@ def _enviar_retiradas(
 ) -> bool:
     """Retiradas pendentes. 409 `revisao_obsoleta` → reenvia com a `revisaoVigente`
     do Flow (nunca pausa por isso); 200 com `aprovacaoId` nulo = feito. Retirada
-    sem saída (inválida, 409 sem revisão nova) loga uma vez e fica para depois.
+    sem saída (inválida, 409 sem revisão nova, segundo 409 com outra revisão)
+    loga uma vez e fica para depois.
     5xx (fora 503) pula só aquela retirada; rede, 429 e 503 encerram as
     retiradas desta volta. Retirada que falhou vai para o fim da fila
     (`retirada_presa_em` no SQLite; acima de `LIMITE_PRESAS` a ordem é
@@ -443,7 +444,7 @@ def _enviar_retiradas(
             "motivo": _motivo_retirada(r.get("retirada_motivo")),
         }
         alvo = n
-        for _ in range(2):
+        for tentativa in range(2):
             corpo = {**base, "revisao": alvo}
             try:
                 precos_schema.validar_envio(corpo)
@@ -463,8 +464,18 @@ def _enviar_retiradas(
                 vigente_flow = _revisao_vigente_flow(exc)
                 if exc.status_code == 409 and exc.error == "revisao_obsoleta":
                     if vigente_flow is not None and vigente_flow != alvo:
-                        alvo = vigente_flow
-                        continue
+                        if tentativa == 0:
+                            alvo = vigente_flow
+                            continue
+                        _avisar_uma_vez(
+                            slug,
+                            f"retirada_409_outra:{imp}:{n}",
+                            f"retirada {imp}/{n}: segundo 409 seguido com outra revisão vigente "
+                            f"(enviada como {alvo}, o Flow diz {vigente_flow}); "
+                            "tenta no próximo ciclo",
+                        )
+                        revs.marcar_retirada_presa(conn, imp, n, em=agora)
+                        break
                     _avisar_uma_vez(
                         slug,
                         f"retirada_409:{imp}:{alvo}",

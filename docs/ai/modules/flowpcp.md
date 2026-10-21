@@ -487,7 +487,7 @@ Quatro rotas do Flow (`/api/portal-pedidos/precos/…`): (a) `GET tabela`, (b) `
 | 2xx com JSON fora do contrato | a | pausa tabela e aprovação por 15 min |
 | 409 `revisao_obsoleta`/`conteudo_divergente` | b | vigente aqui: sobe o piso e reenvia (máx. 3 por pedido na volta); já substituída: não reenvia |
 | 409 `revisao_obsoleta` sem `revisaoVigente` | b (pedido) | pausa só a aprovação por 15 min |
-| 409 `revisao_obsoleta` | b (retirada) | reenvia com `revisaoVigente`; sem revisão nova, loga uma vez e a retirada vai para o fim |
+| 409 `revisao_obsoleta` | b (retirada) | reenvia com `revisaoVigente`; sem revisão nova, ou segundo 409 seguido com outra `revisaoVigente`, WARNING uma vez por revisão (slug, pedido, revisões) e a retirada vai para o fim |
 | 200 com `aprovacaoId` nulo | b (retirada) | retirada feita |
 | 413, 400 `payload_invalido`, corpo inválido local | b | `bloqueio_local`: sai da fila; volta com conteúdo novo (nova revisão) ou pelo botão "Reenviar bloqueados" do admin (`POST .../preco-trava/desbloquear`) |
 | 422 `rede_desconhecida`/`produto_desconhecido`/`empresa_faturadora_desconhecida` | b | `recusada_flow`; reenvio do operador cria a revisão seguinte (rev+1) |

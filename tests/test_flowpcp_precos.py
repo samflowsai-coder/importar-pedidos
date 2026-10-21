@@ -807,6 +807,27 @@ def test_retirada_409_sem_revisao_nova_loga_uma_vez(mm, flow, logs):
     assert _linha(1)["retirada_enviada_em"] is None
 
 
+def test_retirada_segundo_409_com_outra_revisao_avisa_uma_vez(mm, flow, logs):
+    _revisao()
+    precos.rodar(AGORA)
+    with router.env_connect("mm") as conn:
+        revs.retirar(conn, IMP, "pedido cancelado no Portal", em=AGORA)
+    flow.aprovacao = [
+        _erro(409, "revisao_obsoleta", {"revisaoVigente": 2}),
+        _erro(409, "revisao_obsoleta", {"revisaoVigente": 3}),
+        _erro(409, "revisao_obsoleta", {"revisaoVigente": 2}),
+        _erro(409, "revisao_obsoleta", {"revisaoVigente": 3}),
+    ]
+    precos.rodar(AGORA + timedelta(seconds=31))
+    precos.rodar(AGORA + timedelta(seconds=62))
+    avisos = [m for m in logs if "retirada" in m and "409" in m]
+    assert len(avisos) == 1
+    assert "env=mm" in avisos[0] and IMP in avisos[0]
+    assert "2" in avisos[0] and "3" in avisos[0]
+    assert _linha(1)["retirada_enviada_em"] is None
+    assert _linha(1)["retirada_presa_em"] is not None
+
+
 def test_retirada_invalida_loga_uma_vez(mm, flow, logs):
     _revisao()
     precos.rodar(AGORA)
