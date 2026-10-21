@@ -779,3 +779,33 @@ def test_send_db_com_fire_fora_nao_recusa_a_escolha(monkeypatch, tmp_path):
 
     assert r.status_code == 200, r.text
     assert recebido["seq"] == {0: 2010}
+
+
+def test_escolha_pontual_regrava_o_check_preco_da_fonte(monkeypatch):
+    """Com fonte de preço, a escolha muda o casamento na fonte (código da escolha):
+    o `check_preco` do import é regravado com o `entry` que já tem a escolha."""
+    monkeypatch.setattr(
+        product_check,
+        "check_order",
+        lambda o, *, env=None, escolhas=None: _check(
+            o, escolhas=escolhas, code_rows=[MODELO], seq_rows=[BRANCO]
+        ),
+    )
+    vistos = []
+
+    def fake_gravar(order, env, entry=None):
+        vistos.append(dict((entry or {}).get("produto_escolhido") or {}))
+        return {"available": True, "items": [], "preco_fonte_slug": "mm"}
+
+    monkeypatch.setattr(preco_trava, "check_preco_para_gravar", fake_gravar)
+    _seed_catalogo()
+    entry_id = _seed_import(_beira_rio())
+
+    r = client.post(
+        f"/api/imported/{entry_id}/vincular-produto",
+        json={"item_index": 0, "fire_produto_id": "2010"},
+    )
+
+    assert r.status_code == 200, r.text
+    assert vistos and "0" in vistos[-1]
+    assert repo.get_import(entry_id)["check_preco"]["preco_fonte_slug"] == "mm"

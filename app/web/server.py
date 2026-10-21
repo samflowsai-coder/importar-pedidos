@@ -3939,10 +3939,18 @@ def _escolher_pontual(
             },
         )
     # Relê: a escolha de outra linha gravada ao mesmo tempo entra também.
-    escolhas = product_check.escolhas_do_import(repo.get_import(import_id))
+    atual = repo.get_import(import_id)
+    escolhas = product_check.escolhas_do_import(atual)
     check = product_check.check_order(order, env=env, escolhas=escolhas)
     if check.get("available"):
         repo.update_fire_metadata(import_id, check=check)
+    # Trava de preço com ambiente fonte: a fonte casa a linha pelo código da
+    # escolha; o check dela é refeito. Desligado/sem fonte: None, sem I/O.
+    from app.erp import preco_trava
+
+    check_preco = preco_trava.check_preco_para_gravar(order, env, atual)
+    if check_preco is not None:
+        repo.update_fire_metadata(import_id, check_preco=check_preco)
     return JSONResponse(
         {
             "entry_id": import_id,

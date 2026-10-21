@@ -167,10 +167,15 @@ decide antes de qualquer chave (`decidir_escolha`): SEQ ativo → `ok` com fonte
 aponta para o produto X, que não existe mais ou está bloqueado."). Vale só para
 aquele import: todo chamador que confere um import salvo passa as escolhas dele
 (`decidir_envio`, recheck do vincular, ack-sem-preço, a própria rota); o check da
-fonte de preço (`_check_da_fonte`) não (SEQs de outro Fire): por isso, com
-`preco_fonte_slug` ≠ o próprio, o item com escolha sai da trava de preço como
-`nao_avaliado`/`escolha_pontual_sem_fonte` (portão bloqueia, preview mostra o motivo;
-nunca passa como conforme nem vai ao Flow). Intercompany não muda. A linha com escolha
+fonte de preço (`_check_da_fonte`) não (SEQs de outro Fire). Com `preco_fonte_slug` ≠ o
+próprio, a linha com escolha vai à fonte com o `codigo` (`CODPROD_ALTERN`) gravado na
+escolha como única chave (`_pedido_para_a_fonte`, sem EAN): se a fonte resolve a um
+único produto ativo pelo código (`estado` `ok`, fonte `codprod_altern`), o item é
+avaliado normalmente com esse SEQ (`escolha_na_fonte: True` no check; conforme ou
+divergente → Flow como qualquer item). Senão (sem código, ambíguo, só por de-para,
+check salvo sem a marca) sai `nao_avaliado`/`escolha_pontual_sem_fonte`: portão
+bloqueia e o preview diz o que fazer (cadastrar/ajustar o código na fonte ou deixar a
+empresa em `observando`). A escolha regrava o `check_preco`. Intercompany não muda. A linha com escolha
 válida também tem os campos legados trocados (`match`, `match_source =
 "escolha_pontual"`, `fire_product_id`, `fire_description`, preço/unidade e
 `price_status` do escolhido; código da previsão de troca = o `CODPROD_ALTERN` dele),
@@ -690,6 +695,10 @@ tem tela de gestão de preço: a decisão (aprovar/recusar) vem do Flow. Spec:
    avaliação"; pedido já importado fica assim até vincular o produto ou reimportar.
    A ida ao Fire da MM no `/api/commit` da Nasmar desiste da conexão em 5 s
    (`LIMITE_CONEXAO_FONTE_S`): com a MM fora, o commit atrasa no máximo isso.
+   Escolha pontual na Nasmar: a MM casa a linha pelo `CODPROD_ALTERN` do produto escolhido.
+   Produto da Nasmar sem esse código na MM (ou com código repetido) bloqueia o pedido com
+   `escolha_pontual_sem_fonte` até cadastrar/ajustar o código na MM; enquanto isso, deixar
+   a Nasmar em `observando`.
 5. Só então `ligado` (409 até a 1ª cópia completa). Desligar volta ao comportamento de hoje.
 
 ### Interruptor por ambiente (`environments.preco_trava_modo`)

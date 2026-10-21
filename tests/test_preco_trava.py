@@ -2315,8 +2315,8 @@ _ESCOLHA_0 = {"0": {"fire_seq": 456, "por": "op@x.com", "em": "2026-10-20T10:00:
 
 def test_nasmar_item_com_escolha_pontual_nao_e_avaliado_na_fonte(monkeypatch):
     # A MM casaria os dois itens com preço igual à tabela ("ok"), mas o item 0
-    # tem escolha pontual na Nasmar (SEQ 456 do Fire DELA): a fonte não vê a
-    # escolha, então o item nunca passa como conforme — fail-closed.
+    # tem escolha pontual na Nasmar (SEQ 456 do Fire DELA) sem código: a fonte
+    # não tem como casá-la, então o item nunca passa como conforme — fail-closed.
     _precos_por_produto({"777": 5400, "778": 5400})
     order = _order((54.0, 54.0))
     import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_0)
@@ -2381,3 +2381,105 @@ def test_index_tem_o_texto_do_motivo_da_escolha_pontual():
         encoding="utf-8"
     )
     assert "escolha_pontual_sem_fonte:" in html
+
+
+# ── Escolha pontual resolvida pelo código na fonte (revisão, item 1) ───────
+
+_ESCOLHA_COD = {
+    "0": {"fire_seq": 456, "por": "op@x.com", "em": "2026-10-20T10:00:00", "codigo": "AF-123"}
+}
+
+
+def _produto_ok(seq, fonte="codprod_altern", unidade="KIT"):
+    return {
+        "estado": "ok",
+        "fire_seq": seq,
+        "fonte": fonte,
+        "motivo": None,
+        "candidatos": [
+            {"seq": seq, "descricao": "MEIA", "codprod_altern": "AF-123", "unidade": unidade}
+        ],
+    }
+
+
+def _fonte_por_codigo(monkeypatch, produto):
+    """Check falso: na MM, o item 0 só resolve se chegar com o código da escolha
+    (e sem EAN); o próprio ambiente devolve o check de sempre."""
+    vistos = []
+
+    def fake(order, *, env=None, escolhas=None):
+        if (env or {}).get("slug") != "mm":
+            return copy.deepcopy(_check(len(order.items)))
+        it0 = order.items[0]
+        vistos.append((it0.product_code, it0.ean))
+        check = _check(ids=[999] + [778] * (len(order.items) - 1))
+        if it0.product_code == "AF-123" and it0.ean is None and produto is not None:
+            check["items"][0]["produto"] = copy.deepcopy(produto)
+        else:
+            check["items"][0]["produto"] = {"estado": "a_identificar", "fire_seq": None}
+        return check
+
+    monkeypatch.setattr(environments_repo, "get_by_slug", lambda s: {"mm": ENV_MM}.get(s))
+    monkeypatch.setattr(pc, "check_order", fake)
+    return vistos
+
+
+def test_escolha_com_codigo_que_a_mm_resolve_e_avaliada_normalmente(monkeypatch):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    vistos = _fonte_por_codigo(monkeypatch, _produto_ok(777))
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert ("AF-123", None) in vistos
+    it0 = d.avaliacao.itens[0]
+    assert (it0.situacao, it0.motivo, it0.fire_produto_id) == ("ok", "ok", "777")
+    assert d.bloqueado is False
+
+
+def test_escolha_com_codigo_divergente_vai_ao_flow(monkeypatch):
+    _precos_por_produto({"777": 5000, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(monkeypatch, _produto_ok(777))
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.reason == "preco_aguardando"
+    assert _corpo(import_id)["itens"][0]["erpProdutoId"] == "777"
+
+
+@pytest.mark.parametrize(
+    "produto",
+    [None, _produto_ok(777, fonte="depara"), {"estado": "ambiguo", "fire_seq": None}],
+)
+def test_escolha_que_a_mm_nao_resolve_pelo_codigo_fica_sem_avaliacao(monkeypatch, produto):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(monkeypatch, produto)
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True and d.reason == "preco_nao_avaliado"
+    assert d.avaliacao.itens[0].motivo == "escolha_pontual_sem_fonte"
+    assert "observando" in d.detalhe
+    assert _revisoes(import_id) == []
+
+
+def test_check_preco_gravado_marca_a_escolha_resolvida_e_o_preview_avalia(monkeypatch):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, check=_check(2), produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(monkeypatch, _produto_ok(777))
+
+    salvo = preco_trava.check_preco_para_gravar(order, _env_nasmar("ligado"), entry)
+    assert salvo["items"][0]["fire_product_id"] == 777
+    assert salvo["items"][0]["escolha_na_fonte"] is True
+
+    entry["check_preco"] = salvo
+    preco = preco_trava.preview_preco(
+        import_id, entry, order, env=_env_nasmar("ligado"), agora=AGORA
+    )
+    assert preco["itens"][0]["estado"] == "ok"

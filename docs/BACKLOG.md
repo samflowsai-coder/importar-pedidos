@@ -237,6 +237,10 @@ Itens abaixo foram vistos nas revisões e deixados de fora de propósito; nenhum
 - **Flow recebe `erpProdutoId` (Task 9 adiada).** O Portal ainda não manda `erpProdutoId`/`confiancaParser` por item
   ao Flow (o Flow não consome e a IA dele já saiu). Ligar o item pelo `fire_produto_id` e nunca casar código ou EAN de
   pedido vindo do Portal é plano do pcp-app; depois o Portal passa a mandar (digit string, ruling R3).
+- **Revisão já enviada ao Flow que vira `nao_avaliado` fica pendente lá.** Qualquer transição de um pedido
+  com revisão enviada para item `nao_avaliado` (escolha pontual sem código na fonte, produto que deixou de
+  casar, unidade, cópia desatualizada...) bloqueia no portão, mas ninguém retira a revisão no Flow: a
+  aprovação fica aberta lá até o pedido voltar a ser avaliável (nova revisão) ou ser cancelado.
 - **Produto ligado + preço desligado:** `is_blocking`/`_regra_de_hoje` usa o `price_status` do match legado, não o do
   produto decidido.
 

@@ -66,7 +66,8 @@ _MOTIVO_LEGIVEL: dict[str, str] = {
     "copia_desatualizada": "tabela de preço sem sincronizar com o Flow há mais de 24 h",
     "empresa_sem_cnpj": "CNPJ da empresa não cadastrado no ambiente",
     "escolha_pontual_sem_fonte": (
-        "produto escolhido à mão neste pedido não é avaliado pela empresa da chave do produto"
+        "produto escolhido à mão sem código que a empresa da chave do produto reconheça "
+        "(cadastre ou ajuste o código do produto lá, ou deixe esta empresa em observando)"
     ),
 }
 
@@ -181,22 +182,73 @@ def _fonte(env: dict | None) -> str | None:
     return slug if slug and slug != (env or {}).get("slug") else None
 
 
-def _check_da_fonte(order: Order, fonte: str) -> dict | None:
+def _pedido_para_a_fonte(order: Order, entry: dict | None) -> tuple[Order, dict[int, int]]:
+    """O pedido como a fonte deve casá-lo: item com escolha pontual vai com o
+    `codigo` (`CODPROD_ALTERN`) gravado na escolha como única chave (sem EAN);
+    sem código, vai sem chave nenhuma. Devolve também as escolhas."""
+    escolhas = pc.escolhas_do_import(entry)
+    if not escolhas:
+        return order, {}
+    bruto = (entry or {}).get("produto_escolhido") or {}
+    novo = order.model_copy(deep=True)
+    for i in escolhas:
+        if 0 <= i < len(novo.items):
+            dado = bruto.get(str(i)) if isinstance(bruto.get(str(i)), dict) else {}
+            novo.items[i].product_code = str(dado.get("codigo") or "").strip() or None
+            novo.items[i].ean = None
+    return novo, escolhas
+
+
+def _marcar_escolhas_na_fonte(check: dict | None, escolhas: dict[int, int]) -> dict | None:
+    """Item com escolha só vale se a fonte o resolveu pelo código a um único
+    produto ativo (`produto.estado` `ok`, fonte `codprod_altern`): o SEQ e a
+    unidade vêm desse produto e o item ganha `escolha_na_fonte: True`. Senão
+    fica sem produto e `escolha_na_fonte: False` (o avaliador não o avalia)."""
+    if not check or not escolhas:
+        return check
+    itens = [dict(it) for it in check.get("items") or []]
+    for i in escolhas:
+        if not 0 <= i < len(itens):
+            continue
+        produto = itens[i].get("produto") if isinstance(itens[i].get("produto"), dict) else {}
+        cand = produto_trava.candidato_decidido(produto)
+        if (
+            produto.get("estado") == "ok"
+            and produto.get("fonte") == "codprod_altern"
+            and produto.get("fire_seq") is not None
+            and cand is not None
+        ):
+            itens[i]["fire_product_id"] = produto["fire_seq"]
+            itens[i]["fire_unidade"] = (cand.get("unidade") or "").strip() or None
+            itens[i]["fire_description"] = cand.get("descricao")
+            itens[i]["escolha_na_fonte"] = True
+        else:
+            itens[i]["fire_product_id"] = None
+            itens[i]["fire_unidade"] = None
+            itens[i]["escolha_na_fonte"] = False
+    return {**check, "items": itens}
+
+
+def _check_da_fonte(order: Order, fonte: str, entry: dict | None = None) -> dict | None:
     """`check_order` no Fire do ambiente fonte, com o contexto DELE ativo: o
     degrau de-para lê o SQLite da fonte, nunca o do ambiente do pedido.
-    A conexão desiste em `LIMITE_CONEXAO_FONTE_S` (fonte fora = check
-    indisponível, a mesma semântica de antes). Fonte inexistente → None (bloqueia)."""
+    Item com escolha pontual casa pelo código da escolha (`_pedido_para_a_fonte`,
+    `_marcar_escolhas_na_fonte`). A conexão desiste em `LIMITE_CONEXAO_FONTE_S`
+    (fonte fora = check indisponível, a mesma semântica de antes). Fonte
+    inexistente → None (bloqueia)."""
     from app.erp.connection import limite_de_conexao
     from app.persistence import context as env_context
 
     amb = environments_repo.get_by_slug(fonte)
     if amb is None:
         return None
+    pedido, escolhas = _pedido_para_a_fonte(order, entry)
     with (
         env_context.active_env(amb["id"], amb["slug"]),
         limite_de_conexao(LIMITE_CONEXAO_FONTE_S),
     ):
-        return pc.check_order(order, env=amb)
+        check = pc.check_order(pedido, env=amb)
+    return _marcar_escolhas_na_fonte(check, escolhas)
 
 
 def _check_para_preco(
@@ -219,7 +271,7 @@ def _check_para_preco(
             produtos_por_item,
             decidido=_produto_ligado(env),
         )
-    return _check_utilizavel(_check_da_fonte(order, fonte), order)
+    return _check_utilizavel(_check_da_fonte(order, fonte, entry), order)
 
 
 def _check_salvo_para_preco(
@@ -258,7 +310,7 @@ def check_preco_para_gravar(
     try:
         if _eh_intercompany(order, entry or {}):
             return None
-        check = _check_da_fonte(order, fonte)
+        check = _check_da_fonte(order, fonte, entry)
     except Exception as exc:  # noqa: BLE001 — o preview fica sem avaliação; o portão refaz
         from app.utils.logger import logger
 
@@ -314,9 +366,10 @@ def _avaliar_local(
     env: dict | None,
     grupo: set[str] | None = None,
 ) -> Avaliacao:
-    """`_avaliar_copia` + escolha pontual com fonte de preço (BACKLOG 2.20): o
-    check da fonte roda no Fire DELA e não vê a escolha (SEQ do Fire do
-    pedido), então o item escolhido à mão sai `nao_avaliado`
+    """`_avaliar_copia` + escolha pontual com fonte de preço: a escolha é um SEQ
+    do Fire do pedido, então o item só é avaliado se a fonte o resolveu pelo
+    código da escolha (`escolha_na_fonte` no check, `_marcar_escolhas_na_fonte`).
+    Senão (ou check salvo sem a marca) sai `nao_avaliado`
     (`escolha_pontual_sem_fonte`) e bloqueia; nunca passa como conforme.
     Item intercompany não depende da fonte: fica como está."""
     av = _avaliar_copia(order, check, entry, agora, env, grupo)
@@ -325,6 +378,12 @@ def _avaliar_local(
     escolhas = pc.escolhas_do_import(entry)
     if not escolhas:
         return av
+    itens_check = (check or {}).get("items") or []
+    escolhas = {
+        i: seq
+        for i, seq in escolhas.items()
+        if not (i < len(itens_check) and itens_check[i].get("escolha_na_fonte") is True)
+    }
     itens = [
         dataclasses.replace(
             it,
