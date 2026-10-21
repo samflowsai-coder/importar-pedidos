@@ -390,12 +390,36 @@ def test_retiradas_pendentes_as_presas_vao_para_o_fim(conn):
         rev.marcar_tentada(conn, imp, 1, em=AGORA)
         rev.retirar(conn, imp, "cancelado", em=AGORA)
     assert [p["import_id"] for p in rev.retiradas_pendentes(conn, 1)] == ["imp-a"]
-    assert [
-        p["import_id"] for p in rev.retiradas_pendentes(conn, 1, por_ultimo={("imp-a", 1)})
-    ] == ["imp-b"]
-    assert [
-        p["import_id"] for p in rev.retiradas_pendentes(conn, 10, por_ultimo={("imp-a", 1)})
-    ] == ["imp-b", "imp-a"]
+    rev.marcar_retirada_presa(conn, "imp-a", 1, em=AGORA)
+    assert [p["import_id"] for p in rev.retiradas_pendentes(conn, 1)] == ["imp-b"]
+    assert [p["import_id"] for p in rev.retiradas_pendentes(conn, 10)] == ["imp-b", "imp-a"]
+    assert rev.contar_retiradas_presas(conn) == 1
+
+
+def test_retirada_presa_mais_antiga_volta_primeiro_e_sucesso_solta(conn):
+    for imp in ("imp-a", "imp-b", "imp-c"):
+        rev.garantir_revisao(conn, imp, _corpo(), "sha256:a", agora=AGORA)
+        rev.marcar_tentada(conn, imp, 1, em=AGORA)
+        rev.retirar(conn, imp, "cancelado", em=AGORA)
+    rev.marcar_retirada_presa(conn, "imp-b", 1, em=AGORA)
+    rev.marcar_retirada_presa(conn, "imp-a", 1, em=AGORA + timedelta(seconds=1))
+    assert [p["import_id"] for p in rev.retiradas_pendentes(conn, 10)] == [
+        "imp-c",
+        "imp-b",
+        "imp-a",
+    ]
+    rev.marcar_retirada_enviada(conn, "imp-b", 1, em=AGORA)
+    assert rev.contar_retiradas_presas(conn) == 1
+    assert rev.soltar_retiradas_presas(conn) == 1
+    assert rev.contar_retiradas_presas(conn) == 0
+
+
+def test_tentativas_somam_e_zeram_por_revisao(conn):
+    rev.garantir_revisao(conn, "imp-a", _corpo(), "sha256:a", agora=AGORA)
+    assert rev.somar_tentativa(conn, "imp-a", 1) == 1
+    assert rev.somar_tentativa(conn, "imp-a", 1) == 2
+    rev.zerar_tentativas(conn, "imp-a", 1)
+    assert rev.somar_tentativa(conn, "imp-a", 1) == 1
 
 
 @pytest.fixture
@@ -422,3 +446,32 @@ def test_decisao_de_revisao_velha_nao_avisa_restore(conn, avisos):
     rev.garantir_revisao(conn, IMP, _corpo("b"), "sha256:b", agora=AGORA)
     assert rev.gravar_decisao(conn, _decisao("d1", 1), agora=AGORA) == "descartada"
     assert [m for m in avisos if "backup" in m] == []
+
+
+def test_banco_antigo_ganha_tentativas_e_presa_sem_perder_revisao(tmp_path, monkeypatch):
+    """Migração aditiva: preco_revisao sem as colunas novas ganha as duas e
+    mantém as linhas."""
+    import sqlite3
+
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    router.reset_init_cache()
+    velho = sqlite3.connect(router.env_db_path("mm"))
+    velho.executescript(
+        """
+        CREATE TABLE preco_revisao (
+            import_id TEXT NOT NULL, revisao INTEGER NOT NULL, conteudo_hash TEXT NOT NULL,
+            corpo_json TEXT NOT NULL, situacao TEXT NOT NULL, tentada_em TEXT,
+            enviada_em TEXT, resposta_json TEXT, erro_definitivo TEXT, retirada_em TEXT,
+            retirada_motivo TEXT, retirada_enviada_em TEXT, bloqueio_local TEXT,
+            criado_em TEXT NOT NULL, PRIMARY KEY (import_id, revisao));
+        INSERT INTO preco_revisao (import_id, revisao, conteudo_hash, corpo_json, situacao,
+            criado_em) VALUES ('imp-a', 1, 'h', '{}', 'pendente_envio', '2026-10-18');
+        """
+    )
+    velho.commit()
+    velho.close()
+    with router.env_connect("mm") as c:
+        linha = dict(c.execute("SELECT * FROM preco_revisao").fetchone())
+    assert linha["import_id"] == "imp-a"
+    assert linha["tentativas"] == 0
+    assert linha["retirada_presa_em"] is None

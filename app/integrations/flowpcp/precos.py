@@ -22,9 +22,14 @@ não é a vigente → fica `substituida`; 422 de conteúdo → `recusada_flow`; 
 → pula só aquele pedido (3 seguidos, somando revisões e retiradas = Flow fora:
 o disjuntor encerra o envio da volta); 429/503/rede → para o envio desta volta
 (retiradas e decisões seguem). Pausa e transitório nunca tocam a revisão. A fila gira: quem
-falhou vai para o fim (`tentada_em` das revisões; retiradas presas, na memória
-do processo). Na tabela, 400 `cursor_invalido` com cursor salvo
+falhou vai para o fim (`tentada_em` das revisões; `retirada_presa_em` das
+retiradas). Na tabela, 400 `cursor_invalido` com cursor salvo
 reinicia a cópia como o `reiniciar`.
+
+Estado que sobrevive ao reinício fica no SQLite do ambiente: tentativas por
+revisão (`preco_revisao.tentativas`) e retiradas presas
+(`preco_revisao.retirada_presa_em`). Pausas, intervalos, capacidades e avisos
+ficam na memória do processo: reiniciar = tentar de novo (e avisar de novo).
 
 Estado por ambiente (`geradoEm` da cópia completa, último erro, contagem de
 `pendente_envio`/`bloqueada_local`/`recusada_flow`) vai ao log quando muda
@@ -72,6 +77,7 @@ _RECUSAS_422 = frozenset(
 _MIN = datetime.min.replace(tzinfo=UTC)
 
 # Estado da thread, por slug (memória do processo; reinício = tudo devido).
+# Tentativas e retiradas presas vivem no SQLite do ambiente (preco_revisao).
 _ultima_tabela: dict[str, datetime] = {}
 _ultima_aprovacao: dict[str, datetime] = {}
 _pausa_tabela: dict[str, datetime] = {}
@@ -80,8 +86,6 @@ _capacidades: dict[str, frozenset[str]] = {}
 _ultimo_erro: dict[str, str] = {}
 _estado_logado: dict[str, tuple] = {}
 _avisos: set[tuple[str, str]] = set()
-_tentativas: dict[tuple[str, str, int], int] = {}
-_retiradas_presas: dict[str, set[tuple[str, int]]] = {}
 
 
 def habilitado() -> bool:
@@ -97,8 +101,6 @@ def _reset_estado() -> None:
         _capacidades,
         _ultimo_erro,
         _estado_logado,
-        _tentativas,
-        _retiradas_presas,
     ):
         d.clear()
     _avisos.clear()
@@ -347,9 +349,7 @@ def _enviar_revisoes(conn, client, slug: str, agora: datetime, disjuntor: dict) 
             if acao == "parar":
                 return False
             if acao in ("transitorio", "pular"):
-                chave = (slug, imp, n)
-                _tentativas[chave] = _tentativas.get(chave, 0) + 1
-                if _tentativas[chave] > AVISO_TENTATIVAS:
+                if revs.somar_tentativa(conn, imp, n) > AVISO_TENTATIVAS:
                     _avisar_uma_vez(
                         slug,
                         f"tentativas:{imp}:{n}",
@@ -359,7 +359,7 @@ def _enviar_revisoes(conn, client, slug: str, agora: datetime, disjuntor: dict) 
                 if acao == "transitorio" or disjuntor["seguidos"] >= DISJUNTOR_5XX:
                     return True
                 continue
-            _tentativas.pop((slug, imp, n), None)
+            revs.zerar_tentativas(conn, imp, n)
             if acao == "reenviar" and reenvios.get(imp, 0) < MAX_REENVIOS:
                 reenvios[imp] = reenvios.get(imp, 0) + 1
                 nova = revs.vigente(conn, imp)
@@ -367,7 +367,7 @@ def _enviar_revisoes(conn, client, slug: str, agora: datetime, disjuntor: dict) 
                     fila.insert(0, nova)
             continue
         disjuntor["seguidos"] = 0
-        _tentativas.pop((slug, imp, n), None)
+        revs.zerar_tentativas(conn, imp, n)
         revs.marcar_enviada(conn, imp, n, resposta.model_dump(mode="json"), em=agora)
     return True
 
@@ -426,14 +426,14 @@ def _enviar_retiradas(
     sem saída (inválida, 409 sem revisão nova) loga uma vez e fica para depois.
     5xx (fora 503) pula só aquela retirada; rede, 429 e 503 encerram as
     retiradas desta volta. Retirada que falhou vai para o fim da fila
-    (`_retiradas_presas`, memória do processo, até `LIMITE_PRESAS`). Disjuntor
-    aberto (`DISJUNTOR_5XX` 5xx seguidos na volta) encerra. False = pausou."""
+    (`retirada_presa_em` no SQLite; acima de `LIMITE_PRESAS` a ordem é
+    esquecida). Disjuntor aberto (`DISJUNTOR_5XX` 5xx seguidos na volta)
+    encerra. False = pausou."""
     if disjuntor["seguidos"] >= DISJUNTOR_5XX:
         return True
-    presas = _retiradas_presas.setdefault(slug, set())
-    if len(presas) > LIMITE_PRESAS:
-        presas.clear()  # só ordem da fila: perder a memória não perde retirada
-    for r in revs.retiradas_pendentes(conn, LOTE_ENVIO, por_ultimo=presas):
+    if revs.contar_retiradas_presas(conn) > LIMITE_PRESAS:
+        revs.soltar_retiradas_presas(conn)  # só ordem da fila: nenhuma retirada se perde
+    for r in revs.retiradas_pendentes(conn, LOTE_ENVIO):
         imp, n = r["import_id"], int(r["revisao"])
         base = {
             "schema": "precos.aprovacao.v1",
@@ -453,7 +453,7 @@ def _enviar_retiradas(
                     f"retirada_invalida:{imp}:{alvo}",
                     f"retirada {imp}/{alvo} inválida: {exc}",
                 )
-                presas.add((imp, n))
+                revs.marcar_retirada_presa(conn, imp, n, em=agora)
                 break
             try:
                 client.post_precos_aprovacao(corpo)
@@ -470,18 +470,17 @@ def _enviar_retiradas(
                         f"retirada_409:{imp}:{alvo}",
                         f"retirada {imp}/{alvo}: 409 sem revisão nova; tenta no próximo ciclo",
                     )
-                    presas.add((imp, n))
+                    revs.marcar_retirada_presa(conn, imp, n, em=agora)
                     break
                 if _fora_do_contrato_2xx(exc):
                     _avisar_uma_vez(
                         slug, "resposta_b", "resposta 2xx da aprovação fora do contrato; aceita"
                     )
                     revs.marcar_retirada_enviada(conn, imp, n, em=agora)
-                    presas.discard((imp, n))
                     break
                 if _falha_aprovacao(slug, "retirada", exc, agora):
                     return False
-                presas.add((imp, n))
+                revs.marcar_retirada_presa(conn, imp, n, em=agora)
                 if not _so_este_pedido(exc):
                     return True
                 disjuntor["seguidos"] += 1
@@ -490,7 +489,6 @@ def _enviar_retiradas(
                 break
             disjuntor["seguidos"] = 0
             revs.marcar_retirada_enviada(conn, imp, n, em=agora)
-            presas.discard((imp, n))
             break
     return True
 

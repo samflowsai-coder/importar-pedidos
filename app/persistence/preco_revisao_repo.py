@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     import sqlite3
-    from collections.abc import Collection
 
 _ATIVAS = ("pendente_envio", "enviada", "recusada_flow")
 _ATIVAS_SQL = "('pendente_envio', 'enviada', 'recusada_flow')"
@@ -423,21 +422,14 @@ def retirar(conn: sqlite3.Connection, import_id: str, motivo: str, *, em: dateti
         )
 
 
-def retiradas_pendentes(
-    conn: sqlite3.Connection, limite: int, por_ultimo: Collection[tuple[str, int]] = ()
-) -> list[dict[str, Any]]:
+def retiradas_pendentes(conn: sqlite3.Connection, limite: int) -> list[dict[str, Any]]:
     """Retiradas a enviar: a última revisão que o Flow pode conhecer, `retirada` e
     ainda não avisada, sem revisão ativa mais nova (pedido reaberto: a revisão
     nova já substitui a velha no Flow). A retirada mira a última revisão
     conhecida pelo Flow; na 7.4, 409 `revisao_obsoleta` → reenviar com
     `details.revisaoVigente`; 200 com `aprovacaoId` nulo → feita.
-    `por_ultimo`: (import_id, revisao) presas, que vão para o fim da fila."""
-    presas = list(por_ultimo)
-    fim = (
-        f"(r.import_id, r.revisao) IN (VALUES {', '.join(['(?, ?)'] * len(presas))}), "
-        if presas
-        else ""
-    )
+    As presas (`retirada_presa_em`, `marcar_retirada_presa`) vão para o fim da
+    fila, a que falhou há mais tempo primeiro."""
     rows = conn.execute(
         f"""
         SELECT r.* FROM preco_revisao r
@@ -450,10 +442,11 @@ def retiradas_pendentes(
            AND NOT EXISTS (SELECT 1 FROM preco_revisao r3
                             WHERE r3.import_id = r.import_id AND r3.revisao > r.revisao
                               AND r3.situacao IN {_ATIVAS_SQL})
-         ORDER BY {fim}r.retirada_em, r.import_id
+         ORDER BY r.retirada_presa_em IS NOT NULL, r.retirada_presa_em, r.retirada_em,
+                  r.import_id
          LIMIT ?
-        """,  # noqa: S608 — constante e marcadores
-        (*(v for p in presas for v in p), limite),
+        """,  # noqa: S608 — constante
+        (limite,),
     ).fetchall()
     return [_linha(r) for r in rows]
 
@@ -461,9 +454,63 @@ def retiradas_pendentes(
 def marcar_retirada_enviada(
     conn: sqlite3.Connection, import_id: str, revisao: int, *, em: datetime
 ) -> None:
+    """A retirada chegou ao Flow; deixa de ser presa."""
     with conn:
         conn.execute(
-            "UPDATE preco_revisao SET retirada_enviada_em = ?"
+            "UPDATE preco_revisao SET retirada_enviada_em = ?, retirada_presa_em = NULL"
             " WHERE import_id = ? AND revisao = ? AND situacao = 'retirada'",
             (em.isoformat(), import_id, revisao),
+        )
+
+
+def marcar_retirada_presa(
+    conn: sqlite3.Connection, import_id: str, revisao: int, *, em: datetime
+) -> None:
+    """A retirada falhou nesta volta: vai para o fim da fila (ordem de
+    `retiradas_pendentes`), também depois de reiniciar o processo."""
+    with conn:
+        conn.execute(
+            "UPDATE preco_revisao SET retirada_presa_em = ?"
+            " WHERE import_id = ? AND revisao = ? AND situacao = 'retirada'",
+            (em.isoformat(), import_id, revisao),
+        )
+
+
+def contar_retiradas_presas(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM preco_revisao WHERE retirada_presa_em IS NOT NULL"
+    ).fetchone()
+    return int(row[0])
+
+
+def soltar_retiradas_presas(conn: sqlite3.Connection) -> int:
+    """Esquece a ordem das presas (só ordem da fila: nenhuma retirada se perde)."""
+    with conn:
+        cur = conn.execute(
+            "UPDATE preco_revisao SET retirada_presa_em = NULL WHERE retirada_presa_em IS NOT NULL"
+        )
+    return cur.rowcount
+
+
+def somar_tentativa(conn: sqlite3.Connection, import_id: str, revisao: int) -> int:
+    """Mais uma falha passageira no envio desta revisão; devolve o total."""
+    with conn:
+        conn.execute(
+            "UPDATE preco_revisao SET tentativas = tentativas + 1"
+            " WHERE import_id = ? AND revisao = ?",
+            (import_id, revisao),
+        )
+        row = conn.execute(
+            "SELECT tentativas FROM preco_revisao WHERE import_id = ? AND revisao = ?",
+            (import_id, revisao),
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def zerar_tentativas(conn: sqlite3.Connection, import_id: str, revisao: int) -> None:
+    with conn:
+        conn.execute(
+            "UPDATE preco_revisao SET tentativas = 0"
+            " WHERE import_id = ? AND revisao = ? AND tentativas <> 0",
+            (import_id, revisao),
         )

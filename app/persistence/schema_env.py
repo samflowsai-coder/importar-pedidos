@@ -415,6 +415,8 @@ DROP TABLE IF EXISTS preco_aprovacao;
 -- revisão. situacao: pendente_envio | enviada | recusada_flow | substituida | retirada.
 -- bloqueio_local: corpo que não pode ir ao Flow (fora do contrato, 413, 400
 -- payload_invalido); a revisão fica pendente_envio, fora da fila, até o conteúdo mudar.
+-- tentativas: falhas passageiras seguidas do envio (aviso no log acima de 5);
+-- retirada_presa_em: retirada que falhou, vai para o fim da fila (sobrevive ao reinício).
 CREATE TABLE IF NOT EXISTS preco_revisao (
     import_id           TEXT NOT NULL,
     revisao             INTEGER NOT NULL,
@@ -431,6 +433,8 @@ CREATE TABLE IF NOT EXISTS preco_revisao (
     retirada_motivo     TEXT,
     retirada_enviada_em TEXT,
     bloqueio_local      TEXT,
+    tentativas          INTEGER NOT NULL DEFAULT 0,
+    retirada_presa_em   TEXT,
     criado_em           TEXT NOT NULL,
     PRIMARY KEY (import_id, revisao)
 );
@@ -530,6 +534,9 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("preco_revisao", "tentada_em", "ALTER TABLE preco_revisao ADD COLUMN tentada_em TEXT"),
     # Trava de preço: corpo que não pode ir ao Flow (bloqueio local, não recusa do Flow).
     ("preco_revisao", "bloqueio_local", "ALTER TABLE preco_revisao ADD COLUMN bloqueio_local TEXT"),
+    # Trava de preço: estado da thread que sobrevive ao reinício (tentativas e retirada presa).
+    ("preco_revisao", "tentativas", "ALTER TABLE preco_revisao ADD COLUMN tentativas INTEGER NOT NULL DEFAULT 0"),
+    ("preco_revisao", "retirada_presa_em", "ALTER TABLE preco_revisao ADD COLUMN retirada_presa_em TEXT"),
     # Livro da volta v2: gravação no Fire, reenvio do resultado ao Flow e regra 9b.
     ("cadastro_volta", "produto_id", "ALTER TABLE cadastro_volta ADD COLUMN produto_id TEXT"),
     ("cadastro_volta", "modo", "ALTER TABLE cadastro_volta ADD COLUMN modo TEXT"),
