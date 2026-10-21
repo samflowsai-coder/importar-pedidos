@@ -473,6 +473,9 @@ cópia no db do próprio ambiente):
   confirmadas que não são da revisão vigente. Não toca a cópia da tabela (`preco_*_v1`: rede e
   chaves são upsert, `preco_tabela_v1` é a cópia append-only do Flow), o piso (1 linha por
   pedido) nem decisão não confirmada. Não há log de sync em tabela. Falha só loga.
+  **Por desenho, o que decide fica e cresce com o volume:** a última revisão de todo pedido
+  (inclusive a vigente `enviada` de pedido já faturado ou esquecido), a última conhecida pelo
+  Flow e as decisões da revisão vigente nunca saem; só o histórico intermediário é podado.
 - Estado (`gerado_em`, último erro, `pendente_envio`/`bloqueada_local`/`recusada_flow`) no log
   `flowpcp.precos estado env=…`, só quando muda. Tentativas e retiradas presas sobrevivem ao
   reinício (SQLite do ambiente); pausas, intervalos, capacidades e avisos vivem na memória do
