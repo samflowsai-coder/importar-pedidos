@@ -685,8 +685,8 @@ tem tela de gestão de preço: a decisão (aprovar/recusar) vem do Flow. Spec:
 4. Recarregar o preview NÃO regrava o `check_preco`: só `/api/commit` e `vincular-produto`
    regravam. Check salvo antes do deploy (sem `fire_unidade`, ou de outra fonte) mostra "sem
    avaliação"; pedido já importado fica assim até vincular o produto ou reimportar.
-   Antes de ligar na Nasmar: resolver o timeout de conexão na ida ao Fire da MM no
-   `/api/commit` (hoje sem timeout de conexão; com a MM fora, o commit fica lento).
+   A ida ao Fire da MM no `/api/commit` da Nasmar desiste da conexão em 5 s
+   (`LIMITE_CONEXAO_FONTE_S`): com a MM fora, o commit atrasa no máximo isso.
 5. Só então `ligado` (409 até a 1ª cópia completa). Desligar volta ao comportamento de hoje.
 
 ### Interruptor por ambiente (`environments.preco_trava_modo`)
@@ -773,7 +773,12 @@ chama `aplicar_precos(order, precos_aplicar)` antes de exportar e `registrar_apl
   `fire_product_id`/`fire_unidade` dele é o avaliado e o que vai no corpo. Os vínculos
   de-para do próprio ambiente (`produtos_por_item`) **não** entram nesse check. Item sem
   casamento na MM → `produto_nao_identificado`; MM fora ou fonte inexistente → bloqueia,
-  sem fallback para check salvo. O preview usa `entry["check_preco"]`
+  sem fallback para check salvo. A conexão com o Fire da fonte roda dentro de
+  `connection.limite_de_conexao(LIMITE_CONEXAO_FONTE_S = 5)`: sonda TCP de 5 s antes do
+  `fdb.connect` (o limite garantido; provado contra 10.255.255.1: 5,0 s) e
+  `isc_dpb_connect_timeout` no DPB (hook do fdb, só dentro do bloco). Estourou =
+  `FirebirdConnectionError` → check indisponível, a mesma semântica de "MM fora". Os outros
+  caminhos do portal não ganham limite. O preview usa `entry["check_preco"]`
   (`imports.check_preco_json`, gravado no `/api/commit` e regravado no `vincular-produto`
   por `check_preco_para_gravar`, marcado com `preco_fonte_slug` da fonte que o gerou);
   ausente ou de outra fonte → sem avaliação. `desligado` não faz consulta extra.

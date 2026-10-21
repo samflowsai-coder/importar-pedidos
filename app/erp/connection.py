@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import math
 import os
-from collections.abc import Generator
+import socket
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 from app.erp.exceptions import FirebirdConnectionError
 from app.utils.logger import logger
@@ -14,6 +17,56 @@ def _get_env(key: str, default: str = "") -> str:
 
 # fdb.load_api só pode rodar uma vez por processo; guardamos com este flag.
 _fb_lib_loaded = False
+
+# Limite de tempo da CONEXÃO (segundos) para quem abre dentro de
+# `limite_de_conexao`; None = sem limite (o padrão do portal inteiro).
+_limite_conexao_s: ContextVar[float | None] = ContextVar("fb_limite_conexao_s", default=None)
+# Módulo `fdb` em que o hook do DPB já foi registrado (registro é por processo).
+_hook_dpb_em: object | None = None
+
+
+@contextmanager
+def limite_de_conexao(segundos: float) -> Iterator[None]:
+    """Conexões TCP abertas dentro do bloco (mesma thread/contexto) desistem se
+    o servidor não aceitar em `segundos`: sonda TCP antes do `fdb.connect`
+    (o limite garantido) e `isc_dpb_connect_timeout` no DPB (o cliente
+    Firebird pode respeitar também). Estourou = `FirebirdConnectionError`,
+    a mesma falha de "Fire fora". Embedded não tem rede: não muda nada.
+    Uso: só o caminho que não pode esperar o timeout do sistema operacional
+    (Fire da fonte de preço no `/api/commit`)."""
+    token = _limite_conexao_s.set(segundos)
+    try:
+        yield
+    finally:
+        _limite_conexao_s.reset(token)
+
+
+def _dpb_connect_timeout(dsn, dpb) -> None:  # noqa: ARG001 — assinatura do hook do fdb
+    """Hook `HOOK_DATABASE_ATTACH_REQUEST`: põe `isc_dpb_connect_timeout` no DPB
+    só dentro de `limite_de_conexao`. Devolve None (o fdb segue o connect)."""
+    limite = _limite_conexao_s.get()
+    if limite is not None:
+        import fdb  # type: ignore[import]
+
+        dpb.add_integer_parameter(fdb.isc_dpb_connect_timeout, max(1, math.ceil(limite)))
+
+
+def _registrar_hook_dpb(fdb) -> None:
+    global _hook_dpb_em
+    if _hook_dpb_em is not fdb:
+        fdb.add_hook(fdb.HOOK_DATABASE_ATTACH_REQUEST, _dpb_connect_timeout)
+        _hook_dpb_em = fdb
+
+
+def _sondar_tcp(host: str, port: int, segundos: float) -> None:
+    """O servidor aceita TCP em `segundos`? Senão `FirebirdConnectionError`."""
+    try:
+        with socket.create_connection((host, port), timeout=segundos):
+            pass
+    except OSError as exc:
+        raise FirebirdConnectionError(
+            f"Firebird em {host}:{port} não respondeu em {segundos:g} s: {exc}"
+        ) from exc
 
 
 def _fb_connect_kwargs(cfg: dict) -> dict:
@@ -206,6 +259,11 @@ class FirebirdConnection:
             f"Conectando ao Firebird: {mode} → {kwargs['database']} "
             f"[charset={kwargs['charset']}]"
         )
+
+        limite = _limite_conexao_s.get()
+        if limite is not None and "host" in kwargs:
+            _sondar_tcp(kwargs["host"], kwargs["port"], limite)
+            _registrar_hook_dpb(fdb)
 
         try:
             conn = fdb.connect(**kwargs)

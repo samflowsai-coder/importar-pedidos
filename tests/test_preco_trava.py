@@ -1904,6 +1904,29 @@ def test_check_preco_para_gravar(monkeypatch):
     assert chamadas == [("mm", "mm")]
 
 
+def test_check_da_fonte_conecta_com_limite_de_5s_e_so_ele(monkeypatch):
+    from app.erp import connection
+
+    _precos_por_produto({"777": 5000})
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    limites = {}
+
+    def fake(order, *, env=None, escolhas=None):
+        limites[(env or {}).get("slug")] = connection._limite_conexao_s.get()
+        return copy.deepcopy(_check(ids=[777] if (env or {}).get("slug") == "mm" else [123]))
+
+    monkeypatch.setattr(environments_repo, "get_by_slug", lambda s: {"mm": ENV_MM}.get(s))
+    monkeypatch.setattr(pc, "check_order", fake)
+
+    preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+    preco_trava.check_preco_para_gravar(order, _env_nasmar("ligado"))
+
+    assert preco_trava.LIMITE_CONEXAO_FONTE_S == 5
+    assert limites == {"mm": 5, "nasmar": None}
+    assert connection._limite_conexao_s.get() is None
+
+
 def test_check_preco_para_gravar_com_mm_fora_devolve_none(monkeypatch):
     order = _order((54.0,))
     _checks_por_ambiente(monkeypatch, proprio=_check(), fonte=_check(available=False))

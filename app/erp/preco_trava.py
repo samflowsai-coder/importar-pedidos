@@ -46,6 +46,11 @@ from app.models.order import Order
 from app.persistence import db, environments_repo, precos_repo, repo
 from app.persistence import preco_revisao_repo as revs
 
+# Conexão com o Fire do ambiente fonte (Nasmar → MM) dentro do `/api/commit`:
+# com a fonte fora, desiste em 5 s (vira "Fire da fonte fora") em vez de esperar
+# o timeout do sistema operacional. Só esse caminho; o resto do portal não muda.
+LIMITE_CONEXAO_FONTE_S = 5
+
 MOTIVO_RETIRADA_LOCAL = "pedido liberado pela tabela de preço no Portal"
 MOTIVO_RETIRADA_INTERCOMPANY = "pedido intercompany, fora da trava de preço"
 
@@ -175,13 +180,18 @@ def _fonte(env: dict | None) -> str | None:
 def _check_da_fonte(order: Order, fonte: str) -> dict | None:
     """`check_order` no Fire do ambiente fonte, com o contexto DELE ativo: o
     degrau de-para lê o SQLite da fonte, nunca o do ambiente do pedido.
-    Fonte inexistente → None (bloqueia)."""
+    A conexão desiste em `LIMITE_CONEXAO_FONTE_S` (fonte fora = check
+    indisponível, a mesma semântica de antes). Fonte inexistente → None (bloqueia)."""
+    from app.erp.connection import limite_de_conexao
     from app.persistence import context as env_context
 
     amb = environments_repo.get_by_slug(fonte)
     if amb is None:
         return None
-    with env_context.active_env(amb["id"], amb["slug"]):
+    with (
+        env_context.active_env(amb["id"], amb["slug"]),
+        limite_de_conexao(LIMITE_CONEXAO_FONTE_S),
+    ):
         return pc.check_order(order, env=amb)
 
 
