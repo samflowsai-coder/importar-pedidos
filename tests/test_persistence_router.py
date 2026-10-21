@@ -118,3 +118,34 @@ def test_list_env_slugs_returns_active(tmp_path, monkeypatch):
             " ('3', 'old',    'Old',    '/a', '/b', '/c.fdb', 0, 'now', 'now')"
         )
     assert router.list_env_slugs() == ["mm", "nasmar"]
+
+
+def test_drop_do_modelo_anterior_de_preco_roda_uma_vez_por_banco(tmp_path, monkeypatch):
+    """O DROP das tabelas de preço do modelo anterior roda só no 1º boot do
+    banco (marcador em `schema_migracao`): um banco já migrado não perde uma
+    tabela com esse nome nos boots seguintes."""
+    import sqlite3
+
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    caminho = router.env_db_path("mm")
+    velho = sqlite3.connect(caminho)
+    velho.executescript(
+        "CREATE TABLE preco_rede (id TEXT); INSERT INTO preco_rede VALUES ('velha');"
+        "CREATE TABLE preco_aprovacao (id TEXT);"
+    )
+    velho.commit()
+    velho.close()
+
+    router.reset_init_cache()
+    with router.env_connect("mm") as conn:
+        nomes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "preco_rede" not in nomes and "preco_aprovacao" not in nomes
+        marcas = [r[0] for r in conn.execute("SELECT nome FROM schema_migracao")]
+        assert len(marcas) == 1
+        conn.execute("CREATE TABLE preco_tabela (dado TEXT)")
+        conn.execute("INSERT INTO preco_tabela VALUES ('fica')")
+
+    router.reset_init_cache()  # novo boot
+    with router.env_connect("mm") as conn:
+        assert [r[0] for r in conn.execute("SELECT dado FROM preco_tabela")] == ["fica"]
+        assert conn.execute("SELECT COUNT(*) FROM schema_migracao").fetchone()[0] == 1

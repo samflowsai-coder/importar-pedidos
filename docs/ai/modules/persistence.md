@@ -143,9 +143,12 @@ completo em [`modules/routing.md`](routing.md), aqui só o schema:
 
 ### Trava de preço (db do ambiente, `schema_env.py`)
 Cópia local da tabela do Flow no formato do contrato precos v1 (rota a); o Portal só aplica
-páginas (`precos_repo.aplicar_pagina`, uma transação por página; `reiniciar` zera tudo). O
-bootstrap derruba as tabelas do modelo anterior (`preco_rede`, `preco_rede_cnpj`, `preco_tabela`,
-`preco_sync`).
+páginas (`precos_repo.aplicar_pagina`, uma transação por página; `reiniciar` zera tudo). As
+tabelas do modelo anterior (`preco_rede`, `preco_rede_cnpj`, `preco_tabela`, `preco_sync`,
+`preco_aprovacao`) saem **uma vez por banco** (`MIGRACOES_UMA_VEZ` de `schema_env.py`, aplicada
+por `router._apply_migracoes_uma_vez`, que grava o nome em `schema_migracao (nome, aplicada_em)`
+na mesma transação; nome gravado = não roda de novo). Migração destrutiva nova entra como outra
+entrada dessa tupla, nunca solta no `TABLES_SQL`.
 - `preco_rede_v1` — PK `rede_id`; `nome`, `ativa`, `travada` (estado inteiro vindo do Flow).
 - `preco_rede_chave_v1` — PK `(rede_id, tipo, chave)`; `tipo` = `raiz` (8 caracteres) | `cnpj`
   (14, vence a raiz); substituídas inteiras quando a rede reaparece.
@@ -158,16 +161,18 @@ bootstrap derruba as tabelas do modelo anterior (`preco_rede`, `preco_rede_cnpj`
   (contrato precos v1 §4). `conteudo_hash`, `corpo_json` (`aprovacaoEnvioV1` com a revisão),
   `situacao` (`pendente_envio | enviada | recusada_flow | substituida | retirada`),
   `tentada_em` (hora da última tentativa do POST; ordena a fila de envio), `enviada_em`/`resposta_json`, `erro_definitivo` (422),
-  `bloqueio_local` (texto do bloqueio: corpo que não pode ir ao Flow; sai da fila de envio e só
-  conteúdo novo cria outra revisão), `retirada_em`/`retirada_motivo`/
-  `retirada_enviada_em`. Repo: `preco_revisao_repo`.
+  `bloqueio_local` (texto do bloqueio: corpo que não pode ir ao Flow; sai da fila de envio até
+  conteúdo novo criar outra revisão ou o admin reenviar, `desbloquear_locais`),
+  `tentativas` (falhas passageiras seguidas do envio; aviso acima de 5), `retirada_em`/
+  `retirada_motivo`/`retirada_enviada_em`, `retirada_presa_em` (retirada que falhou: fim da
+  fila, a mais antiga primeiro; limpa no sucesso). Repo: `preco_revisao_repo`.
 - `preco_revisao_piso` — PK `import_id`: piso vindo do 409 `revisao_obsoleta` (a próxima
   revisão nasce acima dele).
 - `preco_decisao` — PK `decisao_id` (idempotente): decisão do Flow por `item_chave`
   (`resultado`, `preco_aprovado_centavos`, `motivo_recusa`, `decidido_em`) e a `confirmacao`
   a devolver (`aplicada | descartada`, `confirmada_em`).
-- `preco_aprovacao` (aprovação por item, modelo anterior) saiu: o bootstrap faz `DROP TABLE IF
-  EXISTS` (nunca saiu da branch).
+- `preco_aprovacao` (aprovação por item, modelo anterior) saiu com as outras do modelo anterior
+  (migração de uma vez, acima; nunca saiu da branch).
 - `imports.check_preco_json` — check de produto que a trava avalia (gravado no `/api/commit` e
   regravado no `vincular-produto`); leva a marca `preco_fonte_slug` da fonte que o gerou, e
   de outra fonte vale como sem avaliação. `repo.get_import` devolve como `check_preco`.
