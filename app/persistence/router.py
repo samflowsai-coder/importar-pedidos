@@ -91,21 +91,27 @@ def _apply_migracoes_uma_vez(
     migracoes: tuple[tuple[str, tuple[str, ...]], ...],
 ) -> None:
     """Cada migração roda uma vez por banco: comandos + nome em `schema_migracao`
-    na mesma transação. Nome já gravado = pula (banco já migrado não muda)."""
+    na mesma transação. Nome já gravado = pula (banco já migrado não muda).
+    Dois processos no 1º boot: `BEGIN IMMEDIATE` serializa, os nomes são
+    relidos dentro da transação e o marcador entra com `INSERT OR IGNORE`."""
     if not migracoes:
         return
-    feitas = {r[0] for r in conn.execute("SELECT nome FROM schema_migracao")}
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migracao"
+        " (nome TEXT PRIMARY KEY, aplicada_em TEXT NOT NULL)"
+    )
     for nome, comandos in migracoes:
-        if nome in feitas:
-            continue
-        conn.execute("BEGIN")
+        conn.execute("BEGIN IMMEDIATE")
         try:
-            for sql in comandos:
-                conn.execute(sql)
-            conn.execute(
-                "INSERT INTO schema_migracao (nome, aplicada_em) VALUES (?, datetime('now'))",
-                (nome,),
-            )
+            feitas = {r[0] for r in conn.execute("SELECT nome FROM schema_migracao")}
+            if nome not in feitas:
+                for sql in comandos:
+                    conn.execute(sql)
+                conn.execute(
+                    "INSERT OR IGNORE INTO schema_migracao (nome, aplicada_em)"
+                    " VALUES (?, datetime('now'))",
+                    (nome,),
+                )
             conn.execute("COMMIT")
         except sqlite3.Error:
             conn.execute("ROLLBACK")
