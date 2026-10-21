@@ -3854,6 +3854,10 @@ function renderPreview(data) {
       priceBit = `<span style="color:var(--error);font-weight:600">✗ ${ps.items_mismatch} item(ns) com preço divergente do Fire — ajuste o cadastro ou a planilha e reimporte.</span>`;
     } else if (regraFire && (ps.items_no_order_price || 0) > 0) {
       priceBit = `<span style="color:var(--error);font-weight:600">✗ ${ps.items_no_order_price} item(ns) sem preço no pedido — corrija a planilha e reimporte.</span>`;
+    } else if (regraFire && data.sem_preco_dispensado && noPriceUnacked.length > 0) {
+      // Planilha sem ack (integração direta desligada): o preço do Fire não bloqueia,
+      // mas fica dito — quem importa a planilha no Fire vê o que ficou sem preço.
+      priceBit = `<span style="color:var(--text-muted)">ℹ ${noPriceUnacked.length} item(ns) sem preço cadastrado no Fire — a planilha sai sem confirmação.</span>`;
     } else if (regraFire && noPriceUnacked.length > 0) {
       priceBit = `<span style="color:var(--warn);font-weight:600">⚠ ${noPriceUnacked.length} item(ns) sem preço cadastrado no Fire.</span>
         <button class="btn" id="pvAckSemPrecoBtn"
@@ -4131,7 +4135,7 @@ function _isBlockedByPriceCheck(data) {
   for (const it of items) {
     if (it.price_status === 'mismatch') return true;
     if (it.price_status === 'no_order_price') return true;
-    if (it.price_status === 'no_price_in_fire') {
+    if (it.price_status === 'no_price_in_fire' && !data.sem_preco_dispensado) {
       const covered = (it.ean && ackedEans.has(it.ean)) || (it.product_code && ackedCodes.has(it.product_code));
       if (!covered) return true;
     }
@@ -4147,6 +4151,7 @@ function _blockReasonText(data) {
   const ackedCodes = new Set((ack && ack.items || []).map(i => i.product_code).filter(Boolean));
   const unacked = (check.items || []).filter(i =>
     i.price_status === 'no_price_in_fire'
+    && !data.sem_preco_dispensado
     && !(i.ean && ackedEans.has(i.ean))
     && !(i.product_code && ackedCodes.has(i.product_code))
   ).length;

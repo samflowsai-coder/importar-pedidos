@@ -1117,11 +1117,15 @@ def _contadores():
     ("rota", "evento"),
     [("send-to-fire", "send_to_fire_blocked"), ("export-xlsx", "xlsx_export_blocked")],
 )
-def test_desligado_grava_mesmo_audit_e_metrica(monkeypatch, rota, evento):
+def test_desligado_grava_mesmo_audit_e_metrica(monkeypatch, tmp_path, rota, evento):
     from fastapi.testclient import TestClient
 
     from app.web.server import app
 
+    # Com a integração direta ligada o ack de "sem preço" continua exigido nas
+    # duas rotas (em EXPORT_MODE=xlsx ele é dispensado: testes ao fim do arquivo).
+    monkeypatch.setenv("EXPORT_MODE", "db")
+    monkeypatch.setattr("app.config._CONFIG_FILE", tmp_path / "config.json")
     client = TestClient(app, raise_server_exceptions=False)
     check = _misto()
     order = _order((54.0, 54.0, 54.0))
@@ -2629,3 +2633,188 @@ def test_index_tem_o_texto_do_motivo_da_chave_repetida_na_fonte():
     )
     assert "escolha_pontual_chave_repetida:" in html
     assert "escolha_pontual_unidade_divergente:" in html
+
+
+# ── Planilha sem o ack de "sem preço no Fire" (21/10/2026) ──────────────────
+#
+# Enquanto a integração direta não liga (EXPORT_MODE=xlsx) o XLSX é revisado no
+# importador do Fire; exigir o ack por pedido travava o lote da operadora por um
+# preço que o Fire nem guarda em PRODUTOS. Dispensa SÓ esse ack, SÓ na rota de
+# planilha, SÓ fora de `ligado`; o resto da regra de hoje segue valendo.
+
+
+@pytest.fixture
+def config_isolada(monkeypatch, tmp_path):
+    """`app.config.load()` deixa o `config.json` da raiz sobrescrever EXPORT_MODE e
+    OUTPUT_DIR, e um teste de rota anterior o grava de verdade. Aponta pra um vazio."""
+    monkeypatch.setattr("app.config._CONFIG_FILE", tmp_path / "config.json")
+
+
+def _xlsx(monkeypatch, modo="xlsx"):
+    monkeypatch.setattr(preco_trava, "_export_mode", lambda: modo)
+
+
+@pytest.mark.parametrize("modo", ["desligado", "observando"])
+def test_planilha_nao_exige_ack_de_item_sem_preco_no_fire(monkeypatch, modo):
+    _copia(5400)
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check(status="no_price_in_fire"))
+    _xlsx(monkeypatch)
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env(modo), agora=AGORA, planilha=True
+    )
+
+    assert d.bloqueado is False
+    dispensado = _audits(import_id, "sem_preco_dispensado")
+    assert len(dispensado) == 1  # fica registrado o que deixou de ser exigido
+    assert dispensado[0]["detail"]["itens"] == [{"ean": "7890", "product_code": "C0"}]
+
+
+def test_envio_direto_continua_exigindo_o_ack(monkeypatch):
+    """Sem `planilha=True` (o caminho que insere no Fire), a regra é a de hoje, mesmo
+    com `export_mode="xlsx"`: o envio ao Fire insere no ERP em qualquer EXPORT_MODE."""
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check(status="no_price_in_fire"))
+    _xlsx(monkeypatch)
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env("desligado"), agora=AGORA, export_mode="xlsx"
+    )
+
+    assert d.bloqueado is True
+    assert d.metric_labels == ["no_price_unacked"]
+    assert _audits(import_id, "sem_preco_dispensado") == []
+
+
+@pytest.mark.parametrize("configurado", ["db", "both"])
+def test_integracao_direta_ligada_traz_o_rigor_de_volta(monkeypatch, configurado):
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _check(status="no_price_in_fire"))
+    _xlsx(monkeypatch, configurado)
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env("desligado"), agora=AGORA, planilha=True
+    )
+
+    assert d.bloqueado is True
+    assert d.reason == "price_check_failed"
+    assert _audits(import_id, "sem_preco_dispensado") == []
+
+
+def test_dispensa_nao_afrouxa_divergencia_nem_pedido_sem_preco(monkeypatch):
+    order = _order((54.0,) * 3)
+    import_id, entry = _seed(order)
+    _live(monkeypatch, _misto())
+    _xlsx(monkeypatch)
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env("desligado"), agora=AGORA, planilha=True
+    )
+
+    assert d.bloqueado is True
+    assert d.metric_labels == ["price_mismatch", "missing_order_price"]
+    assert "sem preço no cadastro do Fire" not in d.detalhe
+
+
+def test_ack_dado_antes_nao_gera_registro_de_dispensa(monkeypatch):
+    """Item já confirmado pelo operador não foi dispensado: foi confirmado."""
+    order = _order((54.0,))
+    import_id, entry = _seed(order, sem_preco_ack_items=[{"ean": "7890", "product_code": None}])
+    _live(monkeypatch, _check(status="no_price_in_fire"))
+    _xlsx(monkeypatch)
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env("desligado"), agora=AGORA, planilha=True
+    )
+
+    assert d.bloqueado is False
+    assert _audits(import_id, "sem_preco_dispensado") == []
+
+
+def test_ligado_nao_tem_dispensa():
+    assert preco_trava.sem_preco_dispensado(_env("ligado"), planilha=True) is False
+
+
+@pytest.mark.parametrize("modo", [None, "desligado", "observando"])
+def test_predicado_da_dispensa(monkeypatch, modo):
+    env = None if modo is None else _env(modo)
+    _xlsx(monkeypatch)
+    assert preco_trava.sem_preco_dispensado(env, planilha=True) is True
+    assert preco_trava.sem_preco_dispensado(env, planilha=False) is False
+    _xlsx(monkeypatch, "db")
+    assert preco_trava.sem_preco_dispensado(env, planilha=True) is False
+
+
+def _lote_sem_preco(monkeypatch, tmp_path, export_mode):
+    """3 pedidos com item sem preço no Fire, exportados em lote pela rota HTTP."""
+    from fastapi.testclient import TestClient
+
+    from app.web.server import app
+
+    monkeypatch.setenv("EXPORT_MODE", export_mode)
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+    ids = [_seed(_order((54.0,)))[0] for _ in range(3)]
+    _live(monkeypatch, _check(status="no_price_in_fire"))
+    client = TestClient(app, raise_server_exceptions=False)
+    return client.post("/api/batch/export-xlsx", json={"ids": ids}).json()
+
+
+def test_lote_de_planilha_gera_todos_sem_pedir_ack(monkeypatch, tmp_path, config_isolada):
+    """O caso da operadora (21/10): lote em modo XLS, produto sem preço no Fire."""
+    res = _lote_sem_preco(monkeypatch, tmp_path, "xlsx")
+
+    assert (res["ok"], res["failed"]) == (3, 0)
+    assert list((tmp_path / "out").glob("*.xlsx"))  # a planilha de fato saiu
+
+
+def test_lote_com_integracao_direta_ligada_segue_bloqueando_e_diz_por_que(
+    monkeypatch, tmp_path, config_isolada
+):
+    res = _lote_sem_preco(monkeypatch, tmp_path, "db")
+
+    assert (res["ok"], res["failed"]) == (0, 3)
+    assert {r["reason"] for r in res["results"]} == {"price_check_failed"}
+    assert all("sem confirmação" in r["detail"] for r in res["results"])
+    assert not (tmp_path / "out").exists() or not list((tmp_path / "out").glob("*.xlsx"))
+
+
+@pytest.mark.parametrize(
+    ("configurado", "esperado"), [("xlsx", True), ("db", False), ("both", False)]
+)
+def test_preview_avisa_a_tela_quando_a_planilha_dispensa_o_ack(
+    monkeypatch, configurado, esperado, config_isolada
+):
+    from fastapi.testclient import TestClient
+
+    from app.web.server import app
+
+    monkeypatch.setenv("EXPORT_MODE", configurado)
+    import_id, _ = _seed(_order((54.0,)))
+    r = TestClient(app, raise_server_exceptions=False).get(f"/api/imported/{import_id}/preview")
+
+    assert r.status_code == 200, r.text
+    assert r.json()["sem_preco_dispensado"] is esperado
+
+
+def test_envio_ao_fire_com_xlsx_configurado_continua_exigindo_o_ack(monkeypatch, config_isolada):
+    """O erro que os testes antigos pegaram: o envio INSERE no Fire mesmo com
+    EXPORT_MODE=xlsx, então nunca pode herdar a dispensa da planilha."""
+    from fastapi.testclient import TestClient
+
+    from app.web.server import app
+
+    monkeypatch.setenv("EXPORT_MODE", "xlsx")
+    import_id, _ = _seed(_order((54.0,)))
+    _live(monkeypatch, _check(status="no_price_in_fire"))
+
+    r = TestClient(app, raise_server_exceptions=False).post(
+        f"/api/imported/{import_id}/send-to-fire"
+    )
+
+    assert r.status_code == 409
+    assert "sem confirmação" in r.json()["detail"]
+    assert _audits(import_id, "sem_preco_dispensado") == []

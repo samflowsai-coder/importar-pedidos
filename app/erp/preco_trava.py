@@ -106,6 +106,17 @@ def _modo(env: dict | None) -> str:
     return modo if modo in ("observando", "ligado") else "desligado"
 
 
+def sem_preco_dispensado(env: dict | None, *, planilha: bool) -> bool:
+    """A planilha dispensa o ack de "sem preço no Fire" (regra antiga).
+
+    Só com a integração direta desligada (`EXPORT_MODE=xlsx`: a planilha é
+    revisada no importador do Fire, e o preço do Fire não está em `PRODUTOS`),
+    só no caminho que gera planilha, e nunca em `ligado` (ali a tabela do Flow
+    decide). Com `db`/`both` o rigor volta sozinho. Preview e portão usam
+    ESTE predicado, para o botão individual e o lote não divergirem."""
+    return planilha and _modo(env) != "ligado" and _export_mode() == "xlsx"
+
+
 def trava_ativa(env: dict | None) -> bool:
     """Trava em `observando` ou `ligado` (XLSX só pelo portão)."""
     return _modo(env) != "desligado"
@@ -992,8 +1003,17 @@ def _preco_do_decidido(order: Order, check: dict) -> dict:
     return {**check, "items": itens}
 
 
-def _regra_de_hoje(check: dict, ack_items: list) -> DecisaoEnvio:
+def _regra_de_hoje(
+    check: dict, ack_items: list, *, sem_preco_dispensado: bool = False
+) -> DecisaoEnvio:
     blocked, block_detail = pc.is_blocking(check, ack_items=ack_items)
+    if sem_preco_dispensado and block_detail.get("items_no_price_unacked"):
+        # Dispensa = tratar o item sem preço e sem ack como se tivesse ack. Reusa o
+        # `is_blocking` (o predicado de "coberto" mora lá, num lugar só): a segunda
+        # chamada devolve o que sobra bloqueando (divergência, pedido sem preço).
+        dispensados = block_detail["items_no_price_unacked"]
+        blocked, block_detail = pc.is_blocking(check, ack_items=[*ack_items, *dispensados])
+        block_detail["items_sem_preco_dispensados"] = dispensados
     if not blocked:
         return DecisaoEnvio(False, block_detail=block_detail)
     labels: list[str] = []
@@ -1313,6 +1333,7 @@ def decidir_envio(
     agora: datetime,
     produtos_por_item: dict[int, int] | None = None,
     export_mode: str | None = None,
+    planilha: bool = False,
 ) -> DecisaoEnvio:
     """Decide se o pedido pode ir ao Fire/XLSX. O chamador grava o audit de
     bloqueio (nome do seu caminho) com `block_detail` e conta `metric_labels`;
@@ -1328,6 +1349,12 @@ def decidir_envio(
 
     `export_mode`: o que este caminho gera ("xlsx", "db" ou "both"); None = o
     `EXPORT_MODE` configurado. A rota de planilha passa "xlsx" sempre.
+
+    `planilha`: o chamador só GERA planilha, não insere no Fire (a rota de export).
+    Sinal explícito, não derivado de `export_mode`: o envio ao Fire insere no ERP
+    mesmo com `EXPORT_MODE=xlsx` (o modo só decide se uma planilha sai além do
+    insert). Só com `planilha` o ack de "sem preço" pode ser dispensado
+    (`sem_preco_dispensado`).
 
     Antes de qualquer lógica de preço, a trava de produto (`produto_chave_modo`,
     `_portao_produto`) sobre o check do ambiente do pedido: em `ligado` bloqueia
@@ -1347,15 +1374,37 @@ def decidir_envio(
     if bloqueio_produto is not None:
         return bloqueio_produto
     if not _produto_ligado(env):
-        decisao = _decidir_preco(import_id, order, entry, live, env, agora, produtos_por_item)
+        decisao = _decidir_preco(
+            import_id,
+            order,
+            entry,
+            live,
+            env,
+            agora,
+            produtos_por_item,
+            planilha=planilha,
+        )
         decisao.check_vivo = live
         return decisao
     # ligado: o SEQ avaliado e o gravado saem do mesmo check que a trava aprovou.
     _, decididos = produto_trava.produtos_decididos(live)
-    decisao = _decidir_preco(import_id, order, entry, live, env, agora, decididos)
+    decisao = _decidir_preco(
+        import_id, order, entry, live, env, agora, decididos, planilha=planilha
+    )
     decisao.check = live
     decisao.check_vivo = live
     return decisao
+
+
+def _registrar_dispensa(import_id: str, itens: list[dict]) -> None:
+    """Audit `sem_preco_dispensado`: o que a planilha deixou de exigir (o ack que
+    a regra antiga pedia). Nunca derruba o envio: é registro, não decisão."""
+    try:
+        repo.append_audit(import_id, "sem_preco_dispensado", {"itens": itens})
+    except Exception as exc:  # noqa: BLE001
+        from app.utils.logger import logger
+
+        logger.warning(f"audit sem_preco_dispensado falhou ({type(exc).__name__}): {exc}")
 
 
 def _decidir_preco(
@@ -1366,8 +1415,13 @@ def _decidir_preco(
     env: dict | None,
     agora: datetime,
     produtos_por_item: dict[int, int] | None,
+    *,
+    planilha: bool = False,
 ) -> DecisaoEnvio:
-    """A parte de preço do `decidir_envio`, depois da trava de produto."""
+    """A parte de preço do `decidir_envio`, depois da trava de produto.
+
+    `planilha`: o caminho só gera planilha (a rota de export); com a integração
+    direta desligada, dispensa o ack de "sem preço no Fire" (`sem_preco_dispensado`)."""
     modo = _modo(env)
     ack_items = entry.get("sem_preco_ack_items") or []
 
@@ -1376,9 +1430,15 @@ def _decidir_preco(
             import_id, order, entry, live, ack_items, agora, produtos_por_item, env
         )
 
+    dispensa = sem_preco_dispensado(env, planilha=planilha)
     hoje = _regra_de_hoje(
-        _preco_do_decidido(order, live) if _produto_ligado(env) else live, ack_items
+        _preco_do_decidido(order, live) if _produto_ligado(env) else live,
+        ack_items,
+        sem_preco_dispensado=dispensa,
     )
+    dispensados = hoje.block_detail.get("items_sem_preco_dispensados") or []
+    if dispensados:
+        _registrar_dispensa(import_id, dispensados)
     if modo == "observando":
         try:
             grupo = cnpjs_grupo()  # uma vez por chamada do portão
@@ -1392,6 +1452,8 @@ def _decidir_preco(
                     "rede_id": av.rede.id if av.rede else None,
                     "regra_de_hoje_bloqueia": hoje.bloqueado,
                     "itens": [asdict(it) for it in av.itens],
+                    # Só com a dispensa: sem isto "hoje libera" some o motivo.
+                    **({"sem_preco_dispensados": len(dispensados)} if dispensa else {}),
                 },
             )
             hoje.avaliacao = av

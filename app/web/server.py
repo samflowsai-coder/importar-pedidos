@@ -466,6 +466,17 @@ def _roteamento_para_preview(order, *, entry=None) -> dict | None:
     }
 
 
+def _sem_preco_dispensado_no_preview(env: dict | None) -> bool:
+    """A tela não pede o ack de "sem preço no Fire" onde a planilha o dispensa.
+    O MESMO predicado do portão (`preco_trava.sem_preco_dispensado`): o botão
+    individual e o lote não podem divergir. `planilha=True`: a ação primária do
+    preview é a planilha sempre que a integração direta está desligada, que é a
+    única situação em que o predicado vale."""
+    from app.erp import preco_trava
+
+    return preco_trava.sem_preco_dispensado(env, planilha=True)
+
+
 def _build_preview_payload(
     preview_id: str, source_filename: str, order, check: dict | None = None
 ) -> dict:
@@ -2089,6 +2100,7 @@ async def preview_file(
     payload["roteamento"] = _roteamento_para_preview(order, entry=entry)
     payload["produto_chave_modo"] = _produto_chave_modo(request_env)
     payload["produto_trava"] = _produto_trava_preview(check, request_env)
+    payload["sem_preco_dispensado"] = _sem_preco_dispensado_no_preview(request_env)
     return JSONResponse(payload)
 
 
@@ -2194,6 +2206,7 @@ def preview_pending(
         payload["roteamento"] = _roteamento_para_preview(order, entry=entry)
     payload["produto_chave_modo"] = _produto_chave_modo(request_env)
     payload["produto_trava"] = _produto_trava_preview(check, request_env)
+    payload["sem_preco_dispensado"] = _sem_preco_dispensado_no_preview(request_env)
     return JSONResponse(payload)
 
 
@@ -3108,6 +3121,7 @@ def _export_one_xlsx(
         produtos_por_item=produtos_por_item,
         # Esta rota gera planilha em qualquer EXPORT_MODE: valem as regras dela.
         export_mode="xlsx",
+        planilha=True,
     )
     if decisao.bloqueado:
         repo.append_audit(import_id, "xlsx_export_blocked", decisao.block_detail)
@@ -4813,6 +4827,9 @@ def rehydrate_preview(
     payload["arquivo_original"] = _arquivo_original_info(entry)
     payload["produto_chave_modo"] = _produto_chave_modo(_request_environment(request))
     payload["produto_trava"] = _produto_trava_preview(check, _request_environment(request))
+    payload["sem_preco_dispensado"] = _sem_preco_dispensado_no_preview(
+        _request_environment(request)
+    )
     # Situação de preço por item (trava). Só leitura; ausente em `desligado` e
     # em qualquer falha — o preview sempre renderiza.
     try:
