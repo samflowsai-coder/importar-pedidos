@@ -397,3 +397,26 @@ def test_cartao_da_trava_tem_o_reenviar_bloqueados():
     assert 'id="btn-preco-desbloquear"' in html
     assert "/preco-trava/desbloquear" in html
     assert "preco_bloqueadas_local" in html
+
+
+def test_get_do_ambiente_nao_cria_o_banco_do_ambiente(setup):
+    from app.web.server import app
+
+    e = _novo_env(setup)
+    caminho = router.env_db_path("mm")
+    if caminho.exists():
+        caminho.unlink()
+    c = TestClient(app)
+    assert c.get(f"/api/admin/environments/{e['id']}").json()["preco_bloqueadas_local"] == 0
+    assert not caminho.exists()
+
+
+def test_cartao_do_reenvio_vale_nos_dois_modos():
+    from pathlib import Path
+
+    html = (
+        Path(__file__).parent.parent / "app" / "web" / "static" / "admin-ambiente-edit.html"
+    ).read_text(encoding="utf-8")
+    assert "até 30 s" not in html
+    assert "Reenvio pedido" not in html
+    assert "Pedidos de volta à fila" in html

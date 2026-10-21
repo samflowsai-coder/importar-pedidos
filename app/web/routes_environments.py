@@ -135,8 +135,11 @@ def create_environment(payload: CreateEnvRequest, _=Depends(require_admin)):
 
 def _preco_bloqueadas_local(slug: str) -> int | None:
     """Revisões da trava de preço bloqueadas localmente (o cartão mostra e
-    oferece o reenvio). None se o banco do ambiente não respondeu."""
+    oferece o reenvio). None se o banco do ambiente não respondeu; 0 sem
+    abrir nada se o banco ainda não existe (o GET não cria o SQLite)."""
     try:
+        if not db_router.env_db_path(slug).exists():
+            return 0
         with db_router.env_connect(slug) as conn:
             return revs.contagem_por_situacao(conn).get("bloqueada_local", 0)
     except Exception as exc:  # noqa: BLE001 — só informativo: o GET não pode cair

@@ -643,7 +643,8 @@
         '<strong>' + n + (n === 1 ? ' pedido parado' : ' pedidos parados') +
         ' antes do Flow:</strong> o pedido ficou grande demais ou fora do formato que o Flow aceita, ' +
         'e por isso não foi para aprovação de preço. Depois de corrigir a causa, reenvie: ' +
-        'eles voltam à fila na próxima volta (até 30 s), e o que continuar fora do formato é bloqueado de novo.';
+        'eles voltam à fila de envio ao Flow, que sai com a trava em Ligado; ' +
+        'o que continuar fora do formato é bloqueado de novo.';
       document.getElementById('btn-preco-desbloquear').hidden = false;
       box.hidden = false;
     }
@@ -1059,7 +1060,7 @@
         // O botão some: o foco vai para o resultado, não para o fim da página.
         texto.setAttribute('tabindex', '-1');
         texto.focus();
-        status.textContent = '✓ Reenvio pedido';
+        status.textContent = '✓ Pedidos de volta à fila';
         status.classList.add('ok');
       } catch (err) {
         status.textContent = '✗ ' + err.message;
