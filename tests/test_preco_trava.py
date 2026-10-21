@@ -2383,33 +2383,51 @@ def test_index_tem_o_texto_do_motivo_da_escolha_pontual():
     assert "escolha_pontual_sem_fonte:" in html
 
 
-# ── Escolha pontual resolvida pelo código na fonte (revisão, item 1) ───────
+# ── Escolha pontual resolvida pelo código na fonte (revisão, item 1 / A-E) ──
 
+# O catálogo guardado na escolha está velho ("AF-VELHO"); o Fire da Nasmar,
+# lido agora, diz que o produto 456 tem o código "AF-123" (R21).
 _ESCOLHA_COD = {
-    "0": {"fire_seq": 456, "por": "op@x.com", "em": "2026-10-20T10:00:00", "codigo": "AF-123"}
+    "0": {"fire_seq": 456, "por": "op@x.com", "em": "2026-10-20T10:00:00", "codigo": "AF-VELHO"}
 }
 
 
-def _produto_ok(seq, fonte="codprod_altern", unidade="KIT"):
+def _cand(seq, codigo="AF-123", unidade="KIT"):
+    return {"seq": seq, "descricao": "MEIA", "codprod_altern": codigo, "unidade": unidade}
+
+
+def _produto_ok(seq, fonte="codprod_altern", unidade="KIT", codigo="AF-123"):
     return {
         "estado": "ok",
         "fire_seq": seq,
         "fonte": fonte,
         "motivo": None,
-        "candidatos": [
-            {"seq": seq, "descricao": "MEIA", "codprod_altern": "AF-123", "unidade": unidade}
-        ],
+        "candidatos": [_cand(seq, codigo, unidade)],
     }
 
 
-def _fonte_por_codigo(monkeypatch, produto):
-    """Check falso: na MM, o item 0 só resolve se chegar com o código da escolha
-    (e sem EAN); o próprio ambiente devolve o check de sempre."""
+def _vivo(n, *, codigo="AF-123", unidade="KIT", seq=456):
+    """Check ao vivo da Nasmar: item 0 decidido pela escolha pontual."""
+    check = _check(n)
+    if seq is not None:
+        check["items"][0]["produto"] = {
+            "estado": "ok",
+            "fire_seq": seq,
+            "fonte": "escolha_pontual",
+            "motivo": "",
+            "candidatos": [_cand(seq, codigo, unidade)],
+        }
+    return check
+
+
+def _fonte_por_codigo(monkeypatch, produto, *, vivo=None):
+    """Check falso: na MM, o item 0 só resolve se chegar com o código "AF-123"
+    (e sem EAN); a Nasmar devolve `vivo` (padrão: escolha com código AF-123)."""
     vistos = []
 
     def fake(order, *, env=None, escolhas=None):
         if (env or {}).get("slug") != "mm":
-            return copy.deepcopy(_check(len(order.items)))
+            return copy.deepcopy(vivo if vivo is not None else _vivo(len(order.items)))
         it0 = order.items[0]
         vistos.append((it0.product_code, it0.ean))
         check = _check(ids=[999] + [778] * (len(order.items) - 1))
@@ -2424,7 +2442,7 @@ def _fonte_por_codigo(monkeypatch, produto):
     return vistos
 
 
-def test_escolha_com_codigo_que_a_mm_resolve_e_avaliada_normalmente(monkeypatch):
+def test_escolha_casa_na_mm_pelo_codigo_lido_do_fire_e_nao_pelo_catalogo(monkeypatch):
     _precos_por_produto({"777": 5400, "778": 5400})
     order = _order((54.0, 54.0))
     import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
@@ -2432,7 +2450,7 @@ def test_escolha_com_codigo_que_a_mm_resolve_e_avaliada_normalmente(monkeypatch)
 
     d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
 
-    assert ("AF-123", None) in vistos
+    assert vistos == [("AF-123", None)]  # nunca o "AF-VELHO" do catálogo
     it0 = d.avaliacao.itens[0]
     assert (it0.situacao, it0.motivo, it0.fire_produto_id) == ("ok", "ok", "777")
     assert d.bloqueado is False
@@ -2451,8 +2469,33 @@ def test_escolha_com_codigo_divergente_vai_ao_flow(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "vivo",
+    [
+        _vivo(2, codigo=None),  # produto sem código no Fire da Nasmar
+        _vivo(2, seq=None),  # Fire ao vivo sem o candidato da escolha
+        _vivo(2, seq=999),  # o ao vivo decidiu outro SEQ
+    ],
+)
+def test_escolha_sem_codigo_ao_vivo_vai_sem_chave_e_bloqueia(monkeypatch, vivo):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    vistos = _fonte_por_codigo(monkeypatch, _produto_ok(777), vivo=vivo)
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert vistos == [(None, None)]
+    assert d.bloqueado is True
+    assert d.avaliacao.itens[0].motivo == "escolha_pontual_sem_fonte"
+
+
+@pytest.mark.parametrize(
     "produto",
-    [None, _produto_ok(777, fonte="depara"), {"estado": "ambiguo", "fire_seq": None}],
+    [
+        None,
+        {"estado": "ambiguo", "fire_seq": None},
+        _produto_ok(777, fonte="depara", codigo="OUTRO"),  # de-para para produto de outro código
+    ],
 )
 def test_escolha_que_a_mm_nao_resolve_pelo_codigo_fica_sem_avaliacao(monkeypatch, produto):
     _precos_por_produto({"777": 5400, "778": 5400})
@@ -2474,7 +2517,7 @@ def test_check_preco_gravado_marca_a_escolha_resolvida_e_o_preview_avalia(monkey
     import_id, entry = _seed(order, check=_check(2), produto_escolhido=_ESCOLHA_COD)
     _fonte_por_codigo(monkeypatch, _produto_ok(777))
 
-    salvo = preco_trava.check_preco_para_gravar(order, _env_nasmar("ligado"), entry)
+    salvo = preco_trava.check_preco_para_gravar(order, _env_nasmar("ligado"), entry, _vivo(2))
     assert salvo["items"][0]["fire_product_id"] == 777
     assert salvo["items"][0]["escolha_na_fonte"] is True
 
@@ -2483,3 +2526,14 @@ def test_check_preco_gravado_marca_a_escolha_resolvida_e_o_preview_avalia(monkey
         import_id, entry, order, env=_env_nasmar("ligado"), agora=AGORA
     )
     assert preco["itens"][0]["estado"] == "ok"
+
+
+def test_check_preco_para_gravar_sem_check_ao_vivo_deixa_a_escolha_sem_chave(monkeypatch):
+    order = _order((54.0, 54.0))
+    _, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    vistos = _fonte_por_codigo(monkeypatch, _produto_ok(777))
+
+    salvo = preco_trava.check_preco_para_gravar(order, _env_nasmar("ligado"), entry)
+
+    assert vistos == [(None, None)]
+    assert salvo["items"][0]["escolha_na_fonte"] is False

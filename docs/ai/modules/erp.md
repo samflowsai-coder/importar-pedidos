@@ -168,8 +168,12 @@ aponta para o produto X, que não existe mais ou está bloqueado."). Vale só pa
 aquele import: todo chamador que confere um import salvo passa as escolhas dele
 (`decidir_envio`, recheck do vincular, ack-sem-preço, a própria rota); o check da
 fonte de preço (`_check_da_fonte`) não (SEQs de outro Fire). Com `preco_fonte_slug` ≠ o
-próprio, a linha com escolha vai à fonte com o `codigo` (`CODPROD_ALTERN`) gravado na
-escolha como única chave (`_pedido_para_a_fonte`, sem EAN): se a fonte resolve a um
+próprio, a linha com escolha vai à fonte com o `CODPROD_ALTERN` do produto escolhido
+**lido do Fire no check ao vivo** do ambiente do pedido (R21: item `ok` por
+`escolha_pontual` no mesmo SEQ; nunca o `codigo` do catálogo guardado na escolha) como
+única chave (`_pedido_para_a_fonte`, sem EAN). Sem esse candidato ao vivo (Fire fora,
+`check_preco_para_gravar` sem `live`) ou sem código no Fire, a linha vai sem chave e
+bloqueia. As rotas de escolha, vincular e mover passam o check fresco como `live`. Se a fonte resolve a um
 único produto ativo pelo código (`estado` `ok`, fonte `codprod_altern`), o item é
 avaliado normalmente com esse SEQ (`escolha_na_fonte: True` no check; conforme ou
 divergente → Flow como qualquer item). Senão (sem código, ambíguo, só por de-para,

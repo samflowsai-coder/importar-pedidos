@@ -182,21 +182,45 @@ def _fonte(env: dict | None) -> str | None:
     return slug if slug and slug != (env or {}).get("slug") else None
 
 
-def _pedido_para_a_fonte(order: Order, entry: dict | None) -> tuple[Order, dict[int, int]]:
+def _escolhas_vivas(live: dict | None, escolhas: dict[int, int]) -> dict[int, dict | None]:
+    """{posição: candidato decidido no check ao vivo do ambiente do pedido} de
+    cada escolha: só o item `ok` por `escolha_pontual` no MESMO SEQ da escolha
+    (R21: o lido do Fire agora vale mais que o catálogo guardado). Sem check ao
+    vivo, outro SEQ ou Fire fora → None."""
+    itens = (live or {}).get("items") or []
+    out: dict[int, dict | None] = {}
+    for i, seq in escolhas.items():
+        produto = (itens[i] or {}).get("produto") if 0 <= i < len(itens) else None
+        out[i] = (
+            produto_trava.candidato_decidido(produto)
+            if isinstance(produto, dict)
+            and produto.get("estado") == "ok"
+            and produto.get("fonte") == "escolha_pontual"
+            and str(produto.get("fire_seq")) == str(seq)
+            else None
+        )
+    return out
+
+
+def _pedido_para_a_fonte(
+    order: Order, entry: dict | None, live: dict | None
+) -> tuple[Order, dict[int, int], dict[int, dict | None]]:
     """O pedido como a fonte deve casá-lo: item com escolha pontual vai com o
-    `codigo` (`CODPROD_ALTERN`) gravado na escolha como única chave (sem EAN);
-    sem código, vai sem chave nenhuma. Devolve também as escolhas."""
+    `CODPROD_ALTERN` do produto escolhido, lido do Fire no check ao vivo
+    (`_escolhas_vivas`), como única chave (sem EAN). Sem candidato ao vivo ou
+    sem código no Fire, vai sem chave nenhuma (bloqueia). O `codigo` guardado
+    na escolha (catálogo) nunca é usado. Devolve também escolhas e candidatos."""
     escolhas = pc.escolhas_do_import(entry)
     if not escolhas:
-        return order, {}
-    bruto = (entry or {}).get("produto_escolhido") or {}
+        return order, {}, {}
+    vivos = _escolhas_vivas(live, escolhas)
     novo = order.model_copy(deep=True)
     for i in escolhas:
         if 0 <= i < len(novo.items):
-            dado = bruto.get(str(i)) if isinstance(bruto.get(str(i)), dict) else {}
-            novo.items[i].product_code = str(dado.get("codigo") or "").strip() or None
+            codigo = ((vivos.get(i) or {}).get("codprod_altern") or "").strip() or None
+            novo.items[i].product_code = codigo
             novo.items[i].ean = None
-    return novo, escolhas
+    return novo, escolhas, vivos
 
 
 def _marcar_escolhas_na_fonte(check: dict | None, escolhas: dict[int, int]) -> dict | None:
@@ -229,11 +253,13 @@ def _marcar_escolhas_na_fonte(check: dict | None, escolhas: dict[int, int]) -> d
     return {**check, "items": itens}
 
 
-def _check_da_fonte(order: Order, fonte: str, entry: dict | None = None) -> dict | None:
+def _check_da_fonte(
+    order: Order, fonte: str, entry: dict | None = None, live: dict | None = None
+) -> dict | None:
     """`check_order` no Fire do ambiente fonte, com o contexto DELE ativo: o
     degrau de-para lê o SQLite da fonte, nunca o do ambiente do pedido.
-    Item com escolha pontual casa pelo código da escolha (`_pedido_para_a_fonte`,
-    `_marcar_escolhas_na_fonte`). A conexão desiste em `LIMITE_CONEXAO_FONTE_S`
+    Item com escolha pontual casa pelo código do produto escolhido lido do Fire
+    no check ao vivo `live` (`_pedido_para_a_fonte`, `_marcar_escolhas_na_fonte`). A conexão desiste em `LIMITE_CONEXAO_FONTE_S`
     (fonte fora = check indisponível, a mesma semântica de antes). Fonte
     inexistente → None (bloqueia)."""
     from app.erp.connection import limite_de_conexao
@@ -242,7 +268,7 @@ def _check_da_fonte(order: Order, fonte: str, entry: dict | None = None) -> dict
     amb = environments_repo.get_by_slug(fonte)
     if amb is None:
         return None
-    pedido, escolhas = _pedido_para_a_fonte(order, entry)
+    pedido, escolhas, _ = _pedido_para_a_fonte(order, entry, live)
     with (
         env_context.active_env(amb["id"], amb["slug"]),
         limite_de_conexao(LIMITE_CONEXAO_FONTE_S),
@@ -271,7 +297,7 @@ def _check_para_preco(
             produtos_por_item,
             decidido=_produto_ligado(env),
         )
-    return _check_utilizavel(_check_da_fonte(order, fonte, entry), order)
+    return _check_utilizavel(_check_da_fonte(order, fonte, entry, live), order)
 
 
 def _check_salvo_para_preco(
@@ -298,10 +324,12 @@ def _check_salvo_para_preco(
 
 
 def check_preco_para_gravar(
-    order: Order, env: dict | None, entry: dict | None = None
+    order: Order, env: dict | None, entry: dict | None = None, live: dict | None = None
 ) -> dict | None:
     """Check do ambiente fonte para gravar em `check_preco` (commit e vínculo
-    de-para), marcado com a fonte que o gerou (`preco_fonte_slug`). None quando
+    de-para), marcado com a fonte que o gerou (`preco_fonte_slug`). `live`: o
+    check ao vivo do ambiente do pedido (com as escolhas), de onde sai o código
+    da escolha pontual; sem ele, a escolha vai sem chave. None quando
     a trava está desligada, quando não há fonte, quando o pedido é intercompany
     (nenhuma consulta extra) ou quando o Fire da fonte não respondeu."""
     fonte = _fonte(env)
@@ -310,7 +338,7 @@ def check_preco_para_gravar(
     try:
         if _eh_intercompany(order, entry or {}):
             return None
-        check = _check_da_fonte(order, fonte, entry)
+        check = _check_da_fonte(order, fonte, entry, live)
     except Exception as exc:  # noqa: BLE001 — o preview fica sem avaliação; o portão refaz
         from app.utils.logger import logger
 

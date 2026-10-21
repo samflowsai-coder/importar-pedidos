@@ -384,7 +384,7 @@ def check_falso(monkeypatch):
         chamadas["check"].append((env["slug"], env_context.current_env_slug(), escolhas))
         return {"available": True, "de": env["slug"], "summary": {"items_total": len(order.items)}}
 
-    def _preco(order, env, entry=None):  # noqa: ARG001
+    def _preco(order, env, entry=None, live=None):  # noqa: ARG001
         chamadas["preco"].append((env["slug"], env_context.current_env_slug()))
         return {"available": True, "preco_fonte_slug": "mm"}
 

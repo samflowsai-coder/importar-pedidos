@@ -793,7 +793,8 @@ def test_escolha_pontual_regrava_o_check_preco_da_fonte(monkeypatch):
     )
     vistos = []
 
-    def fake_gravar(order, env, entry=None):
+    def fake_gravar(order, env, entry=None, live=None):
+        assert live is not None  # o check fresco, de onde sai o código da escolha (R21)
         vistos.append(dict((entry or {}).get("produto_escolhido") or {}))
         return {"available": True, "items": [], "preco_fonte_slug": "mm"}
 
