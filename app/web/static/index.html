@@ -1792,6 +1792,29 @@ function _resumoLote(res, verb) {
     .join('\n');
 }
 
+// Por que o lote recusou, no próprio alert(): o operador não tem console. O
+// servidor já devolve `detail` (texto pronto) e `reason` por pedido; aqui só se
+// agrupa pelo mesmo texto — 11 pedidos recusados pelo mesmo portão viram UMA
+// linha com a contagem, do motivo mais comum pro menos. O portão não é
+// contornado em lote: quem resolve é o pedido (ex.: confirmar item sem preço).
+function _motivosDasFalhas(results) {
+  const MAX_MOTIVOS = 5;
+  const porMotivo = new Map();
+  for (const r of results) {
+    if (r.ok) continue;
+    const motivo = r.detail || r.reason || 'motivo não informado';
+    porMotivo.set(motivo, (porMotivo.get(motivo) || 0) + 1);
+  }
+  const ordenados = [...porMotivo.entries()].sort((a, b) => b[1] - a[1]);
+  const linhas = ordenados
+    .slice(0, MAX_MOTIVOS)
+    .map(([motivo, n]) => `• ${n} × ${motivo}`);
+  if (ordenados.length > MAX_MOTIVOS) {
+    linhas.push(`• e mais ${ordenados.length - MAX_MOTIVOS} motivo(s) diferente(s)`);
+  }
+  return linhas.join('\n');
+}
+
 async function doBatchPrimary() {
   const ids = [...batchSelection];
   if (!ids.length) return;
@@ -1815,7 +1838,7 @@ async function doBatchPrimary() {
       ? 'XLS gerado(s)'
       : (cfg.exportMode === 'both' ? 'cadastrado(s) no Fire + XLS' : 'cadastrado(s) no Fire');
     const msg = _resumoLote(res, verb);
-    alert(msg + (res.failed ? '\n\nDetalhes no console.' : ''));
+    alert(msg + (res.failed ? '\n\nMotivo:\n' + _motivosDasFalhas(res.results) : ''));
     if (res.failed) {
       console.warn('Batch primary action failures:', res.results.filter(r => !r.ok));
     }
