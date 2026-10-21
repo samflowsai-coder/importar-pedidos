@@ -358,6 +358,10 @@ de hoje (`is_blocking`), que compara com `PRODUTOS.PRECO_VENDA` da MM. Medido na
 (`fechamento._confirmar_sem_preco`: `sem_preco_ack_by = lote:<chave>` + audit com `origem=lote`).
 Divergência de preço e preço ausente no pedido continuam bloqueando; `product_check` e
 `is_blocking` não mudaram. O preço do lote é conferido pela composição antes do envio.
+Pendência menor (revisão de 21/10): em `EXPORT_MODE=both`, `_send_one_to_fire` passa
+`planilha=True` ao `_recusa_planilha_pontual` também para o espelho, que nunca gera XLSX
+(`server.py`, `not espelho`). Com escolha pontual de produto sem `CODPROD_ALTERN` numa linha do
+espelho, recusa à toa (lado seguro). Corrigir com `planilha=... and not integracao.e_espelho(import_id)`.
 ---
 
 ## 4. Decisões pendentes (aguardam o Samuel)

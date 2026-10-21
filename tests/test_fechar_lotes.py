@@ -936,3 +936,24 @@ def test_linha_do_espelho_sem_ean_nem_codigo_nao_entra_no_ack(portal_lote):
 
     ack = _espelho_do_mm()["sem_preco_ack_items"]
     assert [a["ean"] for a in ack] == ["7891"]
+
+
+def test_reparo_de_linha_sem_evento_mantem_o_ack_do_lote(portal_lote_com_perna, monkeypatch):
+    """Linha gravada mas evento não: o reparo regrava a linha e o ack continua o do lote."""
+    original = fechamento.transition
+
+    def _falha(*a, **kw):
+        raise RuntimeError("caiu antes do evento")
+
+    monkeypatch.setattr(fechamento, "transition", _falha)
+    fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+    assert _espelho_do_mm()["sem_preco_ack_by"] == "lote:NAS-2026-S34"
+
+    monkeypatch.setattr(fechamento, "transition", original)
+    assert fechamento.fechar_vencidos(agora=datetime(2026, 8, 24, 8, 5))["materializados"] == 1
+
+    esp = _espelho_do_mm()
+    assert esp["sem_preco_ack_by"] == "lote:NAS-2026-S34"
+    assert esp["sem_preco_ack_items"] == [
+        {"ean": "7891", "product_code": None, "fire_product_id": None}
+    ]
