@@ -9,11 +9,12 @@ Transformar a saída do extractor (texto + tabelas) em um `Order` (pydantic). Ca
   tem a sua cópia. Dívida conhecida (ver `docs/BACKLOG.md`); ao mexer num parser,
   copie do vizinho mais próximo em vez de inventar variante.
 - `app/parsers/generic_parser.py` — fallback determinístico antes do LLM.
-- `app/parsers/<cliente>_parser.py` — **11 parsers específicos**: Mercado Eletrônico, Pedido Compras Revenda, SBF/Centauro, Beira Rio, Kolosh, Sam's Club, Kallan XLS, **Nasmar Template**, Daju, Desmembramento XLS, e o Generic.
+- `app/parsers/<cliente>_parser.py` — **12 parsers específicos**: Mercado Eletrônico, Pedido Compras Revenda, SBF/Centauro (PDF), Centauro ORDER CONFIRMATION (XLSX), Beira Rio, Kolosh, Sam's Club, Kallan XLS, **Nasmar Template**, Daju, Desmembramento XLS, e o Generic.
   ⚠️ Um parser cobre um **formato**, não um cliente. O `NasmarTemplateParser` sozinho
   atende 4 clientes (AF, MF, Pulmão, Tennis Station) porque todos usam o template do
   próprio fornecedor. Cliente novo que chega nesse template custa **zero** parser —
   antes de escrever um novo, cheque se o formato já está coberto.
+- `app/parsers/celulas.py` — `numero`, `texto`, `data`: leitura de célula de planilha (nativo e texto dão o mesmo resultado). Use em parser novo de XLSX; Daju e Nasmar ainda têm cópia própria (BACKLOG 2.24).
 - `app/pipeline.py` — registro da cascata na lista `_parsers`.
 
 ## Como adicionar um parser novo
@@ -88,6 +89,32 @@ fornecedor é a **Nasmar**. Samples: `PEDIDO KOLOSH.pdf` (fev/26),
   até o fim do texto; sem cortar ali, a cauda arrasta TRANSPORTE e INFORMACOES
   ADICIONAIS para dentro da `DESCRICAO` do Fire. Pinado em
   `test_kolosh_ultimo_item_nao_engole_o_rodape_do_pdf`.
+
+## Centauro ORDER CONFIRMATION (XLSX, layout de 21/10/2026)
+
+`CentauroOrderConfirmationParser` lê a planilha que a Centauro passou a mandar no lugar do
+PDF (sample: `NOVO MODELO CENTAURO - ORDER CONFIRMATION  - 21102026.xlsx`). O `SbfCentauroParser`
+(PDF) continua para os pedidos antigos. Antes deste parser o `GenericParser` pegava o arquivo
+e devolvia lixo calado: pedido `MARCA`, 2 itens falsos, sem cliente.
+
+- **Cabeçalho achado por rótulo**, não por letra de coluna: `SKU`, `DESCRIÇÃO`, `CUSTO (VALOR NF)`,
+  `TOTAL QTD`, `TOTAL $`, `OC CENTAURO` (opcionais: `CNPJ`, `EAN`, `SUGESTÃO DE AGENDA`).
+  O extractor concatena as 4 abas em `rows`; os itens valem só até o fim da aba do cabeçalho
+  (a aba `MANUAL` repete os rótulos e `BASE OPÇÕES` tem ~980 linhas). A linha 2 da planilha traz
+  totais (`5000`, `54700`) acima do cabeçalho e não entra.
+- **Mapa:** `SKU` → `product_code` · `OC CENTAURO` → `order_number` (vira `PEDIDO_CLIENTE`) ·
+  `CUSTO (VALOR NF)` → `unit_price` · `TOTAL QTD` → `quantity` (kits) · `SUGESTÃO DE AGENDA` →
+  `delivery_date` · `CNPJ` → `supplier_cnpj` (é a MM Americanense, o que roteia para o ambiente `mm`).
+- ⚠️ **A chave é o `SKU` (`9978LT013874`), não `MODELO/COR` (`9978LT01`), `MODELO` nem
+  `REF. FORNECEDOR`.** Conferido na Fire viva `.7` (SELECT): `CODPROD_ALTERN = '9978LT013874'` →
+  `SEQ 3936`, EAN também casa; os outros três não existem lá. Mesma regra do PDF: o Fire só casa
+  pela variante.
+- **Cliente fixo no parser** (a planilha não traz): `SBF COMERCIO PRODUTOS ESPORTIVOS` /
+  `06.347.409/0296-51`, o mesmo CNPJ de faturamento do PDF (único cadastro da raiz `06347409`,
+  `CADASTRO.CODIGO=498`). A matriz `/0001-65` não existe no Fire.
+- **Sem data de emissão** no arquivo → `issue_date=None`; o mapper cai em hoje.
+- **Uma OC por arquivo.** Duas OCs distintas levantam `ValueError` (não devolve `None`: com `None`
+  o Generic pegaria o arquivo e gravaria lixo). OC vazia → `order_number=None` e o pipeline numera `SN-`.
 
 ## SBF/Centauro: CNPJ de Faturamento, não de Cobrança
 

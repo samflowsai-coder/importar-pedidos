@@ -48,6 +48,8 @@ class Diagnostico:
     parser_ms: int = 0
     validacao_ok: bool | None = None
     avisos: list[str] = field(default_factory=list)
+    # Motivo quando um parser reconheceu o formato e recusou o pedido (PedidoRecusadoError).
+    recusa: str | None = None
 
 
 def cabecalho_candidato(rows: list) -> dict | None:
@@ -543,6 +545,8 @@ class registrar:  # noqa: N801 — usado como context manager: `with leituras.re
                 "pulados": d.parsers_pulados,
                 "llm": d.llm or None,
             }
+            if d.recusa:
+                linha["parser"]["recusa"] = d.recusa
         if order is not None:
             ped = montar_pedido(order)
             ped["pedido_ja_importado"] = pedido_ja_importado(
