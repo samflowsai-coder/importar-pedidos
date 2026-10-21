@@ -23,7 +23,8 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
-Nada novo desde a versão 20261020-0700.
+1) **Regra comercial de faturamento MM × Nasmar (nasce desligada).** Em /admin/roteamento fica a regra validada com o comercial: Centauro, Riachuelo, Kallan e Sam's Club sempre pela MM, as demais redes pela UF do CNPJ faturado (SP vai pela MM, fora de SP pela Nasmar). Com a regra ligada o preview sugere a empresa e o operador pode trocar, e um pedido em revisão pode ser movido para a outra empresa sem perder nem duplicar. Enquanto estiver desligada nada muda; a única mudança que já vale é que o mesmo pedido não é enviado ao Fire duas vezes ao mesmo tempo.
+2) **Trava de preço pronta para ligar.** Pedido que ficou fora do formato que o Flow aceita ganha o botão "Reenviar bloqueados" no cartão da trava; a conversa com o Flow não perde retiradas quando o portal reinicia; o histórico de preço com mais de 180 dias é limpo sem tocar no que ainda decide um pedido. Na Nasmar, a consulta ao Fire da MM desiste em 5 segundos se a MM estiver fora, e produto escolhido à mão só é avaliado se o código dele achar um único produto da MM com a mesma unidade; se não, o pedido fica segurado com a explicação na tela. A trava continua desligada até alguém ligar no admin.
 
 ## 20261020-0700
 
