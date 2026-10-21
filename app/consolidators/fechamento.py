@@ -303,6 +303,7 @@ def materializar_espelho(lote: dict, *, agora: datetime) -> bool:
                 "modo": lote["modo_preco_aplicado"],
             },
         )
+        _confirmar_sem_preco(import_id, chave, order)
         if not tem_evento:
             transition(
                 import_id,
@@ -311,6 +312,29 @@ def materializar_espelho(lote: dict, *, agora: datetime) -> bool:
                 payload={"source": "lote_intercompany", "chave_lote": chave},
             )
     return True
+
+
+def _confirmar_sem_preco(import_id: str, chave: str, order: Order) -> None:
+    """O espelho nasce com o "sem preço no Fire" confirmado pelo lote (BACKLOG 3.8).
+
+    `PRECO_VENDA` da MM é vazio, então toda linha do espelho cairia em
+    `no_price_in_fire` e pediria a mesma confirmação toda segunda. O preço do
+    espelho já é auditável pela composição (`integracao._divergencias` confere
+    antes do envio). Só o ack: divergência e preço ausente no pedido seguem
+    bloqueando em `is_blocking`. Linha sem EAN nem código não é coberta e
+    continua pedindo confirmação. Roda dentro do `active_env` do espelho.
+    """
+    itens = [
+        {"ean": it.ean, "product_code": it.product_code, "fire_product_id": None}
+        for it in order.items
+        if it.ean or it.product_code
+    ]
+    repo.set_sem_preco_ack(import_id, by_email=f"lote:{chave}", items=itens)
+    repo.append_audit(
+        import_id,
+        "sem_preco_acknowledged",
+        {"origem": "lote", "chave_lote": chave, "items": itens},
+    )
 
 
 # --- varredura de recuperação -------------------------------------------------

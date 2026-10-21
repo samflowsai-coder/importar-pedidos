@@ -146,6 +146,11 @@ Tomadas na execução:
    (`skipped` ou exceção) cancela a reserva (`abortar_envio_espelho`,
    `guardar_reserva`). O espelho **não** vai ao `/recebimento` do Flow
    (`push_new_order` pulado): no Aponta tudo segue por pedido de origem.
+   **"Sem preço no Fire" dispensado:** `PRECO_VENDA` da MM é vazio, então o
+   espelho nasce (`fechamento._confirmar_sem_preco`) com `sem_preco_ack_*` de
+   autor `lote:<chave>` e o audit `sem_preco_acknowledged` com `origem=lote`.
+   Só cobre linha com EAN ou código; divergência de preço e preço ausente no
+   pedido seguem bloqueando em `is_blocking` (que não foi tocado).
 
 ## Armadilhas
 

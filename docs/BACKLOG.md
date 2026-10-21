@@ -352,11 +352,12 @@ Confirmar com o Elias (fiscal MM) antes de subir o pacote.
 O espelho (preço × 0,93) passa pelo portão de preço (`preco_trava.decidir_envio`). A trava
 por rede (PR #90) deixa intercompany fora da tabela, mas em todos os modos ele cai na regra
 de hoje (`is_blocking`), que compara com `PRODUTOS.PRECO_VENDA` da MM. Medido na cópia do
-`.7` (19/10): `PRECO_VENDA` vazio em 3.421 de 3.421 produtos, então cada linha do espelho sai
-`no_price_in_fire` e o envio pede a mesma confirmação "sem preço no Fire" que qualquer pedido
-da MM pede hoje (não é divergência). **Decisão pendente:** manter a confirmação manual no
-espelho ou dispensá-la (o preço do lote já é auditável pela composição).
-
+`.7` (19/10): `PRECO_VENDA` vazio em 3.421 de 3.421 produtos, então cada linha do espelho sairia
+`no_price_in_fire` e pediria a confirmação "sem preço no Fire" toda segunda.
+**Resolvido (21/10, decisão do Samuel):** o espelho nasce com essa confirmação feita pelo lote
+(`fechamento._confirmar_sem_preco`: `sem_preco_ack_by = lote:<chave>` + audit com `origem=lote`).
+Divergência de preço e preço ausente no pedido continuam bloqueando; `product_check` e
+`is_blocking` não mudaram. O preço do lote é conferido pela composição antes do envio.
 ---
 
 ## 4. Decisões pendentes (aguardam o Samuel)

@@ -825,3 +825,114 @@ def test_reparo_marca_enviado_sem_rastro_com_lote_fiscal_ok_falso(portal_lote_co
     assert lote["status"] == "enviado"
     assert lote["fire_codigo_espelho"] == 5084
     assert lote["lote_fiscal_ok"] is False
+
+
+# --- "sem preço no Fire" dispensado no espelho (BACKLOG 3.8) --------------------
+
+
+def _espelho_do_mm() -> dict:
+    env = environments_repo.get_by_slug("mm")
+    with env_context.active_env(env["id"], env["slug"]):
+        return repo.get_import("lote-NAS-2026-S34")
+
+
+def _audits_do_espelho(tipo: str) -> list[dict]:
+    env = environments_repo.get_by_slug("mm")
+    with env_context.active_env(env["id"], env["slug"]):
+        return [a for a in repo.list_audit("lote-NAS-2026-S34") if a["event_type"] == tipo]
+
+
+def test_espelho_nasce_com_o_sem_preco_confirmado_pelo_lote(portal_lote_com_perna):
+    fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+
+    esp = _espelho_do_mm()
+    assert esp["sem_preco_ack_by"] == "lote:NAS-2026-S34"
+    assert esp["sem_preco_ack_items"] == [
+        {"ean": "7891", "product_code": None, "fire_product_id": None}
+    ]
+    (audit,) = _audits_do_espelho("sem_preco_acknowledged")
+    assert audit["detail"]["origem"] == "lote"
+    assert audit["detail"]["chave_lote"] == "NAS-2026-S34"
+    assert audit["detail"]["items"] == esp["sem_preco_ack_items"]
+
+
+def test_ack_do_espelho_libera_so_o_sem_preco_e_mantem_a_divergencia(portal_lote_com_perna):
+    from app.erp.product_check import is_blocking
+
+    fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+    ack = _espelho_do_mm()["sem_preco_ack_items"]
+
+    sem_preco = {"available": True, "items": [{"ean": "7891", "price_status": "no_price_in_fire"}]}
+    blocked, detail = is_blocking(sem_preco, ack_items=ack)
+    assert blocked is False
+    assert detail["items_no_price_unacked"] == []
+
+    divergente = {
+        "available": True,
+        "items": [
+            {"ean": "7891", "price_status": "mismatch", "unit_price_order": 14.99},
+            {"ean": "7891", "price_status": "no_order_price"},
+        ],
+    }
+    blocked, detail = is_blocking(divergente, ack_items=ack)
+    assert blocked is True
+    assert len(detail["items_mismatch"]) == 1
+    assert len(detail["items_no_order_price"]) == 1
+
+
+def test_pedido_comum_da_mm_segue_pedindo_a_confirmacao(portal_lote_com_perna):
+    from app.erp.product_check import is_blocking
+
+    fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+    _grava("mm", "P-MM-1")
+    env = environments_repo.get_by_slug("mm")
+    with env_context.active_env(env["id"], env["slug"]):
+        comum = repo.get_import("P-MM-1")
+    assert comum["sem_preco_ack_by"] is None
+    assert comum["sem_preco_ack_items"] is None
+
+    sem_preco = {"available": True, "items": [{"ean": "7891", "price_status": "no_price_in_fire"}]}
+    blocked, detail = is_blocking(sem_preco, ack_items=comum["sem_preco_ack_items"])
+    assert blocked is True
+    assert len(detail["items_no_price_unacked"]) == 1
+
+
+def test_espelho_reparado_depois_da_falha_tambem_nasce_com_o_ack(
+    portal_lote_com_perna, monkeypatch
+):
+    original = repo.insert_import
+
+    def _mm_fora(entry):
+        if entry["id"].startswith("lote-"):
+            raise RuntimeError("disco do MM cheio")
+        return original(entry)
+
+    monkeypatch.setattr(repo, "insert_import", _mm_fora)
+    fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+    monkeypatch.setattr(repo, "insert_import", original)
+    fechamento.fechar_vencidos(agora=datetime(2026, 8, 24, 8, 5))
+
+    assert _espelho_do_mm()["sem_preco_ack_by"] == "lote:NAS-2026-S34"
+    assert len(_audits_do_espelho("sem_preco_acknowledged")) == 1
+
+
+def test_linha_do_espelho_sem_ean_nem_codigo_nao_entra_no_ack(portal_lote):
+    _fator()
+    snap = {
+        "header": {
+            "order_number": "N2",
+            "customer_name": "DAJU",
+            "customer_cnpj": "11222333000181",
+        },
+        "items": [
+            {"description": "MEIA", "quantity": 2.0, "unit_price": 16.12, "ean": "7891"},
+            {"description": "SEM CHAVE", "quantity": 1.0, "unit_price": 10.0},
+        ],
+        "source_file": "",
+    }
+    _perna("N2", fire=1158, snapshot=snap)
+
+    fechamento.fechar_vencidos(agora=SEGUNDA_8H)
+
+    ack = _espelho_do_mm()["sem_preco_ack_items"]
+    assert [a["ean"] for a in ack] == ["7891"]
