@@ -66,7 +66,7 @@ def portal_lote(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pc_mod,
         "check_order",
-        lambda order, *, env=None: {"available": False},  # noqa: ARG005
+        lambda order, *, env=None, **_k: {"available": False},  # noqa: ARG005
     )
     monkeypatch.setattr(erp_mod.ERPExporter, "export", lambda self, order, out: [])  # noqa: ARG005
 

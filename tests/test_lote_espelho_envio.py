@@ -89,7 +89,7 @@ def portal_lote(tmp_path, monkeypatch):
     monkeypatch.setattr(
         product_check,
         "check_order",
-        lambda order, *, env=None: estado["check"],  # noqa: ARG005
+        lambda order, *, env=None, **_k: estado["check"],  # noqa: ARG005
     )
     monkeypatch.setattr(
         erp_mod.ERPExporter,
@@ -405,7 +405,7 @@ def test_pedido_comum_nao_muda(portal_lote):
     r = _enviar(portal_lote, "M1")
     assert r.status_code == 200, r.text
     (chamada,) = portal_lote["estado"]["exports"]
-    assert chamada["obs"] is None
+    assert "obs" not in chamada
     assert portal_lote["estado"]["pushes"] == ["M1"]
     assert integracao.e_espelho("M1") is False
 

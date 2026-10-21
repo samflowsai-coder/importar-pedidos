@@ -2887,7 +2887,7 @@ def _send_one_to_fire(
             order,
             override_client_id=override,
             produtos_por_item=produtos_por_item,
-            obs=espelho.obs if espelho else None,
+            **({"obs": espelho.obs} if espelho else {}),
         )
         db_result = result.to_dict()
 
