@@ -202,3 +202,32 @@ def test_migracao_uma_vez_cria_o_marcador_sozinha(tmp_path):
     router._apply_migracoes_uma_vez(c, (("m1", ("CREATE TABLE t1 (x INTEGER)",)),))
     assert [r[0] for r in c.execute("SELECT nome FROM schema_migracao")] == ["m1"]
     c.close()
+
+
+def test_migracao_uma_vez_espera_transacao_de_escrita_de_outro_processo(tmp_path):
+    """Outro processo segura uma escrita (ex.: o 1º boot dele no meio da
+    migração): `BEGIN IMMEDIATE` espera o lock (busy timeout), depois relê os
+    nomes e não roda nem grava de novo."""
+    import sqlite3
+    import threading
+
+    caminho = tmp_path / "app_state_mm.db"
+    migs = (("m1", ("CREATE TABLE t1 (x INTEGER)",)),)
+    outro = sqlite3.connect(caminho, timeout=5.0, check_same_thread=False)
+    outro.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migracao"
+        " (nome TEXT PRIMARY KEY, aplicada_em TEXT NOT NULL)"
+    )
+    outro.execute("BEGIN IMMEDIATE")
+    outro.execute("CREATE TABLE t1 (x INTEGER)")
+    outro.execute("INSERT INTO schema_migracao VALUES ('m1', 'agora')")
+    libera = threading.Timer(0.3, lambda: outro.execute("COMMIT"))
+    libera.start()
+
+    eu = sqlite3.connect(caminho, timeout=5.0)
+    router._apply_migracoes_uma_vez(eu, migs)  # sem 'table t1 already exists'
+    libera.join()
+
+    assert eu.execute("SELECT COUNT(*) FROM schema_migracao").fetchone()[0] == 1
+    eu.close()
+    outro.close()
