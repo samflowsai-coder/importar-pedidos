@@ -299,6 +299,15 @@ durante o envio.
 
 ---
 
+### 2.24 Daju e Nasmar: migrar `_parse_number`/`_to_number` para `app/parsers/celulas.py`
+
+`DajuParser._parse_number` e `NasmarTemplateParser._to_number` são cópias idênticas, e
+`_coerce_text`/`_coerce_date` da Nasmar repetem `celulas.texto`/`celulas.data`. O parser da
+Centauro (ORDER CONFIRMATION) já usa o módulo; migrar os dois como refactor próprio, sem
+mudança de comportamento — `tests/test_new_parsers.py` (Daju/Nasmar) é a rede.
+
+---
+
 ## 3. Bloqueado em terceiros
 
 ### 3.1 Ajuste do cadastro de produtos da MM Confecção — **parado 2026-08-21**

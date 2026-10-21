@@ -1644,3 +1644,186 @@ def test_authentic_feet_modelo_antigo_total_kits_continua_igual():
     assert [int(i.quantity) for i in order.items] == [36, 60, 60, 48, 60, 60, 36, 36, 36, 36]
     assert {i.unit_price for i in order.items} == {11.96, 15.32}
     assert sum(i.total_price for i in order.items) == pytest.approx(6081.12, abs=0.01)
+
+
+# ── Centauro: planilha ORDER CONFIRMATION (layout de 21/10/2026) ─────────────
+
+_CENTAURO_XLSX = "NOVO MODELO CENTAURO - ORDER CONFIRMATION  - 21102026.xlsx"
+
+_CENTAURO_ROTULOS = [
+    None, "PEDIDO MARCA", "CNPJ", "REF. FORNECEDOR", "REF. COR", "COMPRADOR", "MESA", "UDN",
+    "SKU", "MODELO/COR", "MODELO", "COR", "DESCRIÇÃO", "DESCRIÇÃO COR", "TAMANHO BR", "EAN",
+    "CUSTO (VALOR NF)", "CUSTO COM IPI", "PDV ATUAL", "MARK UP", "CÓDIGO DE IMPOSTO ",
+    "TOTAL QTD", "TOTAL $", "SUGESTÃO DE AGENDA", "OC CENTAURO",
+]  # fmt: skip
+
+
+def _centauro_linha(sku="9978LT013874", qtd=5000, preco=10.94, total=54700, oc="UY44542298"):
+    linha = [None] * len(_CENTAURO_ROTULOS)
+    for rotulo, valor in {
+        "CNPJ": "353948710001-11", "SKU": sku, "DESCRIÇÃO": "KIT MEIA", "EAN": 7909607842231,
+        "CUSTO (VALOR NF)": preco, "TOTAL QTD": qtd, "TOTAL $": total, "OC CENTAURO": oc,
+    }.items():  # fmt: skip
+        linha[_CENTAURO_ROTULOS.index(rotulo)] = valor
+    return linha
+
+
+def _centauro_extracted(*linhas):
+    """Mesma forma do XLSExtractor: totais acima do cabeçalho + aba MANUAL depois."""
+    totais = [None] * len(_CENTAURO_ROTULOS)
+    totais[21], totais[22] = 5000, 54700
+    manual = [[None, "COLUNA DA PLANILHA", "AÇÃO"], [None, "SKU", "PREENCHIDO PELA CENTAURO"]]
+    rows = [totais, _CENTAURO_ROTULOS, *linhas, *manual]
+    texto = " ".join(str(c) for r in rows for c in r if c is not None)
+    return {
+        "rows": rows,
+        "tables": [rows],
+        "text": texto,
+        "sheets": [
+            {"name": "ORDER CONFIRMATION", "rows": 2 + len(linhas)},
+            {"name": "MANUAL", "rows": len(manual)},
+        ],
+    }
+
+
+def test_centauro_order_confirmation_campos_do_sample():
+    order = _process(_CENTAURO_XLSX)
+    assert order is not None
+    h = order.header
+    assert h.order_number == "UY44542298"
+    assert h.customer_cnpj == "06.347.409/0296-51"
+    assert h.supplier_cnpj == "35394871000111"
+    assert len(order.items) == 1  # nem os totais da linha 2 nem as abas MANUAL/BASE OPÇÕES
+    item = order.items[0]
+    # SKU é a variante que o Fire casa (CODPROD_ALTERN) — não MODELO/COR nem REF. FORNECEDOR
+    assert item.product_code == "9978LT013874"
+    assert item.ean == "7909607842231"
+    assert item.quantity == 5000.0
+    assert item.unit_price == 10.94
+    assert item.total_price == 54700.0
+    assert item.delivery_date == "21/10/2026"
+    assert item.delivery_cnpj == "06.347.409/0296-51"
+
+
+def test_centauro_order_confirmation_nao_cai_no_generico():
+    """Antes do parser, o Generic lia o arquivo como pedido 'MARCA' com 2 itens falsos."""
+    from app.pipeline import Diagnostico, process_detailed
+
+    diag = Diagnostico()
+    order = process_detailed(_load(_CENTAURO_XLSX), diag)
+    assert diag.parser_usado == "CentauroOrderConfirmationParser"
+    assert order.header.order_number != "MARCA"
+
+
+def test_centauro_order_confirmation_numero_em_texto_igual_ao_nativo():
+    from app.parsers.centauro_order_confirmation_parser import CentauroOrderConfirmationParser
+
+    p = CentauroOrderConfirmationParser()
+    nativo = p.parse(_centauro_extracted(_centauro_linha()))
+    texto = p.parse(
+        _centauro_extracted(_centauro_linha(qtd="5.000", preco="10,94", total="54.700,00"))
+    )
+    assert [i.model_dump() for i in texto.items] == [i.model_dump() for i in nativo.items]
+
+
+def test_centauro_order_confirmation_duas_ocs_recusa_em_vez_de_misturar():
+    from app.parsers.base_parser import PedidoRecusadoError
+    from app.parsers.centauro_order_confirmation_parser import CentauroOrderConfirmationParser
+
+    ext = _centauro_extracted(
+        _centauro_linha(oc="UY1"), _centauro_linha(sku="9978LT023873", oc="UY2")
+    )
+    with pytest.raises(PedidoRecusadoError, match="mais de uma OC"):
+        CentauroOrderConfirmationParser().parse(ext)
+
+
+def test_centauro_order_confirmation_varios_skus_mesma_oc():
+    from app.parsers.centauro_order_confirmation_parser import CentauroOrderConfirmationParser
+
+    ext = _centauro_extracted(_centauro_linha(), _centauro_linha(sku="9978LT023873", qtd=1200))
+    order = CentauroOrderConfirmationParser().parse(ext)
+    assert [i.product_code for i in order.items] == ["9978LT013874", "9978LT023873"]
+    assert order.header.order_number == "UY44542298"
+
+
+def test_centauro_order_confirmation_sem_oc_o_pipeline_numera():
+    from app.parsers.centauro_order_confirmation_parser import CentauroOrderConfirmationParser
+
+    order = CentauroOrderConfirmationParser().parse(_centauro_extracted(_centauro_linha(oc=None)))
+    assert order.header.order_number is None  # o pipeline gera o SN-<hash> (_numerar_se_ausente)
+
+
+def test_centauro_order_confirmation_quantidade_zero_e_pulada():
+    from app.parsers.centauro_order_confirmation_parser import CentauroOrderConfirmationParser
+
+    ext = _centauro_extracted(_centauro_linha(), _centauro_linha(sku="9978LT023873", qtd=0))
+    assert len(CentauroOrderConfirmationParser().parse(ext).items) == 1
+
+
+@pytest.mark.parametrize(
+    ("linha_ruim", "trecho"),
+    [
+        (dict(sku="9978LT023873", qtd=None), "quantidade vazia"),
+        (dict(sku="9978LT023873", qtd="1.200 pares"), "ilegível"),
+        (dict(sku="9978LT023873", qtd="1,234.5"), "ilegível"),
+        (dict(sku=None, qtd=300), "sem SKU"),
+        (dict(sku="9978LT023873", qtd=-5), "negativa"),
+        (dict(sku="9978LT023873", preco="dez"), r"CUSTO \(VALOR NF\)"),
+        (dict(sku="9978LT023873", oc=None), "sem OC"),
+    ],
+)
+def test_centauro_order_confirmation_linha_pela_metade_recusa_em_vez_de_sumir(linha_ruim, trecho):
+    """Item descartado sem aviso é pedido que vai ao Fire faltando mercadoria."""
+    from app.parsers.base_parser import PedidoRecusadoError
+    from app.parsers.centauro_order_confirmation_parser import CentauroOrderConfirmationParser
+
+    ext = _centauro_extracted(_centauro_linha(), _centauro_linha(**linha_ruim))
+    with pytest.raises(PedidoRecusadoError, match=trecho):
+        CentauroOrderConfirmationParser().parse(ext)
+
+
+def test_centauro_order_confirmation_rotulo_alterado_recusa_e_nao_cai_no_generico():
+    """can_parse vê os rótulos até na aba MANUAL; cabeçalho mudado não pode virar None."""
+    from app.parsers.base_parser import PedidoRecusadoError
+    from app.parsers.centauro_order_confirmation_parser import CentauroOrderConfirmationParser
+
+    ext = _centauro_extracted(_centauro_linha())
+    ext["rows"][1] = [("TOTAL R$" if c == "TOTAL $" else c) for c in ext["rows"][1]]
+    p = CentauroOrderConfirmationParser()
+    assert p.can_parse(ext)
+    with pytest.raises(PedidoRecusadoError, match="cabeçalho"):
+        p.parse(ext)
+
+
+def test_centauro_order_confirmation_rotulo_com_espaco_duplo_ainda_acha_o_cabecalho():
+    from app.parsers.centauro_order_confirmation_parser import CentauroOrderConfirmationParser
+
+    ext = _centauro_extracted(_centauro_linha())
+    ext["rows"][1] = [("OC  CENTAURO" if c == "OC CENTAURO" else c) for c in ext["rows"][1]]
+    assert CentauroOrderConfirmationParser().parse(ext).header.order_number == "UY44542298"
+
+
+def test_pipeline_recusa_vira_none_com_motivo_e_sem_llm(monkeypatch, tmp_path):
+    """A recusa chega ao operador (diag.recusa) e o LLM não inventa pedido em cima."""
+    from app import pipeline
+    from app.ingestion.file_loader import LoadedFile
+
+    chamou_llm = []
+    monkeypatch.setattr(pipeline._llm, "parse", lambda *a, **k: chamou_llm.append(1))
+    ext = _centauro_extracted(_centauro_linha(oc="UY1"), _centauro_linha(sku="X2", oc="UY2"))
+    monkeypatch.setattr(pipeline._xls_extractor, "extract", lambda _f: ext)
+    f = tmp_path / "centauro.xlsx"
+    f.write_bytes(b"x")
+    diag = pipeline.Diagnostico()
+    assert pipeline.process_detailed(LoadedFile(path=f, extension=".xlsx", raw=b"x"), diag) is None
+    assert diag.parser_usado == "CentauroOrderConfirmationParser"
+    assert "mais de uma OC" in diag.recusa
+    assert chamou_llm == []
+
+
+def test_centauro_order_confirmation_nao_reconhece_outras_planilhas():
+    from app.parsers.centauro_order_confirmation_parser import CentauroOrderConfirmationParser
+
+    p = CentauroOrderConfirmationParser()
+    assert not p.can_parse({"text": "PEDIDO KALLAN K01 produto qtd", "rows": []})
+    assert p.parse({"text": "", "rows": []}) is None

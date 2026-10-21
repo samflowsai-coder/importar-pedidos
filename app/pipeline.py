@@ -11,7 +11,9 @@ from app.llm.fallback_parser import LLMFallbackParser
 from app.models.order import Order
 from app.normalizers.order_normalizer import OrderNormalizer
 from app.observability.leituras import Diagnostico, cabecalho_candidato
+from app.parsers.base_parser import PedidoRecusadoError
 from app.parsers.beira_rio_parser import BeiranRioParser
+from app.parsers.centauro_order_confirmation_parser import CentauroOrderConfirmationParser
 from app.parsers.daju_parser import DajuParser
 from app.parsers.desmembramento_xls_parser import DesmembramentoXlsParser
 from app.parsers.generic_parser import GenericParser
@@ -33,6 +35,7 @@ _parsers = [
     MercadoEletronicoParser(),
     PedidoComprasRevendaParser(),
     SbfCentauroParser(),
+    CentauroOrderConfirmationParser(),
     BeiranRioParser(),
     KoloshParser(),
     SamsClubParser(),
@@ -78,7 +81,15 @@ def process_detailed(file: LoadedFile, diag: Diagnostico | None = None) -> Order
         if hasattr(parser, "can_parse") and not parser.can_parse(extracted):
             diag.parsers_pulados.append({"nome": nome, "motivo": "can_parse"})
             continue
-        order = parser.parse(extracted)
+        try:
+            order = parser.parse(extracted)
+        except PedidoRecusadoError as exc:
+            # Formato reconhecido, conteúdo inaceitável: sem LLM e sem Generic,
+            # que gravariam lixo. O motivo vai ao operador (preview/lote) e ao log.
+            diag.parser_usado = nome
+            diag.recusa = str(exc)
+            logger.warning(f"{nome} recusou {file.path.name}: {exc}")
+            return None
         if order is not None:
             diag.parser_usado = nome
             logger.debug(f"Parser {nome} extraiu o pedido")

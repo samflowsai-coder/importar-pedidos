@@ -657,7 +657,7 @@ def _process_file(
     ) as L:
         order = L.processar(loaded)
         if not order:
-            raise ValueError("Formato não reconhecido ou pedido sem itens")
+            raise ValueError(L.diag.recusa or "Formato não reconhecido ou pedido sem itens")
         exported = _run_exporters(order, output_path, env=env)
         L.resultado = "importado"
 
@@ -2073,7 +2073,7 @@ async def preview_file(
         if not order:
             raise HTTPException(
                 status_code=422,
-                detail="Formato não reconhecido ou pedido sem itens",
+                detail=L.diag.recusa or "Formato não reconhecido ou pedido sem itens",
             )
 
         from app.erp.product_check import check_order
@@ -2181,7 +2181,8 @@ def preview_pending(
 
             if not order:
                 raise HTTPException(
-                    status_code=422, detail="Formato não reconhecido ou pedido sem itens"
+                    status_code=422,
+                    detail=L.diag.recusa or "Formato não reconhecido ou pedido sem itens",
                 )
 
             from app.erp.product_check import check_order
@@ -5051,7 +5052,7 @@ async def process_files(
                 errors.append(
                     {
                         "source": filename,
-                        "error": "Formato não reconhecido ou pedido sem itens",
+                        "error": L.diag.recusa or "Formato não reconhecido ou pedido sem itens",
                     }
                 )
         except Exception as exc:

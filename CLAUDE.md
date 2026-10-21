@@ -86,7 +86,7 @@ Cada linha aponta pro doc que tem o detalhe. Este mapa é roteamento, não refer
 | Pacote | Papel | Doc |
 |---|---|---|
 | `app/ingestion/`, `app/classifiers/`, `app/extractors/` | disco → bytes → formato → texto/tabelas | `modules/extractors.md` |
-| `app/parsers/` | cascata determinística: 11 específicos + genérico | `modules/parsers.md` |
+| `app/parsers/` | cascata determinística: 12 específicos + genérico | `modules/parsers.md` |
 | `app/llm/` | fallback OpenRouter quando a cascata inteira falha | `modules/llm.md` |
 | `app/normalizers/`, `app/validators/` | datas/case/CNPJ; obrigatórios e qty > 0 | `modules/normalizers.md`, `modules/validators.md` |
 | `app/exporters/` | XLSX (split por loja) e Firebird | `modules/exporters.md` |
