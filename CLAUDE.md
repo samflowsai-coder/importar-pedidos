@@ -91,7 +91,7 @@ Cada linha aponta pro doc que tem o detalhe. Este mapa é roteamento, não refer
 | `app/normalizers/`, `app/validators/` | datas/case/CNPJ; obrigatórios e qty > 0 | `modules/normalizers.md`, `modules/validators.md` |
 | `app/exporters/` | XLSX (split por loja) e Firebird | `modules/exporters.md` |
 | `app/erp/` | Firebird do Fire: queries, mapper, check de produto/preço, de-para | `modules/erp.md` |
-| `app/web/` | FastAPI (100 rotas): preview → commit, admin, app shell | `modules/web.md` |
+| `app/web/` | FastAPI (101 rotas): preview → commit, admin, app shell | `modules/web.md` |
 | `app/persistence/` | SQLite compartilhado + por ambiente, repos, roteador | `modules/persistence.md`, `modules/environments.md` |
 | `app/state/` | máquina de estados do pedido + eventos de ciclo de vida | `modules/state.md` |
 | `app/security/` | bcrypt, HMAC, rate-limit, `secret_store` (Fernet) | `modules/security.md` |

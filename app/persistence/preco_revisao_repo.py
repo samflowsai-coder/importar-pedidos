@@ -8,7 +8,8 @@ Situações da revisão: `pendente_envio` → `enviada` | `recusada_flow` (422);
 `substituida` quando nasce outra; `retirada` quando o pedido sai da fila.
 Bloqueio local (`bloqueio_local`, corpo que não pode ir ao Flow: fora do
 contrato, 413, 400 `payload_invalido`): a revisão segue `pendente_envio` e
-vigente, mas sai da fila de envio; só conteúdo novo cria a revisão seguinte.
+vigente, mas sai da fila de envio; só conteúdo novo cria a revisão seguinte,
+ou o admin a devolve à fila (`desbloquear_locais`).
 A vigente é a de maior número, se ela não estiver `substituida`/`retirada`.
 
 Decisão (`preco_decisao`) é gravada para toda decisão recebida, com a
@@ -264,6 +265,19 @@ def marcar_bloqueio_local(
                 revisao,
             ),
         )
+
+
+def desbloquear_locais(conn: sqlite3.Connection) -> int:
+    """Admin pediu reenvio (`POST .../preco-trava/desbloquear`): as revisões
+    `pendente_envio` com `bloqueio_local` voltam à fila de envio. Corpo que
+    continua fora do contrato é bloqueado de novo na próxima volta. Devolve
+    quantas saíram do bloqueio."""
+    with conn:
+        cur = conn.execute(
+            "UPDATE preco_revisao SET bloqueio_local = NULL"
+            " WHERE situacao = 'pendente_envio' AND bloqueio_local IS NOT NULL"
+        )
+    return cur.rowcount
 
 
 def contagem_por_situacao(conn: sqlite3.Connection) -> dict[str, int]:

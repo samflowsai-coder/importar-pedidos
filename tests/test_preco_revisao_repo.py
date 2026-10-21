@@ -475,3 +475,14 @@ def test_banco_antigo_ganha_tentativas_e_presa_sem_perder_revisao(tmp_path, monk
     assert linha["import_id"] == "imp-a"
     assert linha["tentativas"] == 0
     assert linha["retirada_presa_em"] is None
+
+
+def test_desbloquear_locais_limpa_so_as_pendentes_bloqueadas(conn):
+    rev.garantir_revisao(conn, "imp-a", _corpo(), "sha256:a", agora=AGORA)
+    rev.garantir_revisao(conn, "imp-b", _corpo(), "sha256:b", agora=AGORA)
+    rev.marcar_bloqueio_local(conn, "imp-a", 1, "grande demais", em=AGORA)
+    assert [p["import_id"] for p in rev.pendentes_envio(conn, 10)] == ["imp-b"]
+    assert rev.desbloquear_locais(conn) == 1
+    assert rev.contagem_por_situacao(conn).get("bloqueada_local", 0) == 0
+    assert [p["import_id"] for p in rev.pendentes_envio(conn, 10)] == ["imp-a", "imp-b"]
+    assert rev.desbloquear_locais(conn) == 0

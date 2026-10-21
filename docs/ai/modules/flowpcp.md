@@ -489,7 +489,7 @@ Quatro rotas do Flow (`/api/portal-pedidos/precos/…`): (a) `GET tabela`, (b) `
 | 409 `revisao_obsoleta` sem `revisaoVigente` | b (pedido) | pausa só a aprovação por 15 min |
 | 409 `revisao_obsoleta` | b (retirada) | reenvia com `revisaoVigente`; sem revisão nova, loga uma vez e a retirada vai para o fim |
 | 200 com `aprovacaoId` nulo | b (retirada) | retirada feita |
-| 413, 400 `payload_invalido`, corpo inválido local | b | `bloqueio_local`: só conteúdo novo cria nova revisão; não há desbloqueio por clique |
+| 413, 400 `payload_invalido`, corpo inválido local | b | `bloqueio_local`: sai da fila; volta com conteúdo novo (nova revisão) ou pelo botão "Reenviar bloqueados" do admin (`POST .../preco-trava/desbloquear`) |
 | 422 `rede_desconhecida`/`produto_desconhecido`/`empresa_faturadora_desconhecida` | b | `recusada_flow`; reenvio do operador cria a revisão seguinte (rev+1) |
 | 403, 400/401/404, outros | b, c | pausa só a aprovação por 15 min (a tabela segue) |
 | demais erros | a | pausa tabela e aprovação por 15 min |
