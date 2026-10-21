@@ -181,7 +181,9 @@ divergente → Flow como qualquer item). Todo item com escolha leva no check da 
 `escolha_seq`/`escolha_codigo`; a marca só vale se `escolha_seq` for a escolha atual do
 import (check salvo de uma escolha antiga = sem avaliação). `chave_repetida` na fonte
 (duas linhas chegam com o mesmo código e descrições diferentes) sai
-`escolha_pontual_chave_repetida`, que diz isso. O resto (sem código, ambíguo, de-para
+`escolha_pontual_chave_repetida`, que diz isso. Unidade do produto escolhido (Fire ao vivo;
+sem ela, `catalogo_fire.unidade` daquele SEQ) diferente da do produto da fonte, ou
+desconhecida (kit numa empresa, par na outra) → `escolha_pontual_unidade_divergente`. O resto (sem código, ambíguo, de-para
 para outro produto, check salvo sem a marca) sai `escolha_pontual_sem_fonte`: portão
 bloqueia e o preview diz o que fazer (cadastrar/ajustar o código na fonte ou deixar a
 empresa em `observando`). A escolha regrava o `check_preco`. Intercompany não muda. A linha com escolha

@@ -69,6 +69,10 @@ _MOTIVO_LEGIVEL: dict[str, str] = {
         "duas ou mais linhas chegam à empresa da chave do produto com o mesmo código e "
         "descrições diferentes (produto escolhido à mão); ela não sabe qual é cada uma"
     ),
+    "escolha_pontual_unidade_divergente": (
+        "unidade do produto escolhido à mão não confere com a do produto da empresa da "
+        "chave do produto (ex.: kit numa, par na outra) ou não foi informada"
+    ),
     "escolha_pontual_sem_fonte": (
         "produto escolhido à mão sem código que a empresa da chave do produto reconheça "
         "(cadastre ou ajuste o código do produto lá, ou deixe esta empresa em observando)"
@@ -227,8 +231,36 @@ def _pedido_para_a_fonte(
     return novo, escolhas, vivos
 
 
+def _unidades_das_escolhas(
+    escolhas: dict[int, int], vivos: dict[int, dict | None]
+) -> dict[int, str | None]:
+    """Unidade do produto escolhido no ambiente do pedido: a do Fire ao vivo;
+    sem ela, a do `catalogo_fire` local daquele SEQ; sem nenhuma, None."""
+    out: dict[int, str | None] = {}
+    faltam: dict[int, int] = {}
+    for i, seq in escolhas.items():
+        out[i] = unidade_normalizada((vivos.get(i) or {}).get("unidade"))
+        if out[i] is None and vivos.get(i) is not None:
+            faltam[i] = seq
+    if faltam:
+        try:
+            with db.connect() as conn:
+                for i, seq in faltam.items():
+                    row = conn.execute(
+                        "SELECT unidade FROM catalogo_fire WHERE fire_produto_id = ?",
+                        (str(seq),),
+                    ).fetchone()
+                    out[i] = unidade_normalizada(row[0]) if row else None
+        except Exception:  # noqa: BLE001 — sem unidade conhecida a escolha não é avaliada
+            pass
+    return out
+
+
 def _marcar_escolhas_na_fonte(
-    check: dict | None, escolhas: dict[int, int], vivos: dict[int, dict | None]
+    check: dict | None,
+    escolhas: dict[int, int],
+    vivos: dict[int, dict | None],
+    unidades: dict[int, str | None] | None = None,
 ) -> dict | None:
     """Item com escolha só vale se a fonte o resolveu pelo código a um único
     produto ativo (`produto.estado` `ok`, fonte `codprod_altern`): o SEQ e a
@@ -236,7 +268,9 @@ def _marcar_escolhas_na_fonte(
     fica sem produto e `escolha_na_fonte: False` (o avaliador não o avalia).
     Todo item com escolha leva `escolha_seq` (o SEQ escolhido) e
     `escolha_codigo` (o código usado na fonte): o avaliador só aceita a marca
-    se a escolha atual do import for a mesma."""
+    se a escolha atual do import for a mesma. Unidade do escolhido (`unidades`)
+    diferente da do produto da fonte, ou desconhecida (kit numa, par na outra)
+    → `escolha_pontual_unidade_divergente`."""
     if not check or not escolhas:
         return check
     itens = [dict(it) for it in check.get("items") or []]
@@ -259,6 +293,14 @@ def _marcar_escolhas_na_fonte(
             and codigo is not None
             and (cand.get("codprod_altern") or "").strip().upper() == codigo.upper()
         ):
+            unidade_fonte = unidade_normalizada(cand.get("unidade"))
+            unidade_pedido = (unidades or {}).get(i)
+            if unidade_fonte is None or unidade_fonte != unidade_pedido:
+                itens[i]["fire_product_id"] = None
+                itens[i]["fire_unidade"] = None
+                itens[i]["escolha_na_fonte"] = False
+                itens[i]["escolha_motivo"] = "escolha_pontual_unidade_divergente"
+                continue
             itens[i]["fire_product_id"] = produto["fire_seq"]
             itens[i]["fire_unidade"] = (cand.get("unidade") or "").strip() or None
             itens[i]["fire_description"] = cand.get("descricao")
@@ -291,12 +333,13 @@ def _check_da_fonte(
     if amb is None:
         return None
     pedido, escolhas, vivos = _pedido_para_a_fonte(order, entry, live)
+    unidades = _unidades_das_escolhas(escolhas, vivos)  # db do ambiente do pedido
     with (
         env_context.active_env(amb["id"], amb["slug"]),
         limite_de_conexao(LIMITE_CONEXAO_FONTE_S),
     ):
         check = pc.check_order(pedido, env=amb)
-    return _marcar_escolhas_na_fonte(check, escolhas, vivos)
+    return _marcar_escolhas_na_fonte(check, escolhas, vivos, unidades)
 
 
 def _check_para_preco(
@@ -462,7 +505,13 @@ def _avaliar_local(
     return dataclasses.replace(av, itens=itens)
 
 
-_MOTIVOS_ESCOLHA = frozenset({"escolha_pontual_sem_fonte", "escolha_pontual_chave_repetida"})
+_MOTIVOS_ESCOLHA = frozenset(
+    {
+        "escolha_pontual_sem_fonte",
+        "escolha_pontual_chave_repetida",
+        "escolha_pontual_unidade_divergente",
+    }
+)
 
 
 def _avaliar_copia(

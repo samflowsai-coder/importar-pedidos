@@ -39,6 +39,7 @@ Motivo = Literal[
     "intercompany",
     "escolha_pontual_sem_fonte",
     "escolha_pontual_chave_repetida",
+    "escolha_pontual_unidade_divergente",
 ]
 
 _LIMITE_COPIA = timedelta(hours=24)

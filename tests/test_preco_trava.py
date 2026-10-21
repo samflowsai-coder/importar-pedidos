@@ -2536,6 +2536,39 @@ def test_escolha_em_chave_repetida_na_mm_tem_motivo_proprio(monkeypatch):
     assert "cadastre" not in d.detalhe
 
 
+@pytest.mark.parametrize("unidade_nasmar", ["PAR", None])
+def test_escolha_com_unidade_diferente_entre_as_empresas_nao_e_avaliada(
+    monkeypatch, unidade_nasmar
+):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(
+        monkeypatch, _produto_ok(777, unidade="KIT"), vivo=_vivo(2, unidade=unidade_nasmar)
+    )
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.avaliacao.itens[0].motivo == "escolha_pontual_unidade_divergente"
+
+
+def test_unidade_da_nasmar_cai_para_o_catalogo_quando_o_fire_nao_traz(monkeypatch):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO catalogo_fire (fire_produto_id, codigo, nome, unidade, ativo,"
+            " extraido_em) VALUES (456, 'X', 'MEIA', 'KIT', 1, '2026-10-20')"
+        )
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(monkeypatch, _produto_ok(777, unidade="KIT"), vivo=_vivo(2, unidade=None))
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.avaliacao.itens[0].motivo == "ok"
+
+
 def test_check_preco_gravado_marca_a_escolha_resolvida_e_o_preview_avalia(monkeypatch):
     _precos_por_produto({"777": 5400, "778": 5400})
     order = _order((54.0, 54.0))
@@ -2592,3 +2625,4 @@ def test_index_tem_o_texto_do_motivo_da_chave_repetida_na_fonte():
         encoding="utf-8"
     )
     assert "escolha_pontual_chave_repetida:" in html
+    assert "escolha_pontual_unidade_divergente:" in html
