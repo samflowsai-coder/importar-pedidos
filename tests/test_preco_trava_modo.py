@@ -420,3 +420,17 @@ def test_cartao_do_reenvio_vale_nos_dois_modos():
     assert "até 30 s" not in html
     assert "Reenvio pedido" not in html
     assert "Pedidos de volta à fila" in html
+
+
+def test_cartao_do_reenvio_concorda_numero_e_so_confirma_com_algo_reenviado():
+    from pathlib import Path
+
+    html = (
+        Path(__file__).parent.parent / "app" / "web" / "static" / "admin-ambiente-edit.html"
+    ).read_text(encoding="utf-8")
+    assert "reenvie: ' +\n        'eles voltam" not in html  # plural fixo de antes
+    assert "um ? 'ele volta à fila' : 'eles voltam à fila'" in html
+    assert (
+        "status.textContent = desbloqueadas > 0\n"
+        "          ? (desbloqueadas === 1 ? '✓ Pedido de volta à fila' : '✓ Pedidos de volta à fila')"
+    ) in html

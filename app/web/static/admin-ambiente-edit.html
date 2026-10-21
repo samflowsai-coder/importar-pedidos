@@ -639,11 +639,14 @@
     function precoMostrarBloqueadas(n) {
       const box = document.getElementById('preco-bloqueadas');
       if (!Number.isInteger(n) || n <= 0) { box.hidden = true; return; }
+      const um = n === 1;
       document.getElementById('preco-bloqueadas-texto').innerHTML =
-        '<strong>' + n + (n === 1 ? ' pedido parado' : ' pedidos parados') +
-        ' antes do Flow:</strong> o pedido ficou grande demais ou fora do formato que o Flow aceita, ' +
-        'e por isso não foi para aprovação de preço. Depois de corrigir a causa, reenvie: ' +
-        'eles voltam à fila de envio ao Flow, que sai com a trava em Ligado; ' +
+        '<strong>' + n + (um ? ' pedido parado' : ' pedidos parados') + ' antes do Flow:</strong> ' +
+        (um ? 'ficou grande demais ou fora do formato que o Flow aceita, e por isso não foi'
+            : 'ficaram grandes demais ou fora do formato que o Flow aceita, e por isso não foram') +
+        ' para aprovação de preço. Depois de corrigir a causa, reenvie: ' +
+        (um ? 'ele volta à fila' : 'eles voltam à fila') +
+        ' de envio ao Flow, que sai com a trava em Ligado; ' +
         'o que continuar fora do formato é bloqueado de novo.';
       document.getElementById('btn-preco-desbloquear').hidden = false;
       box.hidden = false;
@@ -1060,8 +1063,10 @@
         // O botão some: o foco vai para o resultado, não para o fim da página.
         texto.setAttribute('tabindex', '-1');
         texto.focus();
-        status.textContent = '✓ Pedidos de volta à fila';
-        status.classList.add('ok');
+        status.textContent = desbloqueadas > 0
+          ? (desbloqueadas === 1 ? '✓ Pedido de volta à fila' : '✓ Pedidos de volta à fila')
+          : '';
+        if (desbloqueadas > 0) status.classList.add('ok');
       } catch (err) {
         status.textContent = '✗ ' + err.message;
         status.classList.add('err');
