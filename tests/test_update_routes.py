@@ -85,6 +85,41 @@ def test_upload_rejeita_409_quando_update_em_andamento(setup, running_status):
     assert "andamento" in r.json()["detail"].lower()
 
 
+def test_upload_409_se_apply_dispara_no_meio_do_upload(setup, monkeypatch):
+    """TOCTOU: os guards rodam antes de ler o corpo (até 100MB). Se um /apply
+    entrar durante o upload, o upload não pode apagar o staging em uso nem o
+    status in_progress."""
+    from app.updates import package, state
+    from app.web import routes_update
+
+    monkeypatch.setattr(package, "compute_deps_sha256", lambda p: "SHA")
+    r1 = _client().post("/api/admin/update/upload",
+                        files={"file": ("v1.zip", _good_zip("SHA"), "application/zip")})
+    assert r1.status_code == 200
+    update_id_v1 = r1.json()["update_id"]
+    staged_v1 = routes_update.staging_dir() / update_id_v1
+
+    original = package.validate_and_stage
+    novo_id = {}
+
+    def stage_e_apply_no_meio(*a, **kw):
+        res = original(*a, **kw)
+        novo_id["id"] = res.update_id
+        state.write_status(routes_update.updates_dir(), status="in_progress",
+                           update_id=update_id_v1)
+        return res
+
+    monkeypatch.setattr(package, "validate_and_stage", stage_e_apply_no_meio)
+    r2 = _client().post("/api/admin/update/upload",
+                        files={"file": ("v2.zip", _good_zip("SHA"), "application/zip")})
+    assert r2.status_code == 409
+    assert "andamento" in r2.json()["detail"].lower()
+    assert staged_v1.exists()
+    assert not (routes_update.staging_dir() / novo_id["id"]).exists()
+    st = state.read_status(routes_update.updates_dir())
+    assert st["status"] == "in_progress" and st["update_id"] == update_id_v1
+
+
 @pytest.mark.parametrize("running_status", ["apply_requested", "in_progress"])
 def test_apply_rejeita_409_quando_ja_em_andamento(setup, running_status):
     """Um 2º /apply enquanto o primeiro já está apply_requested/in_progress
