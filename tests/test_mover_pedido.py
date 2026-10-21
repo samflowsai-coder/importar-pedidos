@@ -298,6 +298,55 @@ def test_nao_move_pedido_ja_enviado_ao_gestor(envs_mm_nasmar):
     _nada_mudou(envs_mm_nasmar)
 
 
+def _marcar_espelho_de_lote(iid=IMPORT_ID):
+    """Registra `iid` como o pedido espelho de um lote intercompany."""
+    from datetime import date, datetime
+
+    from app.persistence import lotes_repo
+
+    with router.shared_connect() as conn:
+        lote = lotes_repo.lote_para(
+            conn,
+            env_origem_slug="nasmar",
+            env_espelho_slug="mm",
+            inicio=date(2026, 10, 12),
+            fim=date(2026, 10, 18),
+            modo_janela="semanal",
+            agora=datetime(2026, 10, 14, 10, 0),
+        )
+        conn.execute(
+            "UPDATE intercompany_lote SET import_id_espelho = ? WHERE id = ?", (iid, lote["id"])
+        )
+
+
+def test_nao_move_pedido_espelho_de_lote(envs_mm_nasmar):
+    """O espelho vive na empresa do lote: movido, o reparo do fechamento o recriaria
+    na MM e o pedido passaria a existir nas duas empresas."""
+    _semear(envs_mm_nasmar["mm"])
+    _marcar_espelho_de_lote()
+    with pytest.raises(mp.PedidoNaoMovivel) as exc:
+        _mover(envs_mm_nasmar)
+    assert exc.value.motivo == "é o pedido espelho de um lote intercompany"
+    _nada_mudou(envs_mm_nasmar)
+
+
+def test_detalhe_nao_oferece_mover_no_espelho_de_lote(envs_mm_nasmar):
+    from app.persistence import context as env_context
+
+    _semear(envs_mm_nasmar["mm"])
+    _marcar_espelho_de_lote()
+    mm = envs_mm_nasmar["mm"]
+    with env_context.active_env(mm["id"], mm["slug"]):
+        assert mp.motivo_nao_move(IMPORT_ID) == "é o pedido espelho de um lote intercompany"
+
+
+def test_pedido_comum_com_lote_existente_ainda_move(envs_mm_nasmar):
+    """Só o id registrado como espelho é barrado."""
+    _semear(envs_mm_nasmar["mm"])
+    _marcar_espelho_de_lote("lote-OUTRO")
+    assert _mover(envs_mm_nasmar) == "movido"
+
+
 def test_mover_interrompido_conclui_sem_duplicar(envs_mm_nasmar, monkeypatch):
     _semear(envs_mm_nasmar["mm"])
     real = mp._apagar_na_origem

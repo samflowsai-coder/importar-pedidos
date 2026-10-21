@@ -101,6 +101,9 @@ Tomadas na execução:
   falhou logo após ligar ficaria abaixo do piso para sempre. Config sem o carimbo
   cai na 1ª anexação real (`MIN(intercompany_lote_item.created_at)`). Carência de 10 min em `sent_to_fire_at` para não disputar com o
   request path.
+- **Espelho não se move de empresa** (`mover_pedido._motivo` barra: "é o pedido espelho
+  de um lote intercompany"). Movido, o reparo do fechamento o recriaria na MM e o pedido
+  existiria nas duas empresas, travando o envio como "mover inacabado".
 - **Espelho nunca é perna** (anexo e varredura pulam imports que são espelho) e a
   API recusa config com origem = espelho.
 - **SP1 desligado conta como sem SP1.** Base sem config ou com `ativo = 0` no
