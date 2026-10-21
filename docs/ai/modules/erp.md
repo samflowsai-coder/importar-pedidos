@@ -167,7 +167,10 @@ decide antes de qualquer chave (`decidir_escolha`): SEQ ativo → `ok` com fonte
 aponta para o produto X, que não existe mais ou está bloqueado."). Vale só para
 aquele import: todo chamador que confere um import salvo passa as escolhas dele
 (`decidir_envio`, recheck do vincular, ack-sem-preço, a própria rota); o check da
-fonte de preço (`_check_da_fonte`) não (SEQs de outro Fire). A linha com escolha
+fonte de preço (`_check_da_fonte`) não (SEQs de outro Fire): por isso, com
+`preco_fonte_slug` ≠ o próprio, o item com escolha sai da trava de preço como
+`nao_avaliado`/`escolha_pontual_sem_fonte` (portão bloqueia, preview mostra o motivo;
+nunca passa como conforme nem vai ao Flow). Intercompany não muda. A linha com escolha
 válida também tem os campos legados trocados (`match`, `match_source =
 "escolha_pontual"`, `fire_product_id`, `fire_description`, preço/unidade e
 `price_status` do escolhido; código da previsão de troca = o `CODPROD_ALTERN` dele),

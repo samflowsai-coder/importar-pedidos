@@ -237,8 +237,6 @@ Itens abaixo foram vistos nas revisões e deixados de fora de propósito; nenhum
 - **Flow recebe `erpProdutoId` (Task 9 adiada).** O Portal ainda não manda `erpProdutoId`/`confiancaParser` por item
   ao Flow (o Flow não consome e a IA dele já saiu). Ligar o item pelo `fire_produto_id` e nunca casar código ou EAN de
   pedido vindo do Portal é plano do pcp-app; depois o Portal passa a mandar (digit string, ruling R3).
-- **Preço com `preco_fonte_slug` ignora a escolha pontual** (Nasmar→MM): `_check_da_fonte` roda no Fire da fonte e não vê
-  `produto_escolhido_json`. Hoje a trava de preço da Nasmar não está ligada; resolver antes de ligar.
 - **Produto ligado + preço desligado:** `is_blocking`/`_regra_de_hoje` usa o `price_status` do match legado, não o do
   produto decidido.
 
@@ -379,6 +377,7 @@ num caminho que decide se pedido entra ou não, então spec antes de plano.
 - Preview marca intercompany como liberado, mas o portão aplica a regra de hoje e pode bloquear (`price_check_failed`); sem teste de paridade.
 - Troca do `preco_trava_modo` só vai pro loguru; falta trilha consultável de quem ligou a trava.
 - Item com vínculo de-para para SEQ diferente do casamento direto (A/B) sai `unidade_divergente` em `ligado` (a unidade do check é a de A); ler a `UNIDADE` do SEQ do vínculo via `find_products_by_seqs_sql` no check ao vivo do portão para o caso A/B parar de bloquear.
+- Paridade do worker docker: `python -m app.worker` não roda `precos.rodar` (sync da tabela, envio, decisões, retenção da trava); só a thread `flowpcp-envio` do processo web. Fora de escopo de propósito: no cliente roda o `ui.py`, onde a thread já existe. Só vira pendência se o deploy docker for usado com a trava ligada.
 
 ---
 

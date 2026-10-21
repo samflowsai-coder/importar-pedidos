@@ -2306,3 +2306,78 @@ def test_produto_desligado_vinculo_v1_continua_zerando_a_unidade(monkeypatch):
     )
 
     assert d.avaliacao.itens[0].motivo == "unidade_divergente"
+
+
+# ── Escolha pontual com fonte de preço (pendência 7, BACKLOG 2.20) ─────────
+
+_ESCOLHA_0 = {"0": {"fire_seq": 456, "por": "op@x.com", "em": "2026-10-20T10:00:00"}}
+
+
+def test_nasmar_item_com_escolha_pontual_nao_e_avaliado_na_fonte(monkeypatch):
+    # A MM casaria os dois itens com preço igual à tabela ("ok"), mas o item 0
+    # tem escolha pontual na Nasmar (SEQ 456 do Fire DELA): a fonte não vê a
+    # escolha, então o item nunca passa como conforme — fail-closed.
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_0)
+    _checks_por_ambiente(monkeypatch, proprio=_check(2), fonte=_check(ids=[777, 778]))
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.reason == "preco_nao_avaliado"
+    it0, it1 = d.avaliacao.itens
+    assert (it0.situacao, it0.motivo) == ("nao_avaliado", "escolha_pontual_sem_fonte")
+    assert (it1.situacao, it1.motivo) == ("ok", "ok")
+    assert "escolhido à mão" in d.detalhe
+    assert _revisoes(import_id) == []
+
+
+def test_nasmar_escolha_pontual_em_observando_aparece_na_avaliacao(monkeypatch):
+    _precos_por_produto({"777": 5400})
+    order = _order((54.0,))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_0)
+    _checks_por_ambiente(monkeypatch, proprio=_check(), fonte=_check(ids=[777]))
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env_nasmar("observando"), agora=AGORA
+    )
+
+    assert d.avaliacao.itens[0].motivo == "escolha_pontual_sem_fonte"
+    (audit,) = _audits(import_id, "preco_observado")
+    assert audit["detail"]["itens"][0]["situacao"] == "nao_avaliado"
+
+
+def test_preview_da_nasmar_mostra_o_motivo_da_escolha_pontual(monkeypatch):
+    _precos_por_produto({"777": 5400})
+    order = _order((54.0,))
+    salvo = {**_check(ids=[777]), "preco_fonte_slug": "mm"}
+    import_id, entry = _seed(order, check=_check(), check_preco=salvo, produto_escolhido=_ESCOLHA_0)
+
+    preco = preco_trava.preview_preco(
+        import_id, entry, order, env=_env_nasmar("ligado"), agora=AGORA
+    )
+
+    assert preco["itens"][0]["estado"] == "nao_avaliado"
+    assert preco["itens"][0]["motivo"] == "escolha_pontual_sem_fonte"
+
+
+def test_escolha_pontual_sem_fonte_segue_avaliada_pelo_proprio_check(monkeypatch):
+    _copia(5400)
+    order = _order((54.0,))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_0)
+    _live(monkeypatch, _check())
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.bloqueado is False
+    assert d.avaliacao.itens[0].motivo == "ok"
+
+
+def test_index_tem_o_texto_do_motivo_da_escolha_pontual():
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "app" / "web" / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    assert "escolha_pontual_sem_fonte:" in html

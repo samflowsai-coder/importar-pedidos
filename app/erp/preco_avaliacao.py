@@ -37,6 +37,7 @@ Motivo = Literal[
     "preco_invalido",
     "empresa_sem_cnpj",
     "intercompany",
+    "escolha_pontual_sem_fonte",
 ]
 
 _LIMITE_COPIA = timedelta(hours=24)

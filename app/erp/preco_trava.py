@@ -19,6 +19,7 @@ de hoje (`check_order` + `is_blocking` + ack) e, em `ligado`, o avaliador puro
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import math
@@ -64,6 +65,9 @@ _MOTIVO_LEGIVEL: dict[str, str] = {
     "preco_invalido": "preço da tabela fora do contrato",
     "copia_desatualizada": "tabela de preço sem sincronizar com o Flow há mais de 24 h",
     "empresa_sem_cnpj": "CNPJ da empresa não cadastrado no ambiente",
+    "escolha_pontual_sem_fonte": (
+        "produto escolhido à mão neste pedido não é avaliado pela empresa da chave do produto"
+    ),
 }
 
 
@@ -303,6 +307,40 @@ def _eh_intercompany(order: Order, entry: dict, grupo: set[str] | None = None) -
 
 
 def _avaliar_local(
+    order: Order,
+    check: dict | None,
+    entry: dict,
+    agora: datetime,
+    env: dict | None,
+    grupo: set[str] | None = None,
+) -> Avaliacao:
+    """`_avaliar_copia` + escolha pontual com fonte de preço (BACKLOG 2.20): o
+    check da fonte roda no Fire DELA e não vê a escolha (SEQ do Fire do
+    pedido), então o item escolhido à mão sai `nao_avaliado`
+    (`escolha_pontual_sem_fonte`) e bloqueia; nunca passa como conforme.
+    Item intercompany não depende da fonte: fica como está."""
+    av = _avaliar_copia(order, check, entry, agora, env, grupo)
+    if _fonte(env) is None:
+        return av
+    escolhas = pc.escolhas_do_import(entry)
+    if not escolhas:
+        return av
+    itens = [
+        dataclasses.replace(
+            it,
+            situacao="nao_avaliado",
+            motivo="escolha_pontual_sem_fonte",
+            preco_tabela_centavos=None,
+            preco_tabela_id=None,
+        )
+        if it.item_index in escolhas and it.situacao != "fora_intercompany"
+        else it
+        for it in av.itens
+    ]
+    return dataclasses.replace(av, itens=itens)
+
+
+def _avaliar_copia(
     order: Order,
     check: dict | None,
     entry: dict,
