@@ -23,6 +23,15 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
+## 20261021-1815
+
+1) **O lote de planilhas e o de envio ao Fire dizem por que recusaram cada pedido.** Antes a tela mostrava só "N com erro, detalhes no console"; agora lista o motivo e quantos pedidos têm cada um.
+2) **Planilha não pede mais confirmação de item sem preço no cadastro do Fire.** Vale para o lote e para o botão do próprio pedido, enquanto o cadastro direto no Fire estiver desligado (a planilha é conferida no importador do Fire). Divergência de preço e pedido sem preço continuam bloqueando; o que deixou de ser exigido fica registrado no pedido. Com o cadastro direto ligado, a confirmação volta.
+3) **Pedido da Centauro na nova planilha "ORDER CONFIRMATION" é lido certo.** Cliente, produto pelo SKU e itens saem corretos. Arquivo incompleto, com cabeçalho alterado ou com mais de um pedido é recusado, e a tela diz o motivo em vez de montar pedido com itens falsos.
+4) **Lote semanal Nasmar → MM chega desligado.** Entram a tela /lotes e tabelas novas no banco do portal; nada muda para a operação até alguém ligar.
+
+## 20261020-2350
+
 1) **Regra comercial de faturamento MM × Nasmar (nasce desligada).** Em /admin/roteamento fica a regra validada com o comercial: Centauro, Riachuelo, Kallan e Sam's Club sempre pela MM, as demais redes pela UF do CNPJ faturado (SP vai pela MM, fora de SP pela Nasmar). Com a regra ligada o preview sugere a empresa e o operador pode trocar, e um pedido em revisão pode ser movido para a outra empresa sem perder nem duplicar. Enquanto estiver desligada nada muda; a única mudança que já vale é que o mesmo pedido não é enviado ao Fire duas vezes ao mesmo tempo.
 2) **Trava de preço pronta para ligar.** Pedido que ficou fora do formato que o Flow aceita ganha o botão "Reenviar bloqueados" no cartão da trava; a conversa com o Flow não perde retiradas quando o portal reinicia; o histórico de preço com mais de 180 dias é limpo sem tocar no que ainda decide um pedido. Na Nasmar, a consulta ao Fire da MM desiste em 5 segundos se a MM estiver fora, e produto escolhido à mão só é avaliado se o código dele achar um único produto da MM com a mesma unidade; se não, o pedido fica segurado com a explicação na tela. A trava continua desligada até alguém ligar no admin.
 
