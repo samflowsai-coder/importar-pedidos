@@ -286,8 +286,9 @@ def _marcar_escolhas_na_fonte(
         codigo = itens[i]["escolha_codigo"]
         if (
             produto.get("estado") == "ok"
-            # De-para da fonte vale quando aponta o mesmo produto do código.
-            and produto.get("fonte") in ("codprod_altern", "depara")
+            # Só o código sozinho prova produto único na fonte; o de-para dela
+            # desempata o código do cliente, não o do produto escolhido.
+            and produto.get("fonte") == "codprod_altern"
             and produto.get("fire_seq") is not None
             and cand is not None
             and codigo is not None

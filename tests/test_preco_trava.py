@@ -2511,7 +2511,9 @@ def test_escolha_que_a_mm_nao_resolve_pelo_codigo_fica_sem_avaliacao(monkeypatch
     assert _revisoes(import_id) == []
 
 
-def test_escolha_resolvida_por_de_para_da_mm_no_mesmo_produto_do_codigo(monkeypatch):
+def test_escolha_resolvida_por_de_para_da_mm_fica_sem_avaliacao(monkeypatch):
+    # O de-para da MM desempata o código do CLIENTE; não prova que o código do
+    # produto da Nasmar é único na MM (dois ativos + vínculo = "ok" por depara).
     _precos_por_produto({"777": 5400, "778": 5400})
     order = _order((54.0, 54.0))
     import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
@@ -2519,8 +2521,9 @@ def test_escolha_resolvida_por_de_para_da_mm_no_mesmo_produto_do_codigo(monkeypa
 
     d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
 
-    assert d.avaliacao.itens[0].motivo == "ok"
-    assert d.avaliacao.itens[0].fire_produto_id == "777"
+    assert d.bloqueado is True and d.reason == "preco_nao_avaliado"
+    assert d.avaliacao.itens[0].motivo == "escolha_pontual_sem_fonte"
+    assert _revisoes(import_id) == []
 
 
 def test_escolha_em_chave_repetida_na_mm_tem_motivo_proprio(monkeypatch):
