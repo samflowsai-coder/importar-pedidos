@@ -693,8 +693,9 @@ tem tela de gestão de preço: a decisão (aprovar/recusar) vem do Flow. Spec:
 4. Recarregar o preview NÃO regrava o `check_preco`: só `/api/commit` e `vincular-produto`
    regravam. Check salvo antes do deploy (sem `fire_unidade`, ou de outra fonte) mostra "sem
    avaliação"; pedido já importado fica assim até vincular o produto ou reimportar.
-   A ida ao Fire da MM no `/api/commit` da Nasmar desiste da conexão em 5 s
-   (`LIMITE_CONEXAO_FONTE_S`): com a MM fora, o commit atrasa no máximo isso.
+   A ida ao Fire da MM no `/api/commit` da Nasmar desiste da conexão em ~5 s
+   (`LIMITE_CONEXAO_FONTE_S`; teto real abaixo). Cadastre a MM com **IP** no host: a
+   resolução de nome não respeita o limite.
    Escolha pontual na Nasmar: a MM casa a linha pelo `CODPROD_ALTERN` do produto escolhido.
    Produto da Nasmar sem esse código na MM (ou com código repetido) bloqueia o pedido com
    `escolha_pontual_sem_fonte` até cadastrar/ajustar o código na MM; enquanto isso, deixar
@@ -787,10 +788,15 @@ chama `aplicar_precos(order, precos_aplicar)` antes de exportar e `registrar_apl
   casamento na MM → `produto_nao_identificado`; MM fora ou fonte inexistente → bloqueia,
   sem fallback para check salvo. A conexão com o Fire da fonte roda dentro de
   `connection.limite_de_conexao(LIMITE_CONEXAO_FONTE_S = 5)`: sonda TCP de 5 s antes do
-  `fdb.connect` (o limite garantido; provado contra 10.255.255.1: 5,0 s) e
-  `isc_dpb_connect_timeout` no DPB (hook do fdb, só dentro do bloco). Estourou =
-  `FirebirdConnectionError` → check indisponível, a mesma semântica de "MM fora". Os outros
-  caminhos do portal não ganham limite. O preview usa `entry["check_preco"]`
+  `fdb.connect` (o limite garantido; provado contra 10.255.255.1: 5,0 s) e, no DPB,
+  `isc_dpb_connect_timeout` com o que **sobrou** da sonda (arredondado para cima, mínimo 1 s;
+  hook do fdb registrado uma vez, com lock, que só age no connect TCP de dentro do bloco).
+  Teto real: ~5 s (+ até 1 s de arredondamento) se o fbclient respeitar o DPB, o que não foi
+  provado sem fbclient; servidor que aceita TCP e trava o attach sem respeitar o DPB fica no
+  timeout dele. `getaddrinfo` (host por nome) não respeita o limite: use IP. A sonda abre e
+  fecha um TCP sem protocolo: o firebird.log do servidor Windows pode registrar erro 10054
+  (ruído). Estourou = `FirebirdConnectionError` → check indisponível, a mesma semântica de
+  "MM fora". Os outros caminhos do portal não ganham limite. O preview usa `entry["check_preco"]`
   (`imports.check_preco_json`, gravado no `/api/commit` e regravado no `vincular-produto`
   por `check_preco_para_gravar`, marcado com `preco_fonte_slug` da fonte que o gerou);
   ausente ou de outra fonte → sem avaliação. `desligado` não faz consulta extra.
