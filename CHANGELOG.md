@@ -23,8 +23,6 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
-## 20261021-1815
-
 1) **O lote de planilhas e o de envio ao Fire dizem por que recusaram cada pedido.** Antes a tela mostrava só "N com erro, detalhes no console"; agora lista o motivo e quantos pedidos têm cada um.
 2) **Planilha não pede mais confirmação de item sem preço no cadastro do Fire.** Vale para o lote e para o botão do próprio pedido, enquanto o cadastro direto no Fire estiver desligado (a planilha é conferida no importador do Fire). Divergência de preço e pedido sem preço continuam bloqueando; o que deixou de ser exigido fica registrado no pedido. Com o cadastro direto ligado, a confirmação volta.
 3) **Pedido da Centauro na nova planilha "ORDER CONFIRMATION" é lido certo.** Cliente, produto pelo SKU e itens saem corretos. Arquivo incompleto, com cabeçalho alterado ou com mais de um pedido é recusado, e a tela diz o motivo em vez de montar pedido com itens falsos.
