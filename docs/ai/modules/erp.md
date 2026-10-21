@@ -135,6 +135,19 @@ E `summary.price_summary` agrega contagens.
 envio. Bloqueia em `mismatch`, `no_order_price`, ou `no_price_in_fire` não
 coberto por `ack_items`. `available=False` → não bloqueia (best-effort).
 
+**Ack de "sem preço" dispensado na planilha** (`preco_trava._regra_de_hoje`, predicado
+`preco_trava.sem_preco_dispensado(env, planilha=)`; `is_blocking` não muda: a regra o chama
+de novo tratando os itens sem ack como confirmados): vale só com a integração direta
+desligada (`EXPORT_MODE=xlsx`, o `_export_mode()` configurado), só quando o chamador passa
+`planilha=True` a `decidir_envio` (a rota de export; o **envio ao Fire nunca**, porque insere
+no ERP mesmo com `EXPORT_MODE=xlsx`) e nunca em `ligado`. O item `no_price_in_fire` sem ack
+deixa de bloquear e sai em `block_detail["items_sem_preco_dispensados"]` (chave que só existe
+com a dispensa); o portão grava o audit `sem_preco_dispensado`
+`{itens: [{ean, product_code}]}` e, em `observando`, `preco_observado.sem_preco_dispensados`
+(quantos). `mismatch` e `no_order_price` seguem bloqueando. Com `db`/`both` o rigor volta.
+Por quê: o Fire não guarda preço em `PRODUTOS` (`PRECO_VENDA` zerado) e a planilha é revisada
+no importador do Fire; o ack por pedido travava o lote da operadora (21/10/2026).
+
 ### Produto por chave exata (`item["produto"]`, observado)
 
 `check_order` grava em todo item `produto = {estado, fire_seq, fonte, motivo,
@@ -714,8 +727,9 @@ tem tela de gestão de preço: a decisão (aprovar/recusar) vem do Flow. Spec:
 5. Só então `ligado` (409 até a 1ª cópia completa). Desligar volta ao comportamento de hoje.
 
 ### Interruptor por ambiente (`environments.preco_trava_modo`)
-- `desligado` (nasce assim) — **bit a bit o comportamento de hoje** (`check_order` +
-  `is_blocking` + ack). É também o modo de ambiente ausente.
+- `desligado` (nasce assim) — **o comportamento de hoje** (`check_order` + `is_blocking` +
+  ack), exceto o ack de "sem preço" na planilha com a integração direta desligada (acima).
+  É também o modo de ambiente ausente.
 - `observando` — regra de hoje continua decidindo; a avaliação nova roda e é gravada em
   audit `preco_observado` (`regra_de_hoje_bloqueia`, itens). Nunca bloqueia, nada vai ao Flow.
 - `ligado` — a regra de hoje **não decide** (aviso de preço do Fire e ack somem); decide

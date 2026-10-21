@@ -182,7 +182,10 @@ API pública para páginas-filho:
 
 ## Tela: produto por chave exata (`index.html`)
 Os 3 payloads de preview (`preview_file`, `preview_pending`, `rehydrate_preview`)
-trazem `produto_chave_modo` (`_produto_chave_modo(request_env)`) e `produto_trava`
+trazem `sem_preco_dispensado` (`_sem_preco_dispensado_no_preview`: o MESMO predicado do
+portão, para o botão individual não pedir o ack que o lote dispensa; a tela não desabilita
+a exportação nem mostra "Confirmar e prosseguir" por item sem preço quando é `true`, só um
+aviso discreto) e `produto_chave_modo` (`_produto_chave_modo(request_env)`) e `produto_trava`
 (`_produto_trava_preview`: `produto_trava.avaliar` sobre o check guardado, com o
 `export_mode` do envio → `{bloqueado, reason, export_mode, itens}`). A tela espelha
 essa decisão (estados de planilha por item e o bloqueio do rodapé), não refaz a regra. Em `desligado` a
