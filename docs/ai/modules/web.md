@@ -338,6 +338,48 @@ env["slug"])`. Fábrica `_persist_ctx(env)`, não uma instância guardada: um
 context manager de `@contextmanager` só entra/sai uma vez, e `reimport_file`
 precisa dele nos dois ramos (sucesso e erro).
 
+## Lote semanal intercompany (wiring web)
+
+Rotas em `app/web/routes_lotes.py`; fechamento em `app/consolidators/fechamento`.
+
+- `GET /lotes` → `lotes.html`. Sessão **válida** exigida (`current_user`, não
+  só cookie presente); sem ela, redirect para `/login`. Item "Lotes" na seção
+  Geral do `shell.js` (operador, não admin).
+- `GET /api/lotes` (`require_user`) → `config`, `fator_vigente`,
+  `proximo_fator`, `aberto`, `pendentes` (`aguardando_fator`), `fora_do_lote`,
+  `recentes` (traz `lote_fiscal_ok`, `erro_motivo` e `espelho_existe`: a linha
+  do espelho está no ambiente espelho; `pendentes` também trazem o campo).
+- `GET /api/lotes/{id}` (`require_user`) → lote + `pernas` + `previa`.
+- `PUT /api/lotes/config` e `POST /api/lotes/fator` (`require_admin`; o fator
+  global vale da próxima janela, devolve `vigente_desde`).
+- `POST /api/lotes/{id}/fator` e `POST /api/lotes/{id}/fechar` (`require_user`).
+- A tela recebe o fator em **%** e manda o decimal como string (`"7,5"` →
+  `"0.075"`); a prévia ao vivo refaz `preco_espelho` em BigInt (4 casas, depois
+  2, `ROUND_HALF_UP`) para bater centavo a centavo com o `exemplo` da API.
+- `PUT /api/lotes/config`: origem = espelho → 422; trocar `janela` com lote
+  aberto que tem pernas → 409. `POST /api/lotes/{id}/fator` só em
+  `aguardando_fator` (senão 409); `fechar` sem fator ou sem pernas → 409.
+- `fora_do_lote` (em `GET /api/lotes`): pedidos da origem que chegaram ao Fire
+  na janela sem virar perna (digitados no Fire/Excel, `found_in_fire`) — não
+  serão refaturados.
+
+Ganchos no envio (`_send_one_to_fire`; detalhe em `modules/consolidators.md`):
+
+- Depois do `check_order` + `is_blocking` de sempre,
+  `integracao.preparar_envio_espelho`: `None` = não é espelho; `BloqueioEspelho`
+  → audita `send_to_fire_blocked` e devolve **409** com `reason` =
+  `ambiente_errado` | `lote_status_<status>` | `lote_invalido` |
+  `lote_alterado` | `reserva_falhou`.
+- Espelho: sem XLSX mesmo em `EXPORT_MODE=both`; insert com
+  `obs=espelho.obs`; `skipped` → `abortar_envio_espelho`; exceção antes de o Fire
+  aceitar → `guardar_reserva` cancela a reserva; sucesso →
+  `concluir_envio_espelho` **antes** de `update_fire_metadata`; não chama
+  `push_new_order` (`/recebimento`).
+- Pedido comum: `integracao.anexar_perna_de_origem` logo depois da transição
+  `SEND_TO_FIRE_SUCCEEDED` (nunca levanta).
+- `_export_one_xlsx` recusa o espelho com 409 `lote_espelho` ("vai ao Fire só
+  pelo cadastro direto").
+
 ## Segurança (não relaxar)
 - Whitelist de extensão: `.pdf`, `.xls`, `.xlsx`.
 - Limite de upload: 50 MB.

@@ -282,6 +282,21 @@ Itens abaixo foram vistos nas revisões e deixados de fora de propósito; nenhum
 - Arquivo todo pendente conta como comparado na cobertura.
 - Cobertura da Nasmar insuficiente na regressão de 20/10 (48 arquivos sem pedido no Fire na janela de 72h): repetir com cópia mais nova antes de ligar a Nasmar.
 
+### 2.21 Lote: `fora_do_lote` some na semana seguinte
+A tela só mede a janela corrente: na segunda, a lista do que precisa ser faturado à mão na
+MM (pedido da Nasmar que entrou no Fire por fora do portal) desaparece. Gravar a lista no
+lote no fechamento e mostrá-la no lote fechado.
+
+### 2.22 Lote: `lote_fiscal_ok = 0` sem caminho de reenvio do rastro
+Falha no `lote_fiscal` do SP1 fica visível na tela ("Rastro NÃO enviado"), mas não há
+como reenviar. Botão "reenviar rastro" que remonta as pernas a partir da `composicao` do
+lote + `erp_item_vinculo`.
+
+### 2.23 Lote: dois envios simultâneos do mesmo espelho e a reserva do SP1
+A reserva é por `chave_lote`: dois "Cadastrar no Fire" concorrentes do mesmo espelho podem
+apagar a reserva do primeiro (sai `lote_fiscal_ok = 0`, visível). Desabilitar o botão
+durante o envio.
+
 ---
 
 ## 3. Bloqueado em terceiros
@@ -333,6 +348,20 @@ O Fire copia `PEDIDO_CLIENTE` pro xPed da NF-e (15 chars). Pedido sem ordem de c
 passa a sair com `SN-6CF05353` ali, onde hoje já saem `NASMAR`, `STUDIO Z`, nome de loja.
 Confirmar com o Elias (fiscal MM) antes de subir o pacote.
 
+### 3.8 Lote intercompany: portão antes de ligar em produção
+O espelho (preço × 0,93) passa pelo portão de preço (`preco_trava.decidir_envio`). A trava
+por rede (PR #90) deixa intercompany fora da tabela, mas em todos os modos ele cai na regra
+de hoje (`is_blocking`), que compara com `PRODUTOS.PRECO_VENDA` da MM. Medido na cópia do
+`.7` (19/10): `PRECO_VENDA` vazio em 3.421 de 3.421 produtos, então cada linha do espelho sairia
+`no_price_in_fire` e pediria a confirmação "sem preço no Fire" toda segunda.
+**Resolvido (21/10, decisão do Samuel):** o espelho nasce com essa confirmação feita pelo lote
+(`fechamento._confirmar_sem_preco`: `sem_preco_ack_by = lote:<chave>` + audit com `origem=lote`).
+Divergência de preço e preço ausente no pedido continuam bloqueando; `product_check` e
+`is_blocking` não mudaram. O preço do lote é conferido pela composição antes do envio.
+Pendência menor (revisão de 21/10): em `EXPORT_MODE=both`, `_send_one_to_fire` passa
+`planilha=True` ao `_recusa_planilha_pontual` também para o espelho, que nunca gera XLSX
+(`server.py`, `not espelho`). Com escolha pontual de produto sem `CODPROD_ALTERN` numa linha do
+espelho, recusa à toa (lado seguro). Corrigir com `planilha=... and not integracao.e_espelho(import_id)`.
 ---
 
 ## 4. Decisões pendentes (aguardam o Samuel)
@@ -382,6 +411,11 @@ num caminho que decide se pedido entra ou não, então spec antes de plano.
 - Troca do `preco_trava_modo` só vai pro loguru; falta trilha consultável de quem ligou a trava.
 - Item com vínculo de-para para SEQ diferente do casamento direto (A/B) sai `unidade_divergente` em `ligado` (a unidade do check é a de A); ler a `UNIDADE` do SEQ do vínculo via `find_products_by_seqs_sql` no check ao vivo do portão para o caso A/B parar de bloquear.
 - Paridade do worker docker: `python -m app.worker` não roda `precos.rodar` (sync da tabela, envio, decisões, retenção da trava); só a thread `flowpcp-envio` do processo web. Fora de escopo de propósito: no cliente roda o `ui.py`, onde a thread já existe. Só vira pendência se o deploy docker for usado com a trava ligada.
+
+### 4.4 Lote retroativo
+Perna importada numa semana sem lote e enviada ao Fire semanas depois abre o lote daquela
+janela, já vencida, que fecha no ciclo seguinte com 1 perna. Fiscalmente correto,
+operacionalmente estranho. **Decisão de produto:** aceitar, ou mandar para o lote corrente.
 
 ---
 
@@ -444,3 +478,14 @@ portal já lê pedido da TS. **O que falta é dado do cliente:** um segundo pedi
 preferência de outra filial. Até lá, a nota de release manda a operação conferir o nome
 do cliente na tela — o `check_order` resolve a razão social do Fire pelo CNPJ
 (`app/erp/product_check.py:143`), então filial errada é visível para quem olha.
+
+### 5.5 `PORTAL_RECONCILE_PERIODICO=0` não desligou o loop de reconciliação ao subir localmente
+
+Observado em 2026-10-17, subindo o portal local para a tela de lotes: com
+`PORTAL_RECONCILE_PERIODICO=0`, o loop de reconciliação com o Fire subiu mesmo assim.
+**Não investigado.** O guard (`_periodico_habilitado`) mora em
+`reconciliar_todos_os_ambientes` (`app/reconcile/runner.py`), não no start da thread;
+não se sabe se o que se viu foi só a thread de pé ou uma reconciliação de verdade.
+
+**Próximo passo:** reproduzir com o log do `reconcile.runner` e decidir se o guard
+também deve impedir a thread de subir.

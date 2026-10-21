@@ -72,9 +72,26 @@ for o campo que a rotina de import do Fire lê (código ou EAN), o item casa.
 - Best-effort: falha no enriquecimento nunca derruba a geração do XLS. Audita
   `depara_aplicado_no_xls` quando houve mudança. Itens sem vínculo saem intactos.
 
+## Contrato do `FirebirdExporter.export` (insert direto)
+
+`export(order, *, override_client_id=None, produtos_por_item=None, obs=None)`:
+
+- `produtos_por_item`: `{posição em order.items: SEQ}` dos itens casados por
+  de-para — entram pelo SEQ, sem busca por EAN/código.
+- `obs`: grava `CAB_VENDAS.OBS`. Só o espelho do lote intercompany preenche
+  (`LOTE <chave> | PEDIDOS <SLUG>: ...`); pedido comum grava NULL.
+
+`FirebirdExportResult` traz, além de `fire_codigo` e `items_inserted`:
+
+- `itens`: `[(CORPO_VENDAS.CODIGO, posição em order.items)]` de cada item
+  inserido (SP1, vínculo exato).
+- `produtos`: `{posição em order.items: CODPRODUTO gravado}` — o
+  `produtoProdutor` do `lote_fiscal` (ver `modules/consolidators.md`).
+
 ## Testes
 - `tests/test_exporter_split.py` — split por loja, schema, qty bate por arquivo, regressão consolidado.
 - `tests/test_depara_apply.py` — enriquecimento por vínculo (código/EAN), caso
   Riachuelo (sem CNPJ, chave por nome), item sem vínculo intacto.
+- `tests/test_firebird_exporter_lote.py` — `obs=` no cabeçalho e `result.produtos`.
 - `tests/test_smoke_exporter.py` — contrato público + sanitização de char de controle (`test_export_strips_illegal_control_chars`, `test_export_preserves_legit_whitespace`).
 - Validações implícitas em `tests/test_new_parsers.py` (NBA: 21 arquivos; Magic Feet: 9 arquivos; Sam's GRADE: 3 arquivos).

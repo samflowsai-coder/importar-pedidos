@@ -14,6 +14,12 @@ Por cima da escada original há a **regra comercial de faturamento** (degrau
 Nasmar antes de qualquer outro degrau. Nasce **desligada** e só existe quando
 a política está ativa.
 
+**Fase 2 existe** (lote semanal de refaturamento Nasmar → MM): o que a Nasmar
+cadastra no Fire vira perna do lote da semana, e o fechamento gera um pedido
+espelho na MM. Domínio próprio, com interruptor próprio (`lote_config.ativo`,
+nasce desligado) e independente do `roteamento_modo`: ver
+[`modules/consolidators.md`](consolidators.md).
+
 Duas regras não se negociam em lugar nenhum deste domínio:
 
 1. **Ambíguo não responde.** Cliente com pedido em dois ambientes na mesma

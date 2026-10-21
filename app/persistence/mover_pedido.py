@@ -142,9 +142,21 @@ def _tem(conn: sqlite3.Connection, tabela: str, import_id: str, extra: str = "")
     )
 
 
+def _e_espelho_de_lote(import_id: str) -> bool:
+    """O espelho mora na empresa do lote: movido, o reparo do fechamento o recriaria
+    lá e o pedido existiria nas duas empresas, travando o envio."""
+    from app.persistence import db, lotes_repo
+
+    with db.connect_shared() as sconn:
+        return lotes_repo.lote_do_espelho(sconn, import_id) is not None
+
+
 def _motivo(conn: sqlite3.Connection, row: sqlite3.Row) -> str | None:
-    """Por que este pedido não se move, ou None. Lê só o banco de `conn`."""
+    """Por que este pedido não se move, ou None. Lê o banco de `conn` e, para o
+    pedido espelho de lote, o banco compartilhado."""
     iid = row["id"]
+    if _e_espelho_de_lote(iid):
+        return "é o pedido espelho de um lote intercompany"
     if row["fire_codigo"] is not None or _tem(conn, "erp_item_vinculo", iid):
         return "já foi para o Fire"
     if (row["output_files_json"] or "").strip() not in ("", "[]") or _tem(

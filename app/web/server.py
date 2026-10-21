@@ -154,6 +154,11 @@ from app.web.routes_roteamento import router as roteamento_router  # noqa: E402
 
 app.include_router(roteamento_router)
 
+# Lote semanal intercompany: config, fator com vigência, fechar agora.
+from app.web.routes_lotes import router as lotes_router  # noqa: E402
+
+app.include_router(lotes_router)
+
 
 @app.on_event("startup")
 def _iniciar_reconciliacao_periodica() -> None:
@@ -195,6 +200,16 @@ def _iniciar_envio_flowpcp() -> None:
 
     if envio_portal.envio_habilitado():
         threading.Thread(target=envio_portal.loop, name="flowpcp-envio", daemon=True).start()
+
+
+@app.on_event("startup")
+def _iniciar_fechamento_lotes() -> None:
+    """Fecha os lotes intercompany vencidos numa thread daemon do processo web
+    (o worker não roda no Windows do cliente). `PORTAL_LOTES=0` desliga."""
+    from app.consolidators import fechamento
+
+    if fechamento.habilitado():
+        threading.Thread(target=fechamento.loop, name="lotes-fechamento", daemon=True).start()
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────
@@ -2755,6 +2770,7 @@ def _send_one_to_fire(
         - On Fire failure: log SEND_TO_FIRE_FAILED (state stays PARSED).
         - On Fire success: update aux fields then transition SEND_TO_FIRE_SUCCEEDED.
     """
+    from app.consolidators import integracao
     from app.exporters.firebird_exporter import FirebirdExporter
     from app.models.order import Order
     from app.persistence import repo
@@ -2826,9 +2842,23 @@ def _send_one_to_fire(
     if recusa is not None:
         return _FireSendOutcome(False, reason=recusa[0], http_status=409, detail=recusa[1])
 
+    # Lote intercompany: o espelho passou pela trava acima como qualquer pedido;
+    # aqui as guardas do lote e a reserva do lote_fiscal do SP1.
+    espelho = integracao.preparar_envio_espelho(import_id, order, request_env)
+    if isinstance(espelho, integracao.BloqueioEspelho):
+        repo.append_audit(
+            import_id, "send_to_fire_blocked", {"motivo": espelho.motivo, **espelho.detalhe}
+        )
+        return _FireSendOutcome(
+            False, reason=espelho.motivo, http_status=409, detail=espelho.mensagem
+        )
+
     # Reuse the trace_id minted on commit so logs across commit→send-to-fire
     # are correlated for the same pedido.
-    with with_trace_id(entry.get("trace_id")):
+    with (
+        with_trace_id(entry.get("trace_id")),
+        integracao.guardar_reserva(espelho, request_env),
+    ):
         # De-para antes do XLS (modo both) e do insert, com os MESMOS vínculos
         # que o portão avaliou. Item vinculado entra no Fire pelo SEQ do vínculo:
         # o `fire_codigo` é str(SEQ) e relido como CODPROD_ALTERN casaria outro
@@ -2843,7 +2873,8 @@ def _send_one_to_fire(
         output_path = Path(cfg["output_dir"]).expanduser().resolve()
         output_path.mkdir(parents=True, exist_ok=True)
         output_files: list[dict] = []
-        if export_mode in ("xlsx", "both"):
+        # Espelho de lote vai ao Fire só pelo insert direto (rastro do lote_fiscal).
+        if export_mode in ("xlsx", "both") and not espelho:
             from app.exporters.erp_exporter import ERPExporter
 
             paths = ERPExporter().export(order, str(output_path))
@@ -2853,11 +2884,16 @@ def _send_one_to_fire(
         override = entry.get("cliente_override_codigo")
         # Multi-ambiente: usa creds do env atual em vez de env vars FB_*.
         result = FirebirdExporter(env=request_env).export(
-            order, override_client_id=override, produtos_por_item=produtos_por_item
+            order,
+            override_client_id=override,
+            produtos_por_item=produtos_por_item,
+            **({"obs": espelho.obs} if espelho else {}),
         )
         db_result = result.to_dict()
 
         if result.skipped or result.fire_codigo is None:
+            if espelho:
+                integracao.abortar_envio_espelho(espelho, request_env)
             repo.append_audit(
                 import_id,
                 "send_to_fire_failed",
@@ -2893,6 +2929,10 @@ def _send_one_to_fire(
                 ),
             )
 
+        # Fire aceitou: o rastro do lote vem ANTES de tudo que ainda pode levantar.
+        if espelho:
+            integracao.concluir_envio_espelho(espelho, result, request_env)
+
         now = datetime.now().isoformat(timespec="seconds")
         repo.update_fire_metadata(
             import_id,
@@ -2921,6 +2961,7 @@ def _send_one_to_fire(
             },
         )
         _registrar_aplicados(import_id, decisao)
+        integracao.anexar_perna_de_origem(import_id, entry, order, result, request_env)
 
         # SP1: vínculo exato item do ERP ↔ posição em order.items (best-effort).
         if request_env:
@@ -2934,8 +2975,10 @@ def _send_one_to_fire(
         # Ponte FlowPCP (Modelo B/OVERLAY): notifica o pedido novo em paralelo
         # ao Fire — só em ambientes com FlowPCP habilitado (MM). Best-effort:
         # nunca derruba o send-to-fire que já teve sucesso.
+        # Espelho de lote não vai ao /recebimento: no Flow segue tudo por pedido de
+        # origem; o vínculo vai pelo lote_fiscal do SP1.
         slug = (request_env or {}).get("slug")
-        if slug:
+        if slug and espelho is None:
             push_new_order(order_flow, import_id=import_id, slug=slug)
 
         return _FireSendOutcome(
@@ -3024,6 +3067,15 @@ def _export_one_xlsx(
             reason="wrong_status",
             http_status=409,
             detail=f"Pedido não está 'em revisão' (status atual: {entry.get('portal_status')})",
+        )
+    from app.consolidators import integracao
+
+    if integracao.e_espelho(import_id):
+        return _XlsxExportOutcome(
+            False,
+            reason="lote_espelho",
+            http_status=409,
+            detail="Pedido de lote vai ao Fire só pelo cadastro direto (EXPORT_MODE=db)",
         )
     snapshot = entry.get("snapshot")
     if not snapshot:

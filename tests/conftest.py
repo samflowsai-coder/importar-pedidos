@@ -41,6 +41,8 @@ def pytest_configure(config):  # noqa: ARG001 — pytest hook signature
     os.environ.setdefault("PORTAL_ERP_VIGIA", "0")
     # E para a thread de envio ao FlowPCP (app/integrations/flowpcp/envio_portal.py).
     os.environ.setdefault("PORTAL_FLOWPCP_ENVIO", "0")
+    # E para a thread de fechamento dos lotes intercompany (app/consolidators/fechamento.py).
+    os.environ.setdefault("PORTAL_LOTES", "0")
 
 
 # Toda variavel que decide PARA ONDE o app conecta ou como ele fala com o

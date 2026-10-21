@@ -30,7 +30,7 @@ Spec: `pcp-app/docs/superpowers/specs/2026-10-03-sp1-transporte-pedidos-fire-des
 | `app/erp_eventos/vinculo.py` | vínculo exato item do ERP ↔ `order.items` (insert e xlsx) |
 | `app/erp_eventos/produtor.py` | `produtoProdutor` dos itens da base intermediária |
 | `app/erp_eventos/eco.py` | `correlacaoId` da data que o próprio Portal aplicou |
-| `app/erp_eventos/lote_fiscal.py` | emissor do `lote_fiscal` (produtor = Fase 2 do roteamento, não construída) |
+| `app/erp_eventos/lote_fiscal.py` | emissor do `lote_fiscal` (produtor = envio do espelho do lote, `app/consolidators/integracao.py`) |
 | `app/erp_eventos/runner.py` | thread do processo web, trava por base |
 | `app/persistence/erp_bases_repo.py` | config + credencial cifrada por (ambiente, base) — `app_shared.db` |
 | `app/persistence/erp_estado_repo.py` / `erp_vinculo_repo.py` / `erp_foto_repo.py` | tabelas `erp_*` do banco do ambiente |
@@ -150,8 +150,13 @@ do ambiente produtor (já existente).
   antes de ligar (não verificado).
 - `fdb` no Mac não fala com a fbclient do Firebird 5: para ler a cópia local, use
   `firebirdsql` (`tools/erp_medir.py`).
-- `lote_fiscal` só existe quando a Fase 2 do roteamento chamar `reservar_lote` →
-  INSERT → `registrar_lote_fiscal`. Sem reserva, a vigia não segura nada.
+- `lote_fiscal` tem produtor: o envio do espelho do lote intercompany
+  (`app/consolidators/integracao.py`). `preparar_envio_espelho` chama
+  `cancelar_reserva` (sobra de tentativa interrompida) + `reservar_lote` antes do
+  INSERT; `concluir_envio_espelho` chama `registrar_lote_fiscal` numa transação
+  só; insert que não acontece cancela a reserva. Base SP1 do espelho ausente ou
+  com `ativo = 0` = sem reserva e sem `lote_fiscal` (`lote_fiscal_ok = 0`,
+  auditado). Sem reserva, a vigia não segura nada. Ver `modules/consolidators.md`.
 
 ## Testes
 
