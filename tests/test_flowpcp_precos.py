@@ -677,14 +677,61 @@ def test_disjuntor_zera_com_resposta_que_nao_e_5xx(mm, flow):
     ]
 
 
-def test_tentativas_somem_da_memoria_no_sucesso(mm, flow):
+def test_tentativas_zeram_no_sucesso(mm, flow):
     _revisao(external="imp-a")
     flow.aprovacao = [_erro(500, "erro_interno")]
     precos.rodar(AGORA)
-    assert precos._tentativas == {("mm", "imp-a", 1): 1}
+    assert _linha(1, external="imp-a")["tentativas"] == 1
     precos.rodar(AGORA + timedelta(seconds=31))
     assert _situacoes(external="imp-a") == [(1, "enviada")]
-    assert precos._tentativas == {}
+    assert _linha(1, external="imp-a")["tentativas"] == 0
+
+
+def test_tentativas_sobrevivem_ao_reinicio(mm, flow, logs):
+    _revisao(external="imp-a")
+    flow.aprovacao = _preso("imp-a")
+    for i in range(3):
+        precos.rodar(AGORA + timedelta(seconds=31 * i))
+    precos._reset_estado()  # reinício do processo
+    for i in range(3, 6):
+        precos.rodar(AGORA + timedelta(seconds=31 * i))
+    assert _linha(1, external="imp-a")["tentativas"] == 6
+    assert len([m for m in logs if "imp-a/1" in m and "tentativas" in m]) == 1
+
+
+def test_retirada_presa_sobrevive_ao_reinicio(mm, flow, monkeypatch):
+    for imp in ("imp-a", "imp-b"):
+        _revisao(external=imp)
+    precos.rodar(AGORA)
+    with router.env_connect("mm") as conn:
+        for imp in ("imp-a", "imp-b"):
+            revs.retirar(conn, imp, "pedido cancelado no Portal", em=AGORA)
+    monkeypatch.setattr(precos, "LOTE_ENVIO", 1)
+    flow.aprovacao = _preso("imp-a")
+    precos.rodar(AGORA + timedelta(seconds=31))
+    assert _linha(1, external="imp-a")["retirada_presa_em"] is not None
+    precos._reset_estado()  # reinício do processo
+    precos.rodar(AGORA + timedelta(seconds=62))
+    retiradas = [c["externalId"] for c in flow.de("aprovacao") if c["tipo"] == "retirada"]
+    assert retiradas == ["imp-a", "imp-b"]
+    assert _linha(1, external="imp-b")["retirada_enviada_em"] is not None
+    assert _linha(1, external="imp-b")["retirada_presa_em"] is None
+
+
+def test_presas_acima_do_limite_sao_soltas(mm, flow, monkeypatch):
+    for imp in ("imp-a", "imp-b"):
+        _revisao(external=imp)
+    precos.rodar(AGORA)
+    with router.env_connect("mm") as conn:
+        for imp in ("imp-a", "imp-b"):
+            revs.retirar(conn, imp, "pedido cancelado no Portal", em=AGORA)
+            revs.marcar_retirada_presa(conn, imp, 1, em=AGORA)
+    monkeypatch.setattr(precos, "LIMITE_PRESAS", 1)
+    flow.aprovacao = _preso("imp-a", "imp-b")
+    precos.rodar(AGORA + timedelta(seconds=31))
+    with router.env_connect("mm") as conn:
+        # soltou as 2 antigas; as que falharam nesta volta voltam a ser presas
+        assert revs.contar_retiradas_presas(conn) == 2
 
 
 def test_erro_de_rede_e_transitorio(mm, flow):
@@ -758,6 +805,27 @@ def test_retirada_409_sem_revisao_nova_loga_uma_vez(mm, flow, logs):
     precos.rodar(AGORA + timedelta(seconds=62))
     assert len([m for m in logs if "retirada" in m and "409" in m]) == 1
     assert _linha(1)["retirada_enviada_em"] is None
+
+
+def test_retirada_segundo_409_com_outra_revisao_avisa_uma_vez(mm, flow, logs):
+    _revisao()
+    precos.rodar(AGORA)
+    with router.env_connect("mm") as conn:
+        revs.retirar(conn, IMP, "pedido cancelado no Portal", em=AGORA)
+    flow.aprovacao = [
+        _erro(409, "revisao_obsoleta", {"revisaoVigente": 2}),
+        _erro(409, "revisao_obsoleta", {"revisaoVigente": 3}),
+        _erro(409, "revisao_obsoleta", {"revisaoVigente": 2}),
+        _erro(409, "revisao_obsoleta", {"revisaoVigente": 3}),
+    ]
+    precos.rodar(AGORA + timedelta(seconds=31))
+    precos.rodar(AGORA + timedelta(seconds=62))
+    avisos = [m for m in logs if "retirada" in m and "409" in m]
+    assert len(avisos) == 1
+    assert "env=mm" in avisos[0] and IMP in avisos[0]
+    assert "2" in avisos[0] and "3" in avisos[0]
+    assert _linha(1)["retirada_enviada_em"] is None
+    assert _linha(1)["retirada_presa_em"] is not None
 
 
 def test_retirada_invalida_loga_uma_vez(mm, flow, logs):
@@ -1103,3 +1171,37 @@ def test_cliente_2xx_fora_do_contrato_guarda_o_bruto_com_teto():
         _cliente_http(handler).post_precos_aprovacao(EXEMPLOS["aprovacaoPedido"])
     assert exc.value.error == "resposta_fora_do_contrato"
     assert len(exc.value.body) == 64 * 1024
+
+
+# ── Retenção das tabelas preco_* (pendência 5) ──────────────────────────────
+
+
+def test_retencao_roda_no_maximo_uma_vez_por_dia_com_retention_days(mm, flow, monkeypatch):
+    monkeypatch.setenv("RETENTION_DAYS", "30")
+    cortes = []
+    monkeypatch.setattr(
+        revs, "reter", lambda conn, *, corte, **kw: cortes.append(corte) or {"revisoes": 0}
+    )
+    precos.rodar(AGORA)
+    precos.rodar(AGORA + timedelta(hours=23))
+    assert cortes == [AGORA - timedelta(days=30)]
+    precos.rodar(AGORA + timedelta(hours=24, seconds=1))
+    assert len(cortes) == 2
+
+
+def test_retencao_que_falha_nao_derruba_a_volta(mm, flow, monkeypatch):
+    def _falha(conn, **kw):
+        raise RuntimeError("disco cheio")
+
+    monkeypatch.setattr(revs, "reter", _falha)
+    _revisao()
+    precos.rodar(AGORA)
+    assert _situacoes() == [(1, "enviada")]
+
+
+def test_retencao_nao_roda_com_a_trava_desligada(shared, flow, monkeypatch):
+    _env("mm", MM, modo="desligado")
+    chamadas = []
+    monkeypatch.setattr(revs, "reter", lambda conn, **kw: chamadas.append(kw) or {})
+    precos.rodar(AGORA)
+    assert chamadas == []

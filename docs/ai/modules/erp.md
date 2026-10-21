@@ -167,7 +167,26 @@ decide antes de qualquer chave (`decidir_escolha`): SEQ ativo → `ok` com fonte
 aponta para o produto X, que não existe mais ou está bloqueado."). Vale só para
 aquele import: todo chamador que confere um import salvo passa as escolhas dele
 (`decidir_envio`, recheck do vincular, ack-sem-preço, a própria rota); o check da
-fonte de preço (`_check_da_fonte`) não (SEQs de outro Fire). A linha com escolha
+fonte de preço (`_check_da_fonte`) não (SEQs de outro Fire). Com `preco_fonte_slug` ≠ o
+próprio, a linha com escolha vai à fonte com o `CODPROD_ALTERN` do produto escolhido
+**lido do Fire no check ao vivo** do ambiente do pedido (R21: item `ok` por
+`escolha_pontual` no mesmo SEQ; nunca o `codigo` do catálogo guardado na escolha) como
+única chave (`_pedido_para_a_fonte`, sem EAN). Sem esse candidato ao vivo (Fire fora,
+`check_preco_para_gravar` sem `live`) ou sem código no Fire, a linha vai sem chave e
+bloqueia. As rotas de escolha, vincular e mover passam o check fresco como `live`. Se a fonte resolve a um
+único produto ativo pelo código (`estado` `ok`, fonte `codprod_altern`; `depara` da fonte não
+vale: ele desempata o código do cliente e não prova unicidade do código), o item é
+avaliado normalmente com esse SEQ (`escolha_na_fonte: True` no check; conforme ou
+divergente → Flow como qualquer item). Todo item com escolha leva no check da fonte
+`escolha_seq`/`escolha_codigo`; a marca só vale se `escolha_seq` for a escolha atual do
+import (check salvo de uma escolha antiga = sem avaliação). `chave_repetida` na fonte
+(duas linhas chegam com o mesmo código e descrições diferentes) sai
+`escolha_pontual_chave_repetida`, que diz isso. Unidade do produto escolhido (Fire ao vivo;
+sem ela, `catalogo_fire.unidade` daquele SEQ) diferente da do produto da fonte, ou
+desconhecida (kit numa empresa, par na outra) → `escolha_pontual_unidade_divergente`. O resto (sem código, ambíguo, de-para
+para outro produto, check salvo sem a marca) sai `escolha_pontual_sem_fonte`: portão
+bloqueia e o preview diz o que fazer (cadastrar/ajustar o código na fonte ou deixar a
+empresa em `observando`). A escolha regrava o `check_preco`. Intercompany não muda. A linha com escolha
 válida também tem os campos legados trocados (`match`, `match_source =
 "escolha_pontual"`, `fire_product_id`, `fire_description`, preço/unidade e
 `price_status` do escolhido; código da previsão de troca = o `CODPROD_ALTERN` dele),
@@ -685,8 +704,13 @@ tem tela de gestão de preço: a decisão (aprovar/recusar) vem do Flow. Spec:
 4. Recarregar o preview NÃO regrava o `check_preco`: só `/api/commit` e `vincular-produto`
    regravam. Check salvo antes do deploy (sem `fire_unidade`, ou de outra fonte) mostra "sem
    avaliação"; pedido já importado fica assim até vincular o produto ou reimportar.
-   Antes de ligar na Nasmar: resolver o timeout de conexão na ida ao Fire da MM no
-   `/api/commit` (hoje sem timeout de conexão; com a MM fora, o commit fica lento).
+   A ida ao Fire da MM no `/api/commit` da Nasmar desiste da conexão em ~5 s
+   (`LIMITE_CONEXAO_FONTE_S`; teto real abaixo). Cadastre a MM com **IP** no host: a
+   resolução de nome não respeita o limite.
+   Escolha pontual na Nasmar: a MM casa a linha pelo `CODPROD_ALTERN` do produto escolhido.
+   Produto da Nasmar sem esse código na MM (ou com código repetido) bloqueia o pedido com
+   `escolha_pontual_sem_fonte` até cadastrar/ajustar o código na MM; enquanto isso, deixar
+   a Nasmar em `observando`.
 5. Só então `ligado` (409 até a 1ª cópia completa). Desligar volta ao comportamento de hoje.
 
 ### Interruptor por ambiente (`environments.preco_trava_modo`)
@@ -773,7 +797,17 @@ chama `aplicar_precos(order, precos_aplicar)` antes de exportar e `registrar_apl
   `fire_product_id`/`fire_unidade` dele é o avaliado e o que vai no corpo. Os vínculos
   de-para do próprio ambiente (`produtos_por_item`) **não** entram nesse check. Item sem
   casamento na MM → `produto_nao_identificado`; MM fora ou fonte inexistente → bloqueia,
-  sem fallback para check salvo. O preview usa `entry["check_preco"]`
+  sem fallback para check salvo. A conexão com o Fire da fonte roda dentro de
+  `connection.limite_de_conexao(LIMITE_CONEXAO_FONTE_S = 5)`: sonda TCP de 5 s antes do
+  `fdb.connect` (o limite garantido; provado contra 10.255.255.1: 5,0 s) e, no DPB,
+  `isc_dpb_connect_timeout` com o que **sobrou** da sonda (arredondado para cima, mínimo 1 s;
+  hook do fdb registrado uma vez, com lock, que só age no connect TCP de dentro do bloco).
+  Teto real: ~5 s (+ até 1 s de arredondamento) se o fbclient respeitar o DPB, o que não foi
+  provado sem fbclient; servidor que aceita TCP e trava o attach sem respeitar o DPB fica no
+  timeout dele. `getaddrinfo` (host por nome) não respeita o limite: use IP. A sonda abre e
+  fecha um TCP sem protocolo: o firebird.log do servidor Windows pode registrar erro 10054
+  (ruído). Estourou = `FirebirdConnectionError` → check indisponível, a mesma semântica de
+  "MM fora". Os outros caminhos do portal não ganham limite. O preview usa `entry["check_preco"]`
   (`imports.check_preco_json`, gravado no `/api/commit` e regravado no `vincular-produto`
   por `check_preco_para_gravar`, marcado com `preco_fonte_slug` da fonte que o gerou);
   ausente ou de outra fonte → sem avaliação. `desligado` não faz consulta extra.

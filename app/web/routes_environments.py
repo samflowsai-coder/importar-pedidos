@@ -31,7 +31,9 @@ from app.persistence import (
     erp_foto_repo,
     precos_repo,
 )
+from app.persistence import preco_revisao_repo as revs
 from app.persistence import router as db_router
+from app.utils.logger import logger
 from app.web.auth import require_admin
 
 router = APIRouter(prefix="/api/admin/environments", tags=["admin", "environments"])
@@ -131,12 +133,26 @@ def create_environment(payload: CreateEnvRequest, _=Depends(require_admin)):
         raise HTTPException(400, str(e)) from None
 
 
+def _preco_bloqueadas_local(slug: str) -> int | None:
+    """Revisões da trava de preço bloqueadas localmente (o cartão mostra e
+    oferece o reenvio). None se o banco do ambiente não respondeu; 0 sem
+    abrir nada se o banco ainda não existe (o GET não cria o SQLite)."""
+    try:
+        if not db_router.env_db_path(slug).exists():
+            return 0
+        with db_router.env_connect(slug) as conn:
+            return revs.contagem_por_situacao(conn).get("bloqueada_local", 0)
+    except Exception as exc:  # noqa: BLE001 — só informativo: o GET não pode cair
+        logger.warning(f"contagem de bloqueadas da trava de preço env={slug} falhou: {exc!r}")
+        return None
+
+
 @router.get("/{env_id}")
 def get_environment(env_id: str, _=Depends(require_admin)):
     env = environments_repo.get(env_id)
     if not env:
         raise HTTPException(404, "Ambiente não encontrado")
-    return env
+    return {**env, "preco_bloqueadas_local": _preco_bloqueadas_local(env["slug"])}
 
 
 @router.patch("/{env_id}")
@@ -213,6 +229,24 @@ def set_environment_preco_trava(
             raise HTTPException(status_code=422, detail=str(exc)) from None
     environments_repo.set_preco_trava_modo(env_id, payload.modo, por=user.email)
     return environments_repo.get(env_id)
+
+
+@router.post("/{env_id}/preco-trava/desbloquear")
+def unblock_environment_preco_trava(env_id: str, user=Depends(require_admin)):
+    """Devolve à fila de envio ao Flow as revisões com `bloqueio_local` (413,
+    400 `payload_invalido`, corpo inválido aqui), depois que a causa foi
+    corrigida. A próxima volta da thread reenvia; o que continuar inválido
+    volta a ser bloqueado."""
+    env = environments_repo.get(env_id)
+    if env is None:
+        raise HTTPException(status_code=404, detail="Ambiente não encontrado")
+    with db_router.env_connect(env["slug"]) as conn:
+        n = revs.desbloquear_locais(conn)
+    logger.info(
+        f"trava de preço: {n} revisão(ões) desbloqueada(s) para reenvio "
+        f"env={env['slug']} por={user.email}"
+    )
+    return {"desbloqueadas": n}
 
 
 class ProdutoChaveRequest(BaseModel):

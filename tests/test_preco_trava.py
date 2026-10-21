@@ -1904,6 +1904,29 @@ def test_check_preco_para_gravar(monkeypatch):
     assert chamadas == [("mm", "mm")]
 
 
+def test_check_da_fonte_conecta_com_limite_de_5s_e_so_ele(monkeypatch):
+    from app.erp import connection
+
+    _precos_por_produto({"777": 5000})
+    order = _order((54.0,))
+    import_id, entry = _seed(order)
+    limites = {}
+
+    def fake(order, *, env=None, escolhas=None):
+        limites[(env or {}).get("slug")] = connection._limite_conexao_s.get()
+        return copy.deepcopy(_check(ids=[777] if (env or {}).get("slug") == "mm" else [123]))
+
+    monkeypatch.setattr(environments_repo, "get_by_slug", lambda s: {"mm": ENV_MM}.get(s))
+    monkeypatch.setattr(pc, "check_order", fake)
+
+    preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+    preco_trava.check_preco_para_gravar(order, _env_nasmar("ligado"))
+
+    assert preco_trava.LIMITE_CONEXAO_FONTE_S == 5
+    assert limites == {"mm": 5, "nasmar": None}
+    assert connection._limite_conexao_s.get() is None
+
+
 def test_check_preco_para_gravar_com_mm_fora_devolve_none(monkeypatch):
     order = _order((54.0,))
     _checks_por_ambiente(monkeypatch, proprio=_check(), fonte=_check(available=False))
@@ -2283,3 +2306,326 @@ def test_produto_desligado_vinculo_v1_continua_zerando_a_unidade(monkeypatch):
     )
 
     assert d.avaliacao.itens[0].motivo == "unidade_divergente"
+
+
+# ── Escolha pontual com fonte de preço (pendência 7, BACKLOG 2.20) ─────────
+
+_ESCOLHA_0 = {"0": {"fire_seq": 456, "por": "op@x.com", "em": "2026-10-20T10:00:00"}}
+
+
+def test_nasmar_item_com_escolha_pontual_nao_e_avaliado_na_fonte(monkeypatch):
+    # A MM casaria os dois itens com preço igual à tabela ("ok"), mas o item 0
+    # tem escolha pontual na Nasmar (SEQ 456 do Fire DELA) sem código: a fonte
+    # não tem como casá-la, então o item nunca passa como conforme — fail-closed.
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_0)
+    _checks_por_ambiente(monkeypatch, proprio=_check(2), fonte=_check(ids=[777, 778]))
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.reason == "preco_nao_avaliado"
+    it0, it1 = d.avaliacao.itens
+    assert (it0.situacao, it0.motivo) == ("nao_avaliado", "escolha_pontual_sem_fonte")
+    assert (it1.situacao, it1.motivo) == ("ok", "ok")
+    assert "escolhido à mão" in d.detalhe
+    assert _revisoes(import_id) == []
+
+
+def test_nasmar_escolha_pontual_em_observando_aparece_na_avaliacao(monkeypatch):
+    _precos_por_produto({"777": 5400})
+    order = _order((54.0,))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_0)
+    _checks_por_ambiente(monkeypatch, proprio=_check(), fonte=_check(ids=[777]))
+
+    d = preco_trava.decidir_envio(
+        import_id, order, entry, env=_env_nasmar("observando"), agora=AGORA
+    )
+
+    assert d.avaliacao.itens[0].motivo == "escolha_pontual_sem_fonte"
+    (audit,) = _audits(import_id, "preco_observado")
+    assert audit["detail"]["itens"][0]["situacao"] == "nao_avaliado"
+
+
+def test_preview_da_nasmar_mostra_o_motivo_da_escolha_pontual(monkeypatch):
+    _precos_por_produto({"777": 5400})
+    order = _order((54.0,))
+    salvo = {**_check(ids=[777]), "preco_fonte_slug": "mm"}
+    import_id, entry = _seed(order, check=_check(), check_preco=salvo, produto_escolhido=_ESCOLHA_0)
+
+    preco = preco_trava.preview_preco(
+        import_id, entry, order, env=_env_nasmar("ligado"), agora=AGORA
+    )
+
+    assert preco["itens"][0]["estado"] == "nao_avaliado"
+    assert preco["itens"][0]["motivo"] == "escolha_pontual_sem_fonte"
+
+
+def test_escolha_pontual_sem_fonte_segue_avaliada_pelo_proprio_check(monkeypatch):
+    _copia(5400)
+    order = _order((54.0,))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_0)
+    _live(monkeypatch, _check())
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env("ligado"), agora=AGORA)
+
+    assert d.bloqueado is False
+    assert d.avaliacao.itens[0].motivo == "ok"
+
+
+def test_index_tem_o_texto_do_motivo_da_escolha_pontual():
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "app" / "web" / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    assert "escolha_pontual_sem_fonte:" in html
+
+
+# ── Escolha pontual resolvida pelo código na fonte (revisão, item 1 / A-E) ──
+
+# O catálogo guardado na escolha está velho ("AF-VELHO"); o Fire da Nasmar,
+# lido agora, diz que o produto 456 tem o código "AF-123" (R21).
+_ESCOLHA_COD = {
+    "0": {"fire_seq": 456, "por": "op@x.com", "em": "2026-10-20T10:00:00", "codigo": "AF-VELHO"}
+}
+
+
+def _cand(seq, codigo="AF-123", unidade="KIT"):
+    return {"seq": seq, "descricao": "MEIA", "codprod_altern": codigo, "unidade": unidade}
+
+
+def _produto_ok(seq, fonte="codprod_altern", unidade="KIT", codigo="AF-123"):
+    return {
+        "estado": "ok",
+        "fire_seq": seq,
+        "fonte": fonte,
+        "motivo": None,
+        "candidatos": [_cand(seq, codigo, unidade)],
+    }
+
+
+def _vivo(n, *, codigo="AF-123", unidade="KIT", seq=456):
+    """Check ao vivo da Nasmar: item 0 decidido pela escolha pontual."""
+    check = _check(n)
+    if seq is not None:
+        check["items"][0]["produto"] = {
+            "estado": "ok",
+            "fire_seq": seq,
+            "fonte": "escolha_pontual",
+            "motivo": "",
+            "candidatos": [_cand(seq, codigo, unidade)],
+        }
+    return check
+
+
+def _fonte_por_codigo(monkeypatch, produto, *, vivo=None):
+    """Check falso: na MM, o item 0 só resolve se chegar com o código "AF-123"
+    (e sem EAN); a Nasmar devolve `vivo` (padrão: escolha com código AF-123)."""
+    vistos = []
+
+    def fake(order, *, env=None, escolhas=None):
+        if (env or {}).get("slug") != "mm":
+            return copy.deepcopy(vivo if vivo is not None else _vivo(len(order.items)))
+        it0 = order.items[0]
+        vistos.append((it0.product_code, it0.ean))
+        check = _check(ids=[999] + [778] * (len(order.items) - 1))
+        if it0.product_code == "AF-123" and it0.ean is None and produto is not None:
+            check["items"][0]["produto"] = copy.deepcopy(produto)
+        else:
+            check["items"][0]["produto"] = {"estado": "a_identificar", "fire_seq": None}
+        return check
+
+    monkeypatch.setattr(environments_repo, "get_by_slug", lambda s: {"mm": ENV_MM}.get(s))
+    monkeypatch.setattr(pc, "check_order", fake)
+    return vistos
+
+
+def test_escolha_casa_na_mm_pelo_codigo_lido_do_fire_e_nao_pelo_catalogo(monkeypatch):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    vistos = _fonte_por_codigo(monkeypatch, _produto_ok(777))
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert vistos == [("AF-123", None)]  # nunca o "AF-VELHO" do catálogo
+    it0 = d.avaliacao.itens[0]
+    assert (it0.situacao, it0.motivo, it0.fire_produto_id) == ("ok", "ok", "777")
+    assert d.bloqueado is False
+
+
+def test_escolha_com_codigo_divergente_vai_ao_flow(monkeypatch):
+    _precos_por_produto({"777": 5000, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(monkeypatch, _produto_ok(777))
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.reason == "preco_aguardando"
+    assert _corpo(import_id)["itens"][0]["erpProdutoId"] == "777"
+
+
+@pytest.mark.parametrize(
+    "vivo",
+    [
+        _vivo(2, codigo=None),  # produto sem código no Fire da Nasmar
+        _vivo(2, seq=None),  # Fire ao vivo sem o candidato da escolha
+        _vivo(2, seq=999),  # o ao vivo decidiu outro SEQ
+    ],
+)
+def test_escolha_sem_codigo_ao_vivo_vai_sem_chave_e_bloqueia(monkeypatch, vivo):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    vistos = _fonte_por_codigo(monkeypatch, _produto_ok(777), vivo=vivo)
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert vistos == [(None, None)]
+    assert d.bloqueado is True
+    assert d.avaliacao.itens[0].motivo == "escolha_pontual_sem_fonte"
+
+
+@pytest.mark.parametrize(
+    "produto",
+    [
+        None,
+        {"estado": "ambiguo", "fire_seq": None},
+        _produto_ok(777, fonte="depara", codigo="OUTRO"),  # de-para para produto de outro código
+    ],
+)
+def test_escolha_que_a_mm_nao_resolve_pelo_codigo_fica_sem_avaliacao(monkeypatch, produto):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(monkeypatch, produto)
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True and d.reason == "preco_nao_avaliado"
+    assert d.avaliacao.itens[0].motivo == "escolha_pontual_sem_fonte"
+    assert "observando" in d.detalhe
+    assert _revisoes(import_id) == []
+
+
+def test_escolha_resolvida_por_de_para_da_mm_fica_sem_avaliacao(monkeypatch):
+    # O de-para da MM desempata o código do CLIENTE; não prova que o código do
+    # produto da Nasmar é único na MM (dois ativos + vínculo = "ok" por depara).
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(monkeypatch, _produto_ok(777, fonte="depara"))
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True and d.reason == "preco_nao_avaliado"
+    assert d.avaliacao.itens[0].motivo == "escolha_pontual_sem_fonte"
+    assert _revisoes(import_id) == []
+
+
+def test_escolha_em_chave_repetida_na_mm_tem_motivo_proprio(monkeypatch):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(monkeypatch, {"estado": "chave_repetida", "fire_seq": None})
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.avaliacao.itens[0].motivo == "escolha_pontual_chave_repetida"
+    assert "cadastre" not in d.detalhe
+
+
+@pytest.mark.parametrize("unidade_nasmar", ["PAR", None])
+def test_escolha_com_unidade_diferente_entre_as_empresas_nao_e_avaliada(
+    monkeypatch, unidade_nasmar
+):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(
+        monkeypatch, _produto_ok(777, unidade="KIT"), vivo=_vivo(2, unidade=unidade_nasmar)
+    )
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.avaliacao.itens[0].motivo == "escolha_pontual_unidade_divergente"
+
+
+def test_unidade_da_nasmar_cai_para_o_catalogo_quando_o_fire_nao_traz(monkeypatch):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO catalogo_fire (fire_produto_id, codigo, nome, unidade, ativo,"
+            " extraido_em) VALUES (456, 'X', 'MEIA', 'KIT', 1, '2026-10-20')"
+        )
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(monkeypatch, _produto_ok(777, unidade="KIT"), vivo=_vivo(2, unidade=None))
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.avaliacao.itens[0].motivo == "ok"
+
+
+def test_check_preco_gravado_marca_a_escolha_resolvida_e_o_preview_avalia(monkeypatch):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, check=_check(2), produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(monkeypatch, _produto_ok(777))
+
+    salvo = preco_trava.check_preco_para_gravar(order, _env_nasmar("ligado"), entry, _vivo(2))
+    assert salvo["items"][0]["fire_product_id"] == 777
+    assert salvo["items"][0]["escolha_na_fonte"] is True
+
+    entry["check_preco"] = salvo
+    preco = preco_trava.preview_preco(
+        import_id, entry, order, env=_env_nasmar("ligado"), agora=AGORA
+    )
+    assert preco["itens"][0]["estado"] == "ok"
+
+
+def test_check_preco_salvo_de_outra_escolha_fica_sem_avaliacao(monkeypatch):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, check=_check(2), produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(monkeypatch, _produto_ok(777))
+    salvo = preco_trava.check_preco_para_gravar(order, _env_nasmar("ligado"), entry, _vivo(2))
+    assert (salvo["items"][0]["escolha_seq"], salvo["items"][0]["escolha_codigo"]) == (
+        456,
+        "AF-123",
+    )
+    entry["check_preco"] = salvo
+
+    # Escolha trocada depois: o check salvo é de outra escolha → sem avaliação.
+    entry["produto_escolhido"] = {"0": {**_ESCOLHA_COD["0"], "fire_seq": 457}}
+    preco = preco_trava.preview_preco(
+        import_id, entry, order, env=_env_nasmar("ligado"), agora=AGORA
+    )
+    assert preco["itens"][0]["estado"] == "nao_avaliado"
+    assert preco["itens"][0]["motivo"] == "escolha_pontual_sem_fonte"
+
+
+def test_check_preco_para_gravar_sem_check_ao_vivo_deixa_a_escolha_sem_chave(monkeypatch):
+    order = _order((54.0, 54.0))
+    _, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    vistos = _fonte_por_codigo(monkeypatch, _produto_ok(777))
+
+    salvo = preco_trava.check_preco_para_gravar(order, _env_nasmar("ligado"), entry)
+
+    assert vistos == [(None, None)]
+    assert salvo["items"][0]["escolha_na_fonte"] is False
+
+
+def test_index_tem_o_texto_do_motivo_da_chave_repetida_na_fonte():
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "app" / "web" / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    assert "escolha_pontual_chave_repetida:" in html
+    assert "escolha_pontual_unidade_divergente:" in html

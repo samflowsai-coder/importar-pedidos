@@ -460,12 +460,26 @@ cópia no db do próprio ambiente):
   `pendente_envio` (`marcar_tentada` antes do POST; False = não envia), retiradas, e
   decisões (lê sem cursor → `gravar_decisao` → confirma com `empresaFaturadoraCnpj`, até vir vazia).
 - Fila em rotação: revisões por `COALESCE(tentada_em, criado_em)` (`marcar_tentada` grava a
-  hora de cada tentativa), lote de 50; retirada que falhou vai para o fim (`_retiradas_presas`,
-  memória do processo, até 1000). Um pedido preso não segura os outros. Mais de 5 falhas passageiras da
-  mesma revisão → aviso único no log. Decisão de revisão acima da maior local → `descartada`
+  hora de cada tentativa), lote de 50; retirada que falhou vai para o fim
+  (`preco_revisao.retirada_presa_em`, a mais antiga primeiro; acima de 1000 presas a ordem é
+  esquecida, nenhuma retirada se perde). Um pedido preso não segura os outros. Mais de 5 falhas
+  passageiras da mesma revisão (`preco_revisao.tentativas`, zera em qualquer outra resposta) →
+  aviso único no log (por processo). Decisão de revisão acima da maior local → `descartada`
   e aviso no log (sinal de restore de backup do SQLite).
+- Retenção (`RETENTION_DAYS`, padrão 180, a mesma do worker): no máximo 1x por dia por ambiente
+  (memória do processo; reiniciar roda de novo, é idempotente), `preco_revisao_repo.reter` apaga
+  em lotes de 500 (até 20 lotes por tabela) as revisões `substituida`/`retirada` mais velhas que
+  o corte que não são a última do pedido nem a última conhecida pelo Flow, e as decisões já
+  confirmadas que não são da revisão vigente. Não toca a cópia da tabela (`preco_*_v1`: rede e
+  chaves são upsert, `preco_tabela_v1` é a cópia append-only do Flow), o piso (1 linha por
+  pedido) nem decisão não confirmada. Não há log de sync em tabela. Falha só loga.
+  **Por desenho, o que decide fica e cresce com o volume:** a última revisão de todo pedido
+  (inclusive a vigente `enviada` de pedido já faturado ou esquecido), a última conhecida pelo
+  Flow e as decisões da revisão vigente nunca saem; só o histórico intermediário é podado.
 - Estado (`gerado_em`, último erro, `pendente_envio`/`bloqueada_local`/`recusada_flow`) no log
-  `flowpcp.precos estado env=…`, só quando muda. Pausas e intervalos vivem na memória do processo.
+  `flowpcp.precos estado env=…`, só quando muda. Tentativas e retiradas presas sobrevivem ao
+  reinício (SQLite do ambiente); pausas, intervalos, capacidades e avisos vivem na memória do
+  processo: reiniciar = tentar de novo, o que é aceitável.
 
 Quatro rotas do Flow (`/api/portal-pedidos/precos/…`): (a) `GET tabela`, (b) `POST aprovacoes`,
 (c) `GET decisoes` e `POST decisoes/confirmar`. Resumo do tratamento (`precos.py`):
@@ -483,9 +497,9 @@ Quatro rotas do Flow (`/api/portal-pedidos/precos/…`): (a) `GET tabela`, (b) `
 | 2xx com JSON fora do contrato | a | pausa tabela e aprovação por 15 min |
 | 409 `revisao_obsoleta`/`conteudo_divergente` | b | vigente aqui: sobe o piso e reenvia (máx. 3 por pedido na volta); já substituída: não reenvia |
 | 409 `revisao_obsoleta` sem `revisaoVigente` | b (pedido) | pausa só a aprovação por 15 min |
-| 409 `revisao_obsoleta` | b (retirada) | reenvia com `revisaoVigente`; sem revisão nova, loga uma vez e a retirada vai para o fim |
+| 409 `revisao_obsoleta` | b (retirada) | reenvia com `revisaoVigente`; sem revisão nova, ou segundo 409 seguido com outra `revisaoVigente`, WARNING uma vez por revisão (slug, pedido, revisões) e a retirada vai para o fim |
 | 200 com `aprovacaoId` nulo | b (retirada) | retirada feita |
-| 413, 400 `payload_invalido`, corpo inválido local | b | `bloqueio_local`: só conteúdo novo cria nova revisão; não há desbloqueio por clique |
+| 413, 400 `payload_invalido`, corpo inválido local | b | `bloqueio_local`: sai da fila; volta com conteúdo novo (nova revisão) ou pelo botão "Reenviar bloqueados" do admin (`POST .../preco-trava/desbloquear`) |
 | 422 `rede_desconhecida`/`produto_desconhecido`/`empresa_faturadora_desconhecida` | b | `recusada_flow`; reenvio do operador cria a revisão seguinte (rev+1) |
 | 403, 400/401/404, outros | b, c | pausa só a aprovação por 15 min (a tabela segue) |
 | demais erros | a | pausa tabela e aprovação por 15 min |

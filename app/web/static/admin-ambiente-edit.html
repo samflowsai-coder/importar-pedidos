@@ -269,6 +269,15 @@
           <button type="button" id="btn-save-preco-trava" class="btn btn-secondary">Salvar trava de preço</button>
           <span id="preco-trava-status" class="flowpcp-status"></span>
         </div>
+        <!-- Revisões que não podem ir ao Flow (grande demais, fora do formato).
+             Só aparece com contagem > 0 (`preco_bloqueadas_local` do GET). -->
+        <div id="preco-bloqueadas" hidden>
+          <p id="preco-bloqueadas-texto" class="hint" style="margin-top:1rem"></p>
+          <div class="actions" style="margin-top:0">
+            <button type="button" id="btn-preco-desbloquear" class="btn btn-secondary">Reenviar bloqueados</button>
+            <span id="preco-desbloquear-status" class="flowpcp-status" role="status" aria-live="polite"></span>
+          </div>
+        </div>
       </fieldset>
 
       <fieldset>
@@ -625,6 +634,24 @@
     // Chave do produto salva da trava de preço (preenchida no load da edição).
     let precoFonteSalva = '';
 
+    // Trava de preço: revisões bloqueadas aqui (corpo que o Flow não aceita).
+    // O bloco só aparece com N > 0; null (banco não respondeu) também esconde.
+    function precoMostrarBloqueadas(n) {
+      const box = document.getElementById('preco-bloqueadas');
+      if (!Number.isInteger(n) || n <= 0) { box.hidden = true; return; }
+      const um = n === 1;
+      document.getElementById('preco-bloqueadas-texto').innerHTML =
+        '<strong>' + n + (um ? ' pedido parado' : ' pedidos parados') + ' antes do Flow:</strong> ' +
+        (um ? 'ficou grande demais ou fora do formato que o Flow aceita, e por isso não foi'
+            : 'ficaram grandes demais ou fora do formato que o Flow aceita, e por isso não foram') +
+        ' para aprovação de preço. Depois de corrigir a causa, reenvie: ' +
+        (um ? 'ele volta à fila' : 'eles voltam à fila') +
+        ' de envio ao Flow, que sai com a trava em Ligado; ' +
+        'o que continuar fora do formato é bloqueado de novo.';
+      document.getElementById('btn-preco-desbloquear').hidden = false;
+      box.hidden = false;
+    }
+
     if (isEdit) {
       document.getElementById('title').textContent = 'Editar ambiente';
       testBtn.hidden = false;
@@ -654,6 +681,7 @@
         f.elements['slug'].readOnly = true;
         erpBasePadrao();
         document.getElementById('preco-trava-modo').value = env.preco_trava_modo || 'desligado';
+        precoMostrarBloqueadas(env.preco_bloqueadas_local);
         // Chave do produto: só ambientes com FlowPCP ligado (o servidor ainda
         // confere url/tenant/token). O valor salvo nunca some do <select>.
         {
@@ -1004,6 +1032,48 @@
         status.textContent = '✗ ' + err.message; status.classList.add('err');
       } finally {
         btn.disabled = false;
+      }
+    });
+
+    // Trava de preço: devolve à fila as revisões bloqueadas localmente.
+    document.getElementById('btn-preco-desbloquear').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const status = document.getElementById('preco-desbloquear-status');
+      const rotulo = btn.textContent;
+      status.textContent = '';
+      status.className = 'flowpcp-status';
+      btn.disabled = true;
+      btn.setAttribute('aria-busy', 'true');
+      btn.textContent = 'Reenviando…';
+      try {
+        const r = await fetch('/api/admin/environments/' + envId + '/preco-trava/desbloquear', { method: 'POST' });
+        if (r.status === 401) { location.href = '/login'; return; }
+        if (!r.ok) {
+          const t = await r.text();
+          let msg;
+          try { msg = JSON.parse(t).detail || t; } catch { msg = t || ('Erro ' + r.status); }
+          throw new Error(typeof msg === 'string' ? msg : 'Erro ' + r.status);
+        }
+        const { desbloqueadas } = await r.json();
+        const texto = document.getElementById('preco-bloqueadas-texto');
+        texto.textContent = desbloqueadas > 0
+          ? desbloqueadas + (desbloqueadas === 1 ? ' pedido voltou' : ' pedidos voltaram') + ' à fila do Flow.'
+          : 'Nenhum pedido estava bloqueado: nada a reenviar.';
+        btn.hidden = true;
+        // O botão some: o foco vai para o resultado, não para o fim da página.
+        texto.setAttribute('tabindex', '-1');
+        texto.focus();
+        status.textContent = desbloqueadas > 0
+          ? (desbloqueadas === 1 ? '✓ Pedido de volta à fila' : '✓ Pedidos de volta à fila')
+          : '';
+        if (desbloqueadas > 0) status.classList.add('ok');
+      } catch (err) {
+        status.textContent = '✗ ' + err.message;
+        status.classList.add('err');
+      } finally {
+        btn.disabled = false;
+        btn.removeAttribute('aria-busy');
+        btn.textContent = rotulo;
       }
     });
 

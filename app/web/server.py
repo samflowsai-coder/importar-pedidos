@@ -3939,10 +3939,18 @@ def _escolher_pontual(
             },
         )
     # Relê: a escolha de outra linha gravada ao mesmo tempo entra também.
-    escolhas = product_check.escolhas_do_import(repo.get_import(import_id))
+    atual = repo.get_import(import_id)
+    escolhas = product_check.escolhas_do_import(atual)
     check = product_check.check_order(order, env=env, escolhas=escolhas)
     if check.get("available"):
         repo.update_fire_metadata(import_id, check=check)
+    # Trava de preço com ambiente fonte: a fonte casa a linha pelo código da
+    # escolha; o check dela é refeito. Desligado/sem fonte: None, sem I/O.
+    from app.erp import preco_trava
+
+    check_preco = preco_trava.check_preco_para_gravar(order, env, atual, check)
+    if check_preco is not None:
+        repo.update_fire_metadata(import_id, check_preco=check_preco)
     return JSONResponse(
         {
             "entry_id": import_id,
@@ -4188,7 +4196,7 @@ def vincular_produto(
     # (o vínculo pode ter mudado o produto). Desligado/sem fonte: None, sem I/O.
     from app.erp import preco_trava
 
-    check_preco = preco_trava.check_preco_para_gravar(order, env, entry)
+    check_preco = preco_trava.check_preco_para_gravar(order, env, entry, check)
     if check_preco is not None:
         repo.update_fire_metadata(import_id, check_preco=check_preco)
     # R12: Fire fora agora → os outros também dariam indisponível; não recheca.
@@ -4554,7 +4562,7 @@ def reconferir_pedido(
         )
         if check.get("available"):
             repo.update_fire_metadata(import_id, check=check)
-            check_preco = preco_trava.check_preco_para_gravar(order, env, entry)
+            check_preco = preco_trava.check_preco_para_gravar(order, env, entry, check)
             if check_preco is not None:
                 repo.update_fire_metadata(import_id, check_preco=check_preco)
     return JSONResponse(
@@ -4670,7 +4678,9 @@ def mover_pedido_de_empresa(
                     )
                     if check.get("available"):
                         repo.update_fire_metadata(import_id, check=check)
-                    check_preco = preco_trava.check_preco_para_gravar(order, destino, entry)
+                    check_preco = preco_trava.check_preco_para_gravar(
+                        order, destino, entry, check
+                    )
                     if check_preco is not None:
                         repo.update_fire_metadata(import_id, check_preco=check_preco)
             except Exception as exc:  # noqa: BLE001 — o pedido já mudou; o check é refeito depois

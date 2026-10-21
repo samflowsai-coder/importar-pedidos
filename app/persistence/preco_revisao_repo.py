@@ -8,7 +8,8 @@ Situações da revisão: `pendente_envio` → `enviada` | `recusada_flow` (422);
 `substituida` quando nasce outra; `retirada` quando o pedido sai da fila.
 Bloqueio local (`bloqueio_local`, corpo que não pode ir ao Flow: fora do
 contrato, 413, 400 `payload_invalido`): a revisão segue `pendente_envio` e
-vigente, mas sai da fila de envio; só conteúdo novo cria a revisão seguinte.
+vigente, mas sai da fila de envio; só conteúdo novo cria a revisão seguinte,
+ou o admin a devolve à fila (`desbloquear_locais`).
 A vigente é a de maior número, se ela não estiver `substituida`/`retirada`.
 
 Decisão (`preco_decisao`) é gravada para toda decisão recebida, com a
@@ -23,7 +24,6 @@ from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     import sqlite3
-    from collections.abc import Collection
 
 _ATIVAS = ("pendente_envio", "enviada", "recusada_flow")
 _ATIVAS_SQL = "('pendente_envio', 'enviada', 'recusada_flow')"
@@ -73,11 +73,17 @@ def _nova(
     agora: datetime,
 ) -> int:
     """Dentro de transação aberta: a ativa vira `substituida` e nasce
-    `max(maior, piso) + 1` em `pendente_envio`."""
+    `max(maior, piso) + 1` em `pendente_envio`. Retirada presa do pedido deixa
+    de estar pendente (a revisão nova substitui a velha no Flow): solta."""
     numero = max(_maior(conn, import_id), _piso(conn, import_id)) + 1
     conn.execute(
         f"UPDATE preco_revisao SET situacao = 'substituida' "  # noqa: S608 — constante
         f"WHERE import_id = ? AND situacao IN {_ATIVAS_SQL}",
+        (import_id,),
+    )
+    conn.execute(
+        "UPDATE preco_revisao SET retirada_presa_em = NULL"
+        " WHERE import_id = ? AND retirada_presa_em IS NOT NULL",
         (import_id,),
     )
     conn.execute(
@@ -267,6 +273,19 @@ def marcar_bloqueio_local(
         )
 
 
+def desbloquear_locais(conn: sqlite3.Connection) -> int:
+    """Admin pediu reenvio (`POST .../preco-trava/desbloquear`): as revisões
+    `pendente_envio` com `bloqueio_local` voltam à fila de envio. Corpo que
+    continua fora do contrato é bloqueado de novo na próxima volta. Devolve
+    quantas saíram do bloqueio."""
+    with conn:
+        cur = conn.execute(
+            "UPDATE preco_revisao SET bloqueio_local = NULL"
+            " WHERE situacao = 'pendente_envio' AND bloqueio_local IS NOT NULL"
+        )
+    return cur.rowcount
+
+
 def contagem_por_situacao(conn: sqlite3.Connection) -> dict[str, int]:
     """Revisões `pendente_envio` (na fila), `bloqueada_local` e `recusada_flow`."""
     rows = conn.execute(
@@ -423,21 +442,14 @@ def retirar(conn: sqlite3.Connection, import_id: str, motivo: str, *, em: dateti
         )
 
 
-def retiradas_pendentes(
-    conn: sqlite3.Connection, limite: int, por_ultimo: Collection[tuple[str, int]] = ()
-) -> list[dict[str, Any]]:
+def retiradas_pendentes(conn: sqlite3.Connection, limite: int) -> list[dict[str, Any]]:
     """Retiradas a enviar: a última revisão que o Flow pode conhecer, `retirada` e
     ainda não avisada, sem revisão ativa mais nova (pedido reaberto: a revisão
     nova já substitui a velha no Flow). A retirada mira a última revisão
     conhecida pelo Flow; na 7.4, 409 `revisao_obsoleta` → reenviar com
     `details.revisaoVigente`; 200 com `aprovacaoId` nulo → feita.
-    `por_ultimo`: (import_id, revisao) presas, que vão para o fim da fila."""
-    presas = list(por_ultimo)
-    fim = (
-        f"(r.import_id, r.revisao) IN (VALUES {', '.join(['(?, ?)'] * len(presas))}), "
-        if presas
-        else ""
-    )
+    As presas (`retirada_presa_em`, `marcar_retirada_presa`) vão para o fim da
+    fila, a que falhou há mais tempo primeiro."""
     rows = conn.execute(
         f"""
         SELECT r.* FROM preco_revisao r
@@ -450,10 +462,11 @@ def retiradas_pendentes(
            AND NOT EXISTS (SELECT 1 FROM preco_revisao r3
                             WHERE r3.import_id = r.import_id AND r3.revisao > r.revisao
                               AND r3.situacao IN {_ATIVAS_SQL})
-         ORDER BY {fim}r.retirada_em, r.import_id
+         ORDER BY r.retirada_presa_em IS NOT NULL, r.retirada_presa_em, r.retirada_em,
+                  r.import_id
          LIMIT ?
-        """,  # noqa: S608 — constante e marcadores
-        (*(v for p in presas for v in p), limite),
+        """,  # noqa: S608 — constante
+        (limite,),
     ).fetchall()
     return [_linha(r) for r in rows]
 
@@ -461,9 +474,119 @@ def retiradas_pendentes(
 def marcar_retirada_enviada(
     conn: sqlite3.Connection, import_id: str, revisao: int, *, em: datetime
 ) -> None:
+    """A retirada chegou ao Flow; deixa de ser presa."""
     with conn:
         conn.execute(
-            "UPDATE preco_revisao SET retirada_enviada_em = ?"
+            "UPDATE preco_revisao SET retirada_enviada_em = ?, retirada_presa_em = NULL"
             " WHERE import_id = ? AND revisao = ? AND situacao = 'retirada'",
             (em.isoformat(), import_id, revisao),
         )
+
+
+def marcar_retirada_presa(
+    conn: sqlite3.Connection, import_id: str, revisao: int, *, em: datetime
+) -> None:
+    """A retirada falhou nesta volta: vai para o fim da fila (ordem de
+    `retiradas_pendentes`), também depois de reiniciar o processo."""
+    with conn:
+        conn.execute(
+            "UPDATE preco_revisao SET retirada_presa_em = ?"
+            " WHERE import_id = ? AND revisao = ? AND situacao = 'retirada'",
+            (em.isoformat(), import_id, revisao),
+        )
+
+
+def contar_retiradas_presas(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM preco_revisao WHERE retirada_presa_em IS NOT NULL"
+    ).fetchone()
+    return int(row[0])
+
+
+def soltar_retiradas_presas(conn: sqlite3.Connection) -> int:
+    """Esquece a ordem das presas (só ordem da fila: nenhuma retirada se perde)."""
+    with conn:
+        cur = conn.execute(
+            "UPDATE preco_revisao SET retirada_presa_em = NULL WHERE retirada_presa_em IS NOT NULL"
+        )
+    return cur.rowcount
+
+
+def somar_tentativa(conn: sqlite3.Connection, import_id: str, revisao: int) -> int:
+    """Mais uma falha passageira no envio desta revisão; devolve o total."""
+    with conn:
+        conn.execute(
+            "UPDATE preco_revisao SET tentativas = tentativas + 1"
+            " WHERE import_id = ? AND revisao = ?",
+            (import_id, revisao),
+        )
+        row = conn.execute(
+            "SELECT tentativas FROM preco_revisao WHERE import_id = ? AND revisao = ?",
+            (import_id, revisao),
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def zerar_tentativas(conn: sqlite3.Connection, import_id: str, revisao: int) -> None:
+    with conn:
+        conn.execute(
+            "UPDATE preco_revisao SET tentativas = 0"
+            " WHERE import_id = ? AND revisao = ? AND tentativas <> 0",
+            (import_id, revisao),
+        )
+
+
+# Revisão que não decide mais nada: encerrada (`substituida`/`retirada`), nem
+# a última do pedido (vigente, piso, número da próxima) nem a última que o
+# Flow pode conhecer (alvo de retirada futura; guarda do mover de pedido).
+_REVISAO_ANTIGA_SQL = """
+    SELECT r.rowid FROM preco_revisao r
+     WHERE r.situacao IN ('substituida', 'retirada')
+       AND r.criado_em < ?
+       AND r.revisao < (SELECT MAX(r2.revisao) FROM preco_revisao r2
+                         WHERE r2.import_id = r.import_id)
+       AND NOT ((r.enviada_em IS NOT NULL OR r.tentada_em IS NOT NULL)
+                AND r.revisao = (SELECT MAX(r3.revisao) FROM preco_revisao r3
+                                  WHERE r3.import_id = r.import_id
+                                    AND (r3.enviada_em IS NOT NULL
+                                         OR r3.tentada_em IS NOT NULL)))
+     LIMIT ?
+"""
+
+# Decisão já confirmada ao Flow que não é da revisão vigente do pedido (a
+# vigente é a que o portão lê em `decisoes_da_vigente`).
+_DECISAO_ANTIGA_SQL = f"""
+    SELECT d.rowid FROM preco_decisao d
+     WHERE d.confirmada_em IS NOT NULL
+       AND d.recebida_em < ?
+       AND NOT EXISTS (SELECT 1 FROM preco_revisao r
+                        WHERE r.import_id = d.import_id AND r.revisao = d.revisao
+                          AND r.situacao IN {_ATIVAS_SQL})
+     LIMIT ?
+"""  # noqa: S608 — constante
+
+
+def reter(
+    conn: sqlite3.Connection, *, corte: datetime, lote: int = 500, max_lotes: int = 20
+) -> dict[str, int]:
+    """Retenção (`RETENTION_DAYS`): apaga, em lotes de `lote` (uma transação
+    cada, no máximo `max_lotes` por tabela), revisões encerradas mais velhas
+    que `corte` que não decidem mais nada (`_REVISAO_ANTIGA_SQL`) e decisões
+    já confirmadas que não são da revisão vigente. Nunca toca a vigente, a
+    última revisão de um pedido, a última conhecida pelo Flow, decisão não
+    confirmada nem a cópia da tabela. Devolve quantas apagou por tabela."""
+    feitas = {"revisoes": 0, "decisoes": 0}
+    for chave, tabela, sql in (
+        ("revisoes", "preco_revisao", _REVISAO_ANTIGA_SQL),
+        ("decisoes", "preco_decisao", _DECISAO_ANTIGA_SQL),
+    ):
+        for _ in range(max_lotes):
+            with conn:
+                cur = conn.execute(
+                    f"DELETE FROM {tabela} WHERE rowid IN ({sql})",  # noqa: S608 — constantes
+                    (corte.isoformat(), lote),
+                )
+            feitas[chave] += cur.rowcount
+            if cur.rowcount < lote:
+                break
+    return feitas

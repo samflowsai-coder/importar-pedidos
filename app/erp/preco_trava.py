@@ -19,6 +19,7 @@ de hoje (`check_order` + `is_blocking` + ack) e, em `ligado`, o avaliador puro
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import math
@@ -46,6 +47,11 @@ from app.models.order import Order
 from app.persistence import db, environments_repo, precos_repo, repo
 from app.persistence import preco_revisao_repo as revs
 
+# Conexão com o Fire do ambiente fonte (Nasmar → MM) dentro do `/api/commit`:
+# com a fonte fora, desiste em 5 s (vira "Fire da fonte fora") em vez de esperar
+# o timeout do sistema operacional. Só esse caminho; o resto do portal não muda.
+LIMITE_CONEXAO_FONTE_S = 5
+
 MOTIVO_RETIRADA_LOCAL = "pedido liberado pela tabela de preço no Portal"
 MOTIVO_RETIRADA_INTERCOMPANY = "pedido intercompany, fora da trava de preço"
 
@@ -59,6 +65,18 @@ _MOTIVO_LEGIVEL: dict[str, str] = {
     "preco_invalido": "preço da tabela fora do contrato",
     "copia_desatualizada": "tabela de preço sem sincronizar com o Flow há mais de 24 h",
     "empresa_sem_cnpj": "CNPJ da empresa não cadastrado no ambiente",
+    "escolha_pontual_chave_repetida": (
+        "duas ou mais linhas chegam à empresa da chave do produto com o mesmo código e "
+        "descrições diferentes (produto escolhido à mão); ela não sabe qual é cada uma"
+    ),
+    "escolha_pontual_unidade_divergente": (
+        "unidade do produto escolhido à mão não confere com a do produto da empresa da "
+        "chave do produto (ex.: kit numa, par na outra) ou não foi informada"
+    ),
+    "escolha_pontual_sem_fonte": (
+        "produto escolhido à mão sem código que a empresa da chave do produto reconheça "
+        "(cadastre ou ajuste o código do produto lá, ou deixe esta empresa em observando)"
+    ),
 }
 
 
@@ -172,17 +190,157 @@ def _fonte(env: dict | None) -> str | None:
     return slug if slug and slug != (env or {}).get("slug") else None
 
 
-def _check_da_fonte(order: Order, fonte: str) -> dict | None:
+def _escolhas_vivas(live: dict | None, escolhas: dict[int, int]) -> dict[int, dict | None]:
+    """{posição: candidato decidido no check ao vivo do ambiente do pedido} de
+    cada escolha: só o item `ok` por `escolha_pontual` no MESMO SEQ da escolha
+    (R21: o lido do Fire agora vale mais que o catálogo guardado). Sem check ao
+    vivo, outro SEQ ou Fire fora → None."""
+    itens = (live or {}).get("items") or []
+    out: dict[int, dict | None] = {}
+    for i, seq in escolhas.items():
+        produto = (itens[i] or {}).get("produto") if 0 <= i < len(itens) else None
+        out[i] = (
+            produto_trava.candidato_decidido(produto)
+            if isinstance(produto, dict)
+            and produto.get("estado") == "ok"
+            and produto.get("fonte") == "escolha_pontual"
+            and str(produto.get("fire_seq")) == str(seq)
+            else None
+        )
+    return out
+
+
+def _pedido_para_a_fonte(
+    order: Order, entry: dict | None, live: dict | None
+) -> tuple[Order, dict[int, int], dict[int, dict | None]]:
+    """O pedido como a fonte deve casá-lo: item com escolha pontual vai com o
+    `CODPROD_ALTERN` do produto escolhido, lido do Fire no check ao vivo
+    (`_escolhas_vivas`), como única chave (sem EAN). Sem candidato ao vivo ou
+    sem código no Fire, vai sem chave nenhuma (bloqueia). O `codigo` guardado
+    na escolha (catálogo) nunca é usado. Devolve também escolhas e candidatos."""
+    escolhas = pc.escolhas_do_import(entry)
+    if not escolhas:
+        return order, {}, {}
+    vivos = _escolhas_vivas(live, escolhas)
+    novo = order.model_copy(deep=True)
+    for i in escolhas:
+        if 0 <= i < len(novo.items):
+            codigo = ((vivos.get(i) or {}).get("codprod_altern") or "").strip() or None
+            novo.items[i].product_code = codigo
+            novo.items[i].ean = None
+    return novo, escolhas, vivos
+
+
+def _unidades_das_escolhas(
+    escolhas: dict[int, int], vivos: dict[int, dict | None]
+) -> dict[int, str | None]:
+    """Unidade do produto escolhido no ambiente do pedido: a do Fire ao vivo;
+    sem ela, a do `catalogo_fire` local daquele SEQ; sem nenhuma, None."""
+    out: dict[int, str | None] = {}
+    faltam: dict[int, int] = {}
+    for i, seq in escolhas.items():
+        out[i] = unidade_normalizada((vivos.get(i) or {}).get("unidade"))
+        if out[i] is None and vivos.get(i) is not None:
+            faltam[i] = seq
+    if faltam:
+        try:
+            with db.connect() as conn:
+                for i, seq in faltam.items():
+                    row = conn.execute(
+                        "SELECT unidade FROM catalogo_fire WHERE fire_produto_id = ?",
+                        (str(seq),),
+                    ).fetchone()
+                    out[i] = unidade_normalizada(row[0]) if row else None
+        except Exception:  # noqa: BLE001 — sem unidade conhecida a escolha não é avaliada
+            pass
+    return out
+
+
+def _marcar_escolhas_na_fonte(
+    check: dict | None,
+    escolhas: dict[int, int],
+    vivos: dict[int, dict | None],
+    unidades: dict[int, str | None] | None = None,
+) -> dict | None:
+    """Item com escolha só vale se a fonte o resolveu pelo código a um único
+    produto ativo (`produto.estado` `ok`, fonte `codprod_altern`): o SEQ e a
+    unidade vêm desse produto e o item ganha `escolha_na_fonte: True`. Senão
+    fica sem produto e `escolha_na_fonte: False` (o avaliador não o avalia).
+    Todo item com escolha leva `escolha_seq` (o SEQ escolhido) e
+    `escolha_codigo` (o código usado na fonte): o avaliador só aceita a marca
+    se a escolha atual do import for a mesma. Unidade do escolhido (`unidades`)
+    diferente da do produto da fonte, ou desconhecida (kit numa, par na outra)
+    → `escolha_pontual_unidade_divergente`."""
+    if not check or not escolhas:
+        return check
+    itens = [dict(it) for it in check.get("items") or []]
+    for i in escolhas:
+        if not 0 <= i < len(itens):
+            continue
+        itens[i]["escolha_seq"] = escolhas[i]
+        itens[i]["escolha_codigo"] = (
+            (vivos.get(i) or {}).get("codprod_altern") or ""
+        ).strip() or None
+        produto = itens[i].get("produto") if isinstance(itens[i].get("produto"), dict) else {}
+        cand = produto_trava.candidato_decidido(produto)
+        codigo = itens[i]["escolha_codigo"]
+        if (
+            produto.get("estado") == "ok"
+            # Só o código sozinho prova produto único na fonte; o de-para dela
+            # desempata o código do cliente, não o do produto escolhido.
+            and produto.get("fonte") == "codprod_altern"
+            and produto.get("fire_seq") is not None
+            and cand is not None
+            and codigo is not None
+            and (cand.get("codprod_altern") or "").strip().upper() == codigo.upper()
+        ):
+            unidade_fonte = unidade_normalizada(cand.get("unidade"))
+            unidade_pedido = (unidades or {}).get(i)
+            if unidade_fonte is None or unidade_fonte != unidade_pedido:
+                itens[i]["fire_product_id"] = None
+                itens[i]["fire_unidade"] = None
+                itens[i]["escolha_na_fonte"] = False
+                itens[i]["escolha_motivo"] = "escolha_pontual_unidade_divergente"
+                continue
+            itens[i]["fire_product_id"] = produto["fire_seq"]
+            itens[i]["fire_unidade"] = (cand.get("unidade") or "").strip() or None
+            itens[i]["fire_description"] = cand.get("descricao")
+            itens[i]["escolha_na_fonte"] = True
+        else:
+            itens[i]["fire_product_id"] = None
+            itens[i]["fire_unidade"] = None
+            itens[i]["escolha_na_fonte"] = False
+            itens[i]["escolha_motivo"] = (
+                "escolha_pontual_chave_repetida"
+                if produto.get("estado") == "chave_repetida"
+                else "escolha_pontual_sem_fonte"
+            )
+    return {**check, "items": itens}
+
+
+def _check_da_fonte(
+    order: Order, fonte: str, entry: dict | None = None, live: dict | None = None
+) -> dict | None:
     """`check_order` no Fire do ambiente fonte, com o contexto DELE ativo: o
     degrau de-para lê o SQLite da fonte, nunca o do ambiente do pedido.
-    Fonte inexistente → None (bloqueia)."""
+    Item com escolha pontual casa pelo código do produto escolhido lido do Fire
+    no check ao vivo `live` (`_pedido_para_a_fonte`, `_marcar_escolhas_na_fonte`).
+    A conexão desiste em `LIMITE_CONEXAO_FONTE_S` (fonte fora = check indisponível, a mesma semântica de antes). Fonte
+    inexistente → None (bloqueia)."""
+    from app.erp.connection import limite_de_conexao
     from app.persistence import context as env_context
 
     amb = environments_repo.get_by_slug(fonte)
     if amb is None:
         return None
-    with env_context.active_env(amb["id"], amb["slug"]):
-        return pc.check_order(order, env=amb)
+    pedido, escolhas, vivos = _pedido_para_a_fonte(order, entry, live)
+    unidades = _unidades_das_escolhas(escolhas, vivos)  # db do ambiente do pedido
+    with (
+        env_context.active_env(amb["id"], amb["slug"]),
+        limite_de_conexao(LIMITE_CONEXAO_FONTE_S),
+    ):
+        check = pc.check_order(pedido, env=amb)
+    return _marcar_escolhas_na_fonte(check, escolhas, vivos, unidades)
 
 
 def _check_para_preco(
@@ -205,7 +363,7 @@ def _check_para_preco(
             produtos_por_item,
             decidido=_produto_ligado(env),
         )
-    return _check_utilizavel(_check_da_fonte(order, fonte), order)
+    return _check_utilizavel(_check_da_fonte(order, fonte, entry, live), order)
 
 
 def _check_salvo_para_preco(
@@ -232,10 +390,12 @@ def _check_salvo_para_preco(
 
 
 def check_preco_para_gravar(
-    order: Order, env: dict | None, entry: dict | None = None
+    order: Order, env: dict | None, entry: dict | None = None, live: dict | None = None
 ) -> dict | None:
     """Check do ambiente fonte para gravar em `check_preco` (commit e vínculo
-    de-para), marcado com a fonte que o gerou (`preco_fonte_slug`). None quando
+    de-para), marcado com a fonte que o gerou (`preco_fonte_slug`). `live`: o
+    check ao vivo do ambiente do pedido (com as escolhas), de onde sai o código
+    da escolha pontual; sem ele, a escolha vai sem chave. None quando
     a trava está desligada, quando não há fonte, quando o pedido é intercompany
     (nenhuma consulta extra) ou quando o Fire da fonte não respondeu."""
     fonte = _fonte(env)
@@ -244,7 +404,7 @@ def check_preco_para_gravar(
     try:
         if _eh_intercompany(order, entry or {}):
             return None
-        check = _check_da_fonte(order, fonte)
+        check = _check_da_fonte(order, fonte, entry, live)
     except Exception as exc:  # noqa: BLE001 — o preview fica sem avaliação; o portão refaz
         from app.utils.logger import logger
 
@@ -293,6 +453,69 @@ def _eh_intercompany(order: Order, entry: dict, grupo: set[str] | None = None) -
 
 
 def _avaliar_local(
+    order: Order,
+    check: dict | None,
+    entry: dict,
+    agora: datetime,
+    env: dict | None,
+    grupo: set[str] | None = None,
+) -> Avaliacao:
+    """`_avaliar_copia` + escolha pontual com fonte de preço: a escolha é um SEQ
+    do Fire do pedido, então o item só é avaliado se a fonte o resolveu pelo
+    código da escolha (`escolha_na_fonte` no check, `_marcar_escolhas_na_fonte`).
+    Senão (ou check salvo sem a marca) sai `nao_avaliado`
+    (`escolha_pontual_sem_fonte`) e bloqueia; nunca passa como conforme.
+    Item intercompany não depende da fonte: fica como está."""
+    av = _avaliar_copia(order, check, entry, agora, env, grupo)
+    if _fonte(env) is None:
+        return av
+    escolhas = pc.escolhas_do_import(entry)
+    if not escolhas:
+        return av
+    itens_check = (check or {}).get("items") or []
+    escolhas = {
+        i: seq
+        for i, seq in escolhas.items()
+        if not (
+            i < len(itens_check)
+            and itens_check[i].get("escolha_na_fonte") is True
+            and str(itens_check[i].get("escolha_seq")) == str(seq)
+        )
+    }
+
+    def _motivo(i: int) -> Motivo:
+        # O motivo gravado pela fonte vale só para a escolha que o gerou.
+        it = itens_check[i] if i < len(itens_check) else {}
+        motivo = it.get("escolha_motivo")
+        if str(it.get("escolha_seq")) == str(escolhas[i]) and motivo in _MOTIVOS_ESCOLHA:
+            return motivo
+        return "escolha_pontual_sem_fonte"
+
+    itens = [
+        dataclasses.replace(
+            it,
+            situacao="nao_avaliado",
+            motivo=_motivo(it.item_index),
+            preco_tabela_centavos=None,
+            preco_tabela_id=None,
+        )
+        if it.item_index in escolhas and it.situacao != "fora_intercompany"
+        else it
+        for it in av.itens
+    ]
+    return dataclasses.replace(av, itens=itens)
+
+
+_MOTIVOS_ESCOLHA = frozenset(
+    {
+        "escolha_pontual_sem_fonte",
+        "escolha_pontual_chave_repetida",
+        "escolha_pontual_unidade_divergente",
+    }
+)
+
+
+def _avaliar_copia(
     order: Order,
     check: dict | None,
     entry: dict,

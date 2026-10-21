@@ -314,3 +314,123 @@ def test_set_fonte_que_tem_fonte_propria_recusa(setup):
     with pytest.raises(ValueError):
         environments_repo.set_preco_fonte_slug(terceiro["id"], "nasmar", por="x")
     assert environments_repo.get_by_slug("terceiro")["preco_fonte_slug"] is None
+
+
+# ── Reenviar bloqueados localmente (pendência 2) ────────────────────────────
+
+
+def _revisao_bloqueada(slug, imp):
+    from datetime import UTC, datetime
+
+    from app.persistence import preco_revisao_repo as revs
+
+    agora = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
+    with router.env_connect(slug) as conn:
+        revs.garantir_revisao(conn, imp, {"externalId": imp}, f"sha256:{imp}", agora=agora)
+        revs.marcar_bloqueio_local(conn, imp, 1, "pedido grande demais", em=agora)
+
+
+def test_get_do_ambiente_traz_a_contagem_de_bloqueadas_localmente(setup):
+    from app.web.server import app
+
+    e = _novo_env(setup)
+    c = TestClient(app)
+    assert c.get(f"/api/admin/environments/{e['id']}").json()["preco_bloqueadas_local"] == 0
+    _revisao_bloqueada("mm", "imp-a")
+    _revisao_bloqueada("mm", "imp-b")
+    assert c.get(f"/api/admin/environments/{e['id']}").json()["preco_bloqueadas_local"] == 2
+
+
+def test_rota_desbloquear_limpa_e_conta(setup):
+    from app.persistence import preco_revisao_repo as revs
+    from app.utils.logger import logger
+    from app.web.server import app
+
+    e = _novo_env(setup)
+    _revisao_bloqueada("mm", "imp-a")
+    _revisao_bloqueada("mm", "imp-b")
+    msgs: list[str] = []
+    sink = logger.add(lambda m: msgs.append(str(m)), level="INFO")
+    try:
+        c = TestClient(app)
+        r = c.post(f"/api/admin/environments/{e['id']}/preco-trava/desbloquear")
+    finally:
+        logger.remove(sink)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"desbloqueadas": 2}
+    with router.env_connect("mm") as conn:
+        assert len(revs.pendentes_envio(conn, 10)) == 2
+    assert any("desbloque" in m and "env=mm" in m and "por=" in m for m in msgs)
+    assert c.post(f"/api/admin/environments/{e['id']}/preco-trava/desbloquear").json() == {
+        "desbloqueadas": 0
+    }
+    assert c.post("/api/admin/environments/nao-existe/preco-trava/desbloquear").status_code == 404
+
+
+def test_rota_desbloquear_operador_e_403(setup, real_auth):
+    from app.web.server import app
+
+    e = _novo_env(setup)
+    _revisao_bloqueada("mm", "imp-a")
+    c = TestClient(app)
+    c.post("/api/auth/bootstrap", json={"email": "admin@x.com", "password": "supersecret1"})
+    c.post(
+        "/api/admin/users", json={"email": "op@x.com", "password": "operpass1", "role": "operator"}
+    )
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"email": "op@x.com", "password": "operpass1"})
+    r = c.post(f"/api/admin/environments/{e['id']}/preco-trava/desbloquear")
+    assert r.status_code == 403
+    with router.env_connect("mm") as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM preco_revisao WHERE bloqueio_local IS NOT NULL"
+        ).fetchone()[0]
+    assert n == 1
+
+
+def test_cartao_da_trava_tem_o_reenviar_bloqueados():
+    from pathlib import Path
+
+    html = (
+        Path(__file__).parent.parent / "app" / "web" / "static" / "admin-ambiente-edit.html"
+    ).read_text(encoding="utf-8")
+    assert 'id="btn-preco-desbloquear"' in html
+    assert "/preco-trava/desbloquear" in html
+    assert "preco_bloqueadas_local" in html
+
+
+def test_get_do_ambiente_nao_cria_o_banco_do_ambiente(setup):
+    from app.web.server import app
+
+    e = _novo_env(setup)
+    caminho = router.env_db_path("mm")
+    if caminho.exists():
+        caminho.unlink()
+    c = TestClient(app)
+    assert c.get(f"/api/admin/environments/{e['id']}").json()["preco_bloqueadas_local"] == 0
+    assert not caminho.exists()
+
+
+def test_cartao_do_reenvio_vale_nos_dois_modos():
+    from pathlib import Path
+
+    html = (
+        Path(__file__).parent.parent / "app" / "web" / "static" / "admin-ambiente-edit.html"
+    ).read_text(encoding="utf-8")
+    assert "até 30 s" not in html
+    assert "Reenvio pedido" not in html
+    assert "Pedidos de volta à fila" in html
+
+
+def test_cartao_do_reenvio_concorda_numero_e_so_confirma_com_algo_reenviado():
+    from pathlib import Path
+
+    html = (
+        Path(__file__).parent.parent / "app" / "web" / "static" / "admin-ambiente-edit.html"
+    ).read_text(encoding="utf-8")
+    assert "reenvie: ' +\n        'eles voltam" not in html  # plural fixo de antes
+    assert "um ? 'ele volta à fila' : 'eles voltam à fila'" in html
+    assert (
+        "status.textContent = desbloqueadas > 0\n"
+        "          ? (desbloqueadas === 1 ? '✓ Pedido de volta à fila' : '✓ Pedidos de volta à fila')"
+    ) in html

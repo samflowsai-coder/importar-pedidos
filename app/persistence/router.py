@@ -86,6 +86,38 @@ def _apply_column_migrations(
             cols_by_table[table].add(col)
 
 
+def _apply_migracoes_uma_vez(
+    conn: sqlite3.Connection,
+    migracoes: tuple[tuple[str, tuple[str, ...]], ...],
+) -> None:
+    """Cada migração roda uma vez por banco: comandos + nome em `schema_migracao`
+    na mesma transação. Nome já gravado = pula (banco já migrado não muda).
+    Dois processos no 1º boot: `BEGIN IMMEDIATE` serializa, os nomes são
+    relidos dentro da transação e o marcador entra com `INSERT OR IGNORE`."""
+    if not migracoes:
+        return
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migracao"
+        " (nome TEXT PRIMARY KEY, aplicada_em TEXT NOT NULL)"
+    )
+    for nome, comandos in migracoes:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            feitas = {r[0] for r in conn.execute("SELECT nome FROM schema_migracao")}
+            if nome not in feitas:
+                for sql in comandos:
+                    conn.execute(sql)
+                conn.execute(
+                    "INSERT OR IGNORE INTO schema_migracao (nome, aplicada_em)"
+                    " VALUES (?, datetime('now'))",
+                    (nome,),
+                )
+            conn.execute("COMMIT")
+        except sqlite3.Error:
+            conn.execute("ROLLBACK")
+            raise
+
+
 def _ensure_schema(path: Path, schema_module) -> None:
     key = str(path)
     if key in _initialized_paths:
@@ -99,6 +131,7 @@ def _ensure_schema(path: Path, schema_module) -> None:
             _configure(conn)
             conn.executescript(schema_module.TABLES_SQL)
             _apply_column_migrations(conn, schema_module.COLUMN_MIGRATIONS)
+            _apply_migracoes_uma_vez(conn, getattr(schema_module, "MIGRACOES_UMA_VEZ", ()))
             conn.executescript(schema_module.INDEXES_SQL)
             conn.commit()
         finally:

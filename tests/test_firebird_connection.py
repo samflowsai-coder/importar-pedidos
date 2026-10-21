@@ -180,3 +180,178 @@ def test_conexao_de_escrita_sai_com_rollback_nunca_commit(monkeypatch):
     with FirebirdConnection().connect_with_config({"path": "x"}):
         pass
     assert outra.chamadas == ["commit", "close"]
+
+
+# ── Limite de tempo da CONEXÃO (pendência 6: Fire da fonte de preço) ────────
+
+
+def _fdb_falso(monkeypatch):
+    import sys
+    from unittest.mock import MagicMock
+
+    falso = MagicMock()
+    monkeypatch.setitem(sys.modules, "fdb", falso)
+    return falso
+
+
+def _sonda(monkeypatch, *, erro=None):
+    from app.erp import connection
+
+    chamadas = []
+
+    class _Sock:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _create_connection(endereco, timeout=None):
+        chamadas.append((endereco, timeout))
+        if erro is not None:
+            raise erro
+        return _Sock()
+
+    monkeypatch.setattr(connection.socket, "create_connection", _create_connection)
+    return chamadas
+
+
+@pytest.mark.firebird_stub_proprio
+def test_limite_de_conexao_estoura_sem_chamar_o_driver(monkeypatch):
+    from app.erp.connection import FirebirdConnection, limite_de_conexao
+
+    falso = _fdb_falso(monkeypatch)
+    chamadas = _sonda(monkeypatch, erro=TimeoutError("timed out"))
+    cfg = {"path": r"C:\Fire\MM.FDB", "host": "10.255.255.1", "port": "3050"}
+
+    with limite_de_conexao(5), pytest.raises(FirebirdConnectionError, match="5 s"):
+        with FirebirdConnection().connect_with_config(cfg):
+            pass
+
+    assert chamadas == [(("10.255.255.1", 3050), 5)]
+    falso.connect.assert_not_called()
+
+
+@pytest.mark.firebird_stub_proprio
+def test_limite_de_conexao_com_o_fire_no_ar_conecta(monkeypatch):
+    from app.erp.connection import FirebirdConnection, limite_de_conexao
+
+    falso = _fdb_falso(monkeypatch)
+    chamadas = _sonda(monkeypatch)
+    cfg = {"path": r"C:\Fire\MM.FDB", "host": "10.0.0.4", "port": "3050"}
+
+    with limite_de_conexao(5), FirebirdConnection().connect_with_config(cfg):
+        pass
+
+    assert chamadas == [(("10.0.0.4", 3050), 5)]
+    falso.connect.assert_called_once()
+
+
+@pytest.mark.firebird_stub_proprio
+@pytest.mark.parametrize(
+    "cfg",
+    [
+        {"path": r"C:\Fire\MM.FDB", "host": "10.0.0.4", "port": "3050"},
+        {"path": "/tmp/x.fdb"},  # embedded: nada de rede
+    ],
+)
+def test_sem_limite_ou_embedded_nao_sonda(monkeypatch, cfg):
+    from app.erp.connection import FirebirdConnection, limite_de_conexao
+
+    falso = _fdb_falso(monkeypatch)
+    chamadas = _sonda(monkeypatch)
+
+    with FirebirdConnection().connect_with_config(cfg):
+        pass
+    if "host" not in cfg:
+        with limite_de_conexao(5), FirebirdConnection().connect_with_config(cfg):
+            pass
+
+    assert chamadas == []
+    assert falso.connect.call_count == (1 if "host" in cfg else 2)
+
+
+def test_hook_poe_no_dpb_so_o_tempo_restante_da_sonda():
+    from unittest.mock import MagicMock
+
+    import fdb
+
+    from app.erp import connection
+
+    dpb = MagicMock()
+    with connection.limite_de_conexao(5):  # sem tempo restante marcado: nada
+        assert connection._dpb_connect_timeout("dsn", dpb) is None
+    dpb.add_integer_parameter.assert_not_called()
+
+    token = connection._dpb_timeout_s.set(2)
+    try:
+        assert connection._dpb_connect_timeout("dsn", dpb) is None
+    finally:
+        connection._dpb_timeout_s.reset(token)
+    dpb.add_integer_parameter.assert_called_once_with(fdb.isc_dpb_connect_timeout, 2)
+
+
+@pytest.mark.firebird_stub_proprio
+@pytest.mark.parametrize(("gasto", "esperado"), [(0.2, 5), (3.2, 2), (4.9, 1)])
+def test_dpb_recebe_o_que_sobrou_da_sonda(monkeypatch, gasto, esperado):
+    from unittest.mock import MagicMock
+
+    from app.erp import connection
+
+    falso = _fdb_falso(monkeypatch)
+    _sonda(monkeypatch)
+    relogio = iter([100.0, 100.0 + gasto])
+    monkeypatch.setattr(connection.time, "monotonic", lambda: next(relogio))
+    vistos = []
+
+    def _connect(**kw):
+        vistos.append(connection._dpb_timeout_s.get())
+        return MagicMock()
+
+    falso.connect.side_effect = _connect
+    cfg = {"path": r"C:\Fire\MM.FDB", "host": "10.0.0.4", "port": "3050"}
+
+    with connection.limite_de_conexao(5), connection.FirebirdConnection().connect_with_config(cfg):
+        pass
+
+    assert vistos == [esperado]
+    assert connection._dpb_timeout_s.get() is None
+
+
+@pytest.mark.firebird_stub_proprio
+def test_sonda_que_gasta_o_limite_inteiro_nao_chama_o_driver(monkeypatch):
+    from app.erp import connection
+
+    falso = _fdb_falso(monkeypatch)
+    _sonda(monkeypatch)
+    relogio = iter([100.0, 105.0])
+    monkeypatch.setattr(connection.time, "monotonic", lambda: next(relogio))
+    cfg = {"path": r"C:\Fire\MM.FDB", "host": "10.0.0.4", "port": "3050"}
+
+    with connection.limite_de_conexao(5), pytest.raises(FirebirdConnectionError):
+        with connection.FirebirdConnection().connect_with_config(cfg):
+            pass
+    falso.connect.assert_not_called()
+
+
+def test_hook_do_dpb_registra_uma_vez_com_threads():
+    import threading
+    from unittest.mock import MagicMock
+
+    from app.erp import connection
+
+    falso = MagicMock()
+    antes = connection._hook_dpb_em
+    try:
+        connection._hook_dpb_em = None
+        ts = [
+            threading.Thread(target=connection._registrar_hook_dpb, args=(falso,))
+            for _ in range(20)
+        ]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        assert falso.add_hook.call_count == 1
+    finally:
+        connection._hook_dpb_em = antes
