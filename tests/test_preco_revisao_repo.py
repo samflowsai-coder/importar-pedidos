@@ -545,3 +545,16 @@ def test_retencao_para_no_limite_de_lotes(conn):
         "revisoes": 0,
         "decisoes": 0,
     }
+
+
+def test_pedido_reaberto_solta_a_retirada_presa(conn):
+    rev.garantir_revisao(conn, IMP, _corpo(), "sha256:a", agora=AGORA)
+    rev.marcar_tentada(conn, IMP, 1, em=AGORA)
+    rev.retirar(conn, IMP, "cancelado", em=AGORA)
+    rev.marcar_retirada_presa(conn, IMP, 1, em=AGORA)
+    assert rev.contar_retiradas_presas(conn) == 1
+
+    rev.garantir_revisao(conn, IMP, _corpo("b"), "sha256:b", agora=DEPOIS)  # reaberto
+
+    assert rev.retiradas_pendentes(conn, 10) == []
+    assert rev.contar_retiradas_presas(conn) == 0

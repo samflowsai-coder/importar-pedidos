@@ -73,11 +73,17 @@ def _nova(
     agora: datetime,
 ) -> int:
     """Dentro de transação aberta: a ativa vira `substituida` e nasce
-    `max(maior, piso) + 1` em `pendente_envio`."""
+    `max(maior, piso) + 1` em `pendente_envio`. Retirada presa do pedido deixa
+    de estar pendente (a revisão nova substitui a velha no Flow): solta."""
     numero = max(_maior(conn, import_id), _piso(conn, import_id)) + 1
     conn.execute(
         f"UPDATE preco_revisao SET situacao = 'substituida' "  # noqa: S608 — constante
         f"WHERE import_id = ? AND situacao IN {_ATIVAS_SQL}",
+        (import_id,),
+    )
+    conn.execute(
+        "UPDATE preco_revisao SET retirada_presa_em = NULL"
+        " WHERE import_id = ? AND retirada_presa_em IS NOT NULL",
         (import_id,),
     )
     conn.execute(
