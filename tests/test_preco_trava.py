@@ -2511,6 +2511,31 @@ def test_escolha_que_a_mm_nao_resolve_pelo_codigo_fica_sem_avaliacao(monkeypatch
     assert _revisoes(import_id) == []
 
 
+def test_escolha_resolvida_por_de_para_da_mm_no_mesmo_produto_do_codigo(monkeypatch):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(monkeypatch, _produto_ok(777, fonte="depara"))
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.avaliacao.itens[0].motivo == "ok"
+    assert d.avaliacao.itens[0].fire_produto_id == "777"
+
+
+def test_escolha_em_chave_repetida_na_mm_tem_motivo_proprio(monkeypatch):
+    _precos_por_produto({"777": 5400, "778": 5400})
+    order = _order((54.0, 54.0))
+    import_id, entry = _seed(order, produto_escolhido=_ESCOLHA_COD)
+    _fonte_por_codigo(monkeypatch, {"estado": "chave_repetida", "fire_seq": None})
+
+    d = preco_trava.decidir_envio(import_id, order, entry, env=_env_nasmar("ligado"), agora=AGORA)
+
+    assert d.bloqueado is True
+    assert d.avaliacao.itens[0].motivo == "escolha_pontual_chave_repetida"
+    assert "cadastre" not in d.detalhe
+
+
 def test_check_preco_gravado_marca_a_escolha_resolvida_e_o_preview_avalia(monkeypatch):
     _precos_por_produto({"777": 5400, "778": 5400})
     order = _order((54.0, 54.0))
@@ -2558,3 +2583,12 @@ def test_check_preco_para_gravar_sem_check_ao_vivo_deixa_a_escolha_sem_chave(mon
 
     assert vistos == [(None, None)]
     assert salvo["items"][0]["escolha_na_fonte"] is False
+
+
+def test_index_tem_o_texto_do_motivo_da_chave_repetida_na_fonte():
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "app" / "web" / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    assert "escolha_pontual_chave_repetida:" in html

@@ -65,6 +65,10 @@ _MOTIVO_LEGIVEL: dict[str, str] = {
     "preco_invalido": "preço da tabela fora do contrato",
     "copia_desatualizada": "tabela de preço sem sincronizar com o Flow há mais de 24 h",
     "empresa_sem_cnpj": "CNPJ da empresa não cadastrado no ambiente",
+    "escolha_pontual_chave_repetida": (
+        "duas ou mais linhas chegam à empresa da chave do produto com o mesmo código e "
+        "descrições diferentes (produto escolhido à mão); ela não sabe qual é cada uma"
+    ),
     "escolha_pontual_sem_fonte": (
         "produto escolhido à mão sem código que a empresa da chave do produto reconheça "
         "(cadastre ou ajuste o código do produto lá, ou deixe esta empresa em observando)"
@@ -245,11 +249,15 @@ def _marcar_escolhas_na_fonte(
         ).strip() or None
         produto = itens[i].get("produto") if isinstance(itens[i].get("produto"), dict) else {}
         cand = produto_trava.candidato_decidido(produto)
+        codigo = itens[i]["escolha_codigo"]
         if (
             produto.get("estado") == "ok"
-            and produto.get("fonte") == "codprod_altern"
+            # De-para da fonte vale quando aponta o mesmo produto do código.
+            and produto.get("fonte") in ("codprod_altern", "depara")
             and produto.get("fire_seq") is not None
             and cand is not None
+            and codigo is not None
+            and (cand.get("codprod_altern") or "").strip().upper() == codigo.upper()
         ):
             itens[i]["fire_product_id"] = produto["fire_seq"]
             itens[i]["fire_unidade"] = (cand.get("unidade") or "").strip() or None
@@ -259,6 +267,11 @@ def _marcar_escolhas_na_fonte(
             itens[i]["fire_product_id"] = None
             itens[i]["fire_unidade"] = None
             itens[i]["escolha_na_fonte"] = False
+            itens[i]["escolha_motivo"] = (
+                "escolha_pontual_chave_repetida"
+                if produto.get("estado") == "chave_repetida"
+                else "escolha_pontual_sem_fonte"
+            )
     return {**check, "items": itens}
 
 
@@ -268,8 +281,8 @@ def _check_da_fonte(
     """`check_order` no Fire do ambiente fonte, com o contexto DELE ativo: o
     degrau de-para lê o SQLite da fonte, nunca o do ambiente do pedido.
     Item com escolha pontual casa pelo código do produto escolhido lido do Fire
-    no check ao vivo `live` (`_pedido_para_a_fonte`, `_marcar_escolhas_na_fonte`). A conexão desiste em `LIMITE_CONEXAO_FONTE_S`
-    (fonte fora = check indisponível, a mesma semântica de antes). Fonte
+    no check ao vivo `live` (`_pedido_para_a_fonte`, `_marcar_escolhas_na_fonte`).
+    A conexão desiste em `LIMITE_CONEXAO_FONTE_S` (fonte fora = check indisponível, a mesma semântica de antes). Fonte
     inexistente → None (bloqueia)."""
     from app.erp.connection import limite_de_conexao
     from app.persistence import context as env_context
@@ -425,11 +438,20 @@ def _avaliar_local(
             and str(itens_check[i].get("escolha_seq")) == str(seq)
         )
     }
+
+    def _motivo(i: int) -> Motivo:
+        # O motivo gravado pela fonte vale só para a escolha que o gerou.
+        it = itens_check[i] if i < len(itens_check) else {}
+        motivo = it.get("escolha_motivo")
+        if str(it.get("escolha_seq")) == str(escolhas[i]) and motivo in _MOTIVOS_ESCOLHA:
+            return motivo
+        return "escolha_pontual_sem_fonte"
+
     itens = [
         dataclasses.replace(
             it,
             situacao="nao_avaliado",
-            motivo="escolha_pontual_sem_fonte",
+            motivo=_motivo(it.item_index),
             preco_tabela_centavos=None,
             preco_tabela_id=None,
         )
@@ -438,6 +460,9 @@ def _avaliar_local(
         for it in av.itens
     ]
     return dataclasses.replace(av, itens=itens)
+
+
+_MOTIVOS_ESCOLHA = frozenset({"escolha_pontual_sem_fonte", "escolha_pontual_chave_repetida"})
 
 
 def _avaliar_copia(

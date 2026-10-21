@@ -174,12 +174,15 @@ próprio, a linha com escolha vai à fonte com o `CODPROD_ALTERN` do produto esc
 única chave (`_pedido_para_a_fonte`, sem EAN). Sem esse candidato ao vivo (Fire fora,
 `check_preco_para_gravar` sem `live`) ou sem código no Fire, a linha vai sem chave e
 bloqueia. As rotas de escolha, vincular e mover passam o check fresco como `live`. Se a fonte resolve a um
-único produto ativo pelo código (`estado` `ok`, fonte `codprod_altern`), o item é
+único produto ativo pelo código (`estado` `ok`, fonte `codprod_altern`, ou `depara` da fonte
+quando o produto decidido tem esse mesmo `CODPROD_ALTERN`), o item é
 avaliado normalmente com esse SEQ (`escolha_na_fonte: True` no check; conforme ou
 divergente → Flow como qualquer item). Todo item com escolha leva no check da fonte
 `escolha_seq`/`escolha_codigo`; a marca só vale se `escolha_seq` for a escolha atual do
-import (check salvo de uma escolha antiga = sem avaliação). Senão (sem código, ambíguo, só por de-para,
-check salvo sem a marca) sai `nao_avaliado`/`escolha_pontual_sem_fonte`: portão
+import (check salvo de uma escolha antiga = sem avaliação). `chave_repetida` na fonte
+(duas linhas chegam com o mesmo código e descrições diferentes) sai
+`escolha_pontual_chave_repetida`, que diz isso. O resto (sem código, ambíguo, de-para
+para outro produto, check salvo sem a marca) sai `escolha_pontual_sem_fonte`: portão
 bloqueia e o preview diz o que fazer (cadastrar/ajustar o código na fonte ou deixar a
 empresa em `observando`). A escolha regrava o `check_preco`. Intercompany não muda. A linha com escolha
 válida também tem os campos legados trocados (`match`, `match_source =
