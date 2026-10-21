@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import os
 import re
 import shutil
@@ -410,19 +411,31 @@ def _decidir_ambiente(order) -> tuple[str, Decisao | None]:
     return routing.decidir(order, origem="web")
 
 
-def _roteamento_para_preview(order) -> dict | None:
+def _roteamento_para_preview(order, *, entry=None) -> dict | None:
     """Bloco `roteamento` do payload do preview. `None` em 'desligado'.
+
+    `entry` (o `PreviewEntry` do cache): guarda o modo e a decisão que o
+    operador vai ver — o commit usa estes, não decide de novo.
 
     A UI nunca roteia em silêncio: mesmo quando a decisão é automática, o
     bloco viaja no preview para a faixa acima dos itens mostrar o ambiente
     de destino e o degrau que decidiu.
+
+    `contraria`: o que o documento apontaria quando a regra decidiu outra
+    empresa. `pode_trocar`: só em 'ligado' com decisão resolvida — a
+    sugestão vem pré-selecionada e o operador pode trocar (o commit aceita
+    `environment_slug`). Em 'observando' a sugestão é só informação.
     """
     from app.persistence import environments_repo, roteamento_repo
 
     modo, decisao = _decidir_ambiente(order)
+    if entry is not None:
+        entry.roteamento_modo = modo
+        entry.roteamento_decisao = decisao
     if decisao is None:
         return None
     env = environments_repo.get_by_slug(decisao.env_slug) if decisao.env_slug else None
+    contraria = environments_repo.get_by_slug(decisao.contraria) if decisao.contraria else None
     return {
         "modo": modo,
         "degrau": decisao.degrau,
@@ -430,7 +443,10 @@ def _roteamento_para_preview(order) -> dict | None:
         "env_nome": env["name"] if env else None,
         "explicacao": decisao.explicacao,
         "divergiu_de": decisao.divergiu_de,
+        "contraria": decisao.contraria,
+        "contraria_nome": contraria["name"] if contraria else None,
         "precisa_escolher": modo == roteamento_repo.LIGADO and not decisao.resolveu,
+        "pode_trocar": modo == roteamento_repo.LIGADO and decisao.resolveu,
         "opcoes": [{"slug": e["slug"], "name": e["name"]} for e in environments_repo.list_active()],
     }
 
@@ -2048,13 +2064,14 @@ async def preview_file(
             original_path=str(recebido.path),
             file_sha256=recebido.sha256,
             trace_id=trace_id,
+            check_env_slug=slug,
         )
     payload = _build_preview_payload(entry.preview_id, filename, order, check)
     # Bloco `roteamento`: só nos dois montadores de preview FRESCO (aqui e em
     # `preview_pending`) — não em `_build_preview_payload`, que também
     # alimenta `rehydrate_preview` (pedido já commitado, ambiente definitivo,
     # nada a decidir ali — ver Achado 4 do fix round 1).
-    payload["roteamento"] = _roteamento_para_preview(order)
+    payload["roteamento"] = _roteamento_para_preview(order, entry=entry)
     payload["produto_chave_modo"] = _produto_chave_modo(request_env)
     payload["produto_trava"] = _produto_trava_preview(check, request_env)
     return JSONResponse(payload)
@@ -2155,10 +2172,11 @@ def preview_pending(
                 original_path=str(recebido.path),
                 file_sha256=recebido.sha256,
                 trace_id=trace_id,
+                check_env_slug=slug,
             )
         payload = _build_preview_payload(entry.preview_id, name, order, check)
         # Ver comentário equivalente em `preview_upload` (Achado 4, fix round 1).
-        payload["roteamento"] = _roteamento_para_preview(order)
+        payload["roteamento"] = _roteamento_para_preview(order, entry=entry)
     payload["produto_chave_modo"] = _produto_chave_modo(request_env)
     payload["produto_trava"] = _produto_trava_preview(check, request_env)
     return JSONResponse(payload)
@@ -2166,9 +2184,9 @@ def preview_pending(
 
 class CommitRequest(BaseModel):
     preview_id: str
-    # Resposta do operador quando o roteamento (modo 'ligado') não soube
-    # decidir sozinho. Ignorado nos outros modos — lá o ambiente é sempre o
-    # do cookie, como sempre foi.
+    # Escolha do operador em 'ligado': a resposta quando o roteamento não
+    # soube decidir sozinho, ou a troca da empresa sugerida. Ignorado nos
+    # outros modos — lá o ambiente é sempre o do cookie, como sempre foi.
     environment_slug: str | None = None
 
 
@@ -2178,9 +2196,11 @@ def _resolver_env_alvo(
     """O ambiente onde ESTE commit vai gravar. Nunca chuta em 'ligado'.
 
     Fora de `'ligado'` é sempre o ambiente do cookie (`None` se não houver
-    nenhum) — idêntico ao que já era antes desta feature. Em `'ligado'`
-    segue a escada: decisão resolvida > escolha do operador
-    (`body.environment_slug`) > pergunta (409). Os 409/412 daqui rodam ANTES
+    nenhum) — idêntico ao que já era antes desta feature. Em `'ligado'`:
+    escolha explícita do operador (`body.environment_slug`) > decisão
+    resolvida (a sugestão do preview) > pergunta (409). A escolha vence
+    porque o operador pode trocar qualquer sugestão (spec §10.1); o rastro
+    (`roteamento_decisao`) registra a troca. Os 409/412 daqui rodam ANTES
     de `get_cache().consume()` no chamador — não queimam o preview (ver
     docstring de `commit_preview`, ponto 3).
     """
@@ -2190,10 +2210,10 @@ def _resolver_env_alvo(
     if modo != roteamento_repo.LIGADO:
         return env_alvo
 
-    if decisao.resolveu:
-        env_alvo = environments_repo.get_by_slug(decisao.env_slug)
-    elif body.environment_slug:
+    if body.environment_slug:
         env_alvo = environments_repo.get_by_slug(body.environment_slug)
+    elif decisao.resolveu:
+        env_alvo = environments_repo.get_by_slug(decisao.env_slug)
     else:
         # Sem resposta NÃO vira ambiente default. Pergunta.
         raise HTTPException(
@@ -2247,9 +2267,21 @@ def commit_preview(
        qualquer escrita, então a proteção contra clique duplo não se perde —
        só um request vence a corrida por `consume()`.
 
+    A decisão de empresa é a do preview (`entry.roteamento_decisao`, a que o
+    operador viu), não uma nova; se o modo do roteamento mudou desde o
+    preview, 409 pedindo nova conferência (antes de consumir).
+
+    O check de produto gravado é sempre o da empresa onde o pedido entra: o
+    do preview foi conferido no Fire de `entry.check_env_slug`; em 'ligado'
+    com `env_alvo` diferente (roteado ou trocado pelo operador), é refeito no
+    Fire do destino — SEQs de um Fire não valem no outro.
+
+    Fora de 'desligado', cada commit deixa uma linha em `roteamento_decisao`
+    (sugestão, escolha, quem decidiu e a ação).
+
     Em modo 'desligado' (default) `env_alvo` é sempre o ambiente do cookie —
-    idêntico ao comportamento anterior a esta feature — e nenhuma sombra ou
-    memória é gravada.
+    idêntico ao comportamento anterior a esta feature — e nenhuma sombra,
+    memória ou rastro é gravado.
     """
     cfg = _get_cfg_for_request(request)
 
@@ -2264,13 +2296,40 @@ def commit_preview(
     from contextlib import nullcontext
 
     from app.persistence import decisao_ambiente_repo as memoria
-    from app.persistence import roteamento_repo
+    from app.persistence import roteamento_decisao_repo, roteamento_repo
     from app.routing.ambiente import cnpjs_do_pedido
 
-    modo, decisao = _decidir_ambiente(order)
+    # A decisão que o operador viu no preview vale (sem I/O de novo no Fire).
+    # Modo mudou desde então: a decisão de agora ele não viu — confere de novo.
+    # Sem decisão guardada (preview que não passou pelos montadores), decide.
+    if entry.roteamento_modo is None:
+        modo, decisao = _decidir_ambiente(order)
+    else:
+        modo, decisao = roteamento_repo.modo(), entry.roteamento_decisao
+        if modo != entry.roteamento_modo:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "O modo do roteamento mudou desde a conferência deste pedido."
+                    " Confira o arquivo de novo antes de gravar."
+                ),
+            )
     env_alvo = _resolver_env_alvo(request, body, modo, decisao)
 
     cnpj_cliente = (cnpjs_do_pedido(order) or [""])[0]
+
+    # Ação do rastro (`roteamento_decisao`). `None` em 'desligado' e sem
+    # ambiente resolvido — nada a registrar.
+    acao: str | None = None
+    if decisao is not None and env_alvo is not None:
+        if modo == roteamento_repo.OBSERVANDO:
+            acao = "observando"
+        elif not decisao.resolveu:
+            acao = "escolha_sem_sugestao"
+        elif env_alvo["slug"] == decisao.env_slug:
+            acao = "sugestao_aceita"
+        else:
+            acao = "troca_no_preview"
 
     # Armadilha 2: as pastas seguem o pedido roteado, não o cookie. Quando
     # não há ambiente nenhum resolvido (deploy single-tenant legado, sem
@@ -2315,7 +2374,29 @@ def commit_preview(
                 original_path=entry.original_path,
             )
             log_entry["portal_status"] = "parsed"
-            log_entry["check"] = entry.check
+            # Pedido em empresa diferente da conferida no preview: refaz o check
+            # no Fire do destino, sob o contexto dele (o de-para lê o SQLite do
+            # destino). Só em 'ligado' — nos outros modos `env_alvo` é o cookie.
+            # O preview já foi consumido: falha aqui grava SEM check (o
+            # "Conferir de novo" refaz), nunca com o da outra empresa.
+            check = entry.check
+            if (
+                modo == roteamento_repo.LIGADO
+                and env_alvo is not None
+                and env_alvo["slug"] != entry.check_env_slug
+            ):
+                from app.erp import product_check
+
+                try:
+                    check = product_check.check_order(order, env=env_alvo)
+                except Exception as exc:  # noqa: BLE001 — o pedido entra; o check é refeito depois
+                    from app.utils.logger import logger
+
+                    logger.warning(
+                        "commit.check_destino_falhou env={} erro={!r}", env_alvo["slug"], exc
+                    )
+                    check = None
+            log_entry["check"] = check
             if env_alvo is not None:
                 log_entry["environment_id"] = env_alvo["id"]
             # Trava de preço com ambiente fonte (Nasmar → MM): o check do Fire da
@@ -2336,7 +2417,7 @@ def commit_preview(
                     "source": "preview_commit",
                     "items": len(order.items),
                     "from_watch": entry.source_path is not None,
-                    "check": entry.check.get("summary") if entry.check else None,
+                    "check": check.get("summary") if check else None,
                     # ACHADO 3 da revisão final: sem isto, um pedido roteado
                     # em 'ligado' não deixava registro de POR QUE foi pra
                     # esta empresa — só `environment_id` (o resultado), nunca
@@ -2355,6 +2436,8 @@ def commit_preview(
                             "degrau": decisao.degrau,
                             "env_slug": decisao.env_slug,
                             "explicacao": decisao.explicacao,
+                            "contraria": decisao.contraria,
+                            "decidido_por": user.email,
                         }
                         if decisao is not None
                         else None
@@ -2368,7 +2451,7 @@ def commit_preview(
                 payload={
                     "items": len(order.items),
                     "from_watch": entry.source_path is not None,
-                    "check_summary": entry.check.get("summary") if entry.check else None,
+                    "check_summary": check.get("summary") if check else None,
                 },
             )
 
@@ -2382,11 +2465,24 @@ def commit_preview(
                     )
                 if decisao.divergiu_de and cnpj_cliente:
                     memoria.marcar_divergencia(cnpj_cliente=cnpj_cliente, de=decisao.divergiu_de)
-                if modo == roteamento_repo.LIGADO and not decisao.resolveu and cnpj_cliente:
+                # A memória aprende com o operador: quando o roteador não
+                # soube, e quando ele trocou a sugestão.
+                if acao in ("escolha_sem_sugestao", "troca_no_preview") and cnpj_cliente:
                     memoria.lembrar(
                         cnpj_cliente=cnpj_cliente,
                         env_slug=env_alvo["slug"],
                         por=user.email,
+                    )
+                if acao is not None:
+                    roteamento_decisao_repo.registrar(
+                        import_id=log_entry["id"],
+                        modo=modo,
+                        degrau=decisao.degrau,
+                        env_sugerido=decisao.env_slug,
+                        env_escolhido=env_alvo["slug"],
+                        decidido_por=user.email,
+                        motivo=decisao.explicacao,
+                        acao=acao,
                     )
 
             # Only move the source after persistence succeeded. `cfg` já
@@ -2571,6 +2667,80 @@ def _registrar_aplicados(import_id: str, decisao) -> None:
         logger.warning(f"audit preco_aplicado falhou ({type(exc).__name__}): {exc}")
 
 
+_MOVER_INACABADO = "Mover inacabado: conclua o mover do pedido antes de enviar."
+
+
+def _mover_inacabado(import_id: str) -> bool:
+    """O pedido também está em OUTRA empresa ativa (mover interrompido): as
+    duas cópias estão em revisão e qualquer uma poderia ir ao Fire. Vale em
+    todos os modos; custa uma busca por empresa por envio."""
+    from app.persistence import environments_repo
+
+    atual = env_context.current()
+    if atual is None:
+        return False
+    outras = [e for e in environments_repo.list_active() if e["slug"] != atual["slug"]]
+    return env_do_import_id(import_id, envs=outras) is not None
+
+
+_MOVER_NAO_CONFERIDO = "Não deu para conferir as outras empresas agora; tente de novo."
+
+
+def _recusa_mover(import_id: str, outcome_cls):
+    """Recusa (outcome 409) quando o pedido não pode sair agora: mover
+    inacabado, ou não deu para conferir as outras empresas (SQLite de outra
+    empresa com erro — recusa só este pedido, sem ir ao Fire). None = pode."""
+    try:
+        inacabado = _mover_inacabado(import_id)
+    except Exception as exc:  # noqa: BLE001
+        from app.utils.logger import logger
+
+        logger.warning(f"mover inacabado: conferência falhou ({type(exc).__name__})")
+        return outcome_cls(
+            False, reason="mover_inacabado", http_status=409, detail=_MOVER_NAO_CONFERIDO
+        )
+    if inacabado:
+        return outcome_cls(
+            False, reason="mover_inacabado", http_status=409, detail=_MOVER_INACABADO
+        )
+    return None
+
+
+def _com_trava_do_pedido(outcome_cls):
+    """Envio que leva o pedido para fora do Portal segura a trava do pedido da
+    leitura do estado até gravar o resultado: o mover de empresa não corre no
+    meio (`mover_pedido.trava_do_pedido`). Pedido movido antes de a trava sair
+    some desta empresa: a leitura devolve `not_found` sem ir ao Fire. Vale em
+    todos os modos (só serializa o mesmo pedido). A espera tem teto
+    (`_ESPERA_ENVIO_S`): estourou, `outcome_cls` 409 `pedido_ocupado`."""
+
+    def _decorar(fn):
+        @functools.wraps(fn)
+        def _com_trava(import_id: str, *args, **kwargs):
+            from app.persistence import mover_pedido
+
+            try:
+                with mover_pedido.trava_do_pedido(
+                    import_id, espera=mover_pedido._ESPERA_ENVIO_S
+                ):
+                    return fn(import_id, *args, **kwargs)
+            except mover_pedido.PedidoOcupado:
+                return outcome_cls(
+                    False,
+                    reason="pedido_ocupado",
+                    http_status=409,
+                    detail=(
+                        "Outro envio ou mover deste pedido está em andamento há mais de"
+                        " 2 minutos; tente de novo em instantes."
+                    ),
+                )
+
+        return _com_trava
+
+    return _decorar
+
+
+@_com_trava_do_pedido(_FireSendOutcome)
 def _send_one_to_fire(
     import_id: str, cfg: dict, *, request_env: dict | None = None
 ) -> _FireSendOutcome:
@@ -2594,6 +2764,9 @@ def _send_one_to_fire(
         return _FireSendOutcome(
             False, reason="not_found", http_status=404, detail="Pedido não encontrado"
         )
+    recusa = _recusa_mover(import_id, _FireSendOutcome)
+    if recusa is not None:
+        return recusa
     if entry.get("portal_status") != "parsed":
         return _FireSendOutcome(
             False,
@@ -2814,6 +2987,7 @@ class _XlsxExportOutcome:
         self.detail = detail
 
 
+@_com_trava_do_pedido(_XlsxExportOutcome)
 def _export_one_xlsx(
     import_id: str, cfg: dict, *, request_env: dict | None = None
 ) -> _XlsxExportOutcome:
@@ -2831,6 +3005,9 @@ def _export_one_xlsx(
         return _XlsxExportOutcome(
             False, reason="not_found", http_status=404, detail="Pedido não encontrado"
         )
+    recusa = _recusa_mover(import_id, _XlsxExportOutcome)
+    if recusa is not None:
+        return recusa
     if entry.get("portal_status") == "found_in_fire":
         return _XlsxExportOutcome(
             False,
@@ -4390,6 +4567,160 @@ def reconferir_pedido(
     )
 
 
+class MoverEmpresaRequest(BaseModel):
+    destino: str
+
+
+@app.post("/api/imported/{import_id}/mover-empresa")
+def mover_pedido_de_empresa(
+    import_id: str,
+    body: MoverEmpresaRequest,
+    user: User = Depends(require_user),
+) -> JSONResponse:
+    """Move o pedido em revisão para a outra empresa (`mover_pedido.mover_import`)
+    e confere de novo no destino, como o "Conferir de novo": check de produto
+    no Fire do destino (o de-para v2 lê o SQLite dele) e check de preço. Falha
+    da conferência não desfaz o mover — o pedido fica sem check e o detalhe
+    refaz. Só fora de `desligado` — lá, só CONCLUI um mover interrompido
+    (pedido já no destino e na origem), nunca começa um."""
+    import sqlite3
+
+    from app.erp import preco_trava, product_check
+    from app.models.order import Order
+    from app.persistence import decisao_ambiente_repo as memoria
+    from app.persistence import environments_repo, repo, roteamento_decisao_repo, roteamento_repo
+    from app.persistence.mover_pedido import PedidoNaoMovivel, PedidoOcupado, mover_import
+    from app.routing.ambiente import cnpjs_do_pedido
+    from app.utils.logger import logger
+
+    modo = roteamento_repo.modo()
+    envs = environments_repo.list_active()
+    destino = next((e for e in envs if e["slug"] == body.destino), None)
+    # Empresas que têm o pedido: uma, ou duas num mover interrompido.
+    onde = [e for e in envs if env_do_import_id(import_id, envs=[e]) is not None]
+    concluir = destino in onde and len(onde) > 1
+    if modo == roteamento_repo.DESLIGADO and not concluir:
+        raise HTTPException(
+            status_code=409,
+            detail="Mover pedido entre empresas exige o roteamento em observando ou ligado",
+        )
+    if not onde:
+        raise HTTPException(
+            status_code=404, detail="Pedido não encontrado em nenhuma empresa ativa"
+        )
+    if destino is None:
+        raise HTTPException(status_code=422, detail="Empresa de destino inexistente ou inativa")
+    # A origem é a empresa que tem o pedido e NÃO é o destino: num mover
+    # interrompido ele está nos dois, e é assim que a segunda chamada conclui.
+    origens = [e for e in onde if e["id"] != destino["id"]]
+    if not origens:
+        raise HTTPException(status_code=422, detail="O pedido já está nessa empresa")
+    if len(origens) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "O pedido está em duas empresas; conclua o mover anterior antes de mover de novo."
+            ),
+        )
+    (origem,) = origens
+
+    try:
+        estado = mover_import(import_id, origem=origem, destino=destino, por=user.email)
+    except PedidoNaoMovivel as exc:
+        return JSONResponse(
+            {"detail": f"O pedido não pode mudar de empresa: {exc.motivo}.", "motivo": exc.motivo},
+            status_code=409,
+        )
+    except PedidoOcupado:
+        return JSONResponse(
+            {"detail": "O pedido está sendo enviado agora; tente de novo em instantes."},
+            status_code=409,
+        )
+    except sqlite3.OperationalError as exc:
+        if "locked" not in str(exc):
+            raise
+        # Banco de uma das empresas ocupado além do timeout: nada foi apagado
+        # na origem (a cópia, se houve, a próxima chamada conclui).
+        return JSONResponse(
+            {"detail": "O banco da empresa está ocupado; tente de novo em instantes."},
+            status_code=409,
+        )
+
+    resposta = {"import_id": import_id, "de": origem["slug"], "para": destino["slug"]}
+    if estado == "ja_movido":  # outro clique já moveu: nada a refazer nem registrar
+        return JSONResponse(resposta)
+
+    order = None
+    with env_context.active_env(destino["id"], destino["slug"]):
+        try:
+            entry = repo.get_import(import_id)
+            order = Order.model_validate(entry["snapshot"])
+        except Exception as exc:  # noqa: BLE001 — sem o pedido legível: sem check e sem memória
+            logger.warning(
+                "mover.pedido_ilegivel_no_destino import_id={} env={} erro={}",
+                import_id,
+                destino["slug"],
+                type(exc).__name__,
+            )
+        if order is not None:
+            try:
+                with with_trace_id(entry.get("trace_id")):
+                    check = product_check.check_order(
+                        order, env=destino, escolhas=product_check.escolhas_do_import(entry)
+                    )
+                    if check.get("available"):
+                        repo.update_fire_metadata(import_id, check=check)
+                    check_preco = preco_trava.check_preco_para_gravar(order, destino, entry)
+                    if check_preco is not None:
+                        repo.update_fire_metadata(import_id, check_preco=check_preco)
+            except Exception as exc:  # noqa: BLE001 — o pedido já mudou; o check é refeito depois
+                logger.warning(
+                    "mover.check_destino_falhou import_id={} env={} erro={}",
+                    import_id,
+                    destino["slug"],
+                    type(exc).__name__,
+                )
+
+    try:
+        ultima = roteamento_decisao_repo.ultima(import_id)
+    except Exception as exc:  # noqa: BLE001 — o mover já foi gravado; o rastro sai sem sugestão
+        logger.warning(
+            "mover.ultima_decisao_falhou import_id={} erro={}", import_id, type(exc).__name__
+        )
+        ultima = None
+    # Rastro e memória uma vez por mover: concluir um interrompido só registra
+    # se o rastro ainda não tem este mover (o interrompido não chegou a gravar).
+    if (
+        estado == "concluido"
+        and ultima is not None
+        and ultima.get("acao") == "movido_apos_importar"
+        and ultima.get("env_escolhido") == destino["slug"]
+    ):
+        return JSONResponse(resposta)
+    roteamento_decisao_repo.registrar(
+        import_id=import_id,
+        modo=modo,
+        degrau=None,
+        env_sugerido=(ultima or {}).get("env_sugerido"),
+        env_escolhido=destino["slug"],
+        decidido_por=user.email,
+        motivo=f"movido de {origem['slug']} para {destino['slug']}",
+        acao="movido_apos_importar",
+    )
+    # A memória aprende com o operador, como na troca do preview (só em
+    # 'ligado'; em 'observando' nada aprende, para a taxa medir o roteador).
+    if modo == roteamento_repo.LIGADO and order is not None:
+        try:
+            cnpj_cliente = (cnpjs_do_pedido(order) or [""])[0]
+            if cnpj_cliente:
+                memoria.lembrar(cnpj_cliente=cnpj_cliente, env_slug=destino["slug"], por=user.email)
+        except Exception as exc:  # noqa: BLE001 — memória não derruba um mover já gravado
+            logger.warning(
+                "mover.memoria_falhou import_id={} erro={}", import_id, type(exc).__name__
+            )
+    return JSONResponse(resposta)
+
+
 @app.get("/api/imported/{import_id}/preview")
 def rehydrate_preview(
     import_id: str,
@@ -4454,6 +4785,31 @@ def rehydrate_preview(
     # na linha da caixa somada, mas some ao abrir o modal, que é a tela onde
     # o operador decide gravar. Ver Menor 1 do lote 2.
     payload["env_name"] = _env.get("name") if _env is not None else None
+    # Empresa onde o pedido está (a do pedido em 'ligado', senão a do cookie)
+    # e se o "Mover para" pode ser oferecido: mesma guarda do mover, para a
+    # tela não prometer o que a rota recusa (ex.: XLSX já exportado). Em
+    # 'desligado' nada disso roda (o mover não existe); `roteamento_modo`
+    # diz à tela que não há rastro a buscar. Erro aqui nunca impede abrir o
+    # pedido: sem mover.
+    from app.persistence import mover_pedido, roteamento_repo
+
+    _onde = _env if _env is not None else _request_environment(request)
+    payload["env_slug"] = _onde.get("slug") if _onde is not None else None
+    payload["roteamento_modo"] = None
+    payload["motivo_nao_move"] = None
+    payload["pode_mover"] = False
+    try:
+        payload["roteamento_modo"] = roteamento_repo.modo()
+        if payload["roteamento_modo"] != roteamento_repo.DESLIGADO:
+            motivo = mover_pedido.motivo_nao_move(import_id)
+            payload["motivo_nao_move"] = motivo
+            payload["pode_mover"] = motivo is None
+    except Exception as exc:  # noqa: BLE001 — o detalhe abre sem o "Mover para"
+        from app.utils.logger import logger
+
+        logger.warning(
+            "preview.guarda_mover_falhou import_id={} erro={}", import_id, type(exc).__name__
+        )
 
     # Surface the manual cliente override into the check banner so the UI shows
     # it in green instead of the original "✗ Cliente não encontrado" red flag.

@@ -49,7 +49,13 @@ from app.ingestion.file_loader import LoadedFile
 from app.observability import leituras
 from app.observability.trace import new_trace_id, with_trace_id
 from app.persistence import context as env_context
-from app.persistence import environments_repo, repo, roteamento_repo, router
+from app.persistence import (
+    environments_repo,
+    repo,
+    roteamento_decisao_repo,
+    roteamento_repo,
+    router,
+)
 from app.utils.logger import logger
 
 VALID_EXTS = (".pdf", ".xls", ".xlsx")
@@ -359,6 +365,31 @@ def _process_file(env: dict, p: Path) -> None:
                         ),
                     },
                 )
+                # Rastro da decisão de empresa (`roteamento_decisao`). Sem
+                # humano: o autor é o degrau (ligado) ou a pasta (observando).
+                if decisao is not None:
+                    roteamento_decisao_repo.registrar(
+                        import_id=import_id,
+                        modo=modo,
+                        degrau=decisao.degrau,
+                        env_sugerido=decisao.env_slug if decisao.resolveu else None,
+                        env_escolhido=(
+                            env_alvo["slug"]
+                            if modo == roteamento_repo.LIGADO
+                            else env["slug"]
+                        ),
+                        decidido_por=(
+                            f"sistema:{decisao.degrau}"
+                            if modo == roteamento_repo.LIGADO
+                            else "sistema:pasta"
+                        ),
+                        motivo=decisao.explicacao,
+                        acao=(
+                            "automatico"
+                            if modo == roteamento_repo.LIGADO
+                            else "observando"
+                        ),
+                    )
                 # Fecha o ciclo também quando é a PRÓPRIA reavaliação do
                 # watcher que resolve (ex.: a memória aprendeu por outro
                 # pedido do mesmo cliente) — não só quando o operador

@@ -481,3 +481,67 @@ def test_desligado_audit_nao_carrega_roteamento(dois_ambientes, monkeypatch):
     imported = [e for e in eventos if e["event_type"] == "imported_to_portal"]
     assert len(imported) == 1
     assert imported[0]["detail"]["roteamento"] is None
+
+
+def _decisoes():
+    from app.persistence import roteamento_decisao_repo
+
+    with router.shared_connect() as conn:
+        ids = [r["import_id"] for r in conn.execute("SELECT import_id FROM roteamento_decisao")]
+    return [d for i in ids for d in roteamento_decisao_repo.listar_por_import(i)]
+
+
+def test_watcher_ligado_registra_automatico_com_degrau_regra(dois_ambientes, monkeypatch):
+    roteamento_repo.set_modo("ligado", por="t")
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
+    _arquivo(dois_ambientes)
+    scan_environments.run_scan()
+
+    import_id = _imports("nasmar")[0]["id"]
+    from app.persistence import roteamento_decisao_repo
+
+    d = roteamento_decisao_repo.listar_por_import(import_id)
+    assert len(d) == 1
+    assert d[0]["acao"] == "automatico"
+    assert d[0]["modo"] == "ligado"
+    assert d[0]["degrau"] == "documento"
+    assert d[0]["decidido_por"] == "sistema:documento"
+    assert d[0]["env_sugerido"] == "nasmar"
+    assert d[0]["env_escolhido"] == "nasmar"
+    assert d[0]["motivo"]
+
+
+def test_watcher_observando_registra_observando(dois_ambientes, monkeypatch):
+    roteamento_repo.set_modo("observando", por="t")
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
+    _arquivo(dois_ambientes)
+    scan_environments.run_scan()
+
+    import_id = _imports("mm")[0]["id"]
+    from app.persistence import roteamento_decisao_repo
+
+    d = roteamento_decisao_repo.listar_por_import(import_id)
+    assert len(d) == 1
+    assert d[0]["acao"] == "observando"
+    assert d[0]["modo"] == "observando"
+    assert d[0]["decidido_por"] == "sistema:pasta"
+    assert d[0]["env_sugerido"] == "nasmar"
+    assert d[0]["env_escolhido"] == "mm"  # a pasta varrida
+
+
+def test_watcher_pendencia_nao_registra(dois_ambientes, monkeypatch):
+    roteamento_repo.set_modo("ligado", por="t")
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(None))
+    _arquivo(dois_ambientes)
+    scan_environments.run_scan()
+    assert roteamento_repo.contar_pendencias() == 1
+    assert _decisoes() == []
+
+
+def test_watcher_desligado_nao_registra(dois_ambientes, monkeypatch):
+    roteamento_repo.set_modo("desligado", por="t")
+    monkeypatch.setattr(pipeline, "process_detailed", lambda f, d=None: _order(NASMAR))
+    _arquivo(dois_ambientes)
+    scan_environments.run_scan()
+    assert len(_imports("mm")) == 1
+    assert _decisoes() == []

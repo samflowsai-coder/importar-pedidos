@@ -367,3 +367,92 @@ def test_deps_padrao_memoria_devolve_ambiente_ativo(tmp_path, monkeypatch):
 
     deps = ambiente.deps_padrao()
     assert deps.memoria("11222333000181") == "nasmar"
+
+
+# --- degrau 0: a regra comercial de faturamento --------------------------------
+
+import pytest  # noqa: E402
+
+from app.persistence import environments_repo, router  # noqa: E402
+from app.persistence import regra_faturamento_repo as regra_repo  # noqa: E402
+from app.routing.regra import ResultadoRegra  # noqa: E402
+
+
+def _com_regra(deps, slug="mm"):
+    from dataclasses import replace
+
+    return replace(deps, regra=lambda order: ResultadoRegra(env_slug=slug, explicacao="regra X"))
+
+
+def test_regra_vence_documento_e_marca_contraria():
+    deps = _com_regra(_deps(por_cnpj={NASMAR: "nasmar"}), "mm")
+    d = ambiente.ambiente_para(_pedido(supplier=NASMAR), deps)
+    assert (d.env_slug, d.degrau, d.explicacao) == ("mm", "regra", "regra X")
+    assert d.contraria == "nasmar"
+
+
+def test_regra_none_cai_no_documento_como_hoje():
+    from dataclasses import replace
+
+    deps = replace(_deps(por_cnpj={NASMAR: "nasmar"}), regra=lambda order: None)
+    d = ambiente.ambiente_para(_pedido(supplier=NASMAR), deps)
+    assert (d.env_slug, d.degrau, d.contraria) == ("nasmar", "documento", None)
+
+
+def test_deps_regra_none_mantem_escada_atual():
+    assert _deps().regra is None
+    d = ambiente.ambiente_para(_pedido(supplier=NASMAR), _deps(por_cnpj={NASMAR: "nasmar"}))
+    assert (d.degrau, d.contraria) == ("documento", None)
+
+
+def test_regra_divergiu_da_memoria():
+    d = ambiente.ambiente_para(_pedido(), _com_regra(_deps(memoria="nasmar"), "mm"))
+    assert (d.env_slug, d.degrau, d.divergiu_de) == ("mm", "regra", "nasmar")
+
+
+def test_contraria_none_quando_documento_concorda():
+    d = ambiente.ambiente_para(_pedido(supplier=MM), _com_regra(_deps(por_cnpj={MM: "mm"}), "mm"))
+    assert d.degrau == "regra"
+    assert d.contraria is None
+
+
+def test_degraus_inclui_regra_no_topo():
+    assert ambiente.DEGRAUS == ("regra", "documento", "historico", "memoria", "perguntar")
+
+
+@pytest.fixture
+def shared_db(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    router.reset_init_cache()
+    with router.shared_connect():
+        pass
+    yield
+
+
+@pytest.fixture
+def envs_mm_nasmar(shared_db):
+    for slug in ("mm", "nasmar"):
+        environments_repo.create(
+            slug=slug, name=slug.upper(), watch_dir=f"/x/{slug}/in",
+            output_dir=f"/x/{slug}/out", fb_path=f"/x/{slug}.fdb",
+        )
+
+
+def test_deps_padrao_sem_politica_nao_monta_regra(shared_db):
+    assert ambiente.deps_padrao().regra is None
+
+
+def test_deps_padrao_com_politica_monta_regra_sem_io(envs_mm_nasmar, monkeypatch):
+    regra_repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=True, por="a@x")
+
+    def _nao_deve_ler(*a, **k):
+        raise AssertionError("I/O no Fire ao montar deps_padrao")
+
+    monkeypatch.setattr("app.routing.regra.ler_uf_com_cache", _nao_deve_ler)
+    assert callable(ambiente.deps_padrao().regra)
+
+
+def test_deps_padrao_com_env_inativo_nao_monta_regra(shared_db, envs_mm_nasmar):
+    regra_repo.set_config(env_sp="mm", env_fora_sp="nasmar", ativa=True, por="a@x")
+    environments_repo.soft_delete(environments_repo.get_by_slug("nasmar")["id"])
+    assert ambiente.deps_padrao().regra is None

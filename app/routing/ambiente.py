@@ -1,9 +1,14 @@
 """A escada do roteamento: em que empresa este pedido entra?
 
+    0. regra comercial de faturamento (rede fixa ou UF), SE ativa -> regra
     1. supplier_cnpj do documento casa com environments.cnpj  -> documento
     2. histórico do cliente no Fire, 12 meses, SE inequívoco  -> historico
     3. decisão lembrada para este cliente                     -> memoria
     4. nada resolveu, ou histórico ambíguo/indisponível       -> perguntar
+
+O degrau `regra` é opcional: com `Deps.regra is None` (regra sem configuração
+ou desativada) a escada é exatamente a de 4 degraus. Quando decide, o que o
+documento apontaria (se diferente) viaja em `Decisao.contraria`.
 
 A precedência é **estrita**. Cada degrau perde para o de cima, sem exceção:
 documento é fato sobre este pedido, histórico é fato sobre o passado, memória é
@@ -61,9 +66,10 @@ from app.erp.cnpj import cnpj_digits
 from app.models.order import Order
 from app.routing.historico import HistoricoAmbiente
 from app.routing.historico import resolver as _resolver_historico
+from app.routing.regra import ResultadoRegra
 from app.utils.logger import logger
 
-DEGRAUS: tuple[str, ...] = ("documento", "historico", "memoria", "perguntar")
+DEGRAUS: tuple[str, ...] = ("regra", "documento", "historico", "memoria", "perguntar")
 
 # Janela mais larga que a do degrau 2 (12 meses), usada só para a divergência
 # extra na explicação — ver `Deps.historico_amplo` e `deps_padrao()`.
@@ -76,6 +82,8 @@ class Decisao:
     degrau: str
     explicacao: str
     divergiu_de: str | None = None
+    # Só no degrau `regra`: slug que o DOCUMENTO apontaria, quando difere.
+    contraria: str | None = None
     historico: tuple[HistoricoAmbiente, ...] = field(default_factory=tuple)
 
     @property
@@ -92,6 +100,9 @@ class Deps:
     # ver docstring do módulo. Quando presente, é chamado só depois que o
     # degrau 2 já decidiu, nunca para decidir.
     historico_amplo: Callable[[Sequence[str | None]], tuple[HistoricoAmbiente, ...]] | None = None
+    # Opcional. `None` (default) = sem regra comercial, escada de sempre.
+    # Exceção propaga, como nos outros degraus que decidem.
+    regra: Callable[[Order], ResultadoRegra | None] | None = None
 
 
 def _fmt(cnpj: str) -> str:
@@ -166,8 +177,21 @@ def ambiente_para(order: Order, deps: Deps) -> Decisao:
 
     lembrado = deps.memoria(cliente) if cliente else None
 
-    # Degrau 1 — o documento.
     fornecedor = cnpj_digits(order.header.supplier_cnpj)
+
+    # Degrau 0 — a regra comercial de faturamento.
+    r = deps.regra(order) if deps.regra else None
+    if r:
+        do_documento = deps.env_por_cnpj(fornecedor) if fornecedor else None
+        return Decisao(
+            env_slug=r.env_slug,
+            degrau="regra",
+            explicacao=r.explicacao,
+            divergiu_de=lembrado if lembrado and lembrado != r.env_slug else None,
+            contraria=do_documento if do_documento and do_documento != r.env_slug else None,
+        )
+
+    # Degrau 1 — o documento.
     if fornecedor:
         env = deps.env_por_cnpj(fornecedor)
         if env:
@@ -295,4 +319,21 @@ def deps_padrao() -> Deps:
         historico=lambda cnpjs: hist_mod.consultar(cnpjs),
         memoria=memoria,
         historico_amplo=lambda cnpjs: hist_mod.consultar(cnpjs, meses=_MESES_JANELA_AMPLA),
+        regra=_regra_padrao(),
     )
+
+
+def _regra_padrao() -> Callable[[Order], ResultadoRegra | None] | None:
+    """A regra de faturamento ativa, ou `None`. Só lê SQLite aqui; o Fire só é
+    tocado quando a lambda é chamada. Com qualquer dos dois ambientes
+    inativo/inexistente a regra não decide pela metade: `None`."""
+    from app.persistence import environments_repo, regra_faturamento_repo
+    from app.routing.regra import avaliar, ler_uf_com_cache
+
+    pol = regra_faturamento_repo.politica()
+    if pol is None:
+        return None
+    envs = [environments_repo.get_by_slug(s) for s in (pol.env_sp, pol.env_fora_sp)]
+    if not all(e and e.get("is_active") for e in envs):
+        return None
+    return lambda order: avaliar(order, pol, lambda c: ler_uf_com_cache(c, envs))

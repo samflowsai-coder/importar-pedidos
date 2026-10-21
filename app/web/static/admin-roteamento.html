@@ -154,7 +154,108 @@
        prefers-reduced-motion) — eram cópia nova aqui, sem a guarda. Esta
        tela usa o spinner solto dentro de um card (não numa linha flex como
        em index.html), daí o `margin: 8px auto` local pra centralizar. */
-    #rate-loading, #pend-loading { margin: 8px auto; }
+    #rate-loading, #pend-loading, #regra-loading { margin: 8px auto; }
+
+    /* ── Regra comercial ──
+       Botão e campo seguem o .btn / select de index.html e admin-usuarios.html;
+       contorno de controle em --border-control (WCAG 1.4.11, ver tokens.css). */
+    .btn {
+      height: 30px; padding: 0 12px;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--surface); color: var(--text-secondary);
+      font-size: 12px; font-weight: 500; font-family: inherit;
+      cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+      white-space: nowrap;
+      transition: background 120ms, color 120ms, border-color 120ms;
+    }
+    .btn:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-hover); }
+    .btn:disabled { opacity: .35; pointer-events: none; }
+    .btn-primary { background: var(--accent); border-color: transparent; color: #fff; font-weight: 600; }
+    .btn-primary:hover { background: var(--accent-hover); border-color: transparent; color: #fff; }
+    .regra-ctl {
+      height: 32px; padding: 0 10px; min-width: 0;
+      font: inherit; font-size: 13px; color: var(--text); background: var(--bg);
+      border: 1px solid var(--border-control); border-radius: var(--radius-sm);
+    }
+    .regra-ctl:disabled { opacity: .6; }
+    .regra-ctl[aria-invalid="true"] { border-color: var(--error); }
+    .btn:focus-visible, .regra-ctl:focus-visible, .toggle:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 2px;
+    }
+
+    .regra-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; margin-bottom: 16px; }
+    @media (max-width: 640px) { .regra-grid { grid-template-columns: 1fr; } }
+    .regra-field { display: flex; flex-direction: column; gap: 6px; }
+    .regra-label { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+    .regra-empresas-acoes {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      margin: -4px 0 18px; padding-bottom: 18px; border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .regra-toggle-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .toggle {
+      display: inline-flex; align-items: center; gap: 10px;
+      background: none; border: none; padding: 0; cursor: pointer;
+      font: inherit; color: var(--text); font-size: 13.5px; font-weight: 600;
+    }
+    .toggle:disabled { cursor: default; opacity: .55; }
+    .toggle-track {
+      width: 34px; height: 20px; border-radius: 999px; flex-shrink: 0; position: relative;
+      background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--border-control);
+      transition: background 120ms, box-shadow 120ms;
+    }
+    .toggle-thumb {
+      position: absolute; top: 4px; left: 4px; width: 12px; height: 12px; border-radius: 50%;
+      background: var(--border-control); transition: transform 120ms, background 120ms;
+    }
+    .toggle:hover:not(:disabled) .toggle-track { box-shadow: inset 0 0 0 1.5px var(--text-secondary); }
+    .toggle[aria-checked="true"] .toggle-track { background: var(--accent); box-shadow: none; }
+    .toggle[aria-checked="true"]:hover:not(:disabled) .toggle-track { background: var(--accent-hover); }
+    .toggle[aria-busy="true"] { cursor: progress; }
+    .toggle[aria-checked="true"] .toggle-thumb { transform: translateX(14px); background: #fff; }
+    @media (prefers-reduced-motion: reduce) {
+      .toggle-track, .toggle-thumb { transition: none; }
+    }
+    .regra-meta { font-size: 12px; color: var(--text-secondary); }
+    .regra-erro {
+      font-size: 12.5px; color: var(--error-strong); background: var(--error-bg);
+      border: 1px solid rgba(220,38,38,.18); border-radius: var(--radius);
+      padding: 8px 12px; margin-top: 10px;
+    }
+
+    .regra-sub {
+      font-size: 10.5px; font-weight: 600; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: .04em;
+      margin: 22px 0 4px; padding-top: 18px; border-top: 1px solid var(--border-subtle);
+    }
+    .rede { padding: 14px 0; border-bottom: 1px solid var(--border-subtle); }
+    .rede:last-child { border-bottom: none; padding-bottom: 0; }
+    .rede-head { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; margin-bottom: 10px; }
+    .rede-nome { font-size: 13.5px; font-weight: 600; }
+    .rede-emp { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
+    .chaves { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 6px 12px; }
+    .chave-row { display: flex; align-items: center; gap: 6px; }
+    .chave-row .chave-tipo { flex: 0 0 92px; }
+    .chave-row .chave-valor { flex: 1 1 auto; font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .chave-x {
+      flex: 0 0 32px; width: 32px; height: 32px; border-radius: var(--radius-sm);
+      border: 1px solid transparent; background: none; color: var(--text-muted);
+      cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    }
+    .chave-x:hover { color: var(--error-strong); background: var(--error-bg); }
+    .chave-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .chave-hint { grid-column: 1 / -1; font-size: 11.5px; color: var(--error-strong); }
+    .rede-aviso { font-size: 12px; color: var(--warn-strong); font-weight: 600; margin-top: 2px; }
+    .rede-acoes { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+    .rede-acoes .spacer { flex: 1; }
+    .rede-status { font-size: 12px; color: var(--text-muted); }
+    /* Alvo de toque (WCAG 2.5.5) nos controles da regra em tela estreita. */
+    @media (max-width: 768px) {
+      .regra-ctl, .btn, .chave-x { min-height: 44px; }
+      .chave-x { flex-basis: 44px; width: 44px; }
+      .toggle { min-height: 44px; }
+      .rede-acoes .link-btn { padding: 13px 0; }
+    }
 
     [hidden] { display: none !important; }
   </style>
@@ -189,6 +290,47 @@
       <p class="card-error" id="switch-error" hidden>Não foi possível carregar o modo atual. <button type="button" class="link-btn" onclick="loadModo()">Tentar de novo</button></p>
       <div class="switch-meta" id="switch-meta"></div>
       <div class="switch-row" id="switch-row" role="radiogroup" aria-label="Modo do roteamento"></div>
+    </div>
+
+    <!-- Regra comercial de faturamento (entre o interruptor e a taxa) -->
+    <div class="card">
+      <div class="card-title">Regra comercial de faturamento</div>
+      <div class="card-desc">
+        As redes abaixo faturam sempre pela empresa indicada. Os demais pedidos vão pela UF do
+        CNPJ faturado, lida no Fire. Sem certeza da UF, a regra não responde e o roteamento segue
+        a escada. Vale com o interruptor em observando ou ligado.
+      </div>
+      <div id="regra-loading" class="spin-dark"></div>
+      <p class="card-error" id="regra-load-error" hidden>Não foi possível carregar a regra. <button type="button" class="link-btn" onclick="loadRegra()">Tentar de novo</button></p>
+      <div id="regra-content" hidden>
+        <div class="regra-grid">
+          <label class="regra-field">
+            <span class="regra-label">Pedidos de SP faturam por</span>
+            <select id="regra-sp" class="regra-ctl" onchange="onRegraEmpresaChange()"></select>
+          </label>
+          <label class="regra-field">
+            <span class="regra-label">Pedidos de fora de SP faturam por</span>
+            <select id="regra-fora" class="regra-ctl" onchange="onRegraEmpresaChange()"></select>
+          </label>
+        </div>
+        <div class="regra-empresas-acoes">
+          <button type="button" class="btn btn-primary" id="regra-salvar-empresas" disabled
+                  onclick="salvarEmpresas()">Salvar empresas</button>
+          <span class="regra-meta" id="regra-empresas-meta" aria-live="polite"></span>
+        </div>
+        <div class="regra-toggle-row">
+          <button type="button" id="regra-switch" class="toggle" role="switch" aria-checked="false"
+                  aria-describedby="regra-meta" onclick="onRegraSwitch()">
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            Regra ligada
+          </button>
+          <span class="regra-meta" id="regra-meta"></span>
+        </div>
+        <p class="regra-erro" id="regra-erro" role="alert" hidden></p>
+
+        <div class="regra-sub">Redes com empresa fixa</div>
+        <div id="redes-list"></div>
+      </div>
     </div>
 
     <!-- 2. Taxa -->
@@ -226,7 +368,7 @@
   </div>
 </main>
 
-<script src="/static/js/roteamento-labels.js?v=1"></script>
+<script src="/static/js/roteamento-labels.js?v=2"></script>
 <script>
   const API = '/api/roteamento';
   const MODO_PHRASES = {
@@ -497,6 +639,324 @@
       </div>`).join('');
   }
 
+  // ── Regra comercial ──────────────────────────────────────────────
+  // Config (empresa de SP / de fora, interruptor) salva na hora, como o
+  // interruptor do modo. Redes: edição local por rede, "Salvar rede" manda
+  // o conjunto de chaves inteiro (o PUT troca todas). Erro do servidor (400)
+  // vira texto no próprio bloco — nunca alert().
+  const REGRA = `${API}/regra`;
+  const CHAVE_DIGITOS = { raiz: 8, cnpj: 14 };
+  let regra = null;     // { config, redes, empresas } do GET
+  let redeEdit = {};    // id -> { env_slug, chaves: [{tipo, chave}], dirty, erro, salvando }
+  let salvandoRegra = false;
+
+  function soDigitos(v) { return String(v || '').replace(/\D/g, ''); }
+
+  function fmtChave(tipo, v) {
+    const d = soDigitos(v);
+    if (tipo === 'raiz' && d.length === 8) return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5)}`;
+    if (tipo === 'cnpj' && d.length === 14) {
+      return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
+    }
+    return v;
+  }
+
+  function chaveInvalida(c) { return soDigitos(c.chave).length !== CHAVE_DIGITOS[c.tipo]; }
+
+  function empresaNome(slug) {
+    const e = (regra && regra.empresas || []).find((x) => x.slug === slug);
+    return e ? e.name : slug;
+  }
+
+  function empresaOptions(selecionada, comVazio) {
+    const vazio = comVazio ? `<option value="" ${selecionada ? '' : 'selected'}>Selecione…</option>` : '';
+    return vazio + regra.empresas.map((e) =>
+      `<option value="${esc(e.slug)}" ${e.slug === selecionada ? 'selected' : ''}>${esc(e.name)}</option>`
+    ).join('');
+  }
+
+  async function loadRegra() {
+    $('regra-loading').hidden = false;
+    $('regra-load-error').hidden = true;
+    try {
+      const r = await fetch(REGRA, { credentials: 'same-origin' });
+      if (r.status === 401) { location.href = '/login'; return; }
+      if (!r.ok) throw new Error(`http_${r.status}`);
+      regra = await r.json();
+      redeEdit = {};
+      regra.redes.forEach((rd) => {
+        redeEdit[rd.id] = { env_slug: rd.env_slug, chaves: rd.chaves.map((c) => ({ ...c })), dirty: false, erro: '', salvando: false };
+      });
+      $('regra-content').hidden = false;
+      renderRegraConfig();
+      renderRedes();
+    } catch (e) {
+      $('regra-load-error').hidden = false;
+    } finally {
+      $('regra-loading').hidden = true;
+    }
+  }
+
+  // `manterSelecao`: o switch salva com as empresas GRAVADAS e não pode
+  // jogar fora uma troca de empresas que o admin ainda não salvou.
+  function renderRegraConfig(manterSelecao) {
+    const cfg = regra.config;
+    const sp = (manterSelecao && $('regra-sp').value) || (cfg && cfg.env_sp);
+    const fora = (manterSelecao && $('regra-fora').value) || (cfg && cfg.env_fora_sp);
+    $('regra-sp').innerHTML = empresaOptions(sp, !sp);
+    $('regra-fora').innerHTML = empresaOptions(fora, !fora);
+    $('regra-sp').disabled = !isAdmin;
+    $('regra-fora').disabled = !isAdmin;
+    const ligada = !!(cfg && cfg.ativa);
+    const sw = $('regra-switch');
+    sw.setAttribute('aria-checked', String(ligada));
+    sw.disabled = !isAdmin || !cfg;
+    let meta;
+    if (!isAdmin) meta = 'Apenas administradores podem alterar a regra.';
+    else if (!cfg) meta = 'Escolha as duas empresas para poder ligar.';
+    else meta = `${ligada ? 'Ligada' : 'Desligada'} · alterada por ${cfg.alterado_por} ${timeAgo(cfg.alterado_em)}`;
+    $('regra-meta').textContent = meta;
+    onRegraEmpresaChange();
+  }
+
+  function mostrarRegraErro(msg) {
+    $('regra-erro').textContent = msg;
+    $('regra-erro').hidden = !msg;
+  }
+
+  // As duas empresas vão juntas ("Salvar empresas"): salvar a cada `change`
+  // mudava o roteamento na hora e não deixava trocar SP e fora entre si.
+  async function salvarRegraConfig({ env_sp, env_fora_sp, ativa }) {
+    if (!env_sp || !env_fora_sp || salvandoRegra) return;
+    mostrarRegraErro('');
+    // Ocupado sem `disabled`: desabilitar o botão com foco joga o foco
+    // para o <body> no Chrome; a trava é a flag.
+    const sw = $('regra-switch');
+    salvandoRegra = true;
+    sw.setAttribute('aria-busy', 'true');
+    try {
+      const r = await fetch(REGRA, {
+        method: 'PUT', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ env_sp, env_fora_sp, ativa }),
+      });
+      if (r.status === 401) { location.href = '/login'; return; }
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        // O switch volta ao gravado; a seleção de empresas fica para corrigir.
+        renderRegraConfig(true);
+        mostrarRegraErro(typeof data.detail === 'string' ? data.detail : `Falha ao salvar a regra (${r.status}).`);
+        return;
+      }
+      const antes = regra.config ? regra.config.ativa : data.config.ativa;
+      regra.config = data.config;
+      // O "Salvar empresas" fica desabilitado depois de salvar: o foco vai
+      // para o switch, o próximo passo, em vez de cair no <body>.
+      if (document.activeElement === $('regra-salvar-empresas')) $('regra-switch').focus();
+      renderRegraConfig(true);
+      renderRedes();
+      if (window.appShell) {
+        window.appShell.showSuccess(antes === data.config.ativa
+          ? 'Empresas da regra salvas.'
+          : (data.config.ativa ? 'Regra comercial ligada.' : 'Regra comercial desligada.'));
+      }
+    } catch (e) {
+      renderRegraConfig(true);
+      mostrarRegraErro('Falha de rede ao salvar a regra.');
+    } finally {
+      salvandoRegra = false;
+      sw.removeAttribute('aria-busy');
+    }
+  }
+
+  function onRegraEmpresaChange() {
+    const cfg = regra.config;
+    const sp = $('regra-sp').value;
+    const fora = $('regra-fora').value;
+    const mudou = !cfg || sp !== cfg.env_sp || fora !== cfg.env_fora_sp;
+    $('regra-salvar-empresas').disabled = !isAdmin || !sp || !fora || !mudou;
+    $('regra-salvar-empresas').hidden = !isAdmin;
+    $('regra-empresas-meta').textContent = isAdmin && cfg && mudou && sp && fora
+      ? 'Alterações não salvas: o roteamento usa as empresas gravadas até salvar.' : '';
+  }
+
+  function salvarEmpresas() {
+    salvarRegraConfig({
+      env_sp: $('regra-sp').value,
+      env_fora_sp: $('regra-fora').value,
+      ativa: !!(regra.config && regra.config.ativa),
+    });
+  }
+
+  function onRegraSwitch() {
+    const cfg = regra.config;
+    if (!cfg) return;
+    salvarRegraConfig({ env_sp: cfg.env_sp, env_fora_sp: cfg.env_fora_sp, ativa: !cfg.ativa });
+  }
+
+  function chavesHtml(id) {
+    const ed = redeEdit[id];
+    const dis = isAdmin ? '' : 'disabled';
+    return ed.chaves.map((c, i) => {
+      const invalida = c.chave !== '' && chaveInvalida(c);
+      return `
+        <div class="chave-row">
+          <select class="regra-ctl chave-tipo" aria-label="Tipo da chave ${i + 1}" ${dis}
+                  onchange="onChaveTipo(${id}, ${i}, this.value)">
+            <option value="raiz" ${c.tipo === 'raiz' ? 'selected' : ''}>Raiz</option>
+            <option value="cnpj" ${c.tipo === 'cnpj' ? 'selected' : ''}>CNPJ</option>
+          </select>
+          <input type="text" class="regra-ctl chave-valor" id="chave-${id}-${i}" inputmode="numeric"
+                 aria-label="${c.tipo === 'raiz' ? 'Raiz do CNPJ, 8 dígitos' : 'CNPJ, 14 dígitos'} (chave ${i + 1})"
+                 aria-invalid="${invalida}" ${invalida ? `aria-describedby="chave-${id}-${i}-hint"` : ''}
+                 value="${esc(fmtChave(c.tipo, c.chave))}" maxlength="18" ${dis}
+                 oninput="onChaveValor(${id}, ${i}, this)" onblur="this.value = fmtChave(redeEdit[${id}].chaves[${i}].tipo, this.value)">
+          <button type="button" class="chave-x" aria-label="Remover a chave ${esc(fmtChave(c.tipo, c.chave) || i + 1)}" ${dis}
+                  onclick="removerChave(${id}, ${i})">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        ${invalida ? `<div class="chave-hint" id="chave-${id}-${i}-hint">${c.tipo === 'raiz' ? 'Raiz tem 8 dígitos' : 'CNPJ tem 14 dígitos'} (tem ${soDigitos(c.chave).length}).</div>` : ''}`;
+    }).join('');
+  }
+
+  function redeHtml(rd) {
+    const ed = redeEdit[rd.id];
+    const dis = isAdmin ? '' : 'disabled';
+    // Com a regra ligada, rede sem chave faria os pedidos dela irem pela UF
+    // em silêncio: o servidor recusa e a tela nem oferece.
+    const ligada = !!(regra.config && regra.config.ativa);
+    const algumaInvalida = ed.chaves.some((c) => c.chave === '' || chaveInvalida(c))
+      || (ligada && !ed.chaves.length);
+    const status = ed.salvando ? 'Salvando…' : (ed.dirty ? 'Alterações não salvas' : '');
+    return `
+      <div class="rede" id="rede-${rd.id}">
+        <div class="rede-head">
+          <span class="rede-nome">${esc(rd.nome)}</span>
+          <label class="rede-emp">fatura sempre por
+            <select class="regra-ctl" ${dis} onchange="onRedeEmpresa(${rd.id}, this.value)">${empresaOptions(ed.env_slug, false)}</select>
+          </label>
+        </div>
+        <div class="chaves" id="chaves-${rd.id}">${chavesHtml(rd.id)}</div>
+        ${ed.chaves.length ? '' : `<p class="rede-aviso">${ligada
+          ? 'Sem chave: os pedidos desta rede vão pela UF.'
+          : 'Sem chave: a regra não liga.'}</p>`}
+        <div class="rede-acoes">
+          ${isAdmin ? `<button type="button" class="link-btn" id="add-chave-${rd.id}" onclick="adicionarChave(${rd.id})">+ Adicionar chave</button>` : ''}
+          <span class="spacer"></span>
+          <span class="rede-status" aria-live="polite">${esc(status)}</span>
+          ${isAdmin ? `<button type="button" class="btn btn-primary" id="salvar-rede-${rd.id}"
+                  ${ed.dirty && !algumaInvalida && !ed.salvando ? '' : 'disabled'}
+                  onclick="salvarRede(${rd.id})">Salvar rede</button>` : ''}
+        </div>
+        ${ed.erro ? `<p class="regra-erro" role="alert">${esc(ed.erro)}</p>` : ''}
+      </div>`;
+  }
+
+  function renderRedes() {
+    $('redes-list').innerHTML = regra.redes.length
+      ? regra.redes.map(redeHtml).join('')
+      : '<p class="empty-state">Nenhuma rede cadastrada — todo pedido vai pela UF.</p>';
+  }
+
+  // Re-render de UMA rede, devolvendo o foco para o controle equivalente
+  // (innerHTML destrói o elemento que tinha o foco).
+  function renderRede(id, focoId) {
+    const rd = regra.redes.find((x) => x.id === id);
+    const el = $(`rede-${id}`);
+    if (!rd || !el) return;
+    el.outerHTML = redeHtml(rd);
+    const alvo = focoId && $(focoId);
+    if (alvo) alvo.focus();
+  }
+
+  function marcarSujo(id) {
+    const ed = redeEdit[id];
+    ed.dirty = true;
+    ed.erro = '';
+  }
+
+  // Cada tecla redesenha a rede (aviso de dígitos e botão em dia) e devolve
+  // o foco e o cursor ao campo, sem reformatar enquanto digita (só no blur).
+  function onChaveValor(id, i, input) {
+    redeEdit[id].chaves[i].chave = input.value;
+    marcarSujo(id);
+    const pos = input.selectionStart;
+    renderRede(id, input.id);
+    const novo = $(input.id);
+    if (novo) { novo.value = input.value; novo.setSelectionRange(pos, pos); }
+  }
+
+  function onChaveTipo(id, i, tipo) {
+    redeEdit[id].chaves[i].tipo = tipo;
+    marcarSujo(id);
+    renderRede(id, `chave-${id}-${i}`);
+  }
+
+  function onRedeEmpresa(id, slug) {
+    redeEdit[id].env_slug = slug;
+    marcarSujo(id);
+    renderRede(id);
+  }
+
+  function adicionarChave(id) {
+    const ed = redeEdit[id];
+    ed.chaves.push({ tipo: 'raiz', chave: '' });
+    marcarSujo(id);
+    renderRede(id, `chave-${id}-${ed.chaves.length - 1}`);
+  }
+
+  function removerChave(id, i) {
+    const ed = redeEdit[id];
+    ed.chaves.splice(i, 1);
+    marcarSujo(id);
+    const foco = ed.chaves.length ? `chave-${id}-${Math.min(i, ed.chaves.length - 1)}` : `add-chave-${id}`;
+    renderRede(id, foco);
+  }
+
+  async function salvarRede(id) {
+    const rd = regra.redes.find((x) => x.id === id);
+    const ed = redeEdit[id];
+    ed.salvando = true;
+    ed.erro = '';
+    renderRede(id);
+    try {
+      const r = await fetch(`${REGRA}/redes/${id}`, {
+        method: 'PUT', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nome: rd.nome,
+          env_slug: ed.env_slug,
+          chaves: ed.chaves.map((c) => ({ tipo: c.tipo, chave: soDigitos(c.chave) })),
+        }),
+      });
+      if (r.status === 401) { location.href = '/login'; return; }
+      const data = await r.json().catch(() => ({}));
+      ed.salvando = false;
+      if (!r.ok) {
+        ed.erro = typeof data.detail === 'string' ? data.detail : `Falha ao salvar a rede (${r.status}).`;
+        renderRede(id, `salvar-rede-${id}`);
+        return;
+      }
+      // O servidor normaliza (só dígitos, sem repetição): recarrega a lista
+      // para a tela mostrar exatamente o que ficou gravado.
+      const g = await fetch(REGRA, { credentials: 'same-origin' });
+      if (g.ok) {
+        regra = await g.json();
+        const nova = regra.redes.find((x) => x.id === id);
+        if (nova) redeEdit[id] = { env_slug: nova.env_slug, chaves: nova.chaves.map((c) => ({ ...c })), dirty: false, erro: '', salvando: false };
+      } else {
+        ed.dirty = false;
+      }
+      renderRede(id, `add-chave-${id}`);
+      if (window.appShell) window.appShell.showSuccess(`Rede ${rd.nome} salva.`);
+    } catch (e) {
+      ed.salvando = false;
+      ed.erro = 'Falha de rede ao salvar a rede.';
+      renderRede(id, `salvar-rede-${id}`);
+    }
+  }
+
   // ── Boot ─────────────────────────────────────────────────────────
   // Leitura (modo/taxa/pendências) vale para qualquer usuário logado — é
   // material de treinamento do time, não só do admin. Só a troca do modo
@@ -521,7 +981,7 @@
 
     modoReady = loadModo();
     envNamesReady = loadEnvNames();
-    await Promise.allSettled([modoReady, envNamesReady, loadTaxa()]);
+    await Promise.allSettled([modoReady, envNamesReady, loadTaxa(), loadRegra()]);
   }
 
   boot();

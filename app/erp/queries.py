@@ -531,6 +531,18 @@ def count_pedidos_cliente_desde_sql(n: int) -> str:
     """
 
 
+# Regra comercial de faturamento: UF do cliente faturado. Sem ROWS de propósito
+# — o chamador precisa ver duplicatas (mesmo CPF_CNPJ com UFs diferentes).
+# Binds: CNPJ mascarado `NN.NNN.NNN/NNNN-NN` (o formato gravado no Fire) e só
+# dígitos. Casar a coluna crua usa o índice; REPLACE na coluna varria o CADASTRO.
+UF_CLIENTE_POR_CNPJ = """
+    SELECT TRIM(C.UF)
+    FROM CADASTRO C
+    WHERE C.RELAC_CLIENTE = 'Sim'
+      AND C.CPF_CNPJ IN (?, ?)
+"""
+
+
 # ── SP1: vigia de pedidos do ERP (SÓ LEITURA) ─────────────────────────────────
 # Lidas dentro de `FirebirdConnection.connect_somente_leitura` (transação
 # READ ONLY + SNAPSHOT): mesmo que alguém troque um SELECT por UPDATE aqui, o

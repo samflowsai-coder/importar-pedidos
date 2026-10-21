@@ -78,7 +78,7 @@ log humano de auditoria (`audit_log`) e log append-only do ciclo de vida
 
 ### Roteamento intercompany (shared db, `app_shared.db`)
 
-Quatro tabelas transversais (`app/persistence/schema_shared.py`) — comportamento
+Tabelas transversais (`app/persistence/schema_shared.py`) — comportamento
 completo em [`modules/routing.md`](routing.md), aqui só o schema:
 
 - `environments.cnpj TEXT` — CNPJ (dígitos) da empresa que o ambiente
@@ -97,6 +97,22 @@ completo em [`modules/routing.md`](routing.md), aqui só o schema:
   rotear em `ligado`. `visto_em`/`visto_vezes` — reavaliado no máximo
   1x/hora (`app/worker/jobs/scan_environments.py`), nunca a cada ciclo de
   30s.
+- `regra_faturamento_config` — linha única (`id=1 CHECK`): `env_sp`,
+  `env_fora_sp`, `ativa` (nasce 0), `alterado_por`, `alterado_em`. Sem linha =
+  regra desligada (`regra_faturamento_repo`).
+- `regra_faturamento_rede` — `id`, `nome` UNIQUE, `env_slug`, `alterado_por`,
+  `alterado_em`. Semente (só com a tabela vazia e sem linha em
+  `regra_faturamento_config`): Centauro, Riachuelo, Kallan,
+  Sam's Club, todas em `mm`, `alterado_por='semente'`.
+- `regra_faturamento_chave` — PK `(tipo, chave)`, `rede_id` FK (`ON DELETE
+  CASCADE`); `tipo` `raiz` (8 dígitos) ou `cnpj` (14). Uma chave pertence a
+  uma rede só. Semente: raízes Centauro/Riachuelo/Kallan e 12 CNPJs de CD do
+  Sam's Club.
+- `roteamento_decisao` — rastro só-INSERT (`roteamento_decisao_repo`):
+  `import_id`, `decidido_em`, `modo`, `degrau`, `env_sugerido`,
+  `env_escolhido`, `decidido_por`, `motivo`, `acao` (`CHECK`: sugestao_aceita,
+  troca_no_preview, escolha_sem_sugestao, movido_apos_importar, automatico,
+  observando). Índice `(import_id, decidido_em)`.
 - `decisao_ambiente` — PK `cnpj_cliente`; a escolha que um humano já fez
   (degrau 3, memória). `divergiu_em`/`divergiu_de` marcam quando um degrau
   mais forte contradisse depois — nunca reescreve, só marca.

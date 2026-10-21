@@ -9,7 +9,7 @@
 | Se a task envolve... | Domínio | Leia |
 |---|---|---|
 | Adicionar/editar ambiente (multi-empresa MM/Nasmar/...) | `environments` | `modules/environments.md` |
-| Roteamento intercompany (em que empresa o pedido entra: documento/histórico/memória), interruptor de 3 estados, sombra, pendência | `routing` | `modules/routing.md` |
+| Roteamento intercompany (em que empresa o pedido entra: regra de faturamento/documento/histórico/memória), interruptor de 3 estados, sombra, pendência | `routing` | `modules/routing.md` |
 | De-para de cliente intercompany (pedido no nome da revenda) | `erp` + `environments` | `modules/erp.md`, `modules/environments.md` |
 | Adicionar/ajustar parser de cliente novo (PDF ou XLS) | `parsers` | `modules/parsers.md` |
 | Bug em parser específico (Riachuelo, Centauro, Kolosh, etc.) | `parsers` | `modules/parsers.md` |
@@ -59,7 +59,7 @@
 | erp_eventos (SP1) | `tests/test_erp_eventos_*.py` | `.venv/bin/python -m pytest tests/test_erp_eventos_*.py -v` |
 | updates | `tests/test_update_package.py`, `tests/test_update_routes.py`, `tests/test_update_state.py` | `.venv/bin/pytest tests/test_update_package.py tests/test_update_routes.py tests/test_update_state.py -v` |
 | erp | `tests/test_product_check.py`, `tests/test_depara_cliente.py`, `tests/test_depara_apply.py`, `tests/test_smoke_erp_mapper.py`, `tests/test_firebird_*.py` | `.venv/bin/pytest tests/test_product_check.py tests/test_depara_cliente.py tests/test_depara_apply.py -v` |
-| routing | `tests/test_routing_documento.py`, `tests/test_routing_historico.py`, `tests/test_routing_ambiente.py`, `tests/test_decisao_ambiente_repo.py`, `tests/test_roteamento_repo.py`, `tests/test_routing_wiring.py`, `tests/test_routing_modo.py`, `tests/test_scan_environments_roteamento.py` | `.venv/bin/pytest tests/test_routing_ambiente.py tests/test_routing_wiring.py tests/test_scan_environments_roteamento.py -v` |
+| routing | `tests/test_routing_documento.py`, `tests/test_routing_historico.py`, `tests/test_routing_ambiente.py`, `tests/test_decisao_ambiente_repo.py`, `tests/test_roteamento_repo.py`, `tests/test_routing_wiring.py`, `tests/test_routing_modo.py`, `tests/test_scan_environments_roteamento.py`, `tests/test_routing_regra.py`, `tests/test_regra_faturamento_repo.py`, `tests/test_roteamento_decisao_repo.py`, `tests/test_mover_pedido.py`, `tests/test_routes_regra_faturamento.py`, `tests/test_queries_regra_uf.py`, `tests/test_web_static_regra_faturamento.py` | `.venv/bin/pytest tests/test_routing_ambiente.py tests/test_routing_regra.py tests/test_mover_pedido.py tests/test_routing_wiring.py tests/test_scan_environments_roteamento.py -v` |
 | preço (trava) | `tests/test_preco_avaliacao.py`, `tests/test_preco_trava.py`, `tests/test_precos_repo.py`, `tests/test_preco_revisao_repo.py`, `tests/test_flowpcp_precos_schema.py`, `tests/test_preco_trava_modo.py` | `.venv/bin/pytest tests/test_preco_avaliacao.py tests/test_preco_trava.py tests/test_precos_repo.py tests/test_preco_revisao_repo.py tests/test_flowpcp_precos_schema.py tests/test_preco_trava_modo.py -v` |
 | produto (chave exata) | `tests/test_produto_chave.py`, `tests/test_produto_chave_repetida.py`, `tests/test_produto_depara.py`, `tests/test_produto_escopo.py`, `tests/test_produto_vinculo_repo.py`, `tests/test_produto_trava.py`, `tests/test_produto_trava_wiring.py`, `tests/test_produto_saida.py`, `tests/test_web_vincular_v2.py`, `tests/test_web_static_produto.py`, `tests/test_migrar_produto_vinculo_v2.py`, `tests/test_regressao_chave_exata.py` | `.venv/bin/pytest tests/test_produto_*.py tests/test_web_vincular_v2.py tests/test_web_static_produto.py tests/test_migrar_produto_vinculo_v2.py tests/test_regressao_chave_exata.py -v` |
 | exporters | `tests/test_exporter_split.py`, `tests/test_smoke_exporter.py`, `tests/test_firebird_exporter_override.py` | `.venv/bin/pytest tests/test_exporter_split.py tests/test_smoke_exporter.py -v` |
@@ -70,7 +70,7 @@
 | web | `tests/test_web_server.py`, `tests/test_preview_cache.py`, `tests/test_env_do_pedido.py`, `tests/test_rotas_por_pedido_cross_env.py`, `tests/test_pasta_cross_env.py` | `.venv/bin/pytest tests/test_web_server.py tests/test_preview_cache.py tests/test_env_do_pedido.py tests/test_rotas_por_pedido_cross_env.py tests/test_pasta_cross_env.py -v` |
 | Suite completa (antes de commit) | todos | `.venv/bin/pytest tests/ -v` |
 
-> **Suíte completa: 3964 testes em 169 arquivos (conferido 2026-10-20).** `erp`, `exporters` e `pipeline` hoje TÊM
+> **Suíte completa: 4168 testes em 179 arquivos (conferido 2026-10-20).** `erp`, `exporters` e `pipeline` hoje TÊM
 > teste (ver linhas acima), mas nenhum toca Firebird de verdade — mudança em SQL/mapper
 > ainda pede validação manual com `.fdb` de **cópia** e sample real.
 
