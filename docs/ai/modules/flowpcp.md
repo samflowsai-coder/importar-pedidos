@@ -125,6 +125,8 @@ que o check casou (`fire_product_id`, só com `match`) → decisão do check em 
 
 **Pedido sem CNPJ no header, por loja** (`recebimento_por_loja.py`, interruptor `PORTAL_FLOWPCP_RECEBIMENTO_POR_LOJA`, desligado): o Flow acha o cliente só pelo CNPJ e o Fire guarda um pedido por loja. Com o interruptor ligado, header sem CNPJ e todo item com `delivery_cnpj` de 14 dígitos (intercompany resolvido fica de fora), o pedido vira uma linha da fila por loja: mesmo `externalId` (= `import_id`), `cliente.cnpj` = CNPJ da filial, chave de idempotência `send-{import_id}-{cnpj}` e `itens[].indiceOriginal` = posição no array combinado (o Flow grava `source_id_externo = externalId:indiceOriginal`, a chave do vínculo do SP1, que não muda). `indiceOriginal` e `erpProdutoId` só vão no wire quando preenchidos (o contrato do Flow aceita ausente, não `null`).
 
+**Reenvio por loja de um import já combinado:** `POST /api/imported/{id}/reenviar-flow-por-loja` (ver `modules/web.md`) monta o recebimento por loja a partir do snapshot e do check salvo e enfileira só as lojas com pedido aberto no Fire. O Flow precisa estar lendo `indiceOriginal` e as linhas antigas dele marcadas `stale_cliente_por_loja` (o Flow faz, um pedido do cliente por vez). Sai pela fila do Portal, que tem o token.
+
 **Pedido que só existe no Fire** (sem import no Portal): `tools/flow_enviar_pedidos_fire.py`
 lê o pedido pelo `LeitorFirebird` do SP1 (só SELECT), monta o payload por
 `recebimento_fire.montar_recebimento` (mesmo `build_recebimento_payload`) e manda pela API. `externalId` =
