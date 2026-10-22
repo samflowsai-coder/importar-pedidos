@@ -160,6 +160,11 @@ from app.web.routes_lotes import router as lotes_router  # noqa: E402
 
 app.include_router(lotes_router)
 
+# Vínculo manual de um import parsed ao pedido do Fire (admin).
+from app.web.routes_vinculo_fire import router as vinculo_fire_router  # noqa: E402
+
+app.include_router(vinculo_fire_router)
+
 
 @app.on_event("startup")
 def _iniciar_reconciliacao_periodica() -> None:
