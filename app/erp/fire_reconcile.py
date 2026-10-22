@@ -335,9 +335,11 @@ def _decidir_candidato(candidato: Candidato, linhas: list[tuple]) -> Achado | No
     """Decide se e como o candidato casa, na ordem 1 (override) → 2 (CNPJ header) → 3 (lojas).
 
     Cada caminho é tentado no máximo uma vez: qual campo do candidato está
-    preenchido decide qual caminho se aplica, e só esse é tentado. Não há
-    fallback entre caminhos — um candidato com `cliente_codigo` preenchido que
-    não casa por ele NÃO tenta CNPJ/lojas depois. Nenhum dos três caminhos
+    preenchido decide qual caminho se aplica. Fallback só do 2 para o 3: o CNPJ
+    do header pode ser o do comprador (clube do Sam's) enquanto o Fire cadastra
+    o pedido no CD do local de entrega; se o header não casa e há lojas de
+    entrega, as lojas (TODAS) tentam. Um `cliente_codigo` preenchido que não
+    casa NÃO tenta CNPJ/lojas depois. Nenhum dos três caminhos
     aceita casar só pelo número: cada `if` abaixo exige uma âncora de cliente
     não-vazia antes de olhar `linhas`, e o `return None` final cobre o
     candidato que não tem NENHUMA âncora — esse nunca casa.
@@ -359,9 +361,10 @@ def _decidir_candidato(candidato: Candidato, linhas: list[tuple]) -> Achado | No
         casadas = [
             linha for linha in linhas_na_janela if alvo and cnpj_digits(linha[5]) == alvo
         ]
-        if not casadas:
+        if casadas:
+            return _montar_achado(candidato, casadas, caminho=2, lojas_casadas=0)
+        if not candidato.cnpjs_entrega:
             return None
-        return _montar_achado(candidato, casadas, caminho=2, lojas_casadas=0)
 
     if candidato.cnpjs_entrega:
         grupos: dict[str, list[tuple]] = {}
