@@ -10,13 +10,18 @@ from __future__ import annotations
 
 from app.models.order import Order
 
+# Contrato do Flow: `erpProdutoId` casa com ^[1-9][0-9]{0,8}$ e, fora disso, o Flow recusa o
+# recebimento INTEIRO com 400. Passar por inteiro tira o zero à esquerda; o teto são 9 dígitos.
+MAX_SEQ = 999_999_999
 
-def _seq_valido(valor) -> str | None:
+
+def seq_valido(valor) -> str | None:
+    """SEQ do Fire como o Flow aceita (string de dígitos, sem zero à esquerda, até 9), ou None."""
     try:
         n = int(valor)
     except (TypeError, ValueError):
         return None
-    return str(n) if n > 0 else None
+    return str(n) if 0 < n <= MAX_SEQ else None
 
 
 def seqs_por_item(
@@ -35,13 +40,13 @@ def seqs_por_item(
             if not isinstance(item, dict):
                 continue
             produto = item.get("produto") if isinstance(item.get("produto"), dict) else {}
-            seq = _seq_valido(produto.get("fire_seq")) if produto.get("estado") == "ok" else None
+            seq = seq_valido(produto.get("fire_seq")) if produto.get("estado") == "ok" else None
             if seq is None and item.get("match"):
-                seq = _seq_valido(item.get("fire_product_id"))
+                seq = seq_valido(item.get("fire_product_id"))
             if seq is not None:
                 saida[idx] = seq
     for idx, valor in (produtos_por_item or {}).items():
-        seq = _seq_valido(valor)
+        seq = seq_valido(valor)
         if seq is not None and 0 <= idx < n_itens:
             saida[idx] = seq
     return saida

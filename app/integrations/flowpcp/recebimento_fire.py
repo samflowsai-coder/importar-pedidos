@@ -14,6 +14,7 @@ from datetime import date
 
 from app.erp_eventos.modelo import PedidoErp, esta_aberto
 from app.integrations.flowpcp.mapper import build_recebimento_payload
+from app.integrations.flowpcp.produto_erp import seq_valido
 from app.integrations.flowpcp.schema import OrigemRecebimento, RecebimentoRequest
 from app.models.order import Order, OrderHeader, OrderItem
 
@@ -100,7 +101,7 @@ def montar_recebimento(
                 description=i.descricao,
                 product_code=codigos.get(i.erp_item_codigo)
                 or (str(i.cod_produto) if i.cod_produto is not None else None),
-                erp_produto_id=str(i.cod_produto) if i.cod_produto is not None else None,
+                erp_produto_id=seq_valido(i.cod_produto),
                 quantity=float(i.qtd),
                 unit_price=float(i.preco_unitario) if i.preco_unitario is not None else None,
                 delivery_date=_br(i.dt_entrega_item or p.dt_entrega),
