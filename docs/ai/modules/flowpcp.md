@@ -64,6 +64,7 @@ Variáveis de ambiente do processo (todas **ausentes = desligado**; `slug` em mi
 | `PORTAL_FLOWPCP_CADASTRO_P0` | `mm` (lista por vírgula) | portão da gravação: sem o slug aqui, `criar`/`criar_e_atualizar` são recusados (o resultado já guardado ainda é reenviado). Só liga depois da P0 (diff da tela do Fire numa cópia do `.fdb`) |
 | `PORTAL_FLOWPCP_CADASTRO_VOLTA_INATIVAR` | `mm` (lista por vírgula) | portão da ação `inativar` (só em `criar_e_atualizar`); sem ele o item `inativar` é pulado com WARNING |
 | `PORTAL_FLOWPCP_CATALOGO_MARCAS` | `mm` (lista por vírgula) | catálogo manda `marcasErp` (PRODUTOS_MARCA filtrada); exige `marcas.v1` na resposta do Flow |
+| `PORTAL_FLOWPCP_RECEBIMENTO_POR_LOJA` | `mm` (lista por vírgula) | pedido sem CNPJ no header (Riachuelo, NBA) sai como UM `/recebimento` por loja (ver §1). **Só liga depois que o Flow avisar que lê `itens[].indiceOriginal`**: sem isso as lojas seguintes colidem no índice local e somem em silêncio |
 | `PORTAL_FLOWPCP_CATALOGO_NOTA` | `mm` (lista por vírgula) | catálogo manda `temNotaFiscal` por produto (NOTAPROD); exige `produtos.nota.v1` na resposta |
 
 Rotas admin: `PUT /api/admin/environments/{env_id}/flowpcp`,
@@ -121,6 +122,8 @@ Sem isso o Flow não acha o produto quando recebe o código do varejista (182 it
 que o check casou (`fire_product_id`, só com `match`) → decisão do check em `produto_chave_modo`
 `ligado` → mapa explícito do envio (de-para / escolha pontual). Montado em
 `server._pedido_para_o_flow`. O Flow ignora o campo até passar a ler (zod não é `strict`).
+
+**Pedido sem CNPJ no header, por loja** (`recebimento_por_loja.py`, interruptor `PORTAL_FLOWPCP_RECEBIMENTO_POR_LOJA`, desligado): o Flow acha o cliente só pelo CNPJ e o Fire guarda um pedido por loja. Com o interruptor ligado, header sem CNPJ e todo item com `delivery_cnpj` de 14 dígitos (intercompany resolvido fica de fora), o pedido vira uma linha da fila por loja: mesmo `externalId` (= `import_id`), `cliente.cnpj` = CNPJ da filial, chave de idempotência `send-{import_id}-{cnpj}` e `itens[].indiceOriginal` = posição no array combinado (o Flow grava `source_id_externo = externalId:indiceOriginal`, a chave do vínculo do SP1, que não muda). `indiceOriginal` e `erpProdutoId` só vão no wire quando preenchidos (o contrato do Flow aceita ausente, não `null`).
 
 ## 2. De-para de cliente intercompany
 
