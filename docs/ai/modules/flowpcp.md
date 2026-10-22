@@ -122,6 +122,14 @@ que o check casou (`fire_product_id`, só com `match`) → decisão do check em 
 `ligado` → mapa explícito do envio (de-para / escolha pontual). Montado em
 `server._pedido_para_o_flow`. O Flow ignora o campo até passar a ler (zod não é `strict`).
 
+**Pedido que só existe no Fire** (sem import no Portal): `tools/flow_enviar_pedidos_fire.py`
+lê o pedido pelo `LeitorFirebird` do SP1 (só SELECT), monta o payload por
+`recebimento_fire.montar_recebimento` (mesmo `build_recebimento_payload`) e manda pela API. `externalId` =
+uuid5 de `slug:fire:<CODIGO>` (reenvio devolve `alreadyProcessed`). Dry-run por padrão; `--enviar`
+exige `--token-arquivo`. Recusa local: status ≠ PEDIDO, sem PEDIDO_CLIENTE, sem CNPJ de 14 dígitos,
+item já faturado em parte, fora da janela (85 dias, ou `--desde`). **Antes de usar, conferir que o pedido
+NÃO tem import retido no Portal**: o mesmo pedido sob outro `externalId` duplica a demanda no Flow.
+
 ## 2. De-para de cliente intercompany
 
 Divisão de responsabilidade que não deve ser embaralhada:
