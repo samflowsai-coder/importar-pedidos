@@ -702,9 +702,34 @@ def test_inativar_kit_com_componentes_lixo_simula_sem_composicao(env_conn, monke
 
 def test_simular_pede_fila_sem_reserva(env_conn, monkeypatch):
     _simular(monkeypatch)
+    monkeypatch.delenv(cv.VAR_INATIVAR, raising=False)
     cliente = _Client([BOM])
     cv.processar_ambiente("mm", _client=cliente, _fire_conn=_Fire(), _env_conn=env_conn)
-    assert cliente.limites == [50] and cliente.chamadas == [{"simular": True}]
+    assert cliente.limites == [50]
+    assert cliente.chamadas == [{"simular": True, "acoes": ("criar", "atualizar")}]
+
+
+def test_simular_pede_so_as_acoes_que_a_gravacao_consumiria(env_conn, monkeypatch):
+    """A janela de 50 do simular (sem cursor) é preenchida pelas inativações mais antigas e
+    esconde os `atualizar` atrás delas (21/10/2026: 50 inativar, 0 dos 20 atualizar). O
+    simular pede o que o modo de gravação consumiria: sem o portão de inativar, a fila só
+    devolve `criar` e `atualizar`."""
+    _simular(monkeypatch)
+    monkeypatch.delenv(cv.VAR_INATIVAR, raising=False)
+    cliente = _Client([BOM])
+    cv.processar_ambiente("mm", _client=cliente, _fire_conn=_Fire(), _env_conn=env_conn)
+    assert cliente.chamadas[0]["acoes"] == cv._acoes("mm", "criar_e_atualizar")
+    assert "inativar" not in cliente.chamadas[0]["acoes"]
+
+
+def test_simular_com_o_portao_de_inativar_pede_tambem_inativar(env_conn, monkeypatch):
+    """Simular nunca grava: com o portão ligado ele mostra as inativações que a gravação faria."""
+    _simular(monkeypatch)
+    monkeypatch.setenv(cv.VAR_INATIVAR, "mm")
+    cliente = _Client([BOM])
+    cv.processar_ambiente("mm", _client=cliente, _fire_conn=_Fire(), _env_conn=env_conn)
+    assert cliente.chamadas[0]["acoes"] == ("criar", "atualizar", "inativar")
+    assert cliente.chamadas[0]["simular"] is True  # segue sem reservar nada no Flow
 
 
 def test_simular_marca_inexistente_vai_ao_livro(env_conn, monkeypatch):

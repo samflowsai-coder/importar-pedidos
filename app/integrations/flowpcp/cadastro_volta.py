@@ -447,7 +447,12 @@ def _processar_ambiente(slug: str, *, _client, _fire_conn, _env_conn, _relogio) 
         if m == "desligado":
             return {"modo": m, "reenvio": reenvio}
         try:
-            resp = client.list_cadastros_pendentes(limite=LIMITE_FILA, simular=True)
+            # O que a gravação consumiria (`criar_e_atualizar`; `inativar` só com o portão):
+            # a janela de 50 não tem cursor em `simular`, e sem o filtro as inativações mais
+            # antigas escondem os `atualizar` atrás delas (21/10/2026).
+            resp = client.list_cadastros_pendentes(
+                limite=LIMITE_FILA, acoes=_acoes(slug, "criar_e_atualizar"), simular=True
+            )
         except ValueError as exc:  # JSON ou envelope inválido (`cadastros` não é lista)
             logger.error(
                 f"flowpcp.cadastro_volta env={slug}: resposta da fila inválida: "
