@@ -85,7 +85,7 @@ def push_new_order(order: Order, *, import_id: str, slug: str) -> bool:
 
     try:
         return FlowPCPExporter(tenant_id=cfg.tenant_id).enqueue(
-            order, import_id=import_id, resolucao=resolucao
+            order, import_id=import_id, resolucao=resolucao, slug=slug
         )
     except Exception as exc:  # noqa: BLE001 — best-effort; nunca derruba o send-to-fire
         logger.warning(f"flowpcp enqueue falhou (import={import_id} slug={slug}): {exc}")

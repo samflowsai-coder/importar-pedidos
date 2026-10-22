@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from app.erp.cnpj import cnpj_digits
 from app.erp.depara_cliente import ResolucaoCliente
+from app.integrations.flowpcp import recebimento_por_loja
 from app.integrations.flowpcp.schema import (
     ClienteRecebimento,
     FaturadoPor,
@@ -82,3 +83,39 @@ def build_recebimento_payload(
             confiancaParser="alta",
         ),
     )
+
+
+def build_recebimentos_por_loja(
+    *,
+    import_id: str,
+    order: Order,
+    tenant_id: str,
+    resolucao: ResolucaoCliente | None = None,
+) -> list[RecebimentoRequest]:
+    """Um recebimento por loja (ver `recebimento_por_loja`): mesmo `externalId`, CNPJ da filial em
+    `cliente`, `indiceOriginal` em cada item. O chamador já decidiu dividir (`deve_dividir`)."""
+    pedidos: list[RecebimentoRequest] = []
+    fornecedor = order.header.customer_name or "(sem fornecedor)"
+    for cnpj, indices in recebimento_por_loja.lojas(order).items():
+        itens = [order.items[i] for i in indices]
+        nome = next(
+            (i.delivery_name.strip() for i in itens if (i.delivery_name or "").strip()), None
+        )
+        parcial = Order(
+            header=order.header.model_copy(
+                update={
+                    "customer_cnpj": cnpj,
+                    "customer_name": nome or order.header.customer_name,
+                }
+            ),
+            items=itens,
+            source_file=order.source_file,
+        )
+        req = build_recebimento_payload(
+            import_id=import_id, order=parcial, tenant_id=tenant_id, resolucao=resolucao
+        )
+        req.fornecedor = fornecedor
+        for item, indice in zip(req.itens, indices, strict=True):
+            item.indiceOriginal = indice
+        pedidos.append(req)
+    return pedidos
