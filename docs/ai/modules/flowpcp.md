@@ -125,6 +125,14 @@ que o check casou (`fire_product_id`, só com `match`) → decisão do check em 
 
 **Pedido sem CNPJ no header, por loja** (`recebimento_por_loja.py`, interruptor `PORTAL_FLOWPCP_RECEBIMENTO_POR_LOJA`, desligado): o Flow acha o cliente só pelo CNPJ e o Fire guarda um pedido por loja. Com o interruptor ligado, header sem CNPJ e todo item com `delivery_cnpj` de 14 dígitos (intercompany resolvido fica de fora), o pedido vira uma linha da fila por loja: mesmo `externalId` (= `import_id`), `cliente.cnpj` = CNPJ da filial, chave de idempotência `send-{import_id}-{cnpj}` e `itens[].indiceOriginal` = posição no array combinado (o Flow grava `source_id_externo = externalId:indiceOriginal`, a chave do vínculo do SP1, que não muda). `indiceOriginal` e `erpProdutoId` só vão no wire quando preenchidos (o contrato do Flow aceita ausente, não `null`).
 
+**Pedido que só existe no Fire** (sem import no Portal): `tools/flow_enviar_pedidos_fire.py`
+lê o pedido pelo `LeitorFirebird` do SP1 (só SELECT), monta o payload por
+`recebimento_fire.montar_recebimento` (mesmo `build_recebimento_payload`) e manda pela API. `externalId` =
+uuid5 de `slug:fire:<CODIGO>` (reenvio devolve `alreadyProcessed`). Dry-run por padrão; `--enviar`
+exige `--token-arquivo`. Recusa local: status ≠ PEDIDO, sem PEDIDO_CLIENTE, sem CNPJ de 14 dígitos,
+item já faturado em parte, fora da janela (85 dias, ou `--desde`). **Antes de usar, conferir que o pedido
+NÃO tem import retido no Portal**: o mesmo pedido sob outro `externalId` duplica a demanda no Flow.
+
 ## 2. De-para de cliente intercompany
 
 Divisão de responsabilidade que não deve ser embaralhada:
