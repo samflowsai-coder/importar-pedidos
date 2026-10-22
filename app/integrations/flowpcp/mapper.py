@@ -40,6 +40,7 @@ def build_recebimento_payload(
             descricao=it.description,
             quantidade=float(it.quantity),
             precoUnitario=float(it.unit_price) if it.unit_price is not None else None,
+            erpProdutoId=it.erp_produto_id,
         )
         for it in order.items
     ]

@@ -104,6 +104,7 @@ async def _no_cache_html(request: Request, call_next):
 # Ponte FlowPCP (Modelo B/OVERLAY): push best-effort do pedido novo após o
 # send-to-fire, só em ambientes com FlowPCP habilitado (MM).
 from app.erp_eventos import vinculo as erp_vinculo  # noqa: E402
+from app.integrations.flowpcp import produto_erp  # noqa: E402
 from app.integrations.flowpcp.hook import push_new_order  # noqa: E402
 
 # De-para de cliente intercompany: mostra no preview o cliente real que o
@@ -2673,14 +2674,23 @@ def _recusa_planilha_pontual(
     return "sem_codigo_fire", itens[0]["motivo"]
 
 
-def _pedido_para_o_flow(order, decisao):
+def _pedido_para_o_flow(order, decisao, produtos_por_item=None, entry=None):
     """O pedido que vai ao Flow (I2). Em `produto_chave_modo` `ligado`
     (`decisao.check` preenchido), cópia ANTES do `depara_apply.aplicar`: o Flow
-    recebe o código/EAN do cliente, não os do produto decidido no Fire (até o Flow
-    consumir `erpProdutoId`). Fora de `ligado`, o próprio pedido, como hoje."""
-    if getattr(decisao, "check", None) is not None:
-        return order.model_copy(deep=True)
-    return order
+    recebe o código/EAN do cliente, não os do produto decidido no Fire. Fora de
+    `ligado`, o próprio pedido, como hoje.
+
+    Em qualquer modo cada item leva o SEQ do Fire que o Portal já decidiu
+    (`erpProdutoId`, vínculo forte); a ordem da fonte está em `produto_erp.seqs_por_item`."""
+    flow = order.model_copy(deep=True) if getattr(decisao, "check", None) is not None else order
+    check = getattr(decisao, "check", None) or (entry or {}).get("check")
+    produto_erp.anexar_produto_erp(
+        flow,
+        produto_erp.seqs_por_item(
+            len(flow.items), produtos_por_item=produtos_por_item, check=check
+        ),
+    )
+    return flow
 
 
 def _registrar_aplicados(import_id: str, decisao) -> None:
@@ -2879,7 +2889,7 @@ def _send_one_to_fire(
         # produto (BACKLOG §2.1).
         from app.erp import depara_apply
 
-        order_flow = _pedido_para_o_flow(order, decisao)
+        order_flow = _pedido_para_o_flow(order, decisao, produtos_por_item, entry)
         dep_changed = depara_apply.aplicar(order, vinculos)
         if dep_changed:
             repo.append_audit(import_id, "depara_aplicado_no_fire", {"itens": dep_changed})
@@ -3132,7 +3142,9 @@ def _export_one_xlsx(
             False, reason=decisao.reason, http_status=409, detail=decisao.detalhe
         )
     preco_trava.aplicar_precos(order, decisao.precos_aplicar)
-    vinculos, _ = _saida_do_envio(decisao, order, "export", vinculos, produtos_por_item, entry)
+    vinculos, produtos_por_item = _saida_do_envio(
+        decisao, order, "export", vinculos, produtos_por_item, entry
+    )
     recusa = _recusa_planilha_pontual(import_id, vinculos, decisao, "xlsx_export_blocked")
     if recusa is not None:
         return _XlsxExportOutcome(False, reason=recusa[0], http_status=409, detail=recusa[1])
@@ -3143,7 +3155,7 @@ def _export_one_xlsx(
         # do SEQ avaliado).
         from app.erp import depara_apply
 
-        order_flow = _pedido_para_o_flow(order, decisao)
+        order_flow = _pedido_para_o_flow(order, decisao, produtos_por_item, entry)
         dep_changed = depara_apply.aplicar(order, vinculos)
         if dep_changed:
             repo.append_audit(import_id, "depara_aplicado_no_xls", {"itens": dep_changed})

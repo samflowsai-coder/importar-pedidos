@@ -34,6 +34,9 @@ class OrderItem(BaseModel):
     # (Sam's: `Qtde na Emb.` > 1). Informativo: `quantity` continua sendo de
     # packs, nunca multiplicar. None = item vendido avulso.
     qtd_por_embalagem: int | None = None
+    # SEQ do produto no Fire (PRODUTOS.SEQ) quando o Portal já sabe qual é. Só o envio ao
+    # Flow lê (`erpProdutoId`); não entra no XLSX nem no INSERT.
+    erp_produto_id: str | None = None
 
 
 class Order(BaseModel):

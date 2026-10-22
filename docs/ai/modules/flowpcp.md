@@ -113,6 +113,15 @@ reinício e inclui o worker. Vale para thread e worker.
 
 Duplicata no outbox (`OutboxDuplicateError`) é no-op com log, não erro.
 
+**Vínculo forte de produto (`erpProdutoId`):** cada item do `/recebimento` leva, além do
+`produtoCodigo`/`produtoEan` de sempre, o SEQ do Fire que o Portal já decidiu
+(`itens[].erpProdutoId`, string). É ADICIONAL: o código do cliente continua indo como antes.
+Sem isso o Flow não acha o produto quando recebe o código do varejista (182 itens
+`__UNKNOWN__` em 22/10). Fonte, do mais fraco ao mais forte (`produto_erp.seqs_por_item`): produto
+que o check casou (`fire_product_id`, só com `match`) → decisão do check em `produto_chave_modo`
+`ligado` → mapa explícito do envio (de-para / escolha pontual). Montado em
+`server._pedido_para_o_flow`. O Flow ignora o campo até passar a ler (zod não é `strict`).
+
 ## 2. De-para de cliente intercompany
 
 Divisão de responsabilidade que não deve ser embaralhada:
