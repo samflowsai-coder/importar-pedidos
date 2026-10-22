@@ -293,7 +293,10 @@ token nem Flow; ele lista os ambientes ativos e olha o livro de cada um para ree
 Slug na variável que não é ambiente com FlowPCP habilitado loga WARNING uma vez.
 
 Em `simular` a fila não tem cursor (só o confirmar a anda) e `simular` nunca confirma: a volta só
-enxerga os 50 mais antigos (`LIMITE_FILA`), e o que já está no livro nem abre o Fire. Nos modos de
+enxerga os 50 mais antigos (`LIMITE_FILA`), e o que já está no livro nem abre o Fire. O `simular` pede
+só as ações que a gravação consumiria (`_acoes(slug, "criar_e_atualizar")`: `criar` e `atualizar`, mais
+`inativar` só com `PORTAL_FLOWPCP_CADASTRO_VOLTA_INATIVAR`); sem esse filtro as inativações mais antigas
+enchiam a janela e escondiam os `atualizar` (21/10/2026: 50 `inativar`, 0 dos 20 `atualizar`). Nos modos de
 gravação o GET reserva os itens no Flow e pede no máximo 20 (`LIMITE_GRAVACAO`).
 
 ### Onde roda e a ordem do ciclo
