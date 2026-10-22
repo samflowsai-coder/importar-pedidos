@@ -87,6 +87,7 @@ def processar(
     pedidos: list[PedidoErp],
     *,
     hoje: date,
+    desde: date | None,
     slug: str,
     razoes: dict[int, str],
     codigos_flow: dict[int, dict[int, str]],
@@ -105,7 +106,7 @@ def processar(
     livro.parent.mkdir(parents=True, exist_ok=True)
     for p in pedidos:
         reg: dict = {"em": datetime.now(UTC).isoformat(), "pedido": p.erp_codigo}
-        motivo = recusa_local(p, hoje=hoje)
+        motivo = recusa_local(p, hoje=hoje, desde=desde)
         if p.erp_codigo in feitos:
             contagem["pulado"] += 1
             continue
@@ -167,6 +168,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--relatorio", type=Path, help="CSV do relatório de vínculo (códigos do Flow)")
     ap.add_argument("--enviar", action="store_true", help="manda de verdade (padrão: dry-run)")
+    ap.add_argument(
+        "--desde",
+        type=date.fromisoformat,
+        help="envia tudo emitido a partir desta data (AAAA-MM-DD), em vez da janela de 85 dias. "
+        "Além de 90 dias só liga ao ERP se o Flow alargou a janela do vínculo",
+    )
     ap.add_argument("--slug", default="mm")
     ap.add_argument("--host", default=_FIRE_MM[0])
     ap.add_argument("--banco", default=_FIRE_MM[1])
@@ -210,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         contagem = processar(
             pedidos,
             hoje=date.today(),
+            desde=args.desde,
             slug=args.slug,
             razoes=razoes,
             codigos_flow=codigos_flow,

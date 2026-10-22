@@ -53,6 +53,7 @@ def _rodar(pedidos, livro, enviar, **kw):
     contagem = tool.processar(
         pedidos,
         hoje=HOJE,
+        desde=kw.pop("desde", None),
         slug="mm",
         razoes={1: "Cliente SA"},
         codigos_flow={},

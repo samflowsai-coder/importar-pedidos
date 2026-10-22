@@ -181,3 +181,25 @@ def test_recusas_de_item(item):
 def test_recusa_mais_de_500_itens():
     muitos = tuple(_item(i) for i in range(1, 502))
     assert "500" in (recusa_local(_pedido(itens=muitos), hoje=HOJE) or "")
+
+
+# ── vínculo forte e janela por data ───────────────────────────────────────────
+
+
+def test_erp_produto_id_vem_do_codproduto_do_fire():
+    p = _pedido(itens=(_item(1, produto=3914), _item(2, produto=None)))
+    req = montar_recebimento(p, razao_social="X", slug="mm", codigos_flow={1: "KIT-2972"})
+    # O código do Flow só decide o `produtoCodigo`; o vínculo forte é sempre o SEQ do Fire.
+    assert [i.erpProdutoId for i in req.itens] == ["3914", None]
+    assert req.itens[0].produtoCodigo == "KIT-2972"
+
+
+def test_desde_mantem_pedido_de_2026_mesmo_fora_da_janela_de_dias():
+    antigo = _pedido(data_pedido=date(2026, 3, 24))
+    assert "janela" in (recusa_local(antigo, hoje=HOJE) or "")
+    assert recusa_local(antigo, hoje=HOJE, desde=date(2026, 1, 1)) is None
+
+
+def test_desde_ainda_recusa_o_que_e_anterior():
+    velho = _pedido(data_pedido=date(2025, 12, 31))
+    assert "antes de 2026-01-01" in (recusa_local(velho, hoje=HOJE, desde=date(2026, 1, 1)) or "")

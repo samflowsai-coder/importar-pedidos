@@ -40,8 +40,11 @@ def _centesimos(q) -> bool:
     return q * 100 == (q * 100).to_integral_value()
 
 
-def recusa_local(p: PedidoErp, *, hoje: date) -> str | None:
-    """Motivo pelo qual o pedido NÃO deve ser enviado, ou None. Não consulta ninguém."""
+def recusa_local(p: PedidoErp, *, hoje: date, desde: date | None = None) -> str | None:
+    """Motivo pelo qual o pedido NÃO deve ser enviado, ou None. Não consulta ninguém.
+
+    `desde`: troca a janela de dias pelo corte por data (ex.: tudo de 2026 ainda aberto).
+    Pedido além dos 90 dias do Flow só liga ao ERP se o Flow alargou a janela do vínculo."""
     if p.status.strip().upper() != _STATUS_ENVIAVEL or not esta_aberto(p.status):
         return f"status {p.status!r} (só {_STATUS_ENVIAVEL} é enviado)"
     numero = (p.pedido_cliente or "").strip()
@@ -51,7 +54,10 @@ def recusa_local(p: PedidoErp, *, hoje: date) -> str | None:
         return "cliente sem CNPJ de 14 dígitos (o vínculo do Flow casa o cliente por CNPJ)"
     if p.data_pedido is None:
         return "pedido sem data do pedido"
-    if (hoje - p.data_pedido).days > JANELA_VINCULO_DIAS:
+    if desde is not None:
+        if p.data_pedido < desde:
+            return f"emitido antes de {desde.isoformat()}"
+    elif (hoje - p.data_pedido).days > JANELA_VINCULO_DIAS:
         return (
             f"fora da janela de vínculo do Flow ({(hoje - p.data_pedido).days} dias; "
             f"limite {JANELA_VINCULO_DIAS})"
@@ -94,6 +100,7 @@ def montar_recebimento(
                 description=i.descricao,
                 product_code=codigos.get(i.erp_item_codigo)
                 or (str(i.cod_produto) if i.cod_produto is not None else None),
+                erp_produto_id=str(i.cod_produto) if i.cod_produto is not None else None,
                 quantity=float(i.qtd),
                 unit_price=float(i.preco_unitario) if i.preco_unitario is not None else None,
                 delivery_date=_br(i.dt_entrega_item or p.dt_entrega),
