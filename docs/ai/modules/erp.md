@@ -519,13 +519,15 @@ reconciliação em `erro_conexao` de 27/08 a 15/10.
 
 `_decidir_candidato` (`fire_reconcile.py:305`) tenta, na ordem, o primeiro
 caminho cuja âncora de cliente está preenchida no `Candidato` — sem
-fallback entre eles, e nenhum casa só pelo número:
+fallback entre eles, exceto do 2 para o 3, e nenhum casa só pelo número:
 
 1. **`cliente_override_codigo`** (override manual do picker, ver "Cliente
    override" acima) — casa por `CAB_VENDAS.CLIENTE` igual ao código
    (`fire_reconcile.py:322-326`).
 2. **`customer_cnpj` do header** — casa por CNPJ do `CADASTRO` da linha,
-   comparado em dígitos (`fire_reconcile.py:328-335`).
+   comparado em dígitos (`fire_reconcile.py:328-335`). Se não casa e o pedido
+   tem `delivery_cnpj`, cai no caminho 3 (Sam's: o header é o clube comprador,
+   o Fire cadastra o CD do local de entrega).
 3. **Sem CNPJ no header** (Riachuelo, NBA — o CNPJ real é por loja, em
    `delivery_cnpj` de cada item) — compara o conjunto de `delivery_cnpj`
    distintos do pedido contra o Fire (`fire_reconcile.py:337-356`).
