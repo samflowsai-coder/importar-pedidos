@@ -47,6 +47,7 @@ class ItemRecebimento(BaseModel):
     descricao: str
     quantidade: float
     precoUnitario: float | None = None  # noqa: N815
+    erpProdutoId: str | None = None  # noqa: N815 — SEQ do Fire; vínculo forte de produto
 
 
 class OrigemRecebimento(BaseModel):
