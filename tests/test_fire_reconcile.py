@@ -102,6 +102,40 @@ def test_cnpj_divergente_nao_casa(monkeypatch):
     assert buscar_no_fire([cand], env_slug="mm") == {}
 
 
+def test_header_que_nao_casa_cai_para_o_cnpj_de_entrega(monkeypatch):
+    """Sam's: o header traz o CNPJ do clube comprador, mas o Fire cadastra o pedido no
+    CD do local de entrega. Sem o fallback o pedido ficava `parsed` para sempre (e o
+    envio ao Flow, retido)."""
+    _plugar(monkeypatch, [_linha("06839395-0000", 4821, "00.063.960/0587-94")])
+    cand = Candidato(
+        "i1",
+        "06839395-0000",
+        None,
+        "00.063.960/0223-31",
+        ("00.063.960/0587-94",),
+        "2026-09-10",
+    )
+    achado = buscar_no_fire([cand], env_slug="mm")["i1"]
+    assert achado.fire_codigo == 4821
+    assert achado.caminho == 3
+
+
+def test_header_e_entrega_que_nao_casam_continuam_sem_match(monkeypatch):
+    _plugar(monkeypatch, [_linha("06839395-0000", 4821, "99.999.999/0001-11")])
+    cand = Candidato(
+        "i1", "06839395-0000", None, "00.063.960/0223-31", ("00.063.960/0587-94",), "2026-09-10"
+    )
+    assert buscar_no_fire([cand], env_slug="mm") == {}
+
+
+def test_header_que_casa_nao_olha_as_lojas(monkeypatch):
+    _plugar(monkeypatch, [_linha("K09", 905, "12.345.678/0001-99")])
+    cand = Candidato(
+        "i1", "K09", None, "12.345.678/0001-99", ("77.777.777/0001-77",), "2026-08-01"
+    )
+    assert buscar_no_fire([cand], env_slug="mm")["i1"].caminho == 2
+
+
 def test_caminho_1_override_ganha_e_dispensa_cnpj(monkeypatch):
     _plugar(monkeypatch, [_linha("K01", 901, "", cliente=4242)])
     cand = Candidato("i1", "K01", 4242, None, (), "2026-08-01")

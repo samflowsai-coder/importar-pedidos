@@ -15,7 +15,7 @@ Endpoint `POST /{id}/test` valida pastas + tenta conexão Firebird.
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -247,6 +247,76 @@ def unblock_environment_preco_trava(env_id: str, user=Depends(require_admin)):
         f"env={env['slug']} por={user.email}"
     )
     return {"desbloqueadas": n}
+
+
+@router.get("/{env_id}/preco-trava/copia")
+def preco_trava_copia(
+    env_id: str,
+    produto: str | None = Query(default=None, max_length=64),
+    data: str | None = Query(default=None, max_length=10),
+    rede: str | None = Query(default=None, max_length=64),
+    user=Depends(require_admin),
+):
+    """SÓ LEITURA do que a cópia da tabela de preço (Flow → Portal) tem: frescor, contagem por
+    empresa e por vigência e, com `produto` + `data` (AAAA-MM-DD, a emissão do pedido), o preço que
+    a regra de vigência escolhe em cada empresa (`rede` opcional = id da rede). Prova a sincronização
+    sem depender do token do Flow."""
+    env = environments_repo.get(env_id)
+    if env is None:
+        raise HTTPException(status_code=404, detail="Ambiente não encontrado")
+    if (produto is None) != (data is None):
+        raise HTTPException(status_code=422, detail="`produto` e `data` vão juntos")
+    dia = None
+    if data is not None:
+        try:
+            dia = date.fromisoformat(data)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="`data` deve ser AAAA-MM-DD") from None
+    with db_router.env_connect(env["slug"]) as conn:
+        completo_em = precos_repo.ultima_sync_ok(conn)
+        empresas: dict[str, dict] = {}
+        for cnpj, total, cancelados, produtos in conn.execute(
+            "SELECT empresa_cnpj, COUNT(*), COALESCE(SUM(cancelado), 0), COUNT(DISTINCT erp_produto_id)"
+            " FROM preco_tabela_v1 GROUP BY empresa_cnpj ORDER BY empresa_cnpj"
+        ):
+            empresas[cnpj] = {
+                "empresa_cnpj": cnpj,
+                "precos": total,
+                "ativos": total - cancelados,
+                "cancelados": cancelados,
+                "produtos": produtos,
+                "por_vigencia": {},
+            }
+        for cnpj, vigencia, n in conn.execute(
+            "SELECT empresa_cnpj, vigencia_inicio, COUNT(*) FROM preco_tabela_v1"
+            " WHERE cancelado = 0 GROUP BY empresa_cnpj, vigencia_inicio ORDER BY vigencia_inicio"
+        ):
+            empresas[cnpj]["por_vigencia"][vigencia] = n
+        redes = conn.execute("SELECT COUNT(*) FROM preco_rede_v1").fetchone()[0]
+        resolucao = None
+        if dia is not None:
+            resolucao = []
+            for cnpj in empresas:
+                linha = precos_repo.preco_vigente(
+                    conn, empresa_cnpj=cnpj, rede_id=rede, erp_produto_id=produto, data=dia
+                )
+                resolucao.append(
+                    {
+                        "empresa_cnpj": cnpj,
+                        "preco_centavos": linha.preco_centavos if linha else None,
+                        "vigencia_inicio": linha.vigencia_inicio.isoformat() if linha else None,
+                        "preco_id": linha.preco_id if linha else None,
+                        "rede_id": linha.rede_id if linha else None,
+                    }
+                )
+    agora = datetime.now(UTC)
+    return {
+        "sincronizada_em": completo_em.isoformat() if completo_em else None,
+        "idade_min": int((agora - completo_em).total_seconds() // 60) if completo_em else None,
+        "redes": redes,
+        "empresas": list(empresas.values()),
+        "resolucao": resolucao,
+    }
 
 
 class ProdutoChaveRequest(BaseModel):

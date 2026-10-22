@@ -293,12 +293,15 @@ def test_falha_real_de_envio_volta_para_a_fila_no_relogio_local(env, monkeypatch
     time.tzset()
     try:
         pedido("x", dias=0)
+        agora = datetime.now()
+        # O resto do arquivo usa AGORA (data fixa); este teste drena com o relógio real, então a
+        # linha nasce "agora" de verdade. Com a data fixa ele virava `retido` (>7 dias) e quebrava.
         with db.connect() as conn:
             conn.execute(
-                "UPDATE outbox SET payload_json = ? WHERE import_id = 'x'",
-                (json.dumps(_payload_recebimento("x")),),
+                "UPDATE outbox SET payload_json = ?, created_at = ? WHERE import_id = 'x'",
+                (json.dumps(_payload_recebimento("x")), agora.isoformat(timespec="seconds")),
             )
-        agora = datetime.now()
+            conn.execute("UPDATE imports SET imported_at = ? WHERE id = 'x'", (agora.isoformat(),))
         envio_portal.drenar_ambiente(env, CFG, agora=agora, ler_status=Fake().ler)
         st, tentativas, _ = situacao("x")
         assert (st, tentativas) == ("pending", 1)
