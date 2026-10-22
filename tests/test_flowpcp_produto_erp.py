@@ -41,7 +41,8 @@ def test_payload_leva_erp_produto_id_quando_o_item_tem():
     assert [i.erpProdutoId for i in req.itens] == ["3914", None]
     corpo = req.model_dump(by_alias=True)
     assert corpo["itens"][0]["erpProdutoId"] == "3914"
-    assert corpo["itens"][1]["erpProdutoId"] is None
+    # Campo opcional vazio não vai no wire: o contrato do Flow aceita ausente, não `null`.
+    assert "erpProdutoId" not in corpo["itens"][1]
 
 
 def test_produto_codigo_do_cliente_continua_igual():

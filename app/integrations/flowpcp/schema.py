@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 
 
 class DecisaoFlowPCP(BaseModel):
@@ -48,6 +48,18 @@ class ItemRecebimento(BaseModel):
     quantidade: float
     precoUnitario: float | None = None  # noqa: N815
     erpProdutoId: str | None = None  # noqa: N815 — SEQ do Fire; vínculo forte de produto
+    # Posição do item no array COMBINADO do import, quando o pedido sai dividido por loja. O Flow
+    # grava source_id_externo = externalId:indiceOriginal. Só vai no wire se preenchido: o contrato
+    # do Flow aceita o campo ausente, não `null`.
+    indiceOriginal: int | None = None  # noqa: N815
+
+    @model_serializer(mode="wrap")
+    def _omitir_campos_opcionais_vazios(self, handler):
+        dados = handler(self)
+        for campo in ("indiceOriginal", "erpProdutoId"):
+            if dados.get(campo) is None:
+                dados.pop(campo, None)
+        return dados
 
 
 class OrigemRecebimento(BaseModel):
