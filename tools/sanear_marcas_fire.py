@@ -10,7 +10,8 @@ transação, relê e confere, e só então dá commit.
   python tools/sanear_marcas_fire.py <slug>
   python tools/sanear_marcas_fire.py <slug> --gravar --backup-servidor 'C:\\Fire\\backup\\marcas-20261017.fbk'
 
-Marca nova depois de 17/10/2026 é cadastro manual (decisão do Samuel).
+Marca nova depois de 17/10/2026 é cadastro manual (decisão do Samuel); as 3 de 23/10 (Kings,
+Tennis Station, Centauro) foram autorizadas e entram por `--so`.
 """
 from __future__ import annotations
 
@@ -34,6 +35,14 @@ MARCAS_FLOW_2026_10_17 = [
     "Netshoes", "Oxer", "Riachuelo", "Sam's Club", "San Bovo", "Studio Z",
 ]
 
+# Marcas pedidas pelo Flow depois de 17/10 (Kings, Tennis Station e Centauro; mesma grafia do
+# Flow). O Samuel autorizou o cadastro em 23/10/2026. "Lojas Silva" e "Polo Match" também existem
+# no Flow como marca ativa, mas ficam FORA daqui até ele decidir.
+MARCAS_NOVAS_2026_10_23 = ["Kings", "Tennis Station", "Centauro"]
+
+# Tudo o que esta ferramenta pode cadastrar. O padrão (sem --so) é a lista inteira.
+MARCAS_DESEJADAS = MARCAS_FLOW_2026_10_17 + MARCAS_NOVAS_2026_10_23
+
 
 def normalizar(nome: str) -> str:
     """Regra do Flow: trim, espaços colapsados, maiúsculas; acento fica."""
@@ -46,6 +55,22 @@ def chave_solta(nome: str) -> str:
     n = unicodedata.normalize("NFKD", normalizar(nome))
     n = "".join(c for c in n if not unicodedata.combining(c))
     return re.sub(r"[^A-Z0-9]", "", n)
+
+
+def selecionar_marcas(so: str | None) -> list[str]:
+    """`--so "A,B"`: só essas marcas, com a grafia da lista (caixa e espaços do argumento não
+    importam). Sem `--so`, a lista inteira. Nome fora da lista é erro: esta ferramenta não cadastra
+    marca que não foi decidida."""
+    if so is None:
+        return list(MARCAS_DESEJADAS)
+    por_chave = {normalizar(m): m for m in MARCAS_DESEJADAS}
+    textos = [" ".join(n.split()) for n in so.split(",") if n.strip()]
+    if not textos:
+        raise ValueError("--so vazio")
+    fora = [t for t in textos if normalizar(t) not in por_chave]
+    if fora:
+        raise ValueError(f"marca(s) fora da lista desta ferramenta: {', '.join(fora)}")
+    return [por_chave[normalizar(t)] for t in textos]
 
 
 @dataclass
@@ -165,7 +190,7 @@ def executar(
     """Roda o saneamento e devolve o código de saída. Dublês entram por
     `conn_factory` (objeto com connect_somente_leitura/connect_escrita_cadastro) e
     `backup` (callable gbak que devolve a linha de prova)."""
-    desejadas = MARCAS_FLOW_2026_10_17 if desejadas is None else desejadas
+    desejadas = MARCAS_DESEJADAS if desejadas is None else desejadas
     if conn_factory is None:
         from app.erp.connection import FirebirdConnection
 
@@ -267,9 +292,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("slug")
     parser.add_argument("--gravar", action="store_true")
     parser.add_argument("--backup-servidor", help="Caminho do .fbk NO servidor do Fire")
+    parser.add_argument(
+        "--so",
+        help='Só estas marcas, separadas por vírgula (ex.: "Kings,Tennis Station,Centauro")',
+    )
     args = parser.parse_args(argv)
     if args.gravar and not args.backup_servidor:
         parser.error("--gravar exige --backup-servidor")
+    try:
+        desejadas = selecionar_marcas(args.so)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     from app.persistence import environments_repo
 
@@ -282,6 +315,7 @@ def main(argv: list[str] | None = None) -> int:
         gravar=args.gravar,
         backup_servidor=args.backup_servidor,
         slug=args.slug,
+        desejadas=desejadas,
     )
 
 

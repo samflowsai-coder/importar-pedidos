@@ -421,3 +421,40 @@ def test_gbak_backup_levantando_propaga_e_fecha():
 def test_gbak_recusa_embedded():
     with pytest.raises(ValueError):
         backup_mod.gbak({"host": "", "path": "x.fdb"}, "a.fbk", services=_Services())
+
+
+# ── marcas novas de 23/10 (Kings, Tennis Station, Centauro) ───────────────────
+
+
+def test_lista_original_de_17_nao_muda():
+    assert len(tool.MARCAS_FLOW_2026_10_17) == 17
+
+
+def test_lista_desejada_e_as_17_mais_as_3_novas_sem_repetir():
+    assert tool.MARCAS_NOVAS_2026_10_23 == ["Kings", "Tennis Station", "Centauro"]
+    assert tool.MARCAS_DESEJADAS == tool.MARCAS_FLOW_2026_10_17 + tool.MARCAS_NOVAS_2026_10_23
+    assert len({tool.normalizar(m) for m in tool.MARCAS_DESEJADAS}) == 20
+
+
+def test_so_as_3_novas_entram_nos_codigos_17_18_19():
+    existentes = [(1, ""), *[(i, f"Forn {i}") for i in range(2, 17)]]
+    plano = planejar(existentes, tool.selecionar_marcas("Kings,Tennis Station,Centauro"))
+    assert plano.inserir == [(17, "Kings"), (18, "Tennis Station"), (19, "Centauro")]
+
+
+def test_sem_so_vale_a_lista_inteira():
+    assert tool.selecionar_marcas(None) == tool.MARCAS_DESEJADAS
+
+
+def test_so_aceita_caixa_e_espaco_diferentes_e_devolve_a_grafia_da_lista():
+    assert tool.selecionar_marcas("  kings , TENNIS   station") == ["Kings", "Tennis Station"]
+
+
+def test_so_com_marca_fora_da_lista_e_erro():
+    with pytest.raises(ValueError, match="Lojas Silva"):
+        tool.selecionar_marcas("Kings,Lojas Silva")
+
+
+def test_so_vazio_e_erro():
+    with pytest.raises(ValueError):
+        tool.selecionar_marcas(" , ")
