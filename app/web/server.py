@@ -165,6 +165,11 @@ from app.web.routes_vinculo_fire import router as vinculo_fire_router  # noqa: E
 
 app.include_router(vinculo_fire_router)
 
+# Reenvio ao Flow, por loja, de um import que já foi combinado (admin).
+from app.web.routes_reenvio_loja import router as reenvio_loja_router  # noqa: E402
+
+app.include_router(reenvio_loja_router)
+
 
 @app.on_event("startup")
 def _iniciar_reconciliacao_periodica() -> None:
