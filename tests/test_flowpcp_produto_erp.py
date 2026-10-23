@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.integrations.flowpcp.mapper import build_recebimento_payload
 from app.integrations.flowpcp.produto_erp import anexar_produto_erp, seqs_por_item
 from app.models.order import Order, OrderHeader, OrderItem
@@ -155,3 +157,30 @@ def test_pedido_para_o_flow_sem_check_nem_mapa_nao_muda_nada():
     o = _order(1)
     flow = server._pedido_para_o_flow(o, SimpleNamespace(check=None), None, {})
     assert flow.items[0].erp_produto_id is None
+
+
+# ── contrato do Flow: ^[1-9][0-9]{0,8}$ ───────────────────────────────────────
+# Fora disso o Flow recusa o recebimento INTEIRO com 400.
+
+
+def test_seq_com_mais_de_9_digitos_nao_vai():
+    check = {"items": [_check_item(999_999_999), _check_item(1_000_000_000)]}
+    assert seqs_por_item(2, check=check) == {0: "999999999"}
+
+
+def test_seq_nunca_tem_zero_a_esquerda():
+    check = {"items": [_check_item("02535"), _check_item(" 2536 ")]}
+    assert seqs_por_item(2, check=check) == {0: "2535", 1: "2536"}
+
+
+def test_mapa_explicito_com_mais_de_9_digitos_tambem_nao_vai():
+    assert seqs_por_item(1, produtos_por_item={0: 10**9}) == {}
+
+
+@pytest.mark.parametrize("valor", [1, "7", " 42 ", "0002", 999_999_999])
+def test_todo_seq_enviado_casa_com_o_regex_do_flow(valor):
+    import re
+
+    check = {"items": [_check_item(valor)]}
+    for seq in seqs_por_item(1, check=check).values():
+        assert re.fullmatch(r"[1-9][0-9]{0,8}", seq)
