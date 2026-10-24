@@ -245,3 +245,70 @@ def test_exporter_sem_variavel_e_como_sempre(env, monkeypatch):
     _exporter().enqueue(_order(), import_id="imp-1", slug="mm")
     [linha] = outbox_repo.list_for_import("imp-1")
     assert linha.payload["cliente"]["cnpj"] is None
+
+
+# ── achados da revisão ────────────────────────────────────────────────────────
+
+
+def test_cnpj_dv_ok_recusa_digito_nao_ascii():
+    assert cnpj_mod.cnpj_dv_ok("٣٣٢٠٠٠٥٦٠٠٠١٤٩") is False
+
+
+def test_termo_casa_so_palavra_inteira(monkeypatch):
+    """`nba` no meio de outra palavra levaria o pedido de OUTRA rede para o cliente errado."""
+    monkeypatch.setenv(VAR, "nba:11222333000181:Matriz NBA")
+    assert cm.para_pedido("mm", _order("NBA STORE")) is not None
+    assert cm.para_pedido("mm", _order("LOJAS BANBAS LTDA")) is None
+    assert cm.para_pedido("mm", _order("CONNBAZ SA")) is None
+
+
+def test_resolucao_nao_resolvida_nao_impede_a_matriz(monkeypatch):
+    monkeypatch.setenv(VAR, RIACHUELO)
+    nao = ResolucaoCliente(resolvido=False)
+    assert cm.para_pedido("mm", _order(), nao) is not None
+
+
+def test_nome_com_dois_pontos_fica_inteiro(monkeypatch):
+    monkeypatch.setenv(VAR, "riachuelo:33200056000149:Matriz: Riachuelo")
+    [c] = cm.configuradas("mm")
+    assert c.nome == "Matriz: Riachuelo"
+
+
+def test_hook_push_leva_a_matriz_ate_a_fila(env, monkeypatch):
+    import app.integrations.flowpcp.hook as hook
+    from app.integrations.flowpcp.config import FlowPCPConfig
+
+    cfg = FlowPCPConfig(
+        enabled=True, base_url="https://flow.test", service_token="t", tenant_id="t"
+    )
+    monkeypatch.setattr(hook, "flowpcp_config_for_slug", lambda slug: cfg)
+    monkeypatch.setattr(hook, "resolucao_para", lambda order, *, slug: None)
+    monkeypatch.setenv(VAR, RIACHUELO)
+    assert hook.push_new_order(_order(), import_id="imp-1", slug="mm") is True
+    [linha] = outbox_repo.list_for_import("imp-1")
+    assert linha.payload["cliente"] == {"nome": "Matriz Riachuelo", "cnpj": "33200056000149"}
+
+
+def test_reexport_depois_de_ligar_a_matriz_nao_manda_o_mesmo_pedido_nos_dois_formatos(
+    env, monkeypatch
+):
+    monkeypatch.delenv(VAR, raising=False)
+    monkeypatch.setenv("PORTAL_FLOWPCP_RECEBIMENTO_POR_LOJA", "mm")
+    _exporter().enqueue(_order(), import_id="imp-1", slug="mm")  # saiu por loja
+    assert len(outbox_repo.list_for_import("imp-1")) == 2
+    monkeypatch.setenv(VAR, RIACHUELO)  # a matriz foi ligada depois
+    _exporter().enqueue(_order(), import_id="imp-1", slug="mm")  # re-export do XLS
+    chaves = {linha.idempotency_key for linha in outbox_repo.list_for_import("imp-1")}
+    assert "send-imp-1" not in chaves
+    assert len(chaves) == 2
+
+
+def test_reexport_depois_de_ligar_a_divisao_por_loja_tambem_nao_duplica(env, monkeypatch):
+    monkeypatch.delenv(VAR, raising=False)
+    monkeypatch.delenv("PORTAL_FLOWPCP_RECEBIMENTO_POR_LOJA", raising=False)
+    _exporter().enqueue(_order(), import_id="imp-1", slug="mm")  # saiu único
+    monkeypatch.setenv("PORTAL_FLOWPCP_RECEBIMENTO_POR_LOJA", "mm")
+    _exporter().enqueue(_order(), import_id="imp-1", slug="mm")
+    assert [linha.idempotency_key for linha in outbox_repo.list_for_import("imp-1")] == [
+        "send-imp-1"
+    ]

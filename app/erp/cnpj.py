@@ -23,7 +23,7 @@ def cnpj_dv_ok(value: str | None) -> bool:
     Repetição de um dígito só (`11111111111111`) fecha a conta mas não é CNPJ: recusada.
     """
     d = cnpj_digits(value)
-    if len(d) != 14 or len(set(d)) == 1:
+    if len(d) != 14 or not (d.isascii() and d.isdigit()) or len(set(d)) == 1:
         return False
 
     def dv(base: str) -> str:

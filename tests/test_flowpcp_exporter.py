@@ -44,8 +44,9 @@ def test_mapper_shape():
     assert req.itens[0].quantidade == 10
 
 
+@patch("app.integrations.flowpcp.exporter.outbox_repo.list_for_import", return_value=[])
 @patch("app.integrations.flowpcp.exporter.outbox_repo.enqueue")
-def test_export_enqueues_to_outbox(mock_enqueue):
+def test_export_enqueues_to_outbox(mock_enqueue, _lista):
     sent = FlowPCPExporter(tenant_id=TENANT).enqueue(_order(), import_id="imp-1")
     assert sent is True
     _, kwargs = mock_enqueue.call_args
@@ -54,10 +55,11 @@ def test_export_enqueues_to_outbox(mock_enqueue):
     assert kwargs["idempotency_key"] == "send-imp-1"
 
 
+@patch("app.integrations.flowpcp.exporter.outbox_repo.list_for_import", return_value=[])
 @patch(
     "app.integrations.flowpcp.exporter.outbox_repo.enqueue",
     side_effect=outbox_repo.OutboxDuplicateError("dup"),
 )
-def test_export_duplicate_is_noop(mock_enqueue):
+def test_export_duplicate_is_noop(mock_enqueue, _lista):
     # já enfileirado (re-export) — não é erro
     assert FlowPCPExporter(tenant_id=TENANT).enqueue(_order(), import_id="imp-1") is True

@@ -7,7 +7,7 @@ pedido entra com `cliente_id` nulo (sem preço nem aprovação por rede). A divi
 com o Fire segue por item (`import_id:posição`) e não depende do cliente.
 
 `PORTAL_FLOWPCP_CLIENTE_MATRIZ_<SLUG>` = `termo:cnpj:nome`, várias separadas por `;`. O `termo` é
-procurado (sem caixa nem acento) no nome do cliente do header. Entrada inválida é ignorada com
+procurado como palavra inteira (sem caixa nem acento) no nome do cliente do header. Entrada inválida é ignorada com
 WARNING: o pedido cai no comportamento de antes em vez de deixar de ser enviado.
 """
 
@@ -66,4 +66,7 @@ def para_pedido(
     if cnpj_digits(order.header.customer_cnpj) or (resolucao is not None and resolucao.resolvido):
         return None
     nome = _dobrar(order.header.customer_name or "")
-    return next((c for c in configuradas(slug) if _dobrar(c.termo) in nome), None)
+    return next(
+        (c for c in configuradas(slug) if re.search(rf"\b{re.escape(_dobrar(c.termo))}\b", nome)),
+        None,
+    )
