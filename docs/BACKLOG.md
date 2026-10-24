@@ -442,11 +442,15 @@ para `xlsx` na dúvida.
    (`app/web/server.py`, envio ao Fire), e fica lá mesmo se o insert falhar; se a operadora o
    importar, o pedido entra duas vezes. Pasta separada exigiria mudar o código. Por isso o
    canário roda em `db`. Como `db` vale para a empresa inteira, todo pedido da MM (não só o do
-   cliente piloto) perde o "Gerar XLS" na tela, que em `parsed` só oferece cancelar, fechar e
-   o botão primário. Plano B por pedido: expor `POST /api/imported/{id}/export-xlsx` (a rota já
-   gera a planilha em qualquer modo, `server.py`) como ação secundária no preview, ou uma lista
-   de clientes liberados para gravar direto. Sem um dos dois, o único plano B é o freio do
-   item 1 (voltar a `xlsx` na empresa toda).
+   cliente piloto) perde o "Gerar XLS" na tela, que em `parsed` só oferece "Baixar arquivo
+   original", cancelar, fechar e o botão primário. Plano B por pedido: expor
+   `POST /api/imported/{id}/export-xlsx` (a rota já gera a planilha em qualquer modo,
+   `server.py`) como ação secundária no preview, **com o envio ao Fire respondendo 409 depois de
+   `xlsx_exported`**: o pedido segue `parsed` depois do XLS e `_send_one_to_fire` só confere
+   `portal_status`, então sem esse 409 a operadora importa o XLS e ainda clica "Cadastrar no
+   Fire" (lança duas vezes). Alternativa: uma lista de clientes liberados para gravar direto
+   (aí o cliente piloto é o da lista e o plano B por pedido não se aplica). Sem nenhum dos dois,
+   o único plano B é o freio do item 1 (voltar a `xlsx` na empresa toda).
 6. **Trava de produto:** `produto_chave_modo` estava desligado na última checagem (20/10,
    relato da sessão; não reverificado). Sem ela o insert casa produto pela busca antiga e
    erro de produto vira pedido errado no ERP. Ligar `ligado` ao menos no ambiente canário.
@@ -463,14 +467,16 @@ para `xlsx` na dúvida.
   pedido do ERP. Provar no canário que o Flow não duplica (o vínculo exato é o que deveria
   impedir).
 - Operação: backup server-side antes do canário; desligar = trocar o modo (hoje no
-  `config.json`/tela de config, global; por empresa depois do P0.1). Aba aberta mantém o botão
-  até recarregar: avisar a operadora e confiar no 409 do servidor, não na tela. Quem acompanha
+  `config.json`/tela de config, global; por empresa depois do P0.1). Aba aberta em outra máquina
+  mantém o botão até recarregar (as do mesmo navegador se atualizam): avisar a operadora e
+  confiar no 409 do servidor, não na tela. Quem acompanha
   e em que janela.
 
-**Canário proposto (depois do P0):** só a MM (`.7`), em `db`, com o plano B por pedido do item
-5 no ar. Camila confere os 5 primeiros pedidos lado a lado (pedido 100% casado por SEQ, cliente
-de baixo risco, escolhido por quem envia: o modo vale para a empresa toda); saída com 20 pedidos
-sem divergência. Nasmar depois, com cópia da `.4` validada.
+**Canário proposto (depois do P0):** só a MM (`.7`), em `db`, com o plano B do item 5 no ar
+(por pedido, ou a lista de clientes liberados). Camila confere os 5 primeiros pedidos lado a lado
+(pedido 100% casado por SEQ, cliente de baixo risco; com o plano B por pedido o cliente é
+escolhido por quem envia, porque o modo vale para a empresa toda); saída com 20 pedidos sem
+divergência. Nasmar depois, com cópia da `.4` validada.
 
 **Lote semanal (§3.8):** só liga com o `db` estável nos dois ambientes.
 
