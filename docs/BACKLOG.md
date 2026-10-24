@@ -387,6 +387,17 @@ Pendência menor (revisão de 21/10): em `EXPORT_MODE=both`, `_send_one_to_fire`
 `planilha=True` ao `_recusa_planilha_pontual` também para o espelho, que nunca gera XLSX
 (`server.py`, `not espelho`). Com escolha pontual de produto sem `CODPROD_ALTERN` numa linha do
 espelho, recusa à toa (lado seguro). Corrigir com `planilha=... and not integracao.e_espelho(import_id)`.
+
+### 3.9 Espécie dos volumes na NF sai "FARDO" por padrão — chamado na Fire Sistemas
+Pedido da Camila (MM) em 05/10/2026: na emissão da nota o campo da espécie dos volumes
+vem preenchido com "FARDO" e eles nunca usam; querem "CAIXA" como padrão, para as duas
+empresas. Verificado na Fire viva (.4 e .7, só leitura): é `NOTA.NF_TRANSP_ESPECIE`,
+VARCHAR(25) de texto livre, **sem default no banco e sem gatilho/procedure que o
+preencha**, e o texto "FARDO" não está em nenhuma tabela de configuração. Inferência (não
+provada): o padrão está fixo na tela de faturamento do programa. O portal não participa (o
+export não tem coluna de espécie e a linha da nota só nasce na emissão, dentro do Fire).
+A MM abre o chamado com a Fire Sistemas; o Samuel acompanha. **Não editar o banco** para
+forçar "CAIXA". Em 2026 já predomina "CAIXA" (.7: 1.092; .4: 350).
 ---
 
 ## 4. Decisões pendentes (aguardam o Samuel)
@@ -475,6 +486,42 @@ para `xlsx` na dúvida.
   mantém o botão até recarregar (as do mesmo navegador se atualizam): avisar a operadora e
   confiar no 409 do servidor, não na tela. Quem acompanha
   e em que janela.
+
+**Decisões do Samuel em 24/10 (tarde) — onde conflitam com o P0 acima, valem estas:**
+- **Modo global, sem parâmetro por empresa** (substitui o P0.1 "modo por empresa"). Com `db`
+  ligado e o lote semanal, não haverá XLS. Consequência: a Nasmar (`.4`) entra junto, então o
+  **backup server-side da `.4` e a paridade nela viram pré-requisito da virada**, não etapa
+  posterior. Continuam valendo: servidor responde 409 fora do modo e a rota de config só para
+  admin, com auditoria (proposta minha, não discutida).
+- **Sem plano B** (substitui o P0.5): saem o botão secundário de XLS e a lista de clientes
+  liberados. Fica o parâmetro BD/XLS nas configurações, pedido já exportado em XLS não grava
+  direto sem confirmação, e falha do Fire (fora do ar, lock) vira erro claro, nunca pedido
+  meio-gravado. O parágrafo "Canário proposto" abaixo precisa ser reescrito sem o plano B.
+- **Empresa certa sem o operador selecionar:** a gravação depende 100% do roteamento
+  (documento > histórico > memória + regra de faturamento MM × Nasmar). Sem decisão ou ambíguo,
+  o pedido fica retido, nunca grava por padrão. Proposta minha para o canário: o sistema sugere
+  e o operador confirma com um clique, até a taxa de acerto estar provada. Estado do
+  `roteamento_modo` em produção: relato de 20/10, **a reverificar**.
+- **Pedido que já existe no Fire:** o portal acha o anterior pela chave CNPJ do cliente + número
+  do documento (só vale para número de pedido de compra de verdade, não código de loja) e
+  mostra o diff para o usuário confirmar. Pedido digitado à mão ou anterior à virada não tem
+  vínculo no portal: vale a impressão digital no Fire (§1.5) mais a confirmação. **Atualizar o
+  pedido no Fire** (UPDATE/DELETE) é trilha própria, depois do canário estável. Regras
+  propostas (não decididas): item faturado não reduz abaixo do faturado; remover item com
+  produção avisa; incluir item é livre. Antes, descobrir como o Fire representa remoção e
+  alteração de item (tabela `HISTORICO`).
+- **Desfazer pedido, 3 camadas:** faturado (mesmo parcial) bloqueia, cancela-se a NF no Fire
+  primeiro; produção iniciada só avisa (depende de uma leitura do produzido no Flow/Apontaê,
+  **não sei se existe**); cancelar é `STATUS='CANCELADO'` (medido na cópia de 23/10: 22 pedidos
+  assim), nunca apagar a linha.
+- **Trava de produto:** ligar. Caminho: sincronizar o catálogo, migrar o de-para para v2,
+  `observando` por alguns dias, depois `ligado`. Falta o seletor mostrar a diferença antes de
+  aceitar (descrição, EAN, grade, unidade, kit ou par), aprender vínculo só por escolha humana
+  confirmada e o desfazer do vínculo (item 2.2 sobe de prioridade).
+- **Teste direto na produção da MM:** o Samuel autorizou (cadastrar, conferir, excluir).
+  Recomendação minha, **aguardando a confirmação dele**: não fazer, porque o SP1 está ligado na
+  MM e leva o pedido de teste e o cancelamento ao Flow de produção. O ensaio equivalente roda
+  na cópia restaurada de 23/10 (`mm_oct23.fdb` no `fire-local`).
 
 **Canário proposto (depois do P0):** só a MM (`.7`), em `db`, com o plano B do item 5 no ar
 (por pedido, ou a lista de clientes liberados). Camila confere os 5 primeiros pedidos lado a lado

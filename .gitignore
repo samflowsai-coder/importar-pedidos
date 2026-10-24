@@ -21,6 +21,7 @@ build/
 input/
 output/
 logs/
+/data/
 # Business documents (root-level only)
 PRD_Automacao_Pedidos.pdf
 
