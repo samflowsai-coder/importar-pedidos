@@ -25,6 +25,7 @@ MAX_QUANTIDADE = 100_000
 MAX_DIGITOS_MES = 9  # cabe no integer do Flow; código de cliente (12 dígitos) não passa
 _DIGITOS = re.compile(r"[0-9]+")
 _SEQ = re.compile(r"[0-9]{1,10}")
+_MAX_SEQ = 2**31 - 1  # PRODUTOS.SEQ é INTEGER no Firebird
 # "KIT C/5", "KIT 6", "PACK C/36", "KIT3": a quantidade que o nome promete.
 _QTD_NOME = re.compile(r"\b(?:KITS?|PACKS?)\s*(?:C\s*/\s*)?(\d{1,3})(?!\d)")
 
@@ -65,7 +66,7 @@ def _seqs_da_variavel(nome: str, erro: type[ValueError]) -> frozenset[str]:
         parte = parte.strip()
         if not parte:
             continue
-        if not _SEQ.fullmatch(parte):
+        if not _SEQ.fullmatch(parte) or int(parte) > _MAX_SEQ:
             raise erro(f"{nome}: '{parte}' não é um código do Fire (SEQ)")
         seqs.add(str(int(parte)))
     return frozenset(seqs)

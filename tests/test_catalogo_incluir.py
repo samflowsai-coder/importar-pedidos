@@ -35,7 +35,7 @@ def test_incluir_guardado_slug_com_hifen(monkeypatch):
     assert cc.incluir_guardado("mm-amer") == frozenset({"1"})
 
 
-@pytest.mark.parametrize("valor", ["3851;3853", "abc", "٣١", "12345678901"])
+@pytest.mark.parametrize("valor", ["3851;3853", "abc", "٣١", "12345678901", "2147483648"])
 def test_incluir_guardado_invalido_falha_fechado_citando_a_variavel(monkeypatch, valor):
     monkeypatch.setenv(VAR, valor)
     with pytest.raises(cc.IncluirGuardadoInvalidoError, match=VAR):
@@ -115,10 +115,7 @@ def test_extract_com_incluir_e_apenas_meias_manda_os_seqs_como_inteiros_em_ordem
 def test_extract_sem_incluir_chama_como_antes_sem_parametros():
     conn = _Conn()
     extract_produtos(conn, apenas_meias=True)
-    assert (
-        conn.cur.chamadas == [(queries.LIST_PRODUTOS_CATALOGO_MEIAS, None)]
-        or conn.cur.chamadas[0][0] == queries.LIST_PRODUTOS_CATALOGO_MEIAS
-    )
+    assert conn.cur.chamadas == [(queries.LIST_PRODUTOS_CATALOGO_MEIAS, None)]
 
 
 def test_extract_sem_apenas_meias_ignora_incluir_porque_ja_vem_tudo():
@@ -137,6 +134,27 @@ class _FakeClient:
     def send_catalogo(self, request):  # pragma: no cover - não deve ser chamado nos erros
         self.sent = request
         raise AssertionError("não devia enviar")
+
+    def close(self):
+        pass
+
+
+class _ClienteQueAceita:
+    """Aceita o lote e guarda o request para o teste inspecionar o que foi enviado."""
+
+    def __init__(self):
+        self.sent = None
+
+    def send_catalogo(self, request):
+        from app.integrations.flowpcp.catalogo_schema import (
+            CatalogoContagens,
+            CatalogoReconciliacaoResponse,
+        )
+
+        self.sent = request
+        return CatalogoReconciliacaoResponse(
+            contagens=CatalogoContagens(fire_only=len(request.itens)), fire_pk_presente="todos"
+        )
 
     def close(self):
         pass
@@ -182,8 +200,13 @@ def _sync(monkeypatch):
 
     monkeypatch.setattr(catalogo_sync, "extract_produtos", extrair)
 
-    def rodar(**kw):
-        cliente = _FakeClient()
+    gravou_copia = visto.setdefault("replace_all", [])
+    monkeypatch.setattr(
+        catalogo_sync.catalogo_fire_repo, "replace_all", lambda *a, **k: gravou_copia.append(1)
+    )
+
+    def rodar(cliente=None, **kw):
+        cliente = cliente or _FakeClient()
         return (
             cliente,
             visto,
@@ -213,20 +236,22 @@ def test_sync_repassa_o_incluir_para_a_extracao(_sync, monkeypatch):
 
 def test_sync_incluir_com_seq_que_nao_existe_no_fire_nao_envia_nada(_sync, monkeypatch):
     monkeypatch.setenv(VAR, "3851,9999")
-    cliente, _, executar = _sync(dry_run=True)
+    cliente, visto, executar = _sync(dry_run=True)
     with pytest.raises(catalogo_sync.IncluirInexistenteError) as e:
         executar()
     assert e.value.seqs == ["9999"]
     assert e.value.variavel == VAR
     assert cliente.sent is None
+    assert visto["replace_all"] == [], "gravou a cópia local antes de recusar"
 
 
 def test_sync_incluir_invalido_nao_envia_nada(_sync, monkeypatch):
     monkeypatch.setenv(VAR, "abc")
-    cliente, _, executar = _sync(dry_run=True)
+    cliente, visto, executar = _sync(dry_run=True)
     with pytest.raises(cc.IncluirGuardadoInvalidoError):
         executar()
     assert cliente.sent is None
+    assert visto["replace_all"] == []
 
 
 def test_sync_sem_incluir_extrai_como_antes(_sync):
@@ -236,3 +261,26 @@ def test_sync_sem_incluir_extrai_como_antes(_sync):
     except AssertionError:
         pass
     assert visto["incluir"] == frozenset()
+
+
+def test_sync_com_incluir_valido_envia_o_incluido_e_grava_a_copia(_sync, monkeypatch):
+    monkeypatch.setenv(VAR, "3851")
+    cliente, visto, executar = _sync(cliente=_ClienteQueAceita(), dry_run=False)
+    executar()
+    assert visto["incluir"] == frozenset({"3851"})
+    assert "3851" in {i.fireProdutoId for i in cliente.sent.itens}
+    assert visto["replace_all"] == [1]
+
+
+def test_sync_incluir_e_excluir_do_mesmo_seq_vale_excluido(_sync, monkeypatch):
+    """Contradição não derruba nada: o SEQ sai do envio (a exclusão manda) e fica o aviso no log."""
+    monkeypatch.setenv(VAR, "3851")
+    monkeypatch.setenv("PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM", "3851")
+    cliente, _, executar = _sync(cliente=_ClienteQueAceita(), dry_run=False)
+    executar()
+    assert "3851" not in {i.fireProdutoId for i in cliente.sent.itens}
+
+
+def test_a_semente_do_recorte_existe_na_consulta():
+    """A guarda de importação em queries.py é o que impede o INCLUIR de virar no-op calado."""
+    assert queries._SEMENTE_DO_RECORTE in queries.LIST_PRODUTOS_CATALOGO_MEIAS

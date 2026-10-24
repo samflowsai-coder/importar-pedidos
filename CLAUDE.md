@@ -191,6 +191,10 @@ PORTAL_FLOWPCP_CATALOGO_EXCLUIR_<SLUG>=  # (slug em maiúsculas, não alfanumér
                                      # empresa (manual e diário) até o cadastro no Fire ser corrigido.
                                      # Valor inválido ou SEQ fora do extract = nenhum envio de catálogo
                                      # da empresa (manual e diário).
+PORTAL_FLOWPCP_CATALOGO_INCLUIR_<SLUG>=  # irmã da anterior (ex.: PORTAL_FLOWPCP_CATALOGO_INCLUIR_MM=3851,3853,3854):
+                                     # SEQs que entram no recorte apenas_meias mesmo sem cumprir a regra, com os
+                                     # componentes deles. Valor inválido ou SEQ que o Fire não devolve = nada é
+                                     # lido, gravado nem enviado (manual e diário).
 
 # Trava de preço — conversa com o Flow (contrato precos v1), na mesma thread do FlowPCP
 PORTAL_FLOWPCP_PRECOS=           # 0 desliga a sync da tabela, o envio de revisões e as decisões de preço; ausente = ligado.

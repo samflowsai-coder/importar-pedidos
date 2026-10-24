@@ -144,11 +144,18 @@ def run_catalogo_sync(
         dtos = extract_produtos(
             fire_conn, apenas_meias=getattr(cfg, "catalogo_apenas_meias", False), incluir=incluir
         )
-        nao_vieram = sorted(incluir - {d.fire_produto_id for d in dtos}, key=int)
+        vieram = {d.fire_produto_id for d in dtos}
+        nao_vieram = sorted(incluir - vieram, key=int)
         if nao_vieram:
             raise IncluirInexistenteError(nao_vieram, catalogo_composicao._var_incluir(slug))
         if incluir:
             logger.info(f"catalogo sync env={slug}: {len(incluir)} SEQs incluídos no recorte")
+            contraditorios = sorted(incluir & catalogo_composicao.excluir_guardado(slug), key=int)
+            if contraditorios:
+                logger.warning(
+                    f"catalogo sync env={slug}: SEQs em INCLUIR e em EXCLUIR ao mesmo tempo "
+                    f"(valem como excluídos do envio): {', '.join(contraditorios)}"
+                )
         ligado = getattr(cfg, "catalogo_push", False) and catalogo_composicao.envio_ligado(slug)
         lida = None
         if ligado:
