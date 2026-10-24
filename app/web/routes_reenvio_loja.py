@@ -17,7 +17,7 @@ from app.erp import queries
 from app.erp.cnpj import cnpj_digits
 from app.erp.connection import FirebirdConnection
 from app.erp.numero_pedido import variantes
-from app.integrations.flowpcp import produto_erp, recebimento_por_loja
+from app.integrations.flowpcp import cliente_matriz, produto_erp, recebimento_por_loja
 from app.integrations.flowpcp.client import FLOWPCP_TARGET_NAME, RECEBIMENTO_PATH
 from app.integrations.flowpcp.intercompany import resolucao_para
 from app.integrations.flowpcp.mapper import build_recebimentos_por_loja
@@ -125,6 +125,12 @@ def reenviar_flow_por_loja(
             status_code=409,
             detail="este import não divide por loja (header com CNPJ, item sem loja de 14 dígitos "
             "ou intercompany resolvido)",
+        )
+    if cliente_matriz.para_pedido(slug, order, resolucao) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="este pedido vai ao Flow como pedido único da matriz "
+            "(PORTAL_FLOWPCP_CLIENTE_MATRIZ_*): não se reenvia por loja",
         )
     if aplicar and not recebimento_por_loja.ligado(slug):
         raise HTTPException(

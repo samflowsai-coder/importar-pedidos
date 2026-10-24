@@ -196,6 +196,10 @@ PORTAL_FLOWPCP_CATALOGO_INCLUIR_<SLUG>=  # irmã da anterior (ex.: PORTAL_FLOWPC
                                      # componentes deles. Valor inválido ou SEQ que o Fire não devolve = nada é
                                      # lido, gravado nem enviado (manual e diário).
 
+PORTAL_FLOWPCP_CLIENTE_MATRIZ_<SLUG>=  # (ex.: PORTAL_FLOWPCP_CLIENTE_MATRIZ_MM=riachuelo:33200056000149:Matriz Riachuelo) rede sem CNPJ no
+                                     # header vai ao Flow como UM pedido de um cliente fixo (`termo:cnpj:nome`, várias com `;`).
+                                     # Ausente = como antes. Ver docs/ai/modules/flowpcp.md §1.
+
 # Trava de preço — conversa com o Flow (contrato precos v1), na mesma thread do FlowPCP
 PORTAL_FLOWPCP_PRECOS=           # 0 desliga a sync da tabela, o envio de revisões e as decisões de preço; ausente = ligado.
                                  # Só age em ambiente com trava ≠ desligado. Tabela a cada 60 s (observando ou ligado);

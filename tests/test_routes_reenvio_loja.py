@@ -286,3 +286,14 @@ def test_fire_codigo_do_import_encerrado_recusa_aplicar(client):
     # o plano (dry-run) continua disponível e avisa
     corpo = _post(client).json()
     assert corpo["fire_codigo_estado"] == "FATURADO"
+
+
+def test_pedido_com_matriz_configurada_nao_reenvia_por_loja(client, monkeypatch):
+    """Saiu como pedido único da matriz: reenviar por loja mandaria N recebimentos extras."""
+    monkeypatch.setenv(
+        "PORTAL_FLOWPCP_CLIENTE_MATRIZ_MM", "riachuelo:33200056000149:Matriz Riachuelo"
+    )
+    r = _post(client, aplicar=True)
+    assert r.status_code == 409
+    assert "matriz" in r.json()["detail"]
+    assert _no_env(client, outbox_repo.list_for_import, "imp-1") == []

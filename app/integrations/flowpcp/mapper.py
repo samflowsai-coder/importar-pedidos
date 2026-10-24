@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from app.erp.cnpj import cnpj_digits
 from app.erp.depara_cliente import ResolucaoCliente
 from app.integrations.flowpcp import recebimento_por_loja
+from app.integrations.flowpcp.cliente_matriz import ClienteMatriz
 from app.integrations.flowpcp.schema import (
     ClienteRecebimento,
     FaturadoPor,
@@ -32,6 +33,7 @@ def build_recebimento_payload(
     order: Order,
     tenant_id: str,
     resolucao: ResolucaoCliente | None = None,
+    cliente_matriz: ClienteMatriz | None = None,
 ) -> RecebimentoRequest:
     h = order.header
     itens = [
@@ -66,6 +68,10 @@ def build_recebimento_payload(
             nome_cliente = resolucao.nome or f"Cliente {resolucao.cnpj}"
         elif resolucao.nome:
             nome_cliente = resolucao.nome
+
+    if cliente_matriz is not None:
+        # Rede sem CNPJ no header: um cliente fixo (ver `cliente_matriz`). `fornecedor` segue a rede.
+        nome_cliente, cnpj_cliente = cliente_matriz.nome, cliente_matriz.cnpj
 
     return RecebimentoRequest(
         externalId=import_id,
