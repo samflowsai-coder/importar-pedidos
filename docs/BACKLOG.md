@@ -446,11 +446,15 @@ para `xlsx` na dúvida.
    original", cancelar, fechar e o botão primário. Plano B por pedido: expor
    `POST /api/imported/{id}/export-xlsx` (a rota já gera a planilha em qualquer modo,
    `server.py`) como ação secundária no preview, **com o envio ao Fire respondendo 409 depois de
-   `xlsx_exported`**: o pedido segue `parsed` depois do XLS e `_send_one_to_fire` só confere
-   `portal_status`, então sem esse 409 a operadora importa o XLS e ainda clica "Cadastrar no
-   Fire" (lança duas vezes). Alternativa: uma lista de clientes liberados para gravar direto
-   (aí o cliente piloto é o da lista e o plano B por pedido não se aplica). Sem nenhum dos dois,
-   o único plano B é o freio do item 1 (voltar a `xlsx` na empresa toda).
+   `xlsx_exported`**: o pedido segue `parsed` depois do XLS e `_send_one_to_fire` não confere
+   `xlsx_exported` (as travas de produto/preço e o `ORDER_ALREADY_EXISTS` do §1.5 também não
+   olham o XLS, e a idempotência do §1.5 só segura em parte: falha aberta), então sem esse 409
+   a operadora importa o XLS e ainda clica "Cadastrar no Fire" (lança duas vezes). Alternativa:
+   uma lista de clientes liberados para gravar direto, **com `send-to-fire` e o batch
+   respondendo 409 para cliente fora da lista (lida no servidor, não só na tela)** e esses
+   clientes mantendo o "Gerar XLS". Aí o cliente piloto é o da lista; pedido ruim de cliente da
+   lista sai tirando o cliente da lista ou pelo freio do item 1. Sem nenhum dos dois, o único
+   plano B é o freio do item 1 (voltar a `xlsx` na empresa toda).
 6. **Trava de produto:** `produto_chave_modo` estava desligado na última checagem (20/10,
    relato da sessão; não reverificado). Sem ela o insert casa produto pela busca antiga e
    erro de produto vira pedido errado no ERP. Ligar `ligado` ao menos no ambiente canário.
