@@ -851,6 +851,28 @@ def test_sync_catalogo_guardado_inexistente_cita_a_variavel(setup, monkeypatch):
     assert "PORTAL_FLOWPCP_CATALOGO_EXCLUIR_MM" in r.json()["detail"]
 
 
+def test_sync_catalogo_incluir_inexistente_e_422_citando_a_variavel(setup, monkeypatch):
+    env = _env_mm_habilitado(setup)
+    import app.integrations.flowpcp.catalogo_sync as cs
+
+    def fake(slug, **kw):
+        raise cs.IncluirInexistenteError(["9999"], "PORTAL_FLOWPCP_CATALOGO_INCLUIR_MM")
+
+    monkeypatch.setattr(cs, "run_catalogo_sync", fake)
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo?apply=true")
+    assert r.status_code == 422
+    assert "PORTAL_FLOWPCP_CATALOGO_INCLUIR_MM" in r.json()["detail"]
+    assert "9999" in r.json()["detail"]
+
+
+def test_sync_catalogo_incluir_invalido_e_422(setup, monkeypatch):
+    env = _env_mm_habilitado(setup)
+    monkeypatch.setenv("PORTAL_FLOWPCP_CATALOGO_INCLUIR_MM", "abc")
+    r = _client().post(f"/api/admin/environments/{env['id']}/flowpcp/sync-catalogo")
+    assert r.status_code == 422
+    assert "PORTAL_FLOWPCP_CATALOGO_INCLUIR_MM" in r.json()["detail"]
+
+
 def test_sync_catalogo_resposta_fora_do_schema_e_502_nao_422(setup, monkeypatch):
     from pydantic import BaseModel, ValidationError
 

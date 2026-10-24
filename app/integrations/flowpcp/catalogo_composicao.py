@@ -25,6 +25,7 @@ MAX_QUANTIDADE = 100_000
 MAX_DIGITOS_MES = 9  # cabe no integer do Flow; código de cliente (12 dígitos) não passa
 _DIGITOS = re.compile(r"[0-9]+")
 _SEQ = re.compile(r"[0-9]{1,10}")
+_MAX_SEQ = 2**31 - 1  # PRODUTOS.SEQ é INTEGER no Firebird
 # "KIT C/5", "KIT 6", "PACK C/36", "KIT3": a quantidade que o nome promete.
 _QTD_NOME = re.compile(r"\b(?:KITS?|PACKS?)\s*(?:C\s*/\s*)?(\d{1,3})(?!\d)")
 
@@ -37,28 +38,53 @@ def envio_ligado(slug: str) -> bool:
     return slug.lower() in {s.strip().lower() for s in bruto.split(",") if s.strip()}
 
 
+def _var_do_slug(prefixo: str, slug: str) -> str:
+    return prefixo + re.sub(r"[^A-Z0-9]", "_", slug.upper())
+
+
 def _var_excluir(slug: str) -> str:
-    return "PORTAL_FLOWPCP_CATALOGO_EXCLUIR_" + re.sub(r"[^A-Z0-9]", "_", slug.upper())
+    return _var_do_slug("PORTAL_FLOWPCP_CATALOGO_EXCLUIR_", slug)
+
+
+def _var_incluir(slug: str) -> str:
+    return _var_do_slug("PORTAL_FLOWPCP_CATALOGO_INCLUIR_", slug)
 
 
 class ExcluirGuardadoInvalidoError(ValueError):
     """Variável PORTAL_FLOWPCP_CATALOGO_EXCLUIR_<SLUG> com valor que não é lista de SEQs."""
 
 
-def excluir_guardado(slug: str) -> frozenset[str]:
-    """SEQs que ficam fora de todo envio do ambiente (manual e diário) até o Fire
-    ser corrigido: em 15/10/2026, os pares duplicados do listrado Sam's. Valor
-    inválido levanta ExcluirGuardadoInvalidoError: melhor não enviar do que enviar o duplicado."""
-    nome = _var_excluir(slug)
+class IncluirGuardadoInvalidoError(ValueError):
+    """Variável PORTAL_FLOWPCP_CATALOGO_INCLUIR_<SLUG> com valor que não é lista de SEQs."""
+
+
+def _seqs_da_variavel(nome: str, erro: type[ValueError]) -> frozenset[str]:
+    """Lista de SEQs separados por vírgula (espaços e zeros à esquerda não contam). Qualquer
+    item que não seja um SEQ levanta `erro`: lista parcial é pior que nenhuma."""
     seqs: set[str] = set()
     for parte in os.environ.get(nome, "").split(","):
         parte = parte.strip()
         if not parte:
             continue
-        if not _SEQ.fullmatch(parte):
-            raise ExcluirGuardadoInvalidoError(f"{nome}: '{parte}' não é um código do Fire (SEQ)")
+        if not _SEQ.fullmatch(parte) or int(parte) > _MAX_SEQ:
+            raise erro(f"{nome}: '{parte}' não é um código do Fire (SEQ)")
         seqs.add(str(int(parte)))
     return frozenset(seqs)
+
+
+def excluir_guardado(slug: str) -> frozenset[str]:
+    """SEQs que ficam fora de todo envio do ambiente (manual e diário) até o Fire ser corrigido:
+    em 15/10/2026, os pares duplicados do listrado Sam's. Valor inválido levanta
+    ExcluirGuardadoInvalidoError: melhor não enviar do que enviar o duplicado."""
+    return _seqs_da_variavel(_var_excluir(slug), ExcluirGuardadoInvalidoError)
+
+
+def incluir_guardado(slug: str) -> frozenset[str]:
+    """SEQs que entram no catálogo do ambiente (manual e diário) mesmo fora do recorte
+    `apenas_meias` (subgrupo MEIAS, vendido nos últimos 12 meses ou componente de kit). Caso de uso
+    (23/10/2026): 3 pares ativos da MM que nenhum kit usava ainda e que 4 composições do Flow
+    esperavam. Valor inválido levanta IncluirGuardadoInvalidoError e nada é enviado."""
+    return _seqs_da_variavel(_var_incluir(slug), IncluirGuardadoInvalidoError)
 
 
 def codigo_mes(tipo: str, ativo: bool, codigo_alternativo: str | None) -> str | None:

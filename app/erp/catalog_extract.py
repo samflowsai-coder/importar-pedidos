@@ -12,6 +12,7 @@ from app.erp.queries import (
     LIST_PRODUTOS_COM_NOTA,
     LIST_PRODUTOS_KIT_COMPOSICAO,
     LIST_PRODUTOS_MARCA,
+    list_produtos_catalogo_meias,
 )
 
 
@@ -88,7 +89,9 @@ def _int_ou_none(v) -> int | None:
         return None
 
 
-def extract_produtos(fire_conn, *, apenas_meias: bool = False) -> list[ProdutoFireDTO]:
+def extract_produtos(
+    fire_conn, *, apenas_meias: bool = False, incluir: frozenset[str] = frozenset()
+) -> list[ProdutoFireDTO]:
     """Lê o subconjunto de identidade de PRODUTOS do Fire. Read-only.
     codigo = fire_produto_id = str(SEQ) (o cliente usa o sequencial).
     tipo: `_tipo` — pack/kit pela composição, pela unidade ou pelo nome.
@@ -96,11 +99,18 @@ def extract_produtos(fire_conn, *, apenas_meias: bool = False) -> list[ProdutoFi
     `apenas_meias=True` (flowpcp_catalogo_apenas_meias) restringe ao que a fábrica
     vende: subgrupo MEIAS + produto em pedido aberto ou dos últimos 12 meses
     + os componentes desses produtos (`LIST_PRODUTOS_CATALOGO_MEIAS`);
-    False = PRODUTOS inteiro."""
-    query = LIST_PRODUTOS_CATALOGO_MEIAS if apenas_meias else LIST_PRODUTOS_CATALOGO
+    False = PRODUTOS inteiro.
+
+    `incluir` (`PORTAL_FLOWPCP_CATALOGO_INCLUIR_<SLUG>`): SEQs que entram no recorte mesmo sem
+    cumprir a regra (com os componentes deles). Sem `apenas_meias` já vem tudo, então não muda nada."""
     cur = fire_conn.cursor()
     try:
-        cur.execute(query)
+        if apenas_meias and incluir:
+            cur.execute(
+                list_produtos_catalogo_meias(len(incluir)), sorted(int(s) for s in incluir)
+            )
+        else:
+            cur.execute(LIST_PRODUTOS_CATALOGO_MEIAS if apenas_meias else LIST_PRODUTOS_CATALOGO)
         rows = cur.fetchall()
     finally:
         cur.close()
