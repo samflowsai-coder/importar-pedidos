@@ -40,8 +40,9 @@ e **276 de 1137** da MM repetem a chave de outro pedido. O código de loja da H2
 todo mês (`AW064` 8x, `AF203` 6x), e a MM digita texto livre (`NASMAR` 12x). Dormente
 porque produção roda `EXPORT_MODE=xlsx`; no dia em que ligar `db`, o segundo pedido
 legítimo da loja vira `FirebirdOrderAlreadyExistsError`.
-**Bloqueia `EXPORT_MODE=db`.** Fix: a chave precisa de mais uma perna (data do pedido
-ou hash do arquivo), ou a idempotência sai do Fire e fica no portal.
+**Bloqueia `EXPORT_MODE=db`.** ~~Fix: a chave precisa de mais uma perna (data do pedido
+ou hash do arquivo), ou a idempotência sai do Fire e fica no portal.~~ Superado pela
+proposta abaixo (impressão digital + bloqueio brando).
 
 Remedido em 24/10 (Fire viva, `ULT_INS_DTHR` de 2026, só leitura, contagens):
 
@@ -415,11 +416,16 @@ para `xlsx` na dúvida.
    "Cadastrar no Fire" também na Nasmar (`.4`, sem cópia validada). Além disso
    `POST /api/config` troca o modo com `require_user` (qualquer logado). E **nada no servidor
    recusa o envio por causa do modo**: `send_to_fire` e `/api/batch/send-to-fire` gravam no Fire
-   mesmo em `xlsx` (`_send_one_to_fire` só repassa o modo; a tela só o relê ao carregar). Logo
-   voltar o modo não segura quem está com a aba aberta, nem quem chamar a API direto. Precisa de:
+   mesmo em `xlsx` (`_send_one_to_fire` só repassa o modo; a tela o relê ao carregar e entre abas
+   do mesmo navegador, não em outras máquinas). Logo voltar o modo não segura quem está com a
+   aba aberta em outro computador, nem quem chamar a API direto. Precisa de:
    `export_mode` por empresa (muda o schema de `environments`: pede o ok do Samuel); `send-to-fire`
    e o batch responderem 409 quando o modo da empresa, lido no servidor, não for `db`/`both`;
-   rota de config só para admin. Sem isso não existe "canário só na MM" nem freio de verdade.
+   rota de config só para admin. Levar o modo para a empresa troca **todos** os leitores do
+   global, não só `_cfg_para_env`: `_get_cfg`/`app_config.load()` (`server.py:229`),
+   `_export_mode_atual` (`:255`, alimenta a trava de produto e `:4429`), `_run_exporters`
+   (`:573`) e `GET`/`POST /api/config` (`:1268`, `:1295`). Sem isso não existe "canário só
+   na MM" nem freio de verdade.
 2. **Idempotência** (§1.5): 28% dos pedidos da MM e 61% dos da Nasmar caem numa chave repetida.
 3. **Paridade com o importador de Excel.** Não existe ferramenta de comparação:
    `tools/erp_medir.py contrato` só conta o contrato do SP1 em pedidos abertos. Falta gravar o
@@ -435,8 +441,12 @@ para `xlsx` na dúvida.
 5. **`both` não serve de canário:** o XLS nasce antes do insert, na mesma `output_dir`
    (`app/web/server.py`, envio ao Fire), e fica lá mesmo se o insert falhar; se a operadora o
    importar, o pedido entra duas vezes. Pasta separada exigiria mudar o código. Por isso o
-   canário roda em `db`, e o "plano B" é o freio do item 1 (voltar a `xlsx`), não um XLS
-   paralelo.
+   canário roda em `db`. Como `db` vale para a empresa inteira, todo pedido da MM (não só o do
+   cliente piloto) perde o "Gerar XLS" na tela, que em `parsed` só oferece cancelar, fechar e
+   o botão primário. Plano B por pedido: expor `POST /api/imported/{id}/export-xlsx` (a rota já
+   gera a planilha em qualquer modo, `server.py`) como ação secundária no preview, ou uma lista
+   de clientes liberados para gravar direto. Sem um dos dois, o único plano B é o freio do
+   item 1 (voltar a `xlsx` na empresa toda).
 6. **Trava de produto:** `produto_chave_modo` estava desligado na última checagem (20/10,
    relato da sessão; não reverificado). Sem ela o insert casa produto pela busca antiga e
    erro de produto vira pedido errado no ERP. Ligar `ligado` ao menos no ambiente canário.
@@ -444,7 +454,8 @@ para `xlsx` na dúvida.
 **P1 (antes de tirar o canário):**
 - PK do cabeçalho: `GET_NEXT_CABVENDAS_CODIGO` é `MAX(CODIGO)+1` (`app/erp/queries.py`) e o
   `_insert_lock` serializa só o portal. Operadora gravando no Fire na mesma janela colide; por
-  ser PK deve falhar limpo (**não testado**). Fix: repetir com PK novo na violação.
+  ser PK deve falhar limpo (**não testado**). Fix: repetir com PK novo na violação, reusando
+  `classificar_erro` (`app/erp/cadastro_fire.py`), que já devolve `"colisao"`.
 - Preço: `PRECO_VENDA` da MM é vazio em 100% dos produtos, então todo item cai em
   `no_price_in_fire` e o envio pede a confirmação manual (já é assim hoje). A trava de preço
   segue `desligado`; ligar é decisão à parte (§4.2).
@@ -456,10 +467,10 @@ para `xlsx` na dúvida.
   até recarregar: avisar a operadora e confiar no 409 do servidor, não na tela. Quem acompanha
   e em que janela.
 
-**Canário proposto (depois do P0):** só a MM (`.7`), em `db`, 1 cliente de baixo risco,
-pedido 100% casado por SEQ. Camila confere os 5 primeiros lado a lado; saída com 20 pedidos sem
-divergência; só então abre para os demais clientes da MM. Nasmar depois, com cópia da `.4`
-validada.
+**Canário proposto (depois do P0):** só a MM (`.7`), em `db`, com o plano B por pedido do item
+5 no ar. Camila confere os 5 primeiros pedidos lado a lado (pedido 100% casado por SEQ, cliente
+de baixo risco, escolhido por quem envia: o modo vale para a empresa toda); saída com 20 pedidos
+sem divergência. Nasmar depois, com cópia da `.4` validada.
 
 **Lote semanal (§3.8):** só liga com o `db` estável nos dois ambientes.
 
