@@ -55,7 +55,8 @@ que já existe). No Fire, `CHECK_ORDER_EXISTS` vira impressão digital (`PEDIDO_
 `CLIENTE` + `VALOR_TOTAL` + `DT_ENTREGA`) e **bloqueia brando**: mostra o pedido que já
 está no Fire e o operador confirma, com audit. Hoje bloqueia duro (409 "Fire rejeitou o
 pedido: ORDER_ALREADY_EXISTS") e, em `db`, a tela só oferece enviar e cancelar; "Verificar no
-Fire" marcaria o pedido legítimo como `found_in_fire` pela mesma chave repetida (§2.10).
+Fire" e a reconciliação periódica (ligada por padrão, `PORTAL_RECONCILE_PERIODICO`) marcariam o
+pedido legítimo como `found_in_fire` pela mesma chave repetida (§2.10).
 
 ---
 
@@ -412,9 +413,13 @@ para `xlsx` na dúvida.
    (`app/config.py`): `_cfg_para_env` (`app/web/server.py`) só troca as pastas, e o
    `config.json` salvo vence a variável de ambiente. Ligar `db`/`both` para a MM liga o
    "Cadastrar no Fire" também na Nasmar (`.4`, sem cópia validada). Além disso
-   `POST /api/config` troca o modo com `require_user` (qualquer logado). Precisa de
-   `export_mode` por empresa (muda o schema de `environments`: pede o ok do Samuel) e a rota
-   de config só para admin. Sem isso não existe "canário só na MM".
+   `POST /api/config` troca o modo com `require_user` (qualquer logado). E **nada no servidor
+   recusa o envio por causa do modo**: `send_to_fire` e `/api/batch/send-to-fire` gravam no Fire
+   mesmo em `xlsx` (`_send_one_to_fire` só repassa o modo; a tela só o relê ao carregar). Logo
+   voltar o modo não segura quem está com a aba aberta, nem quem chamar a API direto. Precisa de:
+   `export_mode` por empresa (muda o schema de `environments`: pede o ok do Samuel); `send-to-fire`
+   e o batch responderem 409 quando o modo da empresa, lido no servidor, não for `db`/`both`;
+   rota de config só para admin. Sem isso não existe "canário só na MM" nem freio de verdade.
 2. **Idempotência** (§1.5): 28% dos pedidos da MM e 61% dos da Nasmar caem numa chave repetida.
 3. **Paridade com o importador de Excel.** Não existe ferramenta de comparação:
    `tools/erp_medir.py contrato` só conta o contrato do SP1 em pedidos abertos. Falta gravar o
@@ -427,7 +432,12 @@ para `xlsx` na dúvida.
    checkout principal e não é versionado, gera `.fbk` inválido).
 4. **Como desfazer** um pedido gravado errado (quem cancela, como, até quando). Sem resposta
    da Camila/Elias/Fire Sistemas não há canário.
-5. **Trava de produto:** `produto_chave_modo` estava desligado na última checagem (20/10,
+5. **`both` não serve de canário:** o XLS nasce antes do insert, na mesma `output_dir`
+   (`app/web/server.py`, envio ao Fire), e fica lá mesmo se o insert falhar; se a operadora o
+   importar, o pedido entra duas vezes. Pasta separada exigiria mudar o código. Por isso o
+   canário roda em `db`, e o "plano B" é o freio do item 1 (voltar a `xlsx`), não um XLS
+   paralelo.
+6. **Trava de produto:** `produto_chave_modo` estava desligado na última checagem (20/10,
    relato da sessão; não reverificado). Sem ela o insert casa produto pela busca antiga e
    erro de produto vira pedido errado no ERP. Ligar `ligado` ao menos no ambiente canário.
 
@@ -435,10 +445,6 @@ para `xlsx` na dúvida.
 - PK do cabeçalho: `GET_NEXT_CABVENDAS_CODIGO` é `MAX(CODIGO)+1` (`app/erp/queries.py`) e o
   `_insert_lock` serializa só o portal. Operadora gravando no Fire na mesma janela colide; por
   ser PK deve falhar limpo (**não testado**). Fix: repetir com PK novo na violação.
-- `both` não é rede de segurança de graça: o XLS nasce antes do insert, na mesma `output_dir`
-  (`app/web/server.py`, envio ao Fire), e fica lá mesmo se o insert falhar. Se a operadora
-  importar esse XLS, o pedido entra duas vezes. No canário o XLS é só backup: pasta separada
-  ou regra explícita de que não vai ao importador.
 - Preço: `PRECO_VENDA` da MM é vazio em 100% dos produtos, então todo item cai em
   `no_price_in_fire` e o envio pede a confirmação manual (já é assim hoje). A trava de preço
   segue `desligado`; ligar é decisão à parte (§4.2).
@@ -446,12 +452,14 @@ para `xlsx` na dúvida.
   pedido do ERP. Provar no canário que o Flow não duplica (o vínculo exato é o que deveria
   impedir).
 - Operação: backup server-side antes do canário; desligar = trocar o modo (hoje no
-  `config.json`/tela de config, global; por empresa depois do P0.1); quem acompanha e em que
-  janela.
+  `config.json`/tela de config, global; por empresa depois do P0.1). Aba aberta mantém o botão
+  até recarregar: avisar a operadora e confiar no 409 do servidor, não na tela. Quem acompanha
+  e em que janela.
 
-**Canário proposto (depois do P0.1):** só a MM (`.7`), 1 cliente de baixo risco, pedido 100%
-casado por SEQ, XLS só como backup. Camila confere os 5 primeiros lado a lado; saída com 20
-pedidos sem divergência; só então `db`. Nasmar depois, com cópia da `.4` validada.
+**Canário proposto (depois do P0):** só a MM (`.7`), em `db`, 1 cliente de baixo risco,
+pedido 100% casado por SEQ. Camila confere os 5 primeiros lado a lado; saída com 20 pedidos sem
+divergência; só então abre para os demais clientes da MM. Nasmar depois, com cópia da `.4`
+validada.
 
 **Lote semanal (§3.8):** só liga com o `db` estável nos dois ambientes.
 
