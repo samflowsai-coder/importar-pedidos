@@ -70,7 +70,7 @@ def para_pedido(
         (
             c
             for c in configuradas(slug)
-            if re.search(rf"(?<![a-z0-9]){re.escape(_dobrar(c.termo))}(?![a-z0-9])", nome)
+            if re.search(rf"(?<![^\W_]){re.escape(_dobrar(c.termo))}(?![^\W_])", nome)
         ),
         None,
     )

@@ -321,3 +321,9 @@ def test_reexport_depois_de_ligar_a_divisao_por_loja_tambem_nao_duplica(env, mon
 def test_termo_com_borda_nao_alfanumerica_ou_sublinhado_casa(monkeypatch, termo, nome):
     monkeypatch.setenv(VAR, f"{termo}:33200056000149:Matriz X")
     assert cm.para_pedido("mm", _order(nome)) is not None
+
+
+def test_letra_unicode_que_o_dobrar_nao_converte_nao_vira_separador(monkeypatch):
+    """`ø` não decompõe no NFKD: continua letra, então o termo curto não casa no meio da palavra."""
+    monkeypatch.setenv(VAR, "m:33200056000149:Matriz M")
+    assert cm.para_pedido("mm", _order("Møveis Alfa")) is None
