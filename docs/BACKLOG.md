@@ -43,6 +43,19 @@ legítimo da loja vira `FirebirdOrderAlreadyExistsError`.
 **Bloqueia `EXPORT_MODE=db`.** Fix: a chave precisa de mais uma perna (data do pedido
 ou hash do arquivo), ou a idempotência sai do Fire e fica no portal.
 
+Remedido em 24/10 (Fire viva, `ULT_INS_DTHR` de 2026, só leitura, contagens):
+
+| | pedidos c/ `PEDIDO_CLIENTE` | chaves repetidas | pedidos dentro delas | `VALOR_TOTAL`+`DT_ENTREGA` separa todos | não separa |
+|---|---:|---:|---:|---:|---:|
+| `.7` MM | 1.258 | 97 | 347 (28%) | 80 | 17 |
+| `.4` Nasmar | 345 | 55 | 209 (61%) | 53 | 2 |
+
+**Proposta (aguarda o Samuel):** "mesmo envio" fica no portal (`portal_status = sent_to_fire`,
+que já existe). No Fire, `CHECK_ORDER_EXISTS` vira impressão digital (`PEDIDO_CLIENTE` +
+`CLIENTE` + `VALOR_TOTAL` + `DT_ENTREGA`) e **bloqueia brando**: mostra o pedido que já
+está no Fire e o operador confirma, com audit. Hoje bloqueia duro e o operador não tem saída
+dentro do portal.
+
 ---
 
 ## 2. Dívida e melhorias
@@ -375,11 +388,53 @@ espelho, recusa à toa (lado seguro). Corrigir com `planilha=... and not integra
 
 ## 4. Decisões pendentes (aguardam o Samuel)
 
-### 4.1 Insert direto no Fire para pedidos 100% match
-Código do `FirebirdExporter` já existe; é ligar com trava. Risco central: escrever na
-produção do ERP é irreversível, ao contrário do XLS. Trava proposta: opt-in + canário +
-modo `both` (XLS de backup) + cair para o XLS na dúvida. **Exige corrigir o §2.1 antes.**
-Próximo passo se aprovado: brainstorm → spec.
+### 4.1 Gravar direto no Fire (`EXPORT_MODE=db`) — **Samuel quer virar nos próximos dias (24/10)**
+O botão "Cadastrar no Fire" (`/api/imported/{id}/send-to-fire`) e o `FirebirdExporter` já
+existem; `EXPORT_MODE=db` só troca o botão primário de "Gerar XLS" para ele. O §2.1 (de-para
+no insert) já está resolvido. Risco central: escrever na produção do ERP não se desfaz como
+um XLS. Trava: canário + modo `both` (XLS de backup) + voltar para `xlsx` na dúvida.
+
+**Medido na Fire viva em 24/10 (só leitura):**
+- **Zero** pedidos com `ULT_INS_USER = 'IMPORTADOR'` em 2026, nos dois bancos (dados até
+  23/10). O insert direto **nunca rodou em produção**; quem grava são as operadoras pelo
+  importador de Excel. Volume: `.7` ~120–220 pedidos/mês (ago–out), `.4` ~25–55.
+- CNPJ de cliente com mais de um cadastro: **0** nos dois. O `FIND_CLIENT_BY_CNPJ`
+  (`ROWS 1`, sem `ORDER BY`) não é risco hoje.
+- Ganho de virar: o vínculo item↔ERP passa a ser exato (`erp_item_vinculo` gravado no
+  INSERT); no caminho XLSX é por posição e "nunca chuta" (`app/erp_eventos/vinculo.py`).
+
+**P0 (sem isso não grava em produção):**
+1. **Idempotência** (§1.5): 28% dos pedidos da MM e 61% dos da Nasmar caem numa chave repetida.
+2. **PK do cabeçalho:** `GET_NEXT_CABVENDAS_CODIGO` é `MAX(CODIGO)+1` sem gerador
+   (`app/erp/queries.py`). O `_insert_lock` serializa só o portal; a operadora gravando no
+   Fire na mesma janela colide. Esperado falhar por PK, não duplicar em silêncio (**não
+   testado**). Fix: repetir com PK novo na violação, ou usar gerador se o Fire tiver um.
+3. **Paridade com o importador de Excel:** gravar o mesmo pedido real pelo portal numa cópia
+   fresca e comparar campo a campo (`CAB_VENDAS` e `CORPO_VENDAS`) com o que a operadora
+   gerou; `tools/erp_medir.py contrato` mede o contrato por coluna. **Não existe cópia da
+   `.4`** (Nasmar, `CODFIGFISCAL` 5); o único ensaio em cópia foi a `.7` de abril. Cópia nova
+   por backup server-side (o modo streaming do `fire_copia_local.sh` gera `.fbk` inválido).
+4. **Como desfazer** um pedido gravado errado (quem cancela, como, até quando). Sem resposta
+   da Camila/Elias/Fire Sistemas não há canário.
+5. **Trava de produto:** `produto_chave_modo` estava desligado na última checagem (20/10,
+   relato da sessão; não reverificado). Sem ela o insert casa produto pela busca antiga e
+   erro de produto vira pedido errado no ERP. Ligar `ligado` ao menos no ambiente canário.
+
+**P1 (antes de tirar o canário):**
+- Preço: `PRECO_VENDA` da MM é vazio em 100% dos produtos, então todo item cai em
+  `no_price_in_fire` e o envio pede a confirmação manual (já é assim hoje). A trava de preço
+  segue `desligado`; ligar é decisão à parte (§4.2).
+- Flow: o envio faz `push_new_order` (`externalId = import_id`) e a vigia do SP1 também lê o
+  pedido do ERP. Provar no canário que o Flow não duplica (o vínculo exato é o que deveria
+  impedir).
+- Operação: backup server-side antes do canário; desligar = `EXPORT_MODE=xlsx` no ambiente,
+  sem deploy; quem acompanha e em que janela.
+
+**Canário proposto:** só a MM (`.7`), 1 cliente de baixo risco, pedido 100% casado por SEQ,
+modo `both`. Camila confere os 5 primeiros lado a lado; saída com 20 pedidos sem divergência;
+só então `db`. Nasmar depois, com cópia da `.4` validada.
+
+**Lote semanal (§3.8):** só liga com o `db` estável nos dois ambientes.
 
 ### 4.2 Regra mais forte de validação de preço por cliente — **coberto pela trava de preço por rede (branch `feat/tabela-preco-por-rede`, 2026-10-17)**
 > Implementada em `docs/ai/modules/erp.md` ("Trava de preço por rede"): tabela por rede,
