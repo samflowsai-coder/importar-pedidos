@@ -65,6 +65,7 @@ Variáveis de ambiente do processo (todas **ausentes = desligado**; `slug` em mi
 | `PORTAL_FLOWPCP_CADASTRO_VOLTA_INATIVAR` | `mm` (lista por vírgula) | portão da ação `inativar` (só em `criar_e_atualizar`); sem ele o item `inativar` é pulado com WARNING |
 | `PORTAL_FLOWPCP_CATALOGO_MARCAS` | `mm` (lista por vírgula) | catálogo manda `marcasErp` (PRODUTOS_MARCA filtrada); exige `marcas.v1` na resposta do Flow |
 | `PORTAL_FLOWPCP_RECEBIMENTO_POR_LOJA` | `mm` (lista por vírgula) | pedido sem CNPJ no header (Riachuelo, NBA) sai como UM `/recebimento` por loja (ver §1). **Só liga depois que o Flow avisar que lê `itens[].indiceOriginal`**: sem isso as lojas seguintes colidem no índice local e somem em silêncio |
+| `PORTAL_FLOWPCP_CATALOGO_INCLUIR_<SLUG>` | SEQs separados por vírgula (ex.: `PORTAL_FLOWPCP_CATALOGO_INCLUIR_MM=3851,3853,3854`) | irmã de `..._EXCLUIR_<SLUG>`: acrescenta esses produtos (e os componentes deles) ao recorte `flowpcp_catalogo_apenas_meias`, em toda rodada (manual e diária). Valor inválido ou SEQ que o Fire não devolve = nada é lido, gravado nem enviado (422 na rota). Ver §4 |
 | `PORTAL_FLOWPCP_CATALOGO_NOTA` | `mm` (lista por vírgula) | catálogo manda `temNotaFiscal` por produto (NOTAPROD); exige `produtos.nota.v1` na resposta |
 
 Rotas admin: `PUT /api/admin/environments/{env_id}/flowpcp`,
@@ -231,6 +232,17 @@ Travas do Flow (`travaRemocaoAtiva`/`travaSubstituicaoAtiva`) liberadas só pela
 (`confirmar_remocao=1`, `confirmar_substituicao=1`, exigem `apply=true`); o diário nunca manda.
 A tela do ambiente mostra os blocos Portal/Flow/Apontaê do relatório e, depois de um apply
 com trava ativa, o botão "Gravar liberando a trava".
+**Inclusão guardada** (`PORTAL_FLOWPCP_CATALOGO_INCLUIR_<SLUG>`, irmã da exclusão): SEQs que entram no
+recorte `apenas_meias` mesmo sem cumprir a regra (subgrupo MEIAS, pedido/venda de 12 meses ou componente de
+kit), junto com os componentes deles (entram como sementes na CTE: `queries.list_produtos_catalogo_meias(n)`,
+`catalog_extract.extract_produtos(..., incluir=...)`). Mesma sintaxe e mesma falha fechada: valor que não é lista
+de SEQs (`IncluirGuardadoInvalidoError`) ou SEQ que o Fire não devolve (`IncluirInexistenteError`) = nada é lido,
+gravado nem enviado, 422 na rota com o nome da variável. Sem `apenas_meias` já vem o PRODUTOS inteiro e a
+variável só valida a existência. **Caso de uso (23/10/2026):** 3851, 3853 e 3854 (pares Act Vitta ativos,
+cadastrados em 16/07) ficavam fora porque nenhum kit os usava ainda; 4 composições do Flow esperavam por eles
+(o ovo e a galinha: a composição só chega ao Fire pela volta, que exige o componente no catálogo do Flow). Depois de
+incluídos e promovidos, a variável pode ficar: os 3 viram componentes e o recorte os alcança sozinho.
+
 **Exclusão guardada:** `PORTAL_FLOWPCP_CATALOGO_EXCLUIR_<SLUG>` sai de todo envio (manual
 e diário), com a composição ligada ou não; valor inválido não envia nada. SEQ guardado que
 não existe mais no extract = 422 apontando a variável.

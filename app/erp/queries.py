@@ -429,6 +429,25 @@ LIST_PRODUTOS_CATALOGO_MEIAS = """
     ORDER BY P.SEQ
 """
 
+_SEMENTE_DO_RECORTE = "        SELECT P.SEQ, 0 FROM PRODUTOS P\n        WHERE P.CODSUBGRUPO IN ("
+
+
+def list_produtos_catalogo_meias(n_incluir: int = 0) -> str:
+    """`LIST_PRODUTOS_CATALOGO_MEIAS` com `n_incluir` SEQs forçados (parâmetros `?`, inteiros) como
+    sementes do recorte (`PORTAL_FLOWPCP_CATALOGO_INCLUIR_<SLUG>`): entram eles e, pela recursão,
+    os componentes deles. Só acrescenta uma semente; o resto da consulta não muda."""
+    if n_incluir <= 0:
+        return LIST_PRODUTOS_CATALOGO_MEIAS
+    marcas = ", ".join("?" for _ in range(n_incluir))
+    return LIST_PRODUTOS_CATALOGO_MEIAS.replace(
+        _SEMENTE_DO_RECORTE,
+        "        SELECT P.SEQ, 0 FROM PRODUTOS P\n"
+        f"        WHERE P.SEQ IN ({marcas})\n"
+        "           OR P.CODSUBGRUPO IN (",
+        1,
+    )
+
+
 # Composição (PRODUTOS_KIT) para o catálogo enviado ao Flow: pai, filho e
 # quantidade, um nível (o Flow explode recursivo). Sem filtro: são centenas de linhas na
 # MM, e quem decide o que vai é catalogo_composicao. ORDER BY CODIGO mantém a

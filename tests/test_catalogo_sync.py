@@ -154,7 +154,7 @@ def _spy_extract(monkeypatch, dtos):
     (um rename/typo do campo viraria no-op → vazaria o catálogo inteiro)."""
     captura: dict = {}
 
-    def fake(conn, *, apenas_meias=False):
+    def fake(conn, *, apenas_meias=False, incluir=frozenset()):
         captura["apenas_meias"] = apenas_meias
         return dtos
 

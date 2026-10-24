@@ -457,11 +457,15 @@ def sync_catalogo_flowpcp(
 
     import httpx
 
-    from app.integrations.flowpcp.catalogo_composicao import ExcluirGuardadoInvalidoError
+    from app.integrations.flowpcp.catalogo_composicao import (
+        ExcluirGuardadoInvalidoError,
+        IncluirGuardadoInvalidoError,
+    )
     from app.integrations.flowpcp.catalogo_sync import (
         CatalogoLocalResult,
         ConfirmacaoSemApplyError,
         ForaDoEnvioInexistenteError,
+        IncluirInexistenteError,
         run_catalogo_sync,
     )
     from app.integrations.flowpcp.client import (
@@ -494,7 +498,13 @@ def sync_catalogo_flowpcp(
             409,
             "O Flow já está gravando um catálogo deste ambiente. Espere terminar e simule de novo.",
         ) from exc
-    except (ExcluirGuardadoInvalidoError, ConfirmacaoSemApplyError) as exc:
+    except IncluirInexistenteError as exc:
+        raise HTTPException(422, f"Nada foi enviado ao Flow: {exc}") from exc
+    except (
+        ExcluirGuardadoInvalidoError,
+        IncluirGuardadoInvalidoError,
+        ConfirmacaoSemApplyError,
+    ) as exc:
         raise HTTPException(422, str(exc)) from exc
     except httpx.TimeoutException as exc:
         if isinstance(exc, httpx.ConnectTimeout | httpx.PoolTimeout):

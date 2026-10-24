@@ -45,6 +45,18 @@ class ForaDoEnvioInexistenteError(ValueError):
         super().__init__(f"fora do envio, mas não estão no catálogo extraído: {', '.join(seqs)}")
 
 
+class IncluirInexistenteError(ValueError):
+    """SEQ de `PORTAL_FLOWPCP_CATALOGO_INCLUIR_<SLUG>` que o Fire não devolveu. Falha fechada: nada é
+    gravado nem enviado, para não achar que o produto foi incluído quando ele nem existe."""
+
+    def __init__(self, seqs: list[str], variavel: str):
+        self.seqs = seqs
+        self.variavel = variavel
+        super().__init__(
+            f"{variavel}: SEQ que o Fire não devolveu no catálogo (não existe?): {', '.join(seqs)}"
+        )
+
+
 @dataclass(frozen=True)
 class CatalogoLocalResult:
     """Resultado do sync quando o envio ao Flow está DESLIGADO
@@ -91,6 +103,8 @@ def run_catalogo_sync(
     guardada `PORTAL_FLOWPCP_CATALOGO_EXCLUIR_<SLUG>` vale em toda rodada, manual e
     diária. SEQ pedido que não está no catálogo extraído levanta `ForaDoEnvioInexistenteError`
     antes de qualquer envio.
+    `PORTAL_FLOWPCP_CATALOGO_INCLUIR_<SLUG>` (SEQs) acrescenta produtos ao recorte `apenas_meias` em
+    toda rodada; SEQ que o Fire não devolve levanta `IncluirInexistenteError` antes de qualquer gravação.
     Composição (`PORTAL_FLOWPCP_CATALOGO_COMPOSICAO` com o slug): lê PRODUTOS_KIT
     e manda `componentes`/`codigoMes` pelas regras de `catalogo_composicao`; o
     relatório ganha `composicao_portal`. `PORTAL_FLOWPCP_CATALOGO_EXCLUIR_<SLUG>`
@@ -117,6 +131,8 @@ def run_catalogo_sync(
         return None
 
     extraido_em = now_iso or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Valor inválido levanta antes de abrir o Fire: nada é lido, gravado nem enviado.
+    incluir = catalogo_composicao.incluir_guardado(slug)
 
     if _fire_conn is not None:
         fire_ctx = nullcontext(_fire_conn)
@@ -126,8 +142,13 @@ def run_catalogo_sync(
 
     with fire_ctx as fire_conn:
         dtos = extract_produtos(
-            fire_conn, apenas_meias=getattr(cfg, "catalogo_apenas_meias", False)
+            fire_conn, apenas_meias=getattr(cfg, "catalogo_apenas_meias", False), incluir=incluir
         )
+        nao_vieram = sorted(incluir - {d.fire_produto_id for d in dtos}, key=int)
+        if nao_vieram:
+            raise IncluirInexistenteError(nao_vieram, catalogo_composicao._var_incluir(slug))
+        if incluir:
+            logger.info(f"catalogo sync env={slug}: {len(incluir)} SEQs incluídos no recorte")
         ligado = getattr(cfg, "catalogo_push", False) and catalogo_composicao.envio_ligado(slug)
         lida = None
         if ligado:
