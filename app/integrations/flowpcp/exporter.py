@@ -33,12 +33,7 @@ class FlowPCPExporter:
         )
         if self._formato_diferente_ja_enfileirado(import_id, por_loja=por_loja):
             return True
-        if (
-            matriz is None
-            and slug
-            and recebimento_por_loja.ligado(slug)
-            and recebimento_por_loja.deve_dividir(order, resolucao)
-        ):
+        if por_loja:
             return self._enqueue_por_loja(order, import_id=import_id, resolucao=resolucao)
         req = build_recebimento_payload(
             import_id=import_id,
@@ -76,7 +71,7 @@ class FlowPCPExporter:
         if (por_loja and ja_unico) or (not por_loja and ja_por_loja):
             logger.warning(
                 f"flowpcp: import={import_id} já foi enfileirado no outro formato "
-                f"({'único' if ja_unico else 'por loja'}); nada novo enfileirado"
+                f"({'por loja' if ja_por_loja else 'único'}); nada novo enfileirado"
             )
             return True
         return False

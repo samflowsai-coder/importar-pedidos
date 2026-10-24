@@ -312,3 +312,12 @@ def test_reexport_depois_de_ligar_a_divisao_por_loja_tambem_nao_duplica(env, mon
     assert [linha.idempotency_key for linha in outbox_repo.list_for_import("imp-1")] == [
         "send-imp-1"
     ]
+
+
+@pytest.mark.parametrize(
+    ("termo", "nome"),
+    [("(rj)", "LOJA (RJ) LTDA"), ("c&a", "C&A MODAS"), ("riachuelo", "RIACHUELO_SP")],
+)
+def test_termo_com_borda_nao_alfanumerica_ou_sublinhado_casa(monkeypatch, termo, nome):
+    monkeypatch.setenv(VAR, f"{termo}:33200056000149:Matriz X")
+    assert cm.para_pedido("mm", _order(nome)) is not None

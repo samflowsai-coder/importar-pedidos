@@ -67,6 +67,10 @@ def para_pedido(
         return None
     nome = _dobrar(order.header.customer_name or "")
     return next(
-        (c for c in configuradas(slug) if re.search(rf"\b{re.escape(_dobrar(c.termo))}\b", nome)),
+        (
+            c
+            for c in configuradas(slug)
+            if re.search(rf"(?<![a-z0-9]){re.escape(_dobrar(c.termo))}(?![a-z0-9])", nome)
+        ),
         None,
     )
