@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.erp.depara_cliente import ResolucaoCliente
-from app.integrations.flowpcp import recebimento_por_loja
+from app.integrations.flowpcp import cliente_matriz, recebimento_por_loja
 from app.integrations.flowpcp.client import FLOWPCP_TARGET_NAME, RECEBIMENTO_PATH
 from app.integrations.flowpcp.mapper import build_recebimento_payload, build_recebimentos_por_loja
 from app.models.order import Order
@@ -24,14 +24,20 @@ class FlowPCPExporter:
         resolucao: ResolucaoCliente | None = None,
         slug: str | None = None,
     ) -> bool:
+        matriz = cliente_matriz.para_pedido(slug, order, resolucao)
         if (
-            slug
+            matriz is None
+            and slug
             and recebimento_por_loja.ligado(slug)
             and recebimento_por_loja.deve_dividir(order, resolucao)
         ):
             return self._enqueue_por_loja(order, import_id=import_id, resolucao=resolucao)
         req = build_recebimento_payload(
-            import_id=import_id, order=order, tenant_id=self._tenant_id, resolucao=resolucao
+            import_id=import_id,
+            order=order,
+            tenant_id=self._tenant_id,
+            resolucao=resolucao,
+            cliente_matriz=matriz,
         )
         try:
             outbox_repo.enqueue(
