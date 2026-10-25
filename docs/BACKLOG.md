@@ -547,9 +547,9 @@ Diferenças reais, medidas contra os 753 pedidos de operadora desde 01/06:
   `DT_PRODUCAO` (preenchida depois, à mão). Falta repetir com a data de entrega do cabeçalho.
 - **Como o Fire registra alteração (para a trilha de atualizar pedido):** o `HISTORICO` loga um
   evento por mudança (`Inclusão`, `Alteração`, `Alt Cód Item: <item>`, `Exc de Item`,
-  `Exclusão`); desde 01/06 há 1.467 `Exc de Item`. Remover item é apagar a linha de
-  `CORPO_VENDAS`, com evento. Pedido cancelado fica como `STATUS='CANCELADO'` (22 na cópia, todos
-  anteriores a 2026).
+  `Exclusão`); desde 01/06 há 1.467 `Exc de Item`. Que remover item apaga a linha de
+  `CORPO_VENDAS` é inferência pelo nome do evento (não conferido). Pedido cancelado fica como
+  `STATUS='CANCELADO'` (22 na cópia, de 03/2020 a 21/10/2025; nenhum em 2026).
 - **Fora do ensaio:** a Nasmar (`.4`), pedidos não-kit, escolha por EAN/código (só SEQ), e o
   cancelamento (`STATUS`/`HISTORICO`).
 
