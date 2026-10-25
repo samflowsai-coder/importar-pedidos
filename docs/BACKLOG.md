@@ -469,7 +469,7 @@ para `xlsx` na dúvida.
    plano B é o freio do item 1 (voltar a `xlsx` na empresa toda).
 6. **Trava de produto:** `produto_chave_modo` estava desligado na última checagem (20/10,
    relato da sessão; não reverificado). Sem ela o insert casa produto pela busca antiga e
-   erro de produto vira pedido errado no ERP. Ligar `ligado` ao menos no ambiente canário.
+   erro de produto vira pedido errado no ERP. Ligar pelo caminho das "Decisões do Samuel" abaixo (`observando` → `ligado`), nas duas empresas.
 
 **P1 (antes de tirar o canário):**
 - PK do cabeçalho: `GET_NEXT_CABVENDAS_CODIGO` é `MAX(CODIGO)+1` (`app/erp/queries.py`) e o
@@ -488,7 +488,7 @@ para `xlsx` na dúvida.
   confiar no 409 do servidor, não na tela. Quem acompanha
   e em que janela.
 
-**Decisões do Samuel em 24/10 (tarde) — onde conflitam com o P0 acima, valem estas:**
+**Decisões do Samuel em 24/10 (tarde; o item do teste em produção é de 25/10) — onde conflitam com o P0 acima, valem estas:**
 - **Modo global, sem parâmetro por empresa** (substitui o P0.1 "modo por empresa"). Com `db`
   ligado e o lote semanal, não haverá XLS. Consequência: a Nasmar (`.4`) entra junto, então o
   **backup server-side da `.4` e a paridade nela viram pré-requisito da virada**, não etapa
@@ -497,7 +497,7 @@ para `xlsx` na dúvida.
 - **Sem plano B** (substitui o P0.5): saem o botão secundário de XLS e a lista de clientes
   liberados. Fica o parâmetro BD/XLS nas configurações, pedido já exportado em XLS não grava
   direto sem confirmação, e falha do Fire (fora do ar, lock) vira erro claro, nunca pedido
-  meio-gravado. O parágrafo "Canário proposto" abaixo precisa ser reescrito sem o plano B.
+  meio-gravado. (O Canário foi reescrito abaixo.)
 - **Empresa certa sem o operador selecionar:** a gravação depende 100% do roteamento
   (documento > histórico > memória + regra de faturamento MM × Nasmar). Sem decisão ou ambíguo,
   o pedido fica retido, nunca grava por padrão. Proposta do assistente para o canário: o sistema sugere
@@ -524,7 +524,29 @@ para `xlsx` na dúvida.
   produção ("pode fazer, sem problemas"). Só roda com acesso à `.7` (exige VPN) e depois do
   ensaio equivalente na cópia restaurada de 23/10 (`mm_oct23.fdb` no `fire-local`).
 
-**Canário (reescrito em 24/10, com as decisões acima):** `db` com modo global, então MM (`.7`) e
+**Ensaio de paridade em cópia (25/10; P0.3 parcial, só a MM):** 5 pedidos de operadora de
+set/out (todos kits; `CAMILA`) foram remontados a partir do próprio Fire e regravados pelo
+`FirebirdExporter` (itens pelo SEQ) na cópia local de 23/10 (`mm_oct23.fdb`), com número de
+pedido de teste. Gravou 5/5, mesmos itens, QTD, preço, total por item e `ICMS_BASE`.
+Diferenças reais, medidas contra os 753 pedidos de operadora desde 01/06:
+- **`COND_PRAZO` e `PRAZO_MEDIO`:** a operadora preenche em 707/753 (94%); o portal grava NULL.
+  Condição de pagamento do pedido não vem. Origem do valor (cadastro do cliente?) a descobrir.
+- **`OBS`:** preenchida em 737/753 (98%) com número do pedido e nota do cliente
+  (ex.: `SN-89B18EEE` + `NASMAR 1304`); o portal grava NULL em pedido comum.
+- **`REDUCAO` do item:** 563 de 6.877 linhas têm 0 (o resto 61,11); o portal crava 61,11 do
+  perfil em todas (4 das 5 amostras divergiram, mesmo `ICMS_BASE`). Efeito fiscal: **pergunta
+  para o Elias** antes de qualquer gravação.
+- **`VALOR_TOTAL`/`TOTAL_PRODUTO`:** 1/5 diferiu 1 centavo (soma 2569,1589: Fire trunca para
+  2569,15, o portal arredonda para 2569,16). Com preço de espelho (÷ fator) a soma tem dízima, e
+  a impressão digital do §1.5 (que usa `VALOR_TOTAL`) falharia aberta nesse caso.
+- **`DESC_CLASS_FINAN`:** a operadora deixa vazio em 36% dos pedidos; o portal sempre preenche.
+- **Não é divergência do portal (artefato do ensaio):** `DT_ENTREGA`/`DT_BASE_FAT` (o ensaio
+  remontou a data a partir de `DT_ENTREGA_ITEM`, que a operadora nunca preenche: 0/6.877) e
+  `DT_PRODUCAO` (preenchida depois, à mão). Falta repetir com a data de entrega do cabeçalho.
+- **Fora do ensaio:** a Nasmar (`.4`), pedidos não-kit, escolha por EAN/código (só SEQ), e o
+  cancelamento (`STATUS`/`HISTORICO`).
+
+**Canário (reescrito em 25/10, com as decisões acima):** `db` com modo global, então MM (`.7`) e
 Nasmar (`.4`) entram juntas e não há plano B por pedido nem lista de clientes. Pré-requisitos: o
 roteamento provado (ou a empresa sugerida com confirmação por clique), a paridade provada nas
 **duas** empresas e o 409 no servidor. Camila confere os primeiros pedidos lado a lado; o critério
