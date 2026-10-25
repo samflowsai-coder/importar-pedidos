@@ -530,7 +530,8 @@ set/out (todos kits; `CAMILA`) foram remontados a partir do próprio Fire e regr
 pedido de teste. Gravou 5/5, mesmos itens, QTD, preço, total por item e `ICMS_BASE`.
 Diferenças reais, medidas contra os 753 pedidos de operadora desde 01/06:
 - **`COND_PRAZO` e `PRAZO_MEDIO`:** a operadora preenche em 707/753 (94%); o portal grava NULL.
-  Condição de pagamento do pedido não vem. Origem do valor (cadastro do cliente?) a descobrir.
+  Condição de pagamento do pedido não vem. Origem do valor (cadastro do cliente?) a descobrir;
+  não preencher sem confirmar a origem com o fiscal.
 - **`OBS`:** preenchida em 737/753 (98%) com número do pedido e nota do cliente
   (ex.: `SN-89B18EEE` + `NASMAR 1304`); o portal grava NULL em pedido comum.
 - **`REDUCAO` do item:** 563 de 6.877 linhas não têm 61,11 (0 ou vazio; as outras 6.314 têm); o
@@ -538,12 +539,17 @@ Diferenças reais, medidas contra os 753 pedidos de operadora desde 01/06:
   pedidos) divergiram, com o mesmo `ICMS_BASE`. Efeito fiscal: **pergunta
   para o Elias** antes de qualquer gravação.
 - **`VALOR_TOTAL`/`TOTAL_PRODUTO`:** 1/5 diferiu 1 centavo (soma 2569,1589: Fire trunca para
-  2569,15, o portal arredonda para 2569,16). Com preço de espelho (÷ fator) a soma tem dízima, e
+  2569,15, o portal arredonda para 2569,16). Com preço de 4 casas (o do espelho inclusive) a soma tem fração além de 2 casas, e
   a impressão digital do §1.5 (que usa `VALOR_TOTAL`) falharia aberta nesse caso.
-- **`DESC_CLASS_FINAN`:** a operadora deixa vazio em 36% dos pedidos; o portal sempre preenche.
+- **`DESC_CLASS_FINAN`:** a operadora deixa vazio em 274/753 (36%) dos pedidos; o portal sempre preenche.
 - **Não é divergência do portal (artefato do ensaio):** `DT_ENTREGA`/`DT_BASE_FAT` (o ensaio
   remontou a data a partir de `DT_ENTREGA_ITEM`, que a operadora nunca preenche: 0/6.877) e
   `DT_PRODUCAO` (preenchida depois, à mão). Falta repetir com a data de entrega do cabeçalho.
+- **Como o Fire registra alteração (para a trilha de atualizar pedido):** o `HISTORICO` loga um
+  evento por mudança (`Inclusão`, `Alteração`, `Alt Cód Item: <item>`, `Exc de Item`,
+  `Exclusão`); desde 01/06 há 1.467 `Exc de Item`. Remover item é apagar a linha de
+  `CORPO_VENDAS`, com evento. Pedido cancelado fica como `STATUS='CANCELADO'` (22 na cópia, todos
+  anteriores a 2026).
 - **Fora do ensaio:** a Nasmar (`.4`), pedidos não-kit, escolha por EAN/código (só SEQ), e o
   cancelamento (`STATUS`/`HISTORICO`).
 
