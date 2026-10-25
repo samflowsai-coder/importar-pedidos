@@ -398,6 +398,7 @@ provada): o padrão está fixo na tela de faturamento do programa. O portal não
 export não tem coluna de espécie e a linha da nota só nasce na emissão, dentro do Fire).
 A MM abre o chamado com a Fire Sistemas; o Samuel acompanha. **Não editar o banco** para
 forçar "CAIXA". Em 2026 já predomina "CAIXA" (.7: 1.092; .4: 350).
+
 ---
 
 ## 4. Decisões pendentes (aguardam o Samuel)
@@ -421,7 +422,7 @@ para `xlsx` na dúvida.
   INSERT); no caminho XLSX é por posição e "nunca chuta" (`app/erp_eventos/vinculo.py`).
 
 **P0 (sem isso não grava em produção):**
-1. **O modo é global, não por empresa.** `export_mode` vale para o processo inteiro
+1. **(Parte do "por empresa" substituída em 24/10: o Samuel decidiu modo global; ver "Decisões do Samuel" abaixo. O diagnóstico vale.)** **O modo é global, não por empresa.** `export_mode` vale para o processo inteiro
    (`app/config.py`): `_cfg_para_env` (`app/web/server.py`) só troca as pastas, e o
    `config.json` salvo vence a variável de ambiente. Ligar `db`/`both` para a MM liga o
    "Cadastrar no Fire" também na Nasmar (`.4`, sem cópia validada). Além disso
@@ -449,7 +450,7 @@ para `xlsx` na dúvida.
    checkout principal e não é versionado, gera `.fbk` inválido).
 4. **Como desfazer** um pedido gravado errado (quem cancela, como, até quando). Sem resposta
    da Camila/Elias/Fire Sistemas não há canário.
-5. **`both` não serve de canário:** o XLS nasce antes do insert, na mesma `output_dir`
+5. **(Plano B substituído em 24/10: sem plano B; ver "Decisões do Samuel" abaixo. A análise do `both` vale.)** **`both` não serve de canário:** o XLS nasce antes do insert, na mesma `output_dir`
    (`app/web/server.py`, envio ao Fire), e fica lá mesmo se o insert falhar; se a operadora o
    importar, o pedido entra duas vezes. Pasta separada exigiria mudar o código. Por isso o
    canário roda em `db`. Como `db` vale para a empresa inteira, todo pedido da MM (não só o do
@@ -482,7 +483,7 @@ para `xlsx` na dúvida.
   pedido do ERP. Provar no canário que o Flow não duplica (o vínculo exato é o que deveria
   impedir).
 - Operação: backup server-side antes do canário; desligar = trocar o modo (hoje no
-  `config.json`/tela de config, global; por empresa depois do P0.1). Aba aberta em outra máquina
+  `config.json`/tela de config, global, decisão de 24/10). Aba aberta em outra máquina
   mantém o botão até recarregar (as do mesmo navegador se atualizam): avisar a operadora e
   confiar no 409 do servidor, não na tela. Quem acompanha
   e em que janela.
@@ -492,14 +493,14 @@ para `xlsx` na dúvida.
   ligado e o lote semanal, não haverá XLS. Consequência: a Nasmar (`.4`) entra junto, então o
   **backup server-side da `.4` e a paridade nela viram pré-requisito da virada**, não etapa
   posterior. Continuam valendo: servidor responde 409 fora do modo e a rota de config só para
-  admin, com auditoria (proposta minha, não discutida).
+  admin, com auditoria (proposta do assistente, não discutida).
 - **Sem plano B** (substitui o P0.5): saem o botão secundário de XLS e a lista de clientes
   liberados. Fica o parâmetro BD/XLS nas configurações, pedido já exportado em XLS não grava
   direto sem confirmação, e falha do Fire (fora do ar, lock) vira erro claro, nunca pedido
   meio-gravado. O parágrafo "Canário proposto" abaixo precisa ser reescrito sem o plano B.
 - **Empresa certa sem o operador selecionar:** a gravação depende 100% do roteamento
   (documento > histórico > memória + regra de faturamento MM × Nasmar). Sem decisão ou ambíguo,
-  o pedido fica retido, nunca grava por padrão. Proposta minha para o canário: o sistema sugere
+  o pedido fica retido, nunca grava por padrão. Proposta do assistente para o canário: o sistema sugere
   e o operador confirma com um clique, até a taxa de acerto estar provada. Estado do
   `roteamento_modo` em produção: relato de 20/10, **a reverificar**.
 - **Pedido que já existe no Fire:** o portal acha o anterior pela chave CNPJ do cliente + número
@@ -512,22 +513,25 @@ para `xlsx` na dúvida.
   alteração de item (tabela `HISTORICO`).
 - **Desfazer pedido, 3 camadas:** faturado (mesmo parcial) bloqueia, cancela-se a NF no Fire
   primeiro; produção iniciada só avisa (depende de uma leitura do produzido no Flow/Apontaê,
-  **não sei se existe**); cancelar é `STATUS='CANCELADO'` (medido na cópia de 23/10: 22 pedidos
+  **não confirmado se existe**); cancelar é `STATUS='CANCELADO'` (medido na cópia de 23/10: 22 pedidos
   assim), nunca apagar a linha.
 - **Trava de produto:** ligar. Caminho: sincronizar o catálogo, migrar o de-para para v2,
   `observando` por alguns dias, depois `ligado`. Falta o seletor mostrar a diferença antes de
   aceitar (descrição, EAN, grade, unidade, kit ou par), aprender vínculo só por escolha humana
   confirmada e o desfazer do vínculo (item 2.2 sobe de prioridade).
-- **Teste direto na produção da MM:** o Samuel autorizou (cadastrar, conferir, excluir).
-  Recomendação minha, **aguardando a confirmação dele**: não fazer, porque o SP1 está ligado na
-  MM e leva o pedido de teste e o cancelamento ao Flow de produção. O ensaio equivalente roda
-  na cópia restaurada de 23/10 (`mm_oct23.fdb` no `fire-local`).
+- **Teste direto na produção da MM:** autorizado pelo Samuel em 25/10, depois de o assistente
+  avisar que o SP1 está ligado na MM e leva o pedido de teste e o cancelamento ao Flow de
+  produção ("pode fazer, sem problemas"). Só roda com acesso à `.7` (exige VPN) e depois do
+  ensaio equivalente na cópia restaurada de 23/10 (`mm_oct23.fdb` no `fire-local`).
 
-**Canário proposto (depois do P0):** só a MM (`.7`), em `db`, com o plano B do item 5 no ar
-(por pedido, ou a lista de clientes liberados). Camila confere os 5 primeiros pedidos lado a lado
-(pedido 100% casado por SEQ, cliente de baixo risco; com o plano B por pedido o cliente é
-escolhido por quem envia, porque o modo vale para a empresa toda); saída com 20 pedidos sem
-divergência. Nasmar depois, com cópia da `.4` validada.
+**Canário (reescrito em 24/10, com as decisões acima):** `db` com modo global, então MM (`.7`) e
+Nasmar (`.4`) entram juntas e não há plano B por pedido nem lista de clientes. Pré-requisitos: o
+roteamento provado (ou a empresa sugerida com confirmação por clique), a paridade provada nas
+**duas** empresas e o 409 no servidor. Camila confere os primeiros pedidos lado a lado; o critério
+de saída (quantos pedidos sem divergência) fica a definir. **A `.4` segue sem cópia utilizável:**
+os dois `BKP_*_CONFECCAO_TERCA.fbk` de abril terminam truncados (`gbak`: "Backup incomplete") e o
+`nasmar.fdb` do `fire-local` é, na prática, a mesma base da MM de abril. Falta um backup
+server-side novo da `.4`.
 
 **Lote semanal (§3.8):** só liga com o `db` estável nos dois ambientes.
 
