@@ -533,8 +533,9 @@ Diferenças reais, medidas contra os 753 pedidos de operadora desde 01/06:
   Condição de pagamento do pedido não vem. Origem do valor (cadastro do cliente?) a descobrir.
 - **`OBS`:** preenchida em 737/753 (98%) com número do pedido e nota do cliente
   (ex.: `SN-89B18EEE` + `NASMAR 1304`); o portal grava NULL em pedido comum.
-- **`REDUCAO` do item:** 563 de 6.877 linhas têm 0 (o resto 61,11); o portal crava 61,11 do
-  perfil em todas (4 das 5 amostras divergiram, mesmo `ICMS_BASE`). Efeito fiscal: **pergunta
+- **`REDUCAO` do item:** 563 de 6.877 linhas não têm 61,11 (0 ou vazio; as outras 6.314 têm); o
+  portal crava 61,11 do perfil em todas. Nas amostras, 4 linhas (uma em cada um de 4 dos 5
+  pedidos) divergiram, com o mesmo `ICMS_BASE`. Efeito fiscal: **pergunta
   para o Elias** antes de qualquer gravação.
 - **`VALOR_TOTAL`/`TOTAL_PRODUTO`:** 1/5 diferiu 1 centavo (soma 2569,1589: Fire trunca para
   2569,15, o portal arredonda para 2569,16). Com preço de espelho (÷ fator) a soma tem dízima, e
