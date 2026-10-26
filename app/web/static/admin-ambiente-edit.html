@@ -854,12 +854,6 @@
     const ev = (n) => erpFs.querySelector('[name="' + n + '"]');
     const erpStatus = document.getElementById('erp-status');
     const erpDesbloquear = document.getElementById('btn-desbloquear-erp');
-    const BLOQUEIOS = {
-      credencial: 'o Flow recusou a credencial (401). Salve uma credencial nova.',
-      lote_invalido: 'o Flow recusou um lote inteiro (400). Corrija a causa e retome.',
-      unidade_grande: 'um pedido tem mais itens do que cabe num lote. Fale com o suporte.',
-      lote_grande_demais: 'um lote passou do tamanho máximo. Fale com o suporte.',
-    };
 
     function erpMostrarSituacao(view) {
       const box = document.getElementById('erp-situacao');
@@ -871,7 +865,7 @@
       const fila = view.fila || {};
       const linhas = [];
       if (env.bloqueio) {
-        linhas.push('<strong>Envio parado:</strong> ' + (BLOQUEIOS[env.bloqueio] || ('HTTP ' + env.ultimo_http + '.')));
+        linhas.push('<strong>Envio parado:</strong> ' + escAttr(env.bloqueio_texto || ('HTTP ' + env.ultimo_http + '.')));
       }
       linhas.push('Última leitura do ERP: ' + (env.ultima_vigia_em ? new Date(env.ultima_vigia_em).toLocaleString('pt-BR') : 'ainda não leu'));
       linhas.push('Último lote aceito pelo Flow: ' + (env.ultimo_202_em ? new Date(env.ultimo_202_em).toLocaleString('pt-BR') : 'nenhum'));

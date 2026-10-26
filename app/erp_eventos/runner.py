@@ -103,8 +103,7 @@ def _checar_manual(cfg: BaseErpConfig, agora: datetime) -> EnvioManualRecusado |
     if envio.bloqueio:
         return EnvioManualRecusado(
             "bloqueada",
-            f"Envio parado: {consulta.texto_bloqueio(envio.bloqueio, envio.ultimo_http)} "
-            "Corrija a causa e use Retomar envio.",
+            f"Envio parado: {consulta.texto_bloqueio(envio.bloqueio, envio.ultimo_http)}",
         )
     if envio.proxima_tentativa_em and envio.proxima_tentativa_em > formatar_instante(agora):
         hora = datetime.fromisoformat(envio.proxima_tentativa_em).astimezone(FUSO)

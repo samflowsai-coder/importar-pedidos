@@ -739,6 +739,14 @@ def admin_env_edit_page(env_id: str, request: Request):  # noqa: ARG001 — env_
     return FileResponse(str(STATIC_DIR / "admin-ambiente-edit.html"))
 
 
+@app.get("/admin/envio-flow")
+def admin_envio_flow_page(request: Request):
+    """Envio ao Flow: consulta por pedido e Enviar agora (admin-only). API enforce o role."""
+    if not request.cookies.get(COOKIE_NAME) and not _is_test_bypass():
+        return RedirectResponse(url="/login")
+    return FileResponse(str(STATIC_DIR / "admin-envio-flow.html"))
+
+
 @app.get("/admin/atualizacao")
 def admin_atualizacao_page(request: Request):
     """Tela de auto-update do portal (admin-only). API enforce o role."""

@@ -78,11 +78,13 @@ def test_credencial_nova_tira_o_bloqueio_de_401_e_desbloquear_tira_os_outros(env
     corpo = c.put(
         f"/api/admin/environments/{env_id}/erp-base", json=_payload(token="fpe_" + "e" * 43)
     ).json()
-    assert corpo["envio"]["bloqueio"] is None
+    assert corpo["envio"]["bloqueio"] is None and corpo["envio"]["bloqueio_texto"] is None
     with router.env_connect("mm") as conn:
         erp_estado_repo.bloquear(
             conn, "mm", "2026-10-09T13:00:00.000+00:00", motivo="lote_invalido", http=400, erro=""
         )
+    texto = c.get(f"/api/admin/environments/{env_id}/erp-base").json()["envio"]["bloqueio_texto"]
+    assert texto.startswith("o Flow recusou um lote inteiro")
     corpo = c.post(f"/api/admin/environments/{env_id}/erp-base/desbloquear").json()
     assert corpo["envio"]["bloqueio"] is None
 

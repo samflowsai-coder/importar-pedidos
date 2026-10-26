@@ -166,8 +166,7 @@ def test_pedido_recusado_bloqueada(cfg):
     e = _recusa(cfg)
     assert e.codigo == "bloqueada"
     assert e.detalhe == (
-        "Envio parado: um pedido tem mais itens do que cabe num lote. Fale com o suporte. "
-        "Corrija a causa e use Retomar envio."
+        "Envio parado: um pedido tem mais itens do que cabe num lote. Fale com o suporte."
     )
 
 

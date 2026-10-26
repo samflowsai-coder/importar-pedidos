@@ -367,6 +367,9 @@ def _erp_base_view(env_id: str) -> dict:
         foto = erp_foto_repo.foto_do_dia(conn, cfg.base, dia_local(datetime.now(UTC)))
     view["envio"] = {
         "bloqueio": envio.bloqueio,
+        "bloqueio_texto": (
+            consulta.texto_bloqueio(envio.bloqueio, envio.ultimo_http) if envio.bloqueio else None
+        ),
         "ultimo_http": envio.ultimo_http,
         "ultimo_erro": envio.ultimo_erro,
         "ultimo_202_em": envio.ultimo_202_em,

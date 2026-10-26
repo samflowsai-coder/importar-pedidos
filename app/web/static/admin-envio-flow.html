@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Envio ao Flow — Portal de Pedidos</title>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/shell.css">
+  <script defer src="/static/js/shell.js"></script>
+  <style>
+    .content { max-width: 1040px; margin: 0 auto; padding: 32px 24px 64px; }
+    h1 { font-size: 24px; letter-spacing: -.02em; margin: 0 0 4px; font-weight: 650; }
+    .sub { color: var(--text-secondary); margin: 0 0 20px; }
+    .topo { display: flex; align-items: center; gap: 10px; margin: 0 0 16px; flex-wrap: wrap; }
+    .topo label { font-size: 13px; color: var(--text-muted); font-weight: 500; }
+    .topo select {
+      font: inherit; padding: 7px 10px; border: 1px solid var(--border-control);
+      border-radius: var(--radius); background: var(--bg); color: var(--text); max-width: 100%;
+    }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); }
+    .alerta {
+      margin: 0 0 16px; padding: 12px 16px; border-radius: var(--radius);
+      background: var(--error-bg); color: var(--error-strong); font-size: 13px;
+    }
+    .saude { display: grid; grid-template-columns: repeat(5, 1fr) auto; align-items: stretch; }
+    .saude .m { padding: 16px 20px; border-right: 1px solid var(--border-subtle); min-width: 0; }
+    .saude .m small { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); font-weight: 600; }
+    .saude .m strong { display: block; font-size: 20px; font-weight: 650; letter-spacing: -.01em; margin-top: 2px; font-variant-numeric: tabular-nums; }
+    .saude .m span { font-size: 12px; color: var(--text-muted); }
+    .saude .acao { padding: 16px 20px; display: flex; flex-direction: column; justify-content: center; gap: 6px; max-width: 260px; }
+    .btn { font: 500 14px var(--font-sans); border-radius: var(--radius); padding: 8px 14px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-primary:hover:not([disabled]) { background: var(--accent-hover); }
+    .btn[disabled] { opacity: .45; cursor: not-allowed; }
+    .motivo { font-size: 12px; color: var(--text-secondary); margin: 0; }
+    #envio-status { margin: 12px 0 0; font-size: 13px; color: var(--text-secondary); min-height: 1.5em; }
+    .busca { margin-top: 24px; padding: 20px; }
+    .busca label { font-weight: 600; display: block; margin-bottom: 8px; }
+    .busca .row { display: flex; gap: 8px; }
+    .busca input { flex: 1; min-width: 0; font: 14px var(--font-sans); padding: 9px 12px; border: 1px solid var(--border-control); border-radius: var(--radius); background: var(--bg); color: var(--text); }
+    .busca input:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); outline-offset: 0; }
+    .busca .hint { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+    #resultado { margin-top: 16px; }
+    .ph { padding: 20px; display: flex; gap: 24px; align-items: flex-start; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; }
+    .ph h2 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -.01em; overflow-wrap: anywhere; }
+    .ph .meta { color: var(--text-secondary); font-size: 13px; margin-top: 2px; }
+    .ph dl { display: grid; grid-template-columns: auto auto; gap: 2px 12px; margin: 0 0 0 auto; font-size: 13px; }
+    .ph dt { color: var(--text-muted); }
+    .ph dd { margin: 0; font-weight: 500; }
+    .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 10px; white-space: nowrap; }
+    .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .b-fila { background: var(--warn-bg); color: var(--warn-ink); }
+    .b-ok { background: var(--success-bg); color: var(--success-strong); }
+    .b-err { background: var(--error-bg); color: var(--error-strong); }
+    .b-neutro { background: var(--surface-hover); color: var(--text-secondary); }
+    .resumo { padding: 14px 20px; background: var(--surface); border-bottom: 1px solid var(--border-subtle); font-size: 13px; color: var(--text-secondary); }
+    .tw { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); font-weight: 600; padding: 10px 20px; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; }
+    td { padding: 12px 20px; border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
+    tr:last-child td { border-bottom: 0; }
+    td .what { font-weight: 500; }
+    td .det { color: var(--text-muted); font-size: 12px; }
+    td.mono, .mono { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+    .note { font-size: 12px; color: var(--text-muted); }
+    .erro-txt { color: var(--error-strong); }
+    .link-pedido { font: inherit; font-family: var(--font-mono); font-size: 12px; background: none; border: 0; padding: 0; color: var(--accent-hover); text-decoration: underline; cursor: pointer; }
+    .vazio { padding: 28px 20px; }
+    .vazio h3 { margin: 0 0 4px; font-size: 15px; overflow-wrap: anywhere; }
+    .vazio p { margin: 0; color: var(--text-secondary); max-width: 640px; }
+    .lista-aviso { padding: 12px 20px; font-size: 13px; color: var(--text-secondary); border-bottom: 1px solid var(--border-subtle); }
+    h3.sec { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); margin: 32px 0 10px; font-weight: 600; }
+    .foto-linha { padding: 12px 20px; border-top: 1px solid var(--border-subtle); font-size: 13px; color: var(--text-secondary); }
+    .ov { position: fixed; inset: 0; background: var(--overlay); display: none; align-items: center; justify-content: center; padding: 16px; z-index: 100; }
+    .ov.on { display: flex; }
+    .dlg { background: var(--bg); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); max-width: 460px; width: 100%; padding: 24px; }
+    .dlg h2 { margin: 0 0 8px; font-size: 18px; }
+    .dlg p { margin: 0 0 16px; color: var(--text-secondary); }
+    .dlg .acts { display: flex; gap: 8px; justify-content: flex-end; }
+    @media (max-width: 960px) {
+      .saude { grid-template-columns: 1fr 1fr; }
+      .saude .m { border-bottom: 1px solid var(--border-subtle); }
+      .saude .acao { grid-column: 1 / -1; max-width: none; }
+      .ph dl { margin: 0; }
+    }
+    @media (max-width: 480px) {
+      .content { padding: 20px 16px 48px; }
+      th, td { padding-left: 12px; padding-right: 12px; }
+      .busca .row { flex-wrap: wrap; }
+      .busca .row .btn { flex: 1 1 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app-shell"></div>
+  <main class="content">
+    <h1>Envio ao Flow</h1>
+    <p class="sub">Pedidos do Fire que o portal lê e manda para o Flow. A fila sai sozinha às 8h, 11h, 14h e 17h (seg–sáb).</p>
+
+    <div class="topo">
+      <label for="amb">Empresa</label>
+      <select id="amb"></select>
+    </div>
+    <div id="msg-geral" class="alerta" role="alert" hidden></div>
+
+    <div id="corpo" hidden>
+      <div id="bloqueio" class="alerta" hidden></div>
+
+      <section class="card saude" aria-label="Situação do envio">
+        <div class="m"><small>Última leitura do Fire</small><strong id="k-vigia">—</strong><span id="k-vigia-d"></span></div>
+        <div class="m"><small>Na fila</small><strong id="k-fila">—</strong><span>eventos esperando</span></div>
+        <div class="m"><small>Próxima saída</small><strong id="k-prox">—</strong><span id="k-prox-d"></span></div>
+        <div class="m"><small>Último lote aceito</small><strong id="k-aceito">—</strong><span id="k-aceito-d"></span></div>
+        <div class="m"><small>Recusados</small><strong id="k-rec">—</strong><span>últimos 30 dias</span></div>
+        <div class="acao">
+          <button type="button" class="btn btn-primary" id="btn-enviar-agora" disabled>Enviar agora</button>
+          <p class="motivo" id="motivo" hidden></p>
+        </div>
+      </section>
+      <p id="envio-status" role="status" aria-live="polite"></p>
+
+      <section class="card busca">
+        <label for="q">Consultar um pedido</label>
+        <form class="row" id="form-busca" autocomplete="off">
+          <input id="q" name="q" maxlength="40" autocomplete="off">
+          <button type="submit" class="btn" id="btn-consultar">Consultar</button>
+        </form>
+        <div class="hint">Número do pedido do cliente (ex.: UY44549110) ou código do pedido no Fire (ex.: 5131).</div>
+      </section>
+
+      <div id="resultado" aria-live="polite"></div>
+
+      <h3 class="sec">Últimos envios</h3>
+      <section class="card">
+        <div class="tw">
+          <table>
+            <thead><tr><th>Quando</th><th>Como</th><th>Eventos</th><th>Resultado</th></tr></thead>
+            <tbody id="envios"></tbody>
+          </table>
+        </div>
+        <div class="foto-linha" id="foto-linha" hidden></div>
+      </section>
+    </div>
+  </main>
+
+  <div class="ov" id="ov" role="dialog" aria-modal="true" aria-labelledby="dlg-t" aria-describedby="dlg-p">
+    <div class="dlg">
+      <h2 id="dlg-t">Enviar a fila agora?</h2>
+      <p id="dlg-p"></p>
+      <div class="acts">
+        <button type="button" class="btn" id="dlg-cancelar">Cancelar</button>
+        <button type="button" class="btn btn-primary" id="dlg-ok">Enviar agora</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    'use strict';
+    const FUSO = 'America/Sao_Paulo';
+    const $ = (id) => document.getElementById(id);
+    const DIAS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+    const POLL_MS = 2000;
+    const POLL_MAX_MS = 5 * 60 * 1000;
+
+    let envId = null;
+    let painel = null;
+    let consultaAberta = null; // {q} ou {codigo}
+    let pollTimer = null;
+    let enviando = false;
+
+    // ── helpers ──────────────────────────────────────────────────────────
+    function partes(iso) {
+      if (!iso) return null;
+      const d = new Date(iso);
+      if (isNaN(d)) return null;
+      const o = {};
+      new Intl.DateTimeFormat('pt-BR', {
+        timeZone: FUSO, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+        year: 'numeric', hourCycle: 'h23',
+      }).formatToParts(d).forEach((p) => { o[p.type] = p.value; });
+      return o;
+    }
+    const hhmm = (iso) => { const p = partes(iso); return p ? p.hour + ':' + p.minute : '—'; };
+    const ddmmhhmm = (iso) => { const p = partes(iso); return p ? p.day + '/' + p.month + ' ' + p.hour + ':' + p.minute : '—'; };
+    function diaLabel(iso) {
+      const p = partes(iso);
+      if (!p) return '';
+      const chave = (o) => o.year + '-' + o.month + '-' + o.day;
+      const hoje = partes(new Date().toISOString());
+      const dia = (o) => Date.UTC(+o.year, +o.month - 1, +o.day) / 86400000;
+      const dif = dia(p) - dia(hoje);
+      if (chave(p) === chave(hoje)) return 'hoje';
+      if (dif === 1) return 'amanhã';
+      if (dif === -1) return 'ontem';
+      const wd = new Date(Date.UTC(+p.year, +p.month - 1, +p.day)).getUTCDay();
+      return dif > 0 && dif < 7 ? DIAS[wd] : p.day + '/' + p.month;
+    }
+    function el(tag, cls, text) {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined && text !== null) e.textContent = text;
+      return e;
+    }
+    function badge(cls, text) { return el('span', 'badge ' + cls, text); }
+    function limpar(n) { while (n.firstChild) n.removeChild(n.firstChild); }
+    function plural(n, um, varios) { return n + ' ' + (n === 1 ? um : varios); }
+
+    async function api(path, opts) {
+      const r = await fetch('/api/admin/environments' + path, Object.assign({ credentials: 'same-origin' }, opts));
+      if (r.status === 401) { location.href = '/login'; throw new Error('401'); }
+      let corpo = null;
+      try { corpo = await r.json(); } catch (_) { /* sem corpo */ }
+      return { ok: r.ok, status: r.status, corpo };
+    }
+    const base = () => '/' + encodeURIComponent(envId) + '/erp-base';
+    function detalheDe(res, padrao) {
+      const d = res.corpo && res.corpo.detail;
+      return typeof d === 'string' ? d : padrao;
+    }
+    function erroGeral(msg) {
+      const b = $('msg-geral');
+      b.textContent = msg || '';
+      b.hidden = !msg;
+    }
+
+    // ── ambientes ────────────────────────────────────────────────────────
+    async function carregarAmbientes() {
+      const [lista, me] = await Promise.all([
+        api(''),
+        fetch('/api/auth/me', { credentials: 'same-origin' }).then((r) => r.json()).catch(() => null),
+      ]);
+      if (!lista.ok) {
+        erroGeral(lista.status === 403 ? 'Só administradores veem esta tela.' : detalheDe(lista, 'Não consegui carregar os ambientes.'));
+        return;
+      }
+      const todos = Array.isArray(lista.corpo) ? lista.corpo : [];
+      const checados = await Promise.all(todos.map((e) =>
+        api('/' + encodeURIComponent(e.id) + '/erp-base').then((r) => (r.ok && r.corpo && r.corpo.config ? e : null)).catch(() => null)));
+      const comBase = checados.filter(Boolean);
+      const sel = $('amb');
+      limpar(sel);
+      if (!comBase.length) {
+        erroGeral('Nenhuma empresa tem base do ERP configurada. Configure em Ambientes.');
+        return;
+      }
+      comBase.forEach((e) => {
+        const o = el('option', null, e.name);
+        o.value = e.id;
+        sel.appendChild(o);
+      });
+      const pedido = new URLSearchParams(location.search).get('env');
+      const cookieEnv = me && me.environment ? me.environment.id : null;
+      const alvo = [pedido, cookieEnv].find((v) => v && comBase.some((e) => e.id === v)) || comBase[0].id;
+      sel.value = alvo;
+      await trocarAmbiente(alvo, false);
+    }
+
+    async function trocarAmbiente(id, gravarUrl) {
+      envId = id;
+      if (gravarUrl) history.replaceState(null, '', '?env=' + encodeURIComponent(id));
+      pararPolling();
+      enviando = false;
+      consultaAberta = null;
+      limpar($('resultado'));
+      $('envio-status').textContent = '';
+      $('q').value = '';
+      erroGeral('');
+      $('corpo').hidden = false;
+      await carregarPainel();
+    }
+
+    // ── painel ───────────────────────────────────────────────────────────
+    function rotuloOrigem(e) {
+      if (e.origem === 'janela') {
+        const p = partes(e.enviado_em);
+        return p ? 'Janela das ' + parseInt(p.hour, 10) + 'h' : 'Janela';
+      }
+      if (e.origem === 'foto') return 'Antes da foto';
+      if (e.origem === 'manual') return 'Manual · ' + (e.quem || 'desconhecido');
+      return e.origem || '—';
+    }
+
+    async function carregarPainel() {
+      const r = await api(base() + '/painel');
+      if (!r.ok) { erroGeral(detalheDe(r, 'Não consegui carregar o painel.')); return; }
+      painel = r.corpo;
+      const p = painel;
+      $('k-vigia').textContent = hhmm(p.ultima_vigia_em);
+      $('k-vigia-d').textContent = p.ultima_vigia_em ? diaLabel(p.ultima_vigia_em) : 'ainda não leu';
+      $('k-fila').textContent = String(p.fila_pendente);
+      $('k-prox').textContent = hhmm(p.proxima_janela);
+      $('k-prox-d').textContent = diaLabel(p.proxima_janela);
+      $('k-aceito').textContent = hhmm(p.ultimo_202_em);
+      const ult = (p.envios || []).find((e) => (e.aceitos || 0) + (e.duplicados || 0) > 0 || e.eventos === 0);
+      $('k-aceito-d').textContent = p.ultimo_202_em
+        ? diaLabel(p.ultimo_202_em) + (ult ? ' · ' + rotuloOrigem(ult).toLowerCase() : '')
+        : 'nenhum ainda';
+      $('k-rec').textContent = String(p.recusados_30d);
+
+      const bl = $('bloqueio');
+      bl.hidden = !p.bloqueio_texto;
+      bl.textContent = p.bloqueio_texto ? 'Envio parado: ' + p.bloqueio_texto : '';
+
+      const btn = $('btn-enviar-agora');
+      const pode = !!(p.envio_manual && p.envio_manual.pode) && !enviando;
+      btn.disabled = !pode;
+      const mot = $('motivo');
+      const textoMotivo = p.envio_manual && !p.envio_manual.pode ? p.envio_manual.motivo : '';
+      mot.textContent = textoMotivo || '';
+      mot.hidden = !textoMotivo;
+
+      desenharEnvios(p);
+    }
+
+    function desenharEnvios(p) {
+      const tb = $('envios');
+      limpar(tb);
+      const envios = p.envios || [];
+      if (!envios.length) {
+        const tr = el('tr');
+        const td = el('td', 'note', 'Nenhum envio registrado ainda.');
+        td.colSpan = 4;
+        tr.appendChild(td);
+        tb.appendChild(tr);
+      }
+      envios.forEach((e) => {
+        const tr = el('tr');
+        tr.appendChild(el('td', 'mono', ddmmhhmm(e.enviado_em)));
+        tr.appendChild(el('td', null, rotuloOrigem(e)));
+        const tdEv = el('td', null, String(e.eventos));
+        if (e.eventos === 0) { tdEv.appendChild(document.createTextNode(' ')); tdEv.appendChild(el('span', 'note', '(sinal de vida)')); }
+        tr.appendChild(tdEv);
+        const tdRes = el('td');
+        if (e.rejeitados > 0) tdRes.appendChild(badge('b-err', plural(e.rejeitados, 'recusado', 'recusados')));
+        else if (!e.respondido_em) tdRes.appendChild(badge('b-neutro', 'Sem resposta'));
+        else if (e.http && (e.http < 200 || e.http >= 300)) tdRes.appendChild(badge('b-err', 'HTTP ' + e.http));
+        else tdRes.appendChild(badge('b-ok', 'Aceito'));
+        tr.appendChild(tdRes);
+        tb.appendChild(tr);
+      });
+      const fl = $('foto-linha');
+      if (p.foto_hoje) {
+        fl.textContent = 'Foto do dia: ' + p.foto_hoje.situacao + ' (' + p.foto_hoje.paginas + ' páginas)';
+        fl.hidden = false;
+      } else {
+        fl.hidden = true;
+      }
+    }
+
+    // ── consulta ─────────────────────────────────────────────────────────
+    const SITUACAO = {
+      na_fila: ['b-fila', 'Na fila'],
+      enviado: ['b-fila', 'Enviado, sem resposta'],
+      aceito: ['b-ok', 'Aceito'],
+      duplicado: ['b-ok', 'Aceito (duplicado)'],
+      recusado: ['b-err', 'Recusado'],
+    };
+
+    function badgeGeral(eventos) {
+      if (!eventos.length) return null;
+      const tem = (s) => eventos.some((e) => e.situacao_tela === s);
+      if (tem('recusado')) return badge('b-err', 'Recusado');
+      if (tem('na_fila')) return badge('b-fila', 'Na fila');
+      if (tem('enviado')) return badge('b-fila', 'Enviado, sem resposta');
+      return badge('b-ok', 'No Flow');
+    }
+
+    async function consultar(q) {
+      const termo = q.trim();
+      if (!termo) return;
+      consultaAberta = { q: termo };
+      const r = await api(base() + '/pedidos?q=' + encodeURIComponent(termo));
+      const box = $('resultado');
+      limpar(box);
+      if (!r.ok) { box.appendChild(cartaoVazio('Não consegui consultar', detalheDe(r, 'Erro ' + r.status + '.'))); return; }
+      const c = r.corpo;
+      if (!c.pedidos.length) { box.appendChild(naoEncontrado(termo)); return; }
+      if (c.pedidos.length === 1 && c.detalhe) { box.appendChild(cartaoPedido(c.detalhe)); return; }
+      box.appendChild(listaPedidos(c.pedidos, c.limitado));
+    }
+
+    async function abrirPedido(codigo) {
+      consultaAberta = { codigo };
+      const r = await api(base() + '/pedidos/' + encodeURIComponent(codigo));
+      const box = $('resultado');
+      limpar(box);
+      if (!r.ok) { box.appendChild(cartaoVazio('Não consegui abrir o pedido', detalheDe(r, 'Erro ' + r.status + '.'))); return; }
+      box.appendChild(cartaoPedido(r.corpo));
+      const h = box.querySelector('h2');
+      if (h) { h.setAttribute('tabindex', '-1'); h.focus(); }
+    }
+
+    function cartaoVazio(titulo, texto) {
+      const c = el('section', 'card');
+      const v = el('div', 'vazio');
+      v.appendChild(el('h3', null, titulo));
+      v.appendChild(el('p', null, texto));
+      c.appendChild(v);
+      return c;
+    }
+
+    function naoEncontrado(termo) {
+      const quando = painel && painel.ultima_vigia_em ? ' A última leitura do Fire foi às ' + hhmm(painel.ultima_vigia_em) + '.' : '';
+      return cartaoVazio('O portal não tem nada sobre "' + termo + '"',
+        'O portal só lê pedidos abertos no Fire (nem faturado, nem cancelado). Se o pedido existe, ele pode ter sido faturado ou cancelado antes da primeira leitura, ter sido criado há menos de 15 minutos, ou estar em outra empresa.' + quando);
+    }
+
+    function listaPedidos(pedidos, limitado) {
+      const c = el('section', 'card');
+      if (limitado) c.appendChild(el('div', 'lista-aviso', 'Mostrando os 50 mais recentes.'));
+      const tw = el('div', 'tw');
+      const t = el('table');
+      const th = el('thead');
+      const trh = el('tr');
+      ['Fire', 'Pedido do cliente', 'CNPJ', 'Status', 'Visto em'].forEach((h) => trh.appendChild(el('th', null, h)));
+      th.appendChild(trh);
+      t.appendChild(th);
+      const tb = el('tbody');
+      pedidos.forEach((p) => {
+        const tr = el('tr');
+        const td = el('td');
+        const b = el('button', 'link-pedido', String(p.erp_codigo));
+        b.type = 'button';
+        b.addEventListener('click', () => abrirPedido(p.erp_codigo));
+        td.appendChild(b);
+        tr.appendChild(td);
+        tr.appendChild(el('td', null, p.pedido_cliente || '—'));
+        tr.appendChild(el('td', 'mono', p.cliente_cnpj || '—'));
+        tr.appendChild(el('td', null, p.status || '—'));
+        tr.appendChild(el('td', 'mono', ddmmhhmm(p.visto_em)));
+        tb.appendChild(tr);
+      });
+      t.appendChild(tb);
+      tw.appendChild(t);
+      c.appendChild(tw);
+      return c;
+    }
+
+    function cartaoPedido(d) {
+      const c = el('section', 'card');
+      const ph = el('div', 'ph');
+      const esq = el('div');
+      const h2 = el('h2', null, (d.pedido_cliente || 'Fire nº ' + d.erp_codigo) + ' ');
+      const bg = badgeGeral(d.eventos || []);
+      if (bg) h2.appendChild(bg);
+      esq.appendChild(h2);
+      const cli = d.cliente_nome ? d.cliente_nome + (d.cliente_codigo != null ? ' (cliente ' + d.cliente_codigo + ')' : '') : (d.cliente_codigo != null ? 'cliente ' + d.cliente_codigo : '');
+      esq.appendChild(el('div', 'meta', ['Fire nº ' + d.erp_codigo, cli, plural(d.itens, 'item', 'itens')].filter(Boolean).join(' · ')));
+      ph.appendChild(esq);
+
+      const encerrado = d.leitura_tipo === 'ultima_mudanca';
+      const dl = el('dl');
+      const par = (k, v) => { dl.appendChild(el('dt', null, k)); dl.appendChild(el('dd', null, v)); };
+      par(encerrado ? 'Último status visto' : 'No Fire hoje', d.status || '—');
+      par('Visto pelo portal', ddmmhhmm(d.visto_em));
+      par(encerrado ? 'Última mudança vista' : 'Última leitura do Fire',
+        ddmmhhmm(d.leitura_em) + (encerrado ? ' · pedido encerrado, não é mais lido' : ''));
+      par('Gravado por', d.origem_pedido === 'portal' ? 'Portal (insert direto)' : 'Fire (digitado no ERP)');
+      ph.appendChild(dl);
+      c.appendChild(ph);
+
+      if (d.retidos && !(d.eventos || []).length) {
+        c.appendChild(el('div', 'resumo', 'Eventos com mais de 30 dias já foram limpos.'));
+        return c;
+      }
+      if (d.frase) c.appendChild(el('div', 'resumo', d.frase));
+      if (d.retidos) c.appendChild(el('div', 'resumo', 'Eventos com mais de 30 dias já foram limpos.'));
+
+      const tw = el('div', 'tw');
+      const t = el('table');
+      const th = el('thead');
+      const trh = el('tr');
+      ['Evento', 'Visto no Fire', 'Situação', 'Enviado', 'Resposta do Flow'].forEach((h) => trh.appendChild(el('th', null, h)));
+      th.appendChild(trh);
+      t.appendChild(th);
+      const tb = el('tbody');
+      (d.eventos || []).forEach((e) => {
+        const tr = el('tr');
+        const td1 = el('td');
+        td1.appendChild(el('div', 'what', e.rotulo));
+        if (e.detalhe) td1.appendChild(el('div', 'det', e.detalhe));
+        tr.appendChild(td1);
+        tr.appendChild(el('td', 'mono', ddmmhhmm(e.observado_em)));
+        const s = SITUACAO[e.situacao_tela] || ['b-neutro', e.situacao_tela];
+        const td3 = el('td');
+        td3.appendChild(badge(s[0], s[1]));
+        tr.appendChild(td3);
+        const td4 = el('td', 'mono');
+        if (e.enviado_em) {
+          td4.appendChild(document.createTextNode(ddmmhhmm(e.enviado_em)));
+          if (e.origem_lote) { td4.appendChild(el('br')); td4.appendChild(el('span', 'note', e.origem_lote)); }
+        } else td4.textContent = '—';
+        tr.appendChild(td4);
+        const td5 = el('td', 'mono');
+        if (e.respondido_em) {
+          td5.appendChild(document.createTextNode(ddmmhhmm(e.respondido_em)));
+          if (e.motivo) { td5.appendChild(document.createTextNode(' · ')); td5.appendChild(el('span', 'erro-txt', e.motivo)); }
+        } else td5.textContent = '—';
+        tr.appendChild(td5);
+        tb.appendChild(tr);
+      });
+      t.appendChild(tb);
+      tw.appendChild(t);
+      c.appendChild(tw);
+      return c;
+    }
+
+    function recarregarConsulta() {
+      if (!consultaAberta) return Promise.resolve();
+      return consultaAberta.codigo !== undefined ? abrirPedido(consultaAberta.codigo) : consultar(consultaAberta.q);
+    }
+
+    // ── Enviar agora ─────────────────────────────────────────────────────
+    let focoAntes = null;
+    function abrirDialogo() {
+      const n = painel ? painel.fila_pendente : 0;
+      $('dlg-p').textContent = 'Lê o Fire agora e manda tudo o que estiver na fila (' + plural(n, 'evento já esperando', 'eventos já esperando') + ').';
+      focoAntes = document.activeElement;
+      $('ov').classList.add('on');
+      $('dlg-ok').focus();
+    }
+    function fecharDialogo() {
+      $('ov').classList.remove('on');
+      const alvo = focoAntes && document.contains(focoAntes) && !focoAntes.disabled ? focoAntes : $('btn-enviar-agora');
+      if (alvo) alvo.focus();
+    }
+    function teclaDialogo(ev) {
+      if (!$('ov').classList.contains('on')) return;
+      if (ev.key === 'Escape') { ev.preventDefault(); fecharDialogo(); return; }
+      if (ev.key !== 'Tab') return;
+      const foc = [$('dlg-cancelar'), $('dlg-ok')];
+      const i = foc.indexOf(document.activeElement);
+      ev.preventDefault();
+      const prox = ev.shiftKey ? (i <= 0 ? foc.length - 1 : i - 1) : (i === foc.length - 1 ? 0 : i + 1);
+      foc[prox].focus();
+    }
+
+    function statusEnvio(txt) { $('envio-status').textContent = txt; }
+
+    function pararPolling() {
+      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    }
+
+    async function enviarAgora() {
+      fecharDialogo();
+      enviando = true;
+      $('btn-enviar-agora').disabled = true;
+      statusEnvio('Pedindo o envio…');
+      const r = await api(base() + '/enviar-agora', { method: 'POST' });
+      if (r.status !== 202 || !r.corpo || !r.corpo.envio_id) {
+        enviando = false;
+        statusEnvio(detalheDe(r, 'Não consegui pedir o envio (' + r.status + ').'));
+        await carregarPainel();
+        return;
+      }
+      statusEnvio('Envio pedido; acompanhando…');
+      acompanhar(r.corpo.envio_id, Date.now(), envId);
+    }
+
+    function acompanhar(id, inicio, ambiente) {
+      pollTimer = setTimeout(async () => {
+        if (ambiente !== envId) return;
+        if (Date.now() - inicio >= POLL_MAX_MS) {
+          enviando = false;
+          statusEnvio('Ainda rodando; veja Últimos envios daqui a pouco.');
+          carregarPainel();
+          return;
+        }
+        let r;
+        try { r = await api(base() + '/envio-manual/' + encodeURIComponent(id)); }
+        catch (_) { acompanhar(id, inicio, ambiente); return; }
+        if (ambiente !== envId) return;
+        if (r.status === 404) {
+          enviando = false;
+          statusEnvio(detalheDe(r, 'Envio não encontrado.'));
+          carregarPainel();
+          return;
+        }
+        if (!r.ok || !r.corpo) { acompanhar(id, inicio, ambiente); return; }
+        const s = r.corpo;
+        if (s.situacao === 'terminado') {
+          enviando = false;
+          statusEnvio(resumoEnvio(s));
+          await carregarPainel();
+          await recarregarConsulta();
+          return;
+        }
+        statusEnvio(s.situacao === 'em_andamento' ? 'Enviando…' : 'Esperando a vez…');
+        acompanhar(id, inicio, ambiente);
+      }, POLL_MS);
+    }
+
+    function resumoEnvio(s) {
+      const aceitos = (s.aceitos || 0) + (s.duplicados || 0);
+      let txt;
+      if (!aceitos && !(s.rejeitados || 0)) {
+        txt = 'Nada novo para enviar; o Flow confirmou que o portal está vivo.';
+      } else {
+        txt = 'Enviado: ' + plural(s.lotes || 0, 'lote', 'lotes') + ', ' + plural(aceitos, 'aceito', 'aceitos') + ', ' + plural(s.rejeitados || 0, 'recusado', 'recusados') + '.';
+      }
+      if (s.vigia === 'falhou' || s.vigia === 'pulada') txt += ' O Fire não respondeu; mandei só o que já estava na fila.';
+      if (s.parou_por) txt += ' Parou por: ' + s.parou_por + '.';
+      return txt;
+    }
+
+    // ── ligações ─────────────────────────────────────────────────────────
+    $('amb').addEventListener('change', (e) => trocarAmbiente(e.target.value, true));
+    $('form-busca').addEventListener('submit', (e) => { e.preventDefault(); consultar($('q').value); });
+    $('btn-enviar-agora').addEventListener('click', abrirDialogo);
+    $('dlg-cancelar').addEventListener('click', fecharDialogo);
+    $('dlg-ok').addEventListener('click', enviarAgora);
+    $('ov').addEventListener('click', (e) => { if (e.target === $('ov')) fecharDialogo(); });
+    document.addEventListener('keydown', teclaDialogo);
+
+    carregarAmbientes().catch((e) => { if (String(e.message) !== '401') erroGeral('Não consegui carregar a tela.'); });
+  })();
+  </script>
+</body>
+</html>
