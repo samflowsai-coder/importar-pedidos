@@ -5,8 +5,11 @@ Todos os defaults vem de medicao na Fire viva (2026-08-24): 373 pedidos do
 .7 (MM Americanense) e 90 do .4 (Nasmar), de 2026-06-01 em diante. Sao os
 valores presentes em 82% a 100% dos pedidos digitados pela operacao.
 
-CODFIGFISCAL e o unico que difere entre as empresas (1 na MM, 5 na Nasmar),
-por isso mora em `environments` e nao aqui.
+CODFIGFISCAL, ICMS_PORC, REDUCAO e CFOP_PRINCIPAL deste perfil sao so o
+ponto de partida: no insert direto `figura_fiscal.resolver` troca os quatro
+pelos da figura escolhida para o cliente (a nota do Fire sai dela). A figura
+do ambiente (`environments.fiscal_codfigfiscal`, 1 na MM, 5 na Nasmar) vale
+so como ultimo degrau daquela escolha.
 """
 
 from __future__ import annotations

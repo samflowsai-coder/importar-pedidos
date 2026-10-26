@@ -193,7 +193,7 @@ class FirebirdExporter:
                 order_number=order.header.order_number,
                 items_inserted=0,
                 skipped=True,
-                skip_reason="FIGURA_FISCAL_INDEFINIDA",
+                skip_reason="CLIENTE_SEM_UF" if not exc.uf else "FIGURA_FISCAL_INDEFINIDA",
             )
         except FirebirdProductNotFoundError as exc:
             logger.warning(str(exc))

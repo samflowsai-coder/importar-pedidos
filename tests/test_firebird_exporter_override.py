@@ -216,8 +216,6 @@ def test_export_skipped_when_fb_not_configured(monkeypatch):
     """Sanity: contrato existente preservado quando FB_DATABASE não está setado."""
     exporter = FirebirdExporter()
     monkeypatch.setattr(exporter, "_conn", MagicMock())
-    # A figura tem teste próprio (test_figura_fiscal.py); aqui o perfil passa intacto.
-    monkeypatch.setattr("app.erp.figura_fiscal.resolver", lambda cur, cliente, perfil: perfil)
     exporter._conn.is_configured.return_value = False
 
     result = exporter.export(_order(), override_client_id=4242)

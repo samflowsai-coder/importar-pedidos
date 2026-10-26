@@ -108,18 +108,16 @@ FIND_CLIENT_BY_CNPJ = """
     ROWS 1
 """
 
-# Client lookup by primary key (CADASTRO.CODIGO). Used to validate manual
-# overrides before passing the FK into CAB_VENDAS — guards against codigos
-# that were inactivated between selection (HTTP) and send-to-fire (button).
 # Figura fiscal do pedido (app/erp/figura_fiscal.py). O histórico é o que as
-# operadoras gravaram: fora pedidos do próprio portal e cancelados.
+# operadoras gravaram: fora pedidos do próprio portal (bind: o usuário do
+# sistema, `FireSistemasMapper.USUARIO_SISTEMA`) e cancelados.
 FIND_CLIENT_UF = "SELECT UF FROM CADASTRO WHERE CODIGO = ?"
 
 FIGURAS_DO_CLIENTE = """
     SELECT CODFIGFISCAL, COUNT(*) FROM CAB_VENDAS
     WHERE CLIENTE = ? AND DATA_PEDIDO >= ?
-      AND STATUS <> 'CANCELADO' AND CODFIGFISCAL IS NOT NULL
-      AND COALESCE(ULT_INS_USER, '') <> 'IMPORTADOR'
+      AND COALESCE(UPPER(TRIM(STATUS)), '') <> 'CANCELADO' AND CODFIGFISCAL IS NOT NULL
+      AND COALESCE(ULT_INS_USER, '') <> ?
     GROUP BY CODFIGFISCAL
 """
 
@@ -127,8 +125,8 @@ FIGURAS_DA_UF = """
     SELECT V.CODFIGFISCAL, COUNT(*) FROM CAB_VENDAS V
     JOIN CADASTRO C ON C.CODIGO = V.CLIENTE
     WHERE C.UF = ? AND V.DATA_PEDIDO >= ?
-      AND V.STATUS <> 'CANCELADO' AND V.CODFIGFISCAL IS NOT NULL
-      AND COALESCE(V.ULT_INS_USER, '') <> 'IMPORTADOR'
+      AND COALESCE(UPPER(TRIM(V.STATUS)), '') <> 'CANCELADO' AND V.CODFIGFISCAL IS NOT NULL
+      AND COALESCE(V.ULT_INS_USER, '') <> ?
     GROUP BY V.CODFIGFISCAL
 """
 
@@ -137,6 +135,9 @@ FIGURA_FISCAL_POR_CODIGO = """
     FROM FIGURA_FISCAL WHERE CODIGO = ?
 """
 
+# Client lookup by primary key (CADASTRO.CODIGO). Used to validate manual
+# overrides before passing the FK into CAB_VENDAS — guards against codigos
+# that were inactivated between selection (HTTP) and send-to-fire (button).
 FIND_CLIENT_BY_CODIGO = """
     SELECT CODIGO, RAZAO_SOCIAL, CPF_CNPJ FROM CADASTRO
     WHERE CODIGO = ?

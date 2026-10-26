@@ -5,22 +5,25 @@ alíquota e redução da nota são os da `FIGURA_FISCAL` dela, não os do item d
 pedido (medido em 2026-10-26 contra 433 notas autorizadas da .7: 4.129/4.129
 itens). A tabela sozinha não escolhe: cada UF está em várias figuras (venda,
 bonificação, remessa, não contribuinte). Por isso a escolha segue o que as
-operadoras da empresa já gravaram, em degraus, e nunca chuta:
+operadoras da empresa já gravaram, em degraus, e nunca chuta. Só conta figura
+de venda (CFOP 5.10x/6.10x); bonificação, remessa e devolução ficam de fora.
 
-1. `cliente`: os pedidos dele na janela usaram uma figura só;
-2. `uf`: na empresa, uma figura tem ao menos MIN_PEDIDOS_UF pedidos e
-   DOMINANCIA dos pedidos da UF do cliente;
+1. `cliente`: se ele tem pedido de venda na janela, só o histórico dele decide:
+   uma figura com DOMINANCIA dos pedidos. Histórico dividido recusa (não cai
+   para a UF: o próprio cliente mostrou que a figura dele não é a da UF);
+2. `uf`: cliente sem histórico de venda; na empresa, uma figura tem ao menos
+   MIN_PEDIDOS_UF pedidos e DOMINANCIA dos pedidos de venda da UF dele;
 3. `padrao`: a figura do ambiente (`fiscal_codfigfiscal`), se cobre a UF;
 4. nenhum: `FirebirdFiguraFiscalIndefinidaError` e o pedido não é gravado.
 
-Em todo degrau a figura precisa existir e ter a UF do cliente no `UF_DESTINO`;
-senão o degrau é descartado. O histórico ignora pedidos do próprio portal
-(`IMPORTADOR`) e cancelados.
+A figura escolhida precisa ter a UF do cliente no `UF_DESTINO`. O histórico
+ignora pedidos do próprio portal e cancelados.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -29,11 +32,13 @@ from decimal import Decimal
 from app.erp import queries
 from app.erp.exceptions import FirebirdFiguraFiscalIndefinidaError
 from app.erp.fiscal import PerfilFiscal
+from app.erp.mapper import FireSistemasMapper
 from app.utils.logger import logger
 
 JANELA_DIAS = 365
 MIN_PEDIDOS_UF = 3
 DOMINANCIA = Decimal("0.9")
+_CFOP_VENDA = re.compile(r"^[56]\.10\d$")
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,10 @@ def ufs_de(uf_destino: str | None) -> frozenset[str]:
     return frozenset(p.strip().upper() for p in (uf_destino or "").split(";") if p.strip())
 
 
+def e_venda(f: Figura | None) -> bool:
+    return f is not None and bool(_CFOP_VENDA.match(f.cfop))
+
+
 def escolher(
     uf: str | None,
     por_cliente: dict[int, int],
@@ -62,24 +71,32 @@ def escolher(
     if not uf:
         return None
 
-    def cobre(codigo: int | None) -> bool:
+    def serve(codigo: int | None) -> bool:
         f = figura(codigo) if codigo is not None else None
-        return f is not None and uf in f.ufs
+        return e_venda(f) and uf in f.ufs
 
-    if len(por_cliente) == 1:
-        (codigo,) = por_cliente
-        if cobre(codigo):
-            return codigo, "cliente"
+    def dominante(hist: dict[int, int], minimo: int) -> int | None:
+        vendas = {c: n for c, n in hist.items() if e_venda(figura(c))}
+        total = sum(vendas.values())
+        if not total:
+            return None
+        codigo, n = max(vendas.items(), key=lambda kv: kv[1])
+        return codigo if n >= minimo and Decimal(n) / total >= DOMINANCIA else None
 
-    total = sum(por_uf.values())
-    if total:
-        codigo, n = max(por_uf.items(), key=lambda kv: kv[1])
-        if n >= MIN_PEDIDOS_UF and Decimal(n) / total >= DOMINANCIA and cobre(codigo):
-            return codigo, "uf"
+    if tem_venda(por_cliente, figura):
+        codigo = dominante(por_cliente, 1)
+        return (codigo, "cliente") if serve(codigo) else None
 
-    if cobre(padrao):
+    codigo = dominante(por_uf, MIN_PEDIDOS_UF)
+    if serve(codigo):
+        return codigo, "uf"
+    if serve(padrao):
         return padrao, "padrao"
     return None
+
+
+def tem_venda(hist: dict[int, int], figura: Callable[[int], Figura | None]) -> bool:
+    return any(e_venda(figura(c)) for c in hist)
 
 
 def resolver(cur, cliente: int, perfil: PerfilFiscal) -> PerfilFiscal:
@@ -88,13 +105,12 @@ def resolver(cur, cliente: int, perfil: PerfilFiscal) -> PerfilFiscal:
     row = cur.fetchone()
     uf = (row[0] or "").strip().upper() if row else ""
 
+    if not uf:
+        raise FirebirdFiguraFiscalIndefinidaError(cliente, uf)
     desde = date.today() - timedelta(days=JANELA_DIAS)
-    cur.execute(queries.FIGURAS_DO_CLIENTE, (cliente, desde))
+    sistema = FireSistemasMapper.USUARIO_SISTEMA
+    cur.execute(queries.FIGURAS_DO_CLIENTE, (cliente, desde, sistema))
     por_cliente = {int(c): int(n) for c, n in cur.fetchall()}
-    por_uf: dict[int, int] = {}
-    if uf:
-        cur.execute(queries.FIGURAS_DA_UF, (uf, desde))
-        por_uf = {int(c): int(n) for c, n in cur.fetchall()}
 
     cache: dict[int, Figura | None] = {}
 
@@ -114,6 +130,11 @@ def resolver(cur, cliente: int, perfil: PerfilFiscal) -> PerfilFiscal:
                 )
             )
         return cache[codigo]
+
+    por_uf: dict[int, int] = {}
+    if not tem_venda(por_cliente, figura):  # só consulta a UF se o cliente não decide
+        cur.execute(queries.FIGURAS_DA_UF, (uf, desde, sistema))
+        por_uf = {int(c): int(n) for c, n in cur.fetchall()}
 
     escolha = escolher(uf, por_cliente, por_uf, perfil.codfigfiscal, figura)
     if escolha is None:

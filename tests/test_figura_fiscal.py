@@ -29,6 +29,8 @@ def _fig(codigo, cfop, icms, red, ufs):
 MM = {
     1: _fig(1, "5.101", "18", "33.33", ";SP;"),
     7: _fig(7, "5.101", "18", "0", ";SP;"),
+    15: _fig(15, "5.910", "18", "33.33", ";SP;"),  # bonificação: não é venda
+    39: _fig(39, "7.949", "0", "0", ";EX;"),  # amostra ao exterior: não é venda
     8: _fig(8, "6.101", "12", "0", _DOZE),
     17: _fig(17, "6.101", "7", "0", _SETE),
     23: _fig(23, "6.109", "7", "0", ";AM;"),
@@ -50,8 +52,21 @@ def test_cliente_com_uma_figura_so_usa_a_dele():
     assert escolher("SP", {7: 4}, {1: 900, 7: 4}, 1, MM.get) == (7, "cliente")
 
 
-def test_cliente_com_duas_figuras_desce_para_a_uf():
-    assert escolher("SP", {1: 3, 7: 1}, {1: 900, 7: 4}, 1, MM.get) == (1, "uf")
+def test_cliente_com_figura_dominante_usa_a_dele_mesmo_com_um_pedido_fora():
+    # Não contribuinte em SP com um pedido perdido na 1: continua 7 (10/11 = 91%).
+    assert escolher("SP", {7: 10, 1: 1}, {1: 900}, 1, MM.get) == (7, "cliente")
+
+
+def test_cliente_com_historico_dividido_recusa_e_nao_cai_para_a_uf():
+    assert escolher("SP", {1: 3, 7: 1}, {1: 900, 7: 4}, 1, MM.get) is None
+
+
+def test_historico_do_cliente_so_de_bonificacao_desce_para_a_uf():
+    assert escolher("SP", {15: 2}, {1: 900}, 1, MM.get) == (1, "uf")
+
+
+def test_figura_que_nao_e_de_venda_nunca_e_escolhida():
+    assert escolher("EX", {39: 3}, {39: 5}, 39, MM.get) is None
 
 
 def test_cliente_novo_usa_a_figura_dominante_da_uf():
@@ -79,8 +94,9 @@ def test_padrao_que_nao_cobre_a_uf_recusa():
 
 
 def test_figura_que_nao_cobre_a_uf_do_cliente_e_descartada_em_todo_degrau():
-    # Cliente que mudou de estado: o histórico dele (1, SP) não vale para RN.
-    assert escolher("RN", {1: 5}, {17: 78}, 1, MM.get) == (17, "uf")
+    # Cliente que mudou de estado: o histórico dele (1, SP) não vale para RN, e
+    # ele decide sozinho, então recusa em vez de pegar a figura da UF.
+    assert escolher("RN", {1: 5}, {17: 78}, 1, MM.get) is None
     # Figura sumida da tabela também é descartada.
     assert escolher("RN", {99: 5}, {}, 1, MM.get) is None
 
@@ -153,9 +169,32 @@ def test_resolver_sem_decisao_levanta_com_a_uf():
     assert exc.value.cliente == 4242
 
 
+def test_cliente_sem_uf_levanta_sem_consultar_historico():
+    cur = _cursor(None, {1: 5}, {}, MM)
+
+    with pytest.raises(FirebirdFiguraFiscalIndefinidaError) as exc:
+        figura_fiscal.resolver(cur, 4242, perfil_para(None))
+
+    assert exc.value.uf == ""
+    sqls = [c.args[0] for c in cur.execute.call_args_list]
+    assert queries.FIGURAS_DO_CLIENTE not in sqls
+
+
+def test_uf_so_e_consultada_quando_o_cliente_nao_decide():
+    cur = _cursor("SP", {1: 12}, {1: 900}, MM)
+    figura_fiscal.resolver(cur, 4242, perfil_para(None))
+    sqls = [c.args[0] for c in cur.execute.call_args_list]
+    assert queries.FIGURAS_DA_UF not in sqls
+
+
 def test_historico_ignora_o_proprio_portal_e_cancelados():
+    from app.erp.mapper import FireSistemasMapper
+
+    cur = _cursor("RN", {}, {17: 78}, MM)
+    figura_fiscal.resolver(cur, 4242, perfil_para(None))
+    binds = {c.args[0]: c.args[1] for c in cur.execute.call_args_list}
     for sql in (queries.FIGURAS_DO_CLIENTE, queries.FIGURAS_DA_UF):
-        assert "IMPORTADOR" in sql
+        assert binds[sql][-1] == FireSistemasMapper.USUARIO_SISTEMA
         assert "CANCELADO" in sql
         assert "CODFIGFISCAL IS NOT NULL" in sql
 

@@ -51,11 +51,13 @@ até 2026-08; hoje cobrem o que a Fire viva realmente grava, medido contra
   sai da figura do cabeçalho: CFOP, alíquota e redução da nota são os da
   `FIGURA_FISCAL` dela, não os do item (433 notas autorizadas da `.7`, 4.129/4.129
   itens). A figura do ambiente só vale como último degrau: `figura_fiscal.resolver`
-  roda no insert depois do `CHECK_ORDER_EXISTS` e escolhe por (1) o histórico do
-  cliente, se unânime; (2) a figura dominante da UF dele na empresa (≥ 3 pedidos e
-  ≥ 90%); (3) o `fiscal_codfigfiscal` do ambiente, se a UF está no `UF_DESTINO`.
-  Toda figura escolhida precisa cobrir a UF. Sem decisão: `skip_reason
-  FIGURA_FISCAL_INDEFINIDA`, nada é gravado (409 no envio). O histórico ignora
+  roda no insert depois do `CHECK_ORDER_EXISTS`. Só conta figura de venda (CFOP
+  5.10x/6.10x). Escolhe por (1) o histórico de venda do cliente, quando existe: só
+  ele decide (uma figura com ≥ 90%), e dividido recusa; (2) cliente sem histórico
+  de venda: a figura dominante da UF dele na empresa (≥ 3 pedidos e ≥ 90%); (3) o
+  `fiscal_codfigfiscal` do ambiente, se a UF está no `UF_DESTINO`. Toda figura
+  escolhida precisa cobrir a UF. Sem decisão: `skip_reason FIGURA_FISCAL_INDEFINIDA`
+  (`CLIENTE_SEM_UF` se o cadastro não tem UF), nada é gravado (409 no envio). O histórico ignora
   `IMPORTADOR` e cancelados (janela de 365 dias). `CFOP_PRINCIPAL`, `ICMS_PORC` e
   `REDUCAO` do item passam a ser os da figura (SP: redução 33,33, não mais 61,11).
   Validado só-leitura na Fire viva: 182/182 clientes da MM e 78/79 da Nasmar com a
