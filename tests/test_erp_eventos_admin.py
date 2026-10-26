@@ -412,4 +412,4 @@ def test_painel_envios_trazem_rotulos_do_servidor(env_id, manual_limpo):
         )  # fmt: skip
     envio = c.get(_url(env_id, "/painel")).json()["envios"][0]
     assert envio["origem_rotulo"] == "Manual · samuel"
-    assert (envio["resultado_rotulo"], envio["resultado_tom"]) == ("Sem resposta (rede)", "erro")
+    assert (envio["resultado_rotulo"], envio["resultado_tom"]) == ("Enviando…", "neutro")
