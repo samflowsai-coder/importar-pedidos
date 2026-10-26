@@ -541,18 +541,33 @@ Diferenças reais, medidas contra os 753 pedidos de operadora desde 01/06:
   cliente (`COM CABIDE`), referência cruzada do intercompany (`<pedido> - NASMAR 1311`) e
   composição (`KIT 3`), sempre com o número do pedido. É nota livre da operadora; o modelo
   `Order` não tem campo de observação do pedido.
-- **Perfil fiscal (o achado maior):** o portal crava um perfil fixo por ambiente (na MM: figura 1,
-  CFOP 5.101, ICMS 18%, `REDUCAO` 61,11), sem olhar o estado do cliente (`fiscal.py`, `mapper.py`). As operadoras escolhem a **figura fiscal pelo estado do
-  cliente**, e `FIGURA_FISCAL` (Fire viva, `UF_DESTINO`) guarda CFOP e alíquota de cada uma:
-  SP = figura 1 (5.101, 18%); MG/PR/RJ/RS/SC = 8 (6.101, 12%); demais estados = 17 (6.101, 7%);
-  AM = 23 (6.109, 7%, Suframa); exterior = 39 (7.949, 0%). Medido na Fire viva em jun-out (876 pedidos): SP 760 (600 com
-  redução 61,11, 114 com 0, 46 sem figura gravada ou combinações raras); fora de SP 116 (RN 45,
-  AM 39, PE 7, RS 7, DF 5, RJ 5 e 8 de outros estados e do exterior). Hoje o portal gravaria figura, CFOP,
-  ICMS e redução errados em todo pedido de fora de SP (116 de 876 pedidos, 13%), com efeito
-  na nota. Duas dúvidas fiscais que os dados não resolvem, **para o Elias**: (a) a figura 1 da
-  tabela diz redução 33,33 e as linhas gravam 61,11; (b) 114 pedidos de SP saem com redução 0
-  (e 4 de fora de SP saem com 61,11, provável sobra do padrão da operadora, todos `CAMILA`).
-  Nenhum fix de perfil antes da resposta dele.
+- **Perfil fiscal: o que a nota realmente usa (validado contra nota emitida, 26/10):** o portal
+  crava um perfil fixo por ambiente (na MM: figura 1, CFOP 5.101, ICMS 18%, `REDUCAO` 61,11),
+  sem olhar o estado do cliente (`fiscal.py`, `mapper.py`). Para saber o que importa, comparei o
+  item do pedido com o item da **nota emitida** na Fire viva da `.7` (pedidos de operadora
+  faturados desde 01/06: 433 pedidos, todos com NFe `Autorizada`; 4.091 itens casados por
+  `CAB_VENDAS.CODNF` + produto). Resultado:
+  - **`CAB_VENDAS.CODFIGFISCAL` é o que decide a nota:** `NOTA.CODFIGFISCAL` é igual à do
+    pedido em 433/433. Figura é escolhida pelo estado do cliente (`FIGURA_FISCAL.UF_DESTINO`):
+    SP = 1 (5.101, 18%, redução 33,33, CST 20); MG/PR/RJ/RS/SC = 8 (6.101, 12%); demais estados
+    = 17 (6.101, 7%); AM = 23 (6.109, 7%, CST 40, Suframa); exterior = 39 (7.949, CST 41).
+  - **`REDUCAO`, `ICMS_PORC` e `ICMS_BASE` do item do pedido não entram na nota.** A nota
+    recalcula pela figura: `REDUCAO` igual ao pedido em só 186/4.091 itens; `ICMS_PORC` em
+    4.022 (os 69 que diferem são pedidos com 18% de sobra do padrão em figura 17 ou 8, e a nota
+    saiu com 7% ou 12%); `CFOP` e `QTD` em 4.091/4.091. Exemplo SP (pedido AF066): item com
+    redução 61,11 e `ICMS_BASE` 0 saiu na nota com redução 33,33, base 89,42 e ICMS 16,10.
+    Logo o 61,11 do pedido é vestigial, a pergunta "33,33 ou 61,11" não precisa de resposta do
+    fiscal, e as 114 linhas de SP com redução 0 são irrelevantes para a nota.
+  - **O risco real é a figura do cabeçalho:** o portal grava figura 1 em todo pedido. Em
+    114 de 756 pedidos (15%) de fora de SP, a figura 1 geraria a nota com CFOP 5.101 e ICMS 18%
+    para venda interestadual. Nenhum faturado da amostra tinha figura vazia (41 pedidos sem
+    figura estão todos em aberto, o que sugere que alguém a define antes de faturar). Fix
+    proposto (decisão do Samuel, não tomada): o portal escolher `CODFIGFISCAL` pela UF do
+    cliente a partir de `FIGURA_FISCAL.UF_DESTINO`, e gravar `CFOP_PRINCIPAL`/`ICMS_PORC` do
+    item coerentes com a figura (a nota ignora, mas o pedido fica consistente).
+  - **Em aberto:** AM (um só cliente no período, com a flag `FISCAL_ZF_MANAUS`='Sim' no
+    cadastro: não separa "regra por estado" de "regra pela flag"); a `.4` (Nasmar, figura
+    padrão 5) não foi medida; confirmar com o Elias o mapa UF→figura antes de implementar.
 - **`VALOR_TOTAL`/`TOTAL_PRODUTO`:** 1/5 diferiu 1 centavo (soma 2569,1589: Fire trunca para
   2569,15, o portal arredonda para 2569,16). Com preço de 4 casas (o do espelho inclusive) a soma tem fração além de 2 casas, e
   a impressão digital do §1.5 (que usa `VALOR_TOTAL`) falharia aberta nesse caso.
