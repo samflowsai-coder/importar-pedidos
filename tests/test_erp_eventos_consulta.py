@@ -366,6 +366,7 @@ def _lote(**kw):
 @pytest.mark.parametrize(
     ("kw", "rotulo", "tom"),
     [
+        ({"http": None, "respondido_em": None}, "Enviando…", "neutro"),
         ({"http": None}, "Sem resposta (rede)", "erro"),
         ({"http": 500}, "HTTP 500", "erro"),
         ({"aceitos": 0}, "Sem resultado", "aviso"),

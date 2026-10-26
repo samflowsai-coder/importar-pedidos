@@ -138,7 +138,9 @@ def _plural_recusado(n: int) -> str:
 
 def rotulo_lote(reg: erp_envio_lote_repo.LoteRegistro) -> dict:
     """Origem e resultado de um lote, prontos para a tela (a tela só exibe)."""
-    if reg.http is None:
+    if reg.respondido_em is None:
+        res, tom = "Enviando…", "neutro"  # lote em voo: a chamada ao Flow ainda não voltou
+    elif reg.http is None:
         res, tom = "Sem resposta (rede)", "erro"
     elif not 200 <= reg.http < 300:
         res, tom = f"HTTP {reg.http}", "erro"

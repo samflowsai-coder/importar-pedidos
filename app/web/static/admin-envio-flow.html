@@ -563,7 +563,9 @@
       enviando = true;
       $('btn-enviar-agora').disabled = true;
       statusEnvio('Pedindo o envio…');
+      const amb = envId;
       const r = await api(base() + '/enviar-agora', { method: 'POST' });
+      if (amb !== envId) return;
       if (r.status !== 202 || !r.corpo || !r.corpo.envio_id) {
         enviando = false;
         statusEnvio(detalheDe(r, 'Não consegui pedir o envio (' + r.status + ').'));
@@ -571,7 +573,7 @@
         return;
       }
       statusEnvio('Envio pedido; acompanhando…');
-      acompanhar(r.corpo.envio_id, Date.now(), envId);
+      acompanhar(r.corpo.envio_id, Date.now(), amb);
     }
 
     function acompanhar(id, inicio, ambiente) {
