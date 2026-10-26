@@ -387,6 +387,18 @@ Pendência menor (revisão de 21/10): em `EXPORT_MODE=both`, `_send_one_to_fire`
 `planilha=True` ao `_recusa_planilha_pontual` também para o espelho, que nunca gera XLSX
 (`server.py`, `not espelho`). Com escolha pontual de produto sem `CODPROD_ALTERN` numa linha do
 espelho, recusa à toa (lado seguro). Corrigir com `planilha=... and not integracao.e_espelho(import_id)`.
+
+### 3.9 Espécie dos volumes na NF sai "FARDO" por padrão — chamado na Fire Sistemas
+Pedido da Camila (MM) em 05/10/2026: na emissão da nota o campo da espécie dos volumes
+vem preenchido com "FARDO" e eles nunca usam; querem "CAIXA" como padrão, para as duas
+empresas. Verificado na Fire viva (.4 e .7, só leitura): é `NOTA.NF_TRANSP_ESPECIE`,
+VARCHAR(25) de texto livre, **sem default no banco e sem gatilho/procedure que o
+preencha**, e o texto "FARDO" não está em nenhuma tabela de configuração. Inferência (não
+provada): o padrão está fixo na tela de faturamento do programa. O portal não participa (o
+export não tem coluna de espécie e a linha da nota só nasce na emissão, dentro do Fire).
+A MM abre o chamado com a Fire Sistemas; o Samuel acompanha. **Não editar o banco** para
+forçar "CAIXA". Em 2026 já predomina "CAIXA" (.7: 1.092; .4: 350).
+
 ---
 
 ## 4. Decisões pendentes (aguardam o Samuel)
@@ -410,7 +422,7 @@ para `xlsx` na dúvida.
   INSERT); no caminho XLSX é por posição e "nunca chuta" (`app/erp_eventos/vinculo.py`).
 
 **P0 (sem isso não grava em produção):**
-1. **O modo é global, não por empresa.** `export_mode` vale para o processo inteiro
+1. **(Parte do "por empresa" substituída em 24/10: o Samuel decidiu modo global; ver "Decisões do Samuel" abaixo. O diagnóstico vale.)** **O modo é global, não por empresa.** `export_mode` vale para o processo inteiro
    (`app/config.py`): `_cfg_para_env` (`app/web/server.py`) só troca as pastas, e o
    `config.json` salvo vence a variável de ambiente. Ligar `db`/`both` para a MM liga o
    "Cadastrar no Fire" também na Nasmar (`.4`, sem cópia validada). Além disso
@@ -438,7 +450,7 @@ para `xlsx` na dúvida.
    checkout principal e não é versionado, gera `.fbk` inválido).
 4. **Como desfazer** um pedido gravado errado (quem cancela, como, até quando). Sem resposta
    da Camila/Elias/Fire Sistemas não há canário.
-5. **`both` não serve de canário:** o XLS nasce antes do insert, na mesma `output_dir`
+5. **(Plano B substituído em 24/10: sem plano B; ver "Decisões do Samuel" abaixo. A análise do `both` vale.)** **`both` não serve de canário:** o XLS nasce antes do insert, na mesma `output_dir`
    (`app/web/server.py`, envio ao Fire), e fica lá mesmo se o insert falhar; se a operadora o
    importar, o pedido entra duas vezes. Pasta separada exigiria mudar o código. Por isso o
    canário roda em `db`. Como `db` vale para a empresa inteira, todo pedido da MM (não só o do
@@ -457,7 +469,7 @@ para `xlsx` na dúvida.
    plano B é o freio do item 1 (voltar a `xlsx` na empresa toda).
 6. **Trava de produto:** `produto_chave_modo` estava desligado na última checagem (20/10,
    relato da sessão; não reverificado). Sem ela o insert casa produto pela busca antiga e
-   erro de produto vira pedido errado no ERP. Ligar `ligado` ao menos no ambiente canário.
+   erro de produto vira pedido errado no ERP. Ligar pelo caminho das "Decisões do Samuel" abaixo (`observando` → `ligado`), nas duas empresas.
 
 **P1 (antes de tirar o canário):**
 - PK do cabeçalho: `GET_NEXT_CABVENDAS_CODIGO` é `MAX(CODIGO)+1` (`app/erp/queries.py`) e o
@@ -471,16 +483,122 @@ para `xlsx` na dúvida.
   pedido do ERP. Provar no canário que o Flow não duplica (o vínculo exato é o que deveria
   impedir).
 - Operação: backup server-side antes do canário; desligar = trocar o modo (hoje no
-  `config.json`/tela de config, global; por empresa depois do P0.1). Aba aberta em outra máquina
+  `config.json`/tela de config, global, decisão de 24/10). Aba aberta em outra máquina
   mantém o botão até recarregar (as do mesmo navegador se atualizam): avisar a operadora e
   confiar no 409 do servidor, não na tela. Quem acompanha
   e em que janela.
 
-**Canário proposto (depois do P0):** só a MM (`.7`), em `db`, com o plano B do item 5 no ar
-(por pedido, ou a lista de clientes liberados). Camila confere os 5 primeiros pedidos lado a lado
-(pedido 100% casado por SEQ, cliente de baixo risco; com o plano B por pedido o cliente é
-escolhido por quem envia, porque o modo vale para a empresa toda); saída com 20 pedidos sem
-divergência. Nasmar depois, com cópia da `.4` validada.
+**Decisões do Samuel em 24/10 (tarde; o item do teste em produção é de 25/10) — onde conflitam com o P0 acima, valem estas:**
+- **Modo global, sem parâmetro por empresa** (substitui o P0.1 "modo por empresa"). Com `db`
+  ligado e o lote semanal, não haverá XLS. Consequência: a Nasmar (`.4`) entra junto, então o
+  **backup server-side da `.4` e a paridade nela viram pré-requisito da virada**, não etapa
+  posterior. Continuam valendo: servidor responde 409 fora do modo e a rota de config só para
+  admin, com auditoria (proposta do assistente, não discutida).
+- **Sem plano B** (substitui o P0.5): saem o botão secundário de XLS e a lista de clientes
+  liberados. Fica o parâmetro BD/XLS nas configurações, pedido já exportado em XLS não grava
+  direto sem confirmação, e falha do Fire (fora do ar, lock) vira erro claro, nunca pedido
+  meio-gravado. (O Canário foi reescrito abaixo.)
+- **Empresa certa sem o operador selecionar:** a gravação depende 100% do roteamento
+  (documento > histórico > memória + regra de faturamento MM × Nasmar). Sem decisão ou ambíguo,
+  o pedido fica retido, nunca grava por padrão. Proposta do assistente para o canário: o sistema sugere
+  e o operador confirma com um clique, até a taxa de acerto estar provada. Estado do
+  `roteamento_modo` em produção: relato de 20/10, **a reverificar**.
+- **Pedido que já existe no Fire:** o portal acha o anterior pela chave CNPJ do cliente + número
+  do documento (só vale para número de pedido de compra de verdade, não código de loja) e
+  mostra o diff para o usuário confirmar. Pedido digitado à mão ou anterior à virada não tem
+  vínculo no portal: vale a impressão digital no Fire (§1.5) mais a confirmação. **Atualizar o
+  pedido no Fire** (UPDATE/DELETE) é trilha própria, depois do canário estável. Regras
+  propostas (não decididas): item faturado não reduz abaixo do faturado; remover item com
+  produção avisa; incluir item é livre. Antes, descobrir como o Fire representa remoção e
+  alteração de item (tabela `HISTORICO`).
+- **Desfazer pedido, 3 camadas:** faturado (mesmo parcial) bloqueia, cancela-se a NF no Fire
+  primeiro; produção iniciada só avisa (depende de uma leitura do produzido no Flow/Apontaê,
+  **não confirmado se existe**); cancelar é `STATUS='CANCELADO'` (medido na cópia de 23/10: 22 pedidos
+  assim), nunca apagar a linha.
+- **Trava de produto:** ligar. Caminho: sincronizar o catálogo, migrar o de-para para v2,
+  `observando` por alguns dias, depois `ligado`. Falta o seletor mostrar a diferença antes de
+  aceitar (descrição, EAN, grade, unidade, kit ou par), aprender vínculo só por escolha humana
+  confirmada e o desfazer do vínculo (item 2.2 sobe de prioridade).
+- **Teste direto na produção da MM:** autorizado pelo Samuel em 25/10, depois de o assistente
+  avisar que o SP1 está ligado na MM e leva o pedido de teste e o cancelamento ao Flow de
+  produção ("pode fazer, sem problemas"). Só roda com acesso à `.7` (exige VPN) e depois do
+  ensaio equivalente na cópia restaurada de 23/10 (`mm_oct23.fdb` no `fire-local`).
+
+**Ensaio de paridade em cópia (25/10; P0.3 parcial, só a MM):** 5 pedidos de operadora de
+set/out (todos kits; `CAMILA`) foram remontados a partir do próprio Fire e regravados pelo
+`FirebirdExporter` (itens pelo SEQ) na cópia local de 23/10 (`mm_oct23.fdb`), com número de
+pedido de teste. Gravou 5/5, mesmos itens, QTD, preço, total por item e `ICMS_BASE`.
+Diferenças reais, medidas contra os 753 pedidos de operadora desde 01/06:
+- **`COND_PRAZO` e `PRAZO_MEDIO`:** a operadora preenche em 707/753 (94%; cópia de 23/10, desde 01/06); o portal grava NULL,
+  então a condição de pagamento do pedido não vem. **Origem medida na Fire viva da `.7`
+  (26/10, só SELECT, jun a out; as contagens abaixo são desta base e diferem das da cópia):** não é cópia do cadastro (`CADASTRO.FIN_COND_PRAZO` está vazio no cliente de 607 dos
+  756 pedidos e nunca coincide com o do pedido). O prazo é estável por cliente: 156 de 161
+  clientes usam um só (563 pedidos); 4 usam dois e **1 cliente varia a cada pedido** (6 prazos
+  em 135 pedidos), esse só sai do documento. Prazos mais usados: 120, 60, 130, 30, 180 dias.
+  Caminho candidato (decisão do Samuel, não tomada): sugerir o último prazo do cliente com
+  confirmação na tela, e ler do documento onde o parser puder.
+- **`OBS`:** preenchida em 737/753 (98%). Amostra dos pedidos de outubro na Fire viva: nota do
+  cliente (`COM CABIDE`), referência cruzada do intercompany (`<pedido> - NASMAR 1311`) e
+  composição (`KIT 3`), sempre com o número do pedido. É nota livre da operadora; o modelo
+  `Order` não tem campo de observação do pedido.
+- **Perfil fiscal: o que a nota realmente usa (validado contra nota emitida, 26/10, Fire viva da
+  `.7`, só SELECT):** o portal grava figura 1 em todo pedido da MM e, em todo item, CFOP 5.101,
+  ICMS 18%, `ICMS_BASE` 0 e `REDUCAO` 61,11 (`fiscal.py`, `mapper.py`; só a figura varia por
+  ambiente, 5 na Nasmar), sem olhar o estado do cliente. Base da medição: os pedidos de
+  operadora desde 01/06 (756 pedidos, todos os status; 433 faturados, todos com NFe
+  `Autorizada`; 4.129 itens de nota, 4.091 deles casados ao item do pedido por
+  `CAB_VENDAS.CODNF` + produto). Resultado:
+  - **A figura do cabeçalho decide a nota.** `NOTA.CODFIGFISCAL` = `CAB_VENDAS.CODFIGFISCAL`
+    em 433/433, e em 4.129/4.129 itens da nota `REDUCAO`, `ICMS_PORC` e `CFOP` são idênticos ao
+    valor de `FIGURA_FISCAL` da figura da nota (fig 1: 5.101, 18%, redução 33,33, CST 20; fig
+    17 e 8: redução 0, CST 00; fig 23: CST 40; fig 39: CST 41). A base de ICMS confere com
+    `total x (1 - redução)` em 3.985 de 4.074 itens com CST 00/20 (tolerância de 2 centavos; os 89 que não conferem não foram investigados).
+  - **O `REDUCAO`/`ICMS_PORC`/`ICMS_BASE` do item do pedido não vira a nota.** `REDUCAO` do
+    pedido igual ao da nota em só 186/4.091 itens; `ICMS_PORC` em 4.022 (os 69 itens que
+    diferem eram pedidos de figura 17 ou 8 com 18% de sobra do padrão, e a nota saiu com 7% ou
+    12%). Exemplo SP (pedido AF066): item com redução 61,11 e `ICMS_BASE` 0, nota com redução
+    33,33, base 89,42 e ICMS 16,10. Logo o 61,11 do item é vestigial: a "dúvida 33,33 x 61,11"
+    deixa de existir. **Exceção da evidência: o `CFOP`.** Item e nota batem em 4.091/4.091 e
+    ambos são iguais ao da figura, então os dados não separam "a nota copia o do item" de "a
+    nota usa o da figura". Por isso gravar `CFOP_PRINCIPAL` coerente com a figura é obrigatório
+    no fix, não opcional.
+  - **O estado do cliente determina a figura** nos 433 pedidos faturados, sem exceção: SP = 1
+    (373 pedidos); RN, BA, PE, SE, DF = 17; AM = 23; RS, RJ, PR = 8; exterior = 39 (bate com
+    `FIGURA_FISCAL.UF_DESTINO`: MG/PR/RJ/RS/SC = 8, demais estados = 17, AM = 23, EX = 39).
+  - **O risco real é a figura do cabeçalho:** 114 dos 756 pedidos (15%) são de cliente de fora
+    de SP. Com figura 1, a nota sairia com CFOP 5.101 e ICMS 18% numa venda interestadual. Nenhum
+    faturado tinha figura vazia (41 pedidos sem figura estão todos em aberto; sugere que alguém
+    a define antes de faturar, inferência não confirmada). Fix proposto (decisão do Samuel, não
+    tomada): o portal escolher `CODFIGFISCAL` pela UF do cliente a partir de
+    `FIGURA_FISCAL.UF_DESTINO`, e gravar `CFOP_PRINCIPAL`, `ICMS_PORC` e `REDUCAO` do item
+    coerentes com essa figura.
+  - **Em aberto:** AM (um só cliente no período, com `FISCAL_ZF_MANAUS`='Sim': não separa
+    "regra por estado" de "regra pela flag do cadastro"); SC e MG sem pedido na amostra; a
+    `.4` (Nasmar, figura padrão 5) não foi medida; confirmar o mapa UF→figura com o Elias antes
+    de implementar.
+- **`VALOR_TOTAL`/`TOTAL_PRODUTO`:** 1/5 diferiu 1 centavo (soma 2569,1589: Fire trunca para
+  2569,15, o portal arredonda para 2569,16). Com preço de 4 casas (o do espelho inclusive) a soma tem fração além de 2 casas, e
+  a impressão digital do §1.5 (que usa `VALOR_TOTAL`) falharia aberta nesse caso.
+- **`DESC_CLASS_FINAN`:** a operadora deixa vazio em 274/753 (36%) dos pedidos; o portal sempre preenche.
+- **Não é divergência do portal (artefato do ensaio):** `DT_ENTREGA`/`DT_BASE_FAT` (o ensaio
+  remontou a data a partir de `DT_ENTREGA_ITEM`, que a operadora nunca preenche: 0/6.877) e
+  `DT_PRODUCAO` (preenchida depois, à mão). Falta repetir com a data de entrega do cabeçalho.
+- **Como o Fire registra alteração (para a trilha de atualizar pedido):** o `HISTORICO` loga um
+  evento por mudança (`Inclusão`, `Alteração`, `Alt Cód Item: <item>`, `Exc de Item`,
+  `Exclusão`); desde 01/06 há 1.467 `Exc de Item`. Que remover item apaga a linha de
+  `CORPO_VENDAS` é inferência pelo nome do evento (não conferido). Pedido cancelado fica como
+  `STATUS='CANCELADO'` (22 na cópia, de 03/2020 a 21/10/2025; nenhum em 2026).
+- **Fora do ensaio:** a Nasmar (`.4`), pedidos não-kit, escolha por EAN/código (só SEQ), e o
+  cancelamento (`STATUS`/`HISTORICO`).
+
+**Canário (reescrito em 25/10, com as decisões acima):** `db` com modo global, então MM (`.7`) e
+Nasmar (`.4`) entram juntas e não há plano B por pedido nem lista de clientes. Pré-requisitos: o
+roteamento provado (ou a empresa sugerida com confirmação por clique), a paridade provada nas
+**duas** empresas e o 409 no servidor. Camila confere os primeiros pedidos lado a lado; o critério
+de saída (quantos pedidos sem divergência) fica a definir. **A `.4` segue sem cópia utilizável:**
+os dois `BKP_*_CONFECCAO_TERCA.fbk` de abril terminam truncados (`gbak`: "Backup incomplete") e o
+`nasmar.fdb` do `fire-local` é, na prática, a mesma base da MM de abril. Falta um backup
+server-side novo da `.4`.
 
 **Lote semanal (§3.8):** só liga com o `db` estável nos dois ambientes.
 
