@@ -204,7 +204,7 @@ def _enviar_foto(cfg: BaseErpConfig) -> None:
     try:
         if devendo:
             # Só o que é anterior ao corte: o resto espera a janela.
-            drenagem.drenar(cfg, cliente=cliente, ritmo=_ritmo, ate=f.corte_em)
+            drenagem.drenar(cfg, cliente=cliente, ritmo=_ritmo, ate=f.corte_em, origem="foto")
             with router.env_connect(cfg.env_slug) as conn:
                 devendo = erp_estado_repo.pendentes_ate(conn, cfg.base, f.corte_em)
             if devendo:

@@ -12,7 +12,14 @@ import pytest
 from app.erp_eventos import drenagem
 from app.erp_eventos.envio import ClienteErpEventos, RespostaHttp, Ritmo
 from app.erp_eventos.eventos import EventoFila
-from app.persistence import db, environments_repo, erp_bases_repo, erp_estado_repo, router
+from app.persistence import (
+    db,
+    environments_repo,
+    erp_bases_repo,
+    erp_envio_lote_repo,
+    erp_estado_repo,
+    router,
+)
 from app.security import secret_store
 
 TENANT = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
@@ -184,6 +191,73 @@ def test_413_divide_sem_partir_unidade(cfg):
     flow = Flow([RespostaHttp(413, None, None)])
     rodar(cfg, flow)
     assert [len(lote) for lote in flow.lotes] == [16, 8, 8]
+
+
+def lotes_registrados():
+    with router.env_connect("mm") as conn:
+        return erp_envio_lote_repo.recentes(conn, "mm")
+
+
+def test_lote_aceito_grava_registro_janela(cfg):
+    enfileirar([3])
+    rodar(cfg, Flow())
+    (reg,) = lotes_registrados()
+    assert (reg.origem, reg.eventos, reg.http, reg.aceitos) == ("janela", 3, 202, 3)
+    assert (reg.duplicados, reg.rejeitados) == (0, 0)
+    assert reg.quem is None and reg.envio_id is None and reg.respondido_em
+
+
+def test_lote_vazio_de_sinal_grava_registro(cfg):
+    with router.env_connect("mm") as conn:
+        erp_estado_repo.registrar_vigia(conn, "mm", "2026-10-09T13:00:00.000+00:00")
+    rodar(cfg, Flow())
+    (reg,) = lotes_registrados()
+    assert (reg.eventos, reg.http, reg.aceitos) == (0, 202, 0)
+
+
+def test_lote_manual_grava_quem_e_envio_id(cfg):
+    enfileirar([2])
+    drenagem.drenar(
+        cfg,
+        cliente=Flow(),
+        ritmo=Ritmo(0),
+        agora_fn=lambda: T0,
+        origem="manual",
+        quem="samuel",
+        envio_id="env-1",
+    )
+    (reg,) = lotes_registrados()
+    assert (reg.origem, reg.quem, reg.envio_id) == ("manual", "samuel", "env-1")
+
+
+def test_lote_com_erro_5xx_fecha_com_http_e_zero_aceitos(cfg):
+    enfileirar([2])
+    rodar(cfg, Flow([RespostaHttp(503, None, None, erro="x")]))
+    (reg,) = lotes_registrados()
+    assert (reg.http, reg.aceitos, reg.eventos) == (503, 0, 2) and reg.respondido_em
+
+
+def test_lote_400_bloqueia_e_fecha_registro(cfg):
+    enfileirar([2])
+    rodar(cfg, Flow([RespostaHttp(400, None, None, erro="ruim")]))
+    (reg,) = lotes_registrados()
+    assert (reg.http, reg.aceitos) == (400, 0) and reg.respondido_em
+    assert envio(cfg).bloqueio
+
+
+def test_413_fecha_o_lote_recusado_e_registra_o_seguinte(cfg):
+    enfileirar([4, 4])
+    rodar(cfg, Flow([RespostaHttp(413, None, None)]))
+    regs = sorted(lotes_registrados(), key=lambda r: r.enviado_em)
+    assert sorted((r.http, r.eventos) for r in regs) == [(202, 4), (202, 4), (413, 8)]
+
+
+def test_origem_invalida_falha_antes_de_enviar(cfg):
+    enfileirar([1])
+    flow = Flow()
+    with pytest.raises(ValueError):
+        drenagem.drenar(cfg, cliente=flow, ritmo=Ritmo(0), agora_fn=lambda: T0, origem="xis")
+    assert flow.lotes == []
 
 
 def test_cliente_http_manda_bearer_tenant_e_envelope():
