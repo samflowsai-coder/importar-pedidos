@@ -34,7 +34,8 @@
     .btn-primary:hover:not([disabled]) { background: var(--accent-hover); }
     .btn[disabled] { opacity: .45; cursor: not-allowed; }
     .motivo { font-size: 12px; color: var(--text-secondary); margin: 0; }
-    #envio-status { margin: 12px 0 0; font-size: 13px; color: var(--text-secondary); min-height: 1.5em; }
+    #envio-status { margin: 12px 0 0; font-size: 13px; color: var(--text-secondary); }
+    #envio-status:empty { display: none; }
     .busca { margin-top: 24px; padding: 20px; }
     .busca label { font-weight: 600; display: block; margin-bottom: 8px; }
     .busca .row { display: flex; gap: 8px; }
@@ -76,7 +77,8 @@
     .ov.on { display: flex; }
     .dlg { background: var(--bg); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); max-width: 460px; width: 100%; padding: 24px; }
     .dlg h2 { margin: 0 0 8px; font-size: 18px; }
-    .dlg p { margin: 0 0 16px; color: var(--text-secondary); }
+    .dlg p { margin: 0 0 12px; color: var(--text-secondary); }
+    .dlg-lista { margin: 0 0 16px; padding-left: 18px; color: var(--text-secondary); }
     .dlg .acts { display: flex; gap: 8px; justify-content: flex-end; }
     @media (max-width: 960px) {
       .saude { grid-template-columns: 1fr 1fr; }
@@ -96,7 +98,7 @@
   <div id="app-shell"></div>
   <main class="content">
     <h1>Envio ao Flow</h1>
-    <p class="sub">Pedidos do Fire que o portal lê e manda para o Flow. A fila sai sozinha às 8h, 11h, 14h e 17h (seg–sáb).</p>
+    <p class="sub">Pedidos do Fire que o portal lê e manda para o Flow. <span id="sub-janelas">A fila sai sozinha nas janelas do dia (seg–sáb).</span></p>
 
     <div class="topo">
       <label for="amb">Empresa</label>
@@ -108,7 +110,7 @@
       <div id="bloqueio" class="alerta" hidden></div>
 
       <section class="card saude" aria-label="Situação do envio">
-        <div class="m"><small>Última leitura do Fire</small><strong id="k-vigia">—</strong><span id="k-vigia-d"></span></div>
+        <div class="m"><small>Última leitura do Fire</small><strong id="k-vigia">—</strong><span id="k-vigia-d"></span><span class="note" id="k-vigia-i" style="display:block"></span></div>
         <div class="m"><small>Na fila</small><strong id="k-fila">—</strong><span>eventos esperando</span></div>
         <div class="m"><small>Próxima saída</small><strong id="k-prox">—</strong><span id="k-prox-d"></span></div>
         <div class="m"><small>Último lote aceito</small><strong id="k-aceito">—</strong><span id="k-aceito-d"></span></div>
@@ -148,6 +150,10 @@
     <div class="dlg">
       <h2 id="dlg-t">Enviar a fila agora?</h2>
       <p id="dlg-p"></p>
+      <ul class="dlg-lista">
+        <li>Mesma ordem e mesmas regras do envio da janela.</li>
+        <li>Fica registrado como envio manual seu.</li>
+      </ul>
       <div class="acts">
         <button type="button" class="btn" id="dlg-cancelar">Cancelar</button>
         <button type="button" class="btn btn-primary" id="dlg-ok">Enviar agora</button>
@@ -208,7 +214,12 @@
     function plural(n, um, varios) { return n + ' ' + (n === 1 ? um : varios); }
 
     async function api(path, opts) {
-      const r = await fetch('/api/admin/environments' + path, Object.assign({ credentials: 'same-origin' }, opts));
+      let r;
+      try {
+        r = await fetch('/api/admin/environments' + path, Object.assign({ credentials: 'same-origin' }, opts));
+      } catch (_) {
+        return { ok: false, status: 0, corpo: null };
+      }
       if (r.status === 401) { location.href = '/login'; throw new Error('401'); }
       let corpo = null;
       try { corpo = await r.json(); } catch (_) { /* sem corpo */ }
@@ -216,6 +227,7 @@
     }
     const base = () => '/' + encodeURIComponent(envId) + '/erp-base';
     function detalheDe(res, padrao) {
+      if (res.status === 0) return 'Sem conexão com o portal. Tente de novo.';
       const d = res.corpo && res.corpo.detail;
       return typeof d === 'string' ? d : padrao;
     }
@@ -272,30 +284,32 @@
     }
 
     // ── painel ───────────────────────────────────────────────────────────
-    function rotuloOrigem(e) {
-      if (e.origem === 'janela') {
-        const p = partes(e.enviado_em);
-        return p ? 'Janela das ' + parseInt(p.hour, 10) + 'h' : 'Janela';
-      }
-      if (e.origem === 'foto') return 'Antes da foto';
-      if (e.origem === 'manual') return 'Manual · ' + (e.quem || 'desconhecido');
-      return e.origem || '—';
+    function frasePrazos(horas) {
+      if (!horas || !horas.length) return 'A fila sai sozinha nas janelas do dia (seg–sáb).';
+      const hs = horas.map((h) => h + 'h');
+      const lista = hs.length === 1 ? hs[0] : hs.slice(0, -1).join(', ') + ' e ' + hs[hs.length - 1];
+      return 'A fila sai sozinha às ' + lista + ' (seg–sáb).';
     }
 
     async function carregarPainel() {
+      const amb = envId;
       const r = await api(base() + '/painel');
+      if (amb !== envId) return;
       if (!r.ok) { erroGeral(detalheDe(r, 'Não consegui carregar o painel.')); return; }
+      erroGeral('');
       painel = r.corpo;
       const p = painel;
       $('k-vigia').textContent = hhmm(p.ultima_vigia_em);
       $('k-vigia-d').textContent = p.ultima_vigia_em ? diaLabel(p.ultima_vigia_em) : 'ainda não leu';
+      $('k-vigia-i').textContent = p.intervalo_vigia_min ? 'a cada ' + p.intervalo_vigia_min + ' min' : '';
+      $('sub-janelas').textContent = frasePrazos(p.janelas);
       $('k-fila').textContent = String(p.fila_pendente);
       $('k-prox').textContent = hhmm(p.proxima_janela);
       $('k-prox-d').textContent = diaLabel(p.proxima_janela);
       $('k-aceito').textContent = hhmm(p.ultimo_202_em);
-      const ult = (p.envios || []).find((e) => (e.aceitos || 0) + (e.duplicados || 0) > 0 || e.eventos === 0);
+      const ult = (p.envios || []).find((e) => e.http === 202 && e.resultado_tom === 'ok');
       $('k-aceito-d').textContent = p.ultimo_202_em
-        ? diaLabel(p.ultimo_202_em) + (ult ? ' · ' + rotuloOrigem(ult).toLowerCase() : '')
+        ? diaLabel(p.ultimo_202_em) + (ult ? ' · ' + ult.origem_rotulo.toLowerCase() : '')
         : 'nenhum ainda';
       $('k-rec').textContent = String(p.recusados_30d);
 
@@ -328,15 +342,12 @@
       envios.forEach((e) => {
         const tr = el('tr');
         tr.appendChild(el('td', 'mono', ddmmhhmm(e.enviado_em)));
-        tr.appendChild(el('td', null, rotuloOrigem(e)));
+        tr.appendChild(el('td', null, e.origem_rotulo));
         const tdEv = el('td', null, String(e.eventos));
         if (e.eventos === 0) { tdEv.appendChild(document.createTextNode(' ')); tdEv.appendChild(el('span', 'note', '(sinal de vida)')); }
         tr.appendChild(tdEv);
         const tdRes = el('td');
-        if (e.rejeitados > 0) tdRes.appendChild(badge('b-err', plural(e.rejeitados, 'recusado', 'recusados')));
-        else if (!e.respondido_em) tdRes.appendChild(badge('b-neutro', 'Sem resposta'));
-        else if (e.http && (e.http < 200 || e.http >= 300)) tdRes.appendChild(badge('b-err', 'HTTP ' + e.http));
-        else tdRes.appendChild(badge('b-ok', 'Aceito'));
+        tdRes.appendChild(badge({ ok: 'b-ok', aviso: 'b-fila', erro: 'b-err' }[e.resultado_tom] || 'b-neutro', e.resultado_rotulo));
         tr.appendChild(tdRes);
         tb.appendChild(tr);
       });
@@ -371,7 +382,9 @@
       const termo = q.trim();
       if (!termo) return;
       consultaAberta = { q: termo };
+      const amb = envId;
       const r = await api(base() + '/pedidos?q=' + encodeURIComponent(termo));
+      if (amb !== envId) return;
       const box = $('resultado');
       limpar(box);
       if (!r.ok) { box.appendChild(cartaoVazio('Não consegui consultar', detalheDe(r, 'Erro ' + r.status + '.'))); return; }
@@ -383,7 +396,9 @@
 
     async function abrirPedido(codigo) {
       consultaAberta = { codigo };
+      const amb = envId;
       const r = await api(base() + '/pedidos/' + encodeURIComponent(codigo));
+      if (amb !== envId) return;
       const box = $('resultado');
       limpar(box);
       if (!r.ok) { box.appendChild(cartaoVazio('Não consegui abrir o pedido', detalheDe(r, 'Erro ' + r.status + '.'))); return; }

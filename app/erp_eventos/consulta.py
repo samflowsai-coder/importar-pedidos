@@ -132,6 +132,25 @@ def _origem_lote(reg: erp_envio_lote_repo.LoteRegistro) -> str:
     return _SEM_ORIGEM
 
 
+def _plural_recusado(n: int) -> str:
+    return f"{n} recusado" if n == 1 else f"{n} recusados"
+
+
+def rotulo_lote(reg: erp_envio_lote_repo.LoteRegistro) -> dict:
+    """Origem e resultado de um lote, prontos para a tela (a tela só exibe)."""
+    if reg.http is None:
+        res, tom = "Sem resposta (rede)", "erro"
+    elif not 200 <= reg.http < 300:
+        res, tom = f"HTTP {reg.http}", "erro"
+    elif reg.eventos > 0 and not (reg.aceitos or reg.duplicados or reg.rejeitados):
+        res, tom = "Sem resultado", "aviso"
+    elif reg.rejeitados > 0:
+        res, tom = _plural_recusado(reg.rejeitados), "erro"
+    else:
+        res, tom = "Aceito", "ok"
+    return {"origem_rotulo": _origem_lote(reg), "resultado_rotulo": res, "resultado_tom": tom}
+
+
 def _dm(d: str) -> str:
     x = date.fromisoformat(d)
     return f"{x.day:02d}/{x.month:02d}"

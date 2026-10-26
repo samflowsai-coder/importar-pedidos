@@ -273,6 +273,7 @@ def test_painel_sem_credencial_nao_pode(env_id, manual_limpo):
     }
     assert p["envios"] == [] and p["foto_hoje"] is None and p["bloqueio"] is None
     assert p["bloqueio_texto"] is None and p["recusados_30d"] == 0 and p["fila_pendente"] == 0
+    assert p["janelas"] == [8, 11, 14, 17] and p["intervalo_vigia_min"] == 15
     assert p["proxima_janela"]
 
 
@@ -396,3 +397,19 @@ def test_envio_de_outro_ambiente_da_404(env_id, manual_limpo, tmp_path):
     assert ok.status_code == 200 and "environment_id" not in ok.json()
     r = c.get(_url(env_id, f"/envio-manual/{envio_id}"))
     assert r.status_code == 404 and r.json() == {"detail": _ERRO_MANUAL}
+
+
+def test_painel_envios_trazem_rotulos_do_servidor(env_id, manual_limpo):
+    from app.persistence import erp_envio_lote_repo as lotes
+
+    c = _client()
+    _config(c, env_id)
+    em = formatar_instante(datetime.now(UTC))
+    with router.env_connect("mm") as conn:
+        lotes.abrir(
+            conn, lote_id="L", base="mm", origem="manual", quem="samuel", envio_id=None,
+            enviado_em=em, eventos=2,
+        )  # fmt: skip
+    envio = c.get(_url(env_id, "/painel")).json()["envios"][0]
+    assert envio["origem_rotulo"] == "Manual · samuel"
+    assert (envio["resultado_rotulo"], envio["resultado_tom"]) == ("Sem resposta (rede)", "erro")

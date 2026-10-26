@@ -25,6 +25,11 @@ DIAS_UTEIS = frozenset(range(6))  # segunda (0) a sábado (5)
 _invalida_logada: str | None = None
 
 
+def horas_das_janelas() -> tuple[int, ...]:
+    """Horas cheias das janelas em vigor (já considera PORTAL_FLOW_JANELAS)."""
+    return _horas_das_janelas()
+
+
 def _horas_das_janelas() -> tuple[int, ...]:
     global _invalida_logada
     bruto = os.environ.get("PORTAL_FLOW_JANELAS", "").strip()

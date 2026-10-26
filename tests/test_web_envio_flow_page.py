@@ -61,3 +61,11 @@ def test_pagina_sem_innerhtml_nem_confirm_e_com_acessibilidade():
 def test_tela_de_ambiente_nao_duplica_os_textos_de_bloqueio():
     html = (STATIC / "admin-ambiente-edit.html").read_text(encoding="utf-8")
     assert "BLOQUEIOS" not in html and "bloqueio_texto" in html
+
+
+def test_pagina_nao_duplica_regras_do_servidor():
+    html = (STATIC / "admin-envio-flow.html").read_text(encoding="utf-8")
+    assert "rotuloOrigem" not in html and "origem_rotulo" in html and "resultado_rotulo" in html
+    assert "8h, 11h" not in html and "janelas" in html and "intervalo_vigia_min" in html
+    assert "Fica registrado como envio manual seu." in html
+    assert "#envio-status:empty" in html

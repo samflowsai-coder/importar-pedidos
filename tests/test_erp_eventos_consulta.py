@@ -349,3 +349,42 @@ def test_eventos_view_detalhes_e_situacao(conn):
 def test_rotulo_desconhecido_cru():
     assert consulta.rotulo("tipo_novo") == "tipo_novo"
     assert consulta.rotulo("preco_alterado") == "Preço mudou"
+
+
+def _lote(**kw):
+    from app.persistence.erp_envio_lote_repo import LoteRegistro
+
+    base = dict(
+        lote_id="L", base=BASE, origem="janela", quem=None, envio_id=None,
+        enviado_em="2026-10-26T17:04:00.000+00:00", eventos=3, http=202,
+        aceitos=3, duplicados=0, rejeitados=0, respondido_em="2026-10-26T17:04:01.000+00:00",
+    )  # fmt: skip
+    base.update(kw)
+    return LoteRegistro(**base)
+
+
+@pytest.mark.parametrize(
+    ("kw", "rotulo", "tom"),
+    [
+        ({"http": None}, "Sem resposta (rede)", "erro"),
+        ({"http": 500}, "HTTP 500", "erro"),
+        ({"aceitos": 0}, "Sem resultado", "aviso"),
+        ({"aceitos": 2, "rejeitados": 1}, "1 recusado", "erro"),
+        ({"aceitos": 0, "rejeitados": 3}, "3 recusados", "erro"),
+        ({"eventos": 0, "aceitos": 0}, "Aceito", "ok"),
+        ({}, "Aceito", "ok"),
+        ({"aceitos": 0, "duplicados": 3}, "Aceito", "ok"),
+    ],
+)
+def test_rotulo_lote_resultado(kw, rotulo, tom):
+    r = consulta.rotulo_lote(_lote(**kw))
+    assert (r["resultado_rotulo"], r["resultado_tom"]) == (rotulo, tom)
+
+
+def test_rotulo_lote_origem():
+    assert consulta.rotulo_lote(_lote())["origem_rotulo"] == "Janela das 14h"
+    assert consulta.rotulo_lote(_lote(origem="foto"))["origem_rotulo"] == "Antes da foto"
+    assert (
+        consulta.rotulo_lote(_lote(origem="manual", quem="samuel"))["origem_rotulo"]
+        == "Manual · samuel"
+    )
