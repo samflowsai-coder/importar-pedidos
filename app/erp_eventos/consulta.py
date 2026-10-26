@@ -99,7 +99,7 @@ _PC = "UPPER(TRIM(json_extract(estado_json, '$.pedido_cliente'))) = UPPER(TRIM(?
 
 def buscar(conn: sqlite3.Connection, base: str, q: str, *, limite: int = 50) -> list[PedidoResumo]:
     q = q.strip()
-    if q.isdigit():
+    if q.isascii() and q.isdigit() and len(q) <= 18:
         onde, params = f"(erp_codigo = ? OR {_PC})", [int(q), q]
     else:
         onde, params = _PC, [q]
@@ -178,16 +178,20 @@ def _frase(
         texto = BLOQUEIOS.get(bloqueio) or f"HTTP {ultimo_http}."
         return f"O envio está parado: {texto}"
     sem_resposta = sum(1 for e in eventos if e.situacao_tela in ("na_fila", "enviado"))
+    recusados = sum(1 for e in eventos if e.situacao_tela == "recusado")
+    if recusados:
+        frase = (
+            f"O Flow recusou {_plural(recusados)}. Recusa não é reenviada: corrija a causa "
+            "no Fire; a próxima mudança gera um evento novo."
+        )
+        if sem_resposta:
+            outro = "Outro 1 evento" if sem_resposta == 1 else f"Outros {sem_resposta} eventos"
+            frase += f" {outro} ainda na fila."
+        return frase
     if sem_resposta:
         return (
             f"O Flow ainda não recebeu {_plural(sem_resposta)}. "
             f"Saem na janela de {_proxima_texto(agora)} ou agora pelo Enviar agora."
-        )
-    recusados = sum(1 for e in eventos if e.situacao_tela == "recusado")
-    if recusados:
-        return (
-            f"O Flow recusou {_plural(recusados)}. Recusa não é reenviada: corrija a causa "
-            "no Fire; a próxima mudança gera um evento novo."
         )
     if not eventos:
         return ""

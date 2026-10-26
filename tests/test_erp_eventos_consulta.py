@@ -132,6 +132,12 @@ def test_busca_so_da_base(conn):
     assert consulta.buscar(conn, BASE, "ABC") == []
 
 
+@pytest.mark.parametrize("q", ["1" * 40, "²", "1" * 19])
+def test_busca_digitos_invalidos_nao_quebra(conn, q):
+    estado(conn, 100)
+    assert consulta.buscar(conn, BASE, q) == []
+
+
 def test_inexistente_lista_vazia(conn):
     estado(conn, 100)
     assert consulta.buscar(conn, BASE, "nada") == []
@@ -164,6 +170,16 @@ def test_detalhe_inexistente_levanta(conn):
             [("rejeitado", None, "x")],
             None,
             "O Flow recusou 1 evento. Recusa não é reenviada: corrija a causa no Fire; a próxima mudança gera um evento novo.",
+        ),
+        (
+            [("rejeitado", None, "x"), ("pendente", None, None), ("pendente", None, None)],
+            None,
+            "O Flow recusou 1 evento. Recusa não é reenviada: corrija a causa no Fire; a próxima mudança gera um evento novo. Outros 2 eventos ainda na fila.",
+        ),
+        (
+            [("rejeitado", None, "x"), ("pendente", None, None)],
+            None,
+            "O Flow recusou 1 evento. Recusa não é reenviada: corrija a causa no Fire; a próxima mudança gera um evento novo. Outro 1 evento ainda na fila.",
         ),
         (
             [("pendente", None, None)],
