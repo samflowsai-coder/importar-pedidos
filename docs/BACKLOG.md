@@ -541,33 +541,41 @@ Diferenças reais, medidas contra os 753 pedidos de operadora desde 01/06:
   cliente (`COM CABIDE`), referência cruzada do intercompany (`<pedido> - NASMAR 1311`) e
   composição (`KIT 3`), sempre com o número do pedido. É nota livre da operadora; o modelo
   `Order` não tem campo de observação do pedido.
-- **Perfil fiscal: o que a nota realmente usa (validado contra nota emitida, 26/10):** o portal
-  crava um perfil fixo por ambiente (na MM: figura 1, CFOP 5.101, ICMS 18%, `REDUCAO` 61,11),
-  sem olhar o estado do cliente (`fiscal.py`, `mapper.py`). Para saber o que importa, comparei o
-  item do pedido com o item da **nota emitida** na Fire viva da `.7` (pedidos de operadora
-  faturados desde 01/06: 433 pedidos, todos com NFe `Autorizada`; 4.091 itens casados por
+- **Perfil fiscal: o que a nota realmente usa (validado contra nota emitida, 26/10, Fire viva da
+  `.7`, só SELECT):** o portal grava figura 1 em todo pedido da MM e, em todo item, CFOP 5.101,
+  ICMS 18%, `ICMS_BASE` 0 e `REDUCAO` 61,11 (`fiscal.py`, `mapper.py`; só a figura varia por
+  ambiente, 5 na Nasmar), sem olhar o estado do cliente. Base da medição: os pedidos de
+  operadora desde 01/06 (756 pedidos, todos os status; 433 faturados, todos com NFe
+  `Autorizada`; 4.129 itens de nota, 4.091 deles casados ao item do pedido por
   `CAB_VENDAS.CODNF` + produto). Resultado:
-  - **`CAB_VENDAS.CODFIGFISCAL` é o que decide a nota:** `NOTA.CODFIGFISCAL` é igual à do
-    pedido em 433/433. Figura é escolhida pelo estado do cliente (`FIGURA_FISCAL.UF_DESTINO`):
-    SP = 1 (5.101, 18%, redução 33,33, CST 20); MG/PR/RJ/RS/SC = 8 (6.101, 12%); demais estados
-    = 17 (6.101, 7%); AM = 23 (6.109, 7%, CST 40, Suframa); exterior = 39 (7.949, CST 41).
-  - **`REDUCAO`, `ICMS_PORC` e `ICMS_BASE` do item do pedido não entram na nota.** A nota
-    recalcula pela figura: `REDUCAO` igual ao pedido em só 186/4.091 itens; `ICMS_PORC` em
-    4.022 (os 69 que diferem são pedidos com 18% de sobra do padrão em figura 17 ou 8, e a nota
-    saiu com 7% ou 12%); `CFOP` e `QTD` em 4.091/4.091. Exemplo SP (pedido AF066): item com
-    redução 61,11 e `ICMS_BASE` 0 saiu na nota com redução 33,33, base 89,42 e ICMS 16,10.
-    Logo o 61,11 do pedido é vestigial, a pergunta "33,33 ou 61,11" não precisa de resposta do
-    fiscal, e as 114 linhas de SP com redução 0 são irrelevantes para a nota.
-  - **O risco real é a figura do cabeçalho:** o portal grava figura 1 em todo pedido. Em
-    114 de 756 pedidos (15%) de fora de SP, a figura 1 geraria a nota com CFOP 5.101 e ICMS 18%
-    para venda interestadual. Nenhum faturado da amostra tinha figura vazia (41 pedidos sem
-    figura estão todos em aberto, o que sugere que alguém a define antes de faturar). Fix
-    proposto (decisão do Samuel, não tomada): o portal escolher `CODFIGFISCAL` pela UF do
-    cliente a partir de `FIGURA_FISCAL.UF_DESTINO`, e gravar `CFOP_PRINCIPAL`/`ICMS_PORC` do
-    item coerentes com a figura (a nota ignora, mas o pedido fica consistente).
-  - **Em aberto:** AM (um só cliente no período, com a flag `FISCAL_ZF_MANAUS`='Sim' no
-    cadastro: não separa "regra por estado" de "regra pela flag"); a `.4` (Nasmar, figura
-    padrão 5) não foi medida; confirmar com o Elias o mapa UF→figura antes de implementar.
+  - **A figura do cabeçalho decide a nota.** `NOTA.CODFIGFISCAL` = `CAB_VENDAS.CODFIGFISCAL`
+    em 433/433, e em 4.129/4.129 itens da nota `REDUCAO`, `ICMS_PORC` e `CFOP` são idênticos ao
+    valor de `FIGURA_FISCAL` da figura da nota (fig 1: 5.101, 18%, redução 33,33, CST 20; fig
+    17 e 8: redução 0, CST 00; fig 23: CST 40; fig 39: CST 41). A base de ICMS confere com
+    `total x (1 - redução)` em 3.985 de 4.074 itens com CST 00/20 (tolerância de 2 centavos).
+  - **O `REDUCAO`/`ICMS_PORC`/`ICMS_BASE` do item do pedido não vira a nota.** `REDUCAO` do
+    pedido igual ao da nota em só 186/4.091 itens; `ICMS_PORC` em 4.022 (os 69 itens que
+    diferem eram pedidos de figura 17 ou 8 com 18% de sobra do padrão, e a nota saiu com 7% ou
+    12%). Exemplo SP (pedido AF066): item com redução 61,11 e `ICMS_BASE` 0, nota com redução
+    33,33, base 89,42 e ICMS 16,10. Logo o 61,11 do item é vestigial: a "dúvida 33,33 x 61,11"
+    deixa de existir. **Exceção da evidência: o `CFOP`.** Item e nota batem em 4.091/4.091 e
+    ambos são iguais ao da figura, então os dados não separam "a nota copia o do item" de "a
+    nota usa o da figura". Por isso gravar `CFOP_PRINCIPAL` coerente com a figura é obrigatório
+    no fix, não opcional.
+  - **O estado do cliente determina a figura** nos 433 pedidos faturados, sem exceção: SP = 1
+    (373 pedidos); RN, BA, PE, SE, DF = 17; AM = 23; RS, RJ, PR = 8; exterior = 39 (bate com
+    `FIGURA_FISCAL.UF_DESTINO`: MG/PR/RJ/RS/SC = 8, demais estados = 17, AM = 23, EX = 39).
+  - **O risco real é a figura do cabeçalho:** 114 dos 756 pedidos (15%) são de cliente de fora
+    de SP. Com figura 1, a nota sairia com CFOP 5.101 e ICMS 18% numa venda interestadual. Nenhum
+    faturado tinha figura vazia (41 pedidos sem figura estão todos em aberto; sugere que alguém
+    a define antes de faturar, inferência não confirmada). Fix proposto (decisão do Samuel, não
+    tomada): o portal escolher `CODFIGFISCAL` pela UF do cliente a partir de
+    `FIGURA_FISCAL.UF_DESTINO`, e gravar `CFOP_PRINCIPAL`, `ICMS_PORC` e `REDUCAO` do item
+    coerentes com essa figura.
+  - **Em aberto:** AM (um só cliente no período, com `FISCAL_ZF_MANAUS`='Sim': não separa
+    "regra por estado" de "regra pela flag do cadastro"); SC e MG sem pedido na amostra; a
+    `.4` (Nasmar, figura padrão 5) não foi medida; confirmar o mapa UF→figura com o Elias antes
+    de implementar.
 - **`VALOR_TOTAL`/`TOTAL_PRODUTO`:** 1/5 diferiu 1 centavo (soma 2569,1589: Fire trunca para
   2569,15, o portal arredonda para 2569,16). Com preço de 4 casas (o do espelho inclusive) a soma tem fração além de 2 casas, e
   a impressão digital do §1.5 (que usa `VALOR_TOTAL`) falharia aberta nesse caso.
