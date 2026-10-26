@@ -531,8 +531,8 @@ pedido de teste. Gravou 5/5, mesmos itens, QTD, preço, total por item e `ICMS_B
 Diferenças reais, medidas contra os 753 pedidos de operadora desde 01/06:
 - **`COND_PRAZO` e `PRAZO_MEDIO`:** a operadora preenche em 707/753 (94%; cópia de 23/10, desde 01/06); o portal grava NULL,
   então a condição de pagamento do pedido não vem. **Origem medida na Fire viva da `.7`
-  (26/10, só SELECT, jun a out; as contagens abaixo são desta base e diferem das da cópia):** não é cópia do cadastro (`CADASTRO.FIN_COND_PRAZO` está vazio em 607 de
-  756 clientes e nunca coincide com o pedido). O prazo é estável por cliente: 156 de 161
+  (26/10, só SELECT, jun a out; as contagens abaixo são desta base e diferem das da cópia):** não é cópia do cadastro (`CADASTRO.FIN_COND_PRAZO` está vazio no cliente de 607 dos
+  756 pedidos e nunca coincide com o do pedido). O prazo é estável por cliente: 156 de 161
   clientes usam um só (563 pedidos); 4 usam dois e **1 cliente varia a cada pedido** (6 prazos
   em 135 pedidos), esse só sai do documento. Prazos mais usados: 120, 60, 130, 30, 180 dias.
   Caminho candidato (decisão do Samuel, não tomada): sugerir o último prazo do cliente com
@@ -552,7 +552,7 @@ Diferenças reais, medidas contra os 753 pedidos de operadora desde 01/06:
     em 433/433, e em 4.129/4.129 itens da nota `REDUCAO`, `ICMS_PORC` e `CFOP` são idênticos ao
     valor de `FIGURA_FISCAL` da figura da nota (fig 1: 5.101, 18%, redução 33,33, CST 20; fig
     17 e 8: redução 0, CST 00; fig 23: CST 40; fig 39: CST 41). A base de ICMS confere com
-    `total x (1 - redução)` em 3.985 de 4.074 itens com CST 00/20 (tolerância de 2 centavos).
+    `total x (1 - redução)` em 3.985 de 4.074 itens com CST 00/20 (tolerância de 2 centavos; os 89 que não conferem não foram investigados).
   - **O `REDUCAO`/`ICMS_PORC`/`ICMS_BASE` do item do pedido não vira a nota.** `REDUCAO` do
     pedido igual ao da nota em só 186/4.091 itens; `ICMS_PORC` em 4.022 (os 69 itens que
     diferem eram pedidos de figura 17 ou 8 com 18% de sobra do padrão, e a nota saiu com 7% ou
