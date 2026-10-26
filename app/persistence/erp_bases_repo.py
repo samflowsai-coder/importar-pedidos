@@ -175,7 +175,11 @@ def base_atendida(cfg: BaseErpConfig | None) -> str | None:
 def listar_ativas() -> list[BaseErpConfig]:
     """Bases que `base_atendida` aceita. Ordem estável por slug."""
     with router.shared_connect() as conn:
-        rows = conn.execute(_SELECT + " ORDER BY e.slug").fetchall()
+        # Pré-filtro (atalho): evita decifrar token de base desligada a cada tick.
+        # Quem decide é `base_atendida`; o teste de concordância prova a equivalência.
+        rows = conn.execute(
+            _SELECT + " WHERE b.ativo = 1 AND e.is_active = 1 ORDER BY e.slug"
+        ).fetchall()
     saida = []
     for cfg in (_montar(r) for r in rows):
         motivo = base_atendida(cfg)

@@ -87,7 +87,13 @@ def test_abrir_e_fechar_lote(cfg):
         linhas = repo.recentes(conn, "mm")
     assert len(linhas) == 1
     r = linhas[0]
-    assert (r.lote_id, r.origem, r.quem, r.envio_id, r.eventos) == ("L1", "manual", "adm@x.com", "E1", 3)
+    assert (r.lote_id, r.origem, r.quem, r.envio_id, r.eventos) == (
+        "L1",
+        "manual",
+        "adm@x.com",
+        "E1",
+        3,
+    )
     assert (r.http, r.aceitos, r.duplicados, r.rejeitados) == (202, 2, 0, 1)
     assert r.respondido_em == "2026-10-26T12:00:02+00:00"
 
