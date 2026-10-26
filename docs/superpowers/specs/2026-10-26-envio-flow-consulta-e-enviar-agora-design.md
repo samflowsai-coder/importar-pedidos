@@ -73,9 +73,15 @@ ambiente, padrão `mm`/`nasmar` conforme `erp_bases`).
 - `q` só dígitos → procura `erp_pedido_estado.erp_codigo = q` **e** pedido do cliente
   igual a `q` (UY44549110 é dígito também). Caso contrário, só pelo pedido do cliente
   (`json_extract(estado_json, '$.pedido_cliente')`, comparação com `TRIM` e sem caixa).
+- `q` validado na borda: `strip`, 1 a 40 caracteres, senão 422.
 - `PEDIDO_CLIENTE` não é único no Fire (memória NBA/xPed): mais de um resultado vira
-  uma lista para escolher (código do Fire, cliente, data, situação); um resultado abre
-  direto.
+  uma lista para escolher (código do Fire, cliente, data, situação), `LIMIT 50` com
+  aviso "mostrando os 50 mais recentes"; um resultado abre direto. A busca por
+  `json_extract` é varredura de `erp_pedido_estado` (nunca podada); aceito no volume
+  atual (milhares de linhas), o `LIMIT` evita surpresa.
+- Pedido espelho intercompany: o `imports` dele mora no ambiente da Nasmar, não no da
+  MM; na MM ele aparece como "Digitado no Fire". Aceito nesta versão (fora de escopo
+  cruzar ambientes).
 - Resposta por pedido:
   - cabeçalho: `erp_codigo`, `pedido_cliente`, cliente (código + CNPJ; nome quando o
     portal o tem no `imports` daquele pedido), nº de itens, `status`, `visto_em` e a
@@ -124,28 +130,49 @@ Assim não existe segundo caminho de envio nem segunda disputa de trava, e um Fi
 travado (`fdb` sem timeout) prende só o que já prenderia hoje: a thread, nunca o
 request.
 
-1. Recusa com 409 e mensagem se: SP1 desligado (`PORTAL_ERP_VIGIA=0`) ou base inativa;
-   base bloqueada (`bloqueio`); recuo ativo (`proxima_tentativa_em` no futuro, diz até
-   quando); já existe pedido manual pendente ou atendido há menos de 60 s.
+1. Recusa com 409 e mensagem se: SP1 desligado (`PORTAL_ERP_VIGIA=0`); base que a
+   thread não atende; base bloqueada (`bloqueio`); recuo ativo (`proxima_tentativa_em`
+   no futuro, diz até quando); já existe pedido manual pendente/em andamento ou
+   atendido há menos de 60 s.
+   - **"Base que a thread não atende" é um predicado só**, reusado por
+     `erp_bases_repo.listar_ativas()` (`erp_bases_repo.py:159-173`) e pela rota:
+     `erp_bases_repo.base_atendida(cfg)` = base ligada, ambiente ativo e credencial
+     legível. Sem isso, base ligada sem credencial (nunca salva, ou chave do
+     `secret_store` trocada) receberia 202 e o pedido nunca seria atendido. Mensagens:
+     "envio desligado nesta empresa" / "base ligada sem credencial: salve a credencial
+     na edição do ambiente".
 2. Aceito: guarda o pedido em memória do processo (`runner.pedir_envio_manual(cfg,
    quem) → envio_id`; `ui.py` é processo único, `erp_eventos.md` §runner) e responde
-   202 com o `envio_id`.
-3. No tick, `processar_base` vê o pedido e, nesta ordem:
-   1. `drenar(origem="manual")` do que já está na fila (mesma razão de
-      `runner.py:144-151`: mandar antes de ler, para um Fire travado não segurar o que
-      já existe);
+   202 com o `envio_id`. **Um `threading.Lock` próprio** (`_MANUAL_GUARD`) protege
+   `_PEDIDO_MANUAL[(env_id, base)]` e `_RESULTADOS`: o request faz checagem + gravação
+   sob ele (dois cliques simultâneos, ou dois admins → um 202 e um 409); a thread faz o
+   `pop` do pedido sob ele.
+3. No tick, `processar_base` vê o pedido, marca o resultado `em_andamento` com
+   `iniciado_em` e, nesta ordem:
+   1. `drenar(origem="manual")` **só se há eventos pendentes** (`pendentes(...)` > 0,
+      checado no runner, sem parâmetro novo no `drenar`). Mesma razão de
+      `runner.py:144-151`: mandar antes de ler, para um Fire travado não segurar o que já
+      existe. Dentro de uma janela, `_lotes_da_janela` (`runner.py:151`) já drenou neste
+      tick; o passo 1 então normalmente não acha pendentes e é pulado, e esses lotes
+      ficam com `origem='janela'` (aceito: foi a janela que os levou);
    2. vigia, **forçada** mesmo sem os 15 min, mas respeitando a pausa de 5 min de
       `_FALHA_ERP` (Fire que acabou de falhar não é relido; o resultado diz "Fire fora,
       mandei só o que estava na fila");
-   3. `drenar(origem="manual")` de novo, para levar o que a vigia acabou de enfileirar.
-   O resultado (vigia ok/pulada/falhou, lotes, aceitos, recusados, `parou_por`) fica em
-   memória por 1 h, chaveado por `envio_id`, e vai para o log.
-4. A tela acompanha por `GET .../erp-base/envio-manual/{envio_id}` (polling de 2 s até
-   `terminado`) e então recarrega os números, os últimos envios e a consulta aberta.
+   3. `drenar(origem="manual")` sempre, para levar o que a vigia acabou de enfileirar e,
+      com a fila vazia, o lote de sinal de vida.
+   O resultado (`em_andamento` | `terminado`, vigia ok/pulada/falhou, lotes, aceitos,
+   recusados, `parou_por`) fica em memória por 1 h, chaveado por `envio_id`, e vai para
+   o log.
+4. A tela acompanha por `GET .../erp-base/envio-manual/{envio_id}` (polling de 2 s) e,
+   em `terminado`, recarrega os números, os últimos envios e a consulta aberta.
+   - `envio_id` desconhecido → 404 "pedido não encontrado (o portal pode ter
+     reiniciado); veja Últimos envios", e a tela para de consultar.
+   - Teto de 5 min de polling: a tela para e diz "ainda rodando; veja Últimos envios
+     daqui a pouco" (a vigia forçada pode prender a thread: `fdb` sem timeout).
 
-**Fila vazia:** o clique usa o `drenar` de sempre. Como toda vigia liga `sinal_pendente`
-(`erp_estado_repo.py:209`), sair sem eventos normalmente manda o lote vazio de sinal de
-vida (`drenagem.py:66`). Isso é aceito: é um 202 legítimo, aparece em "Últimos envios"
+**Fila vazia:** com o passo 1 condicionado, o clique manda **um** lote vazio de sinal
+de vida no passo 3 (a vigia liga `sinal_pendente`, `erp_estado_repo.py:209`;
+`drenagem.py:66` manda o lote vazio). É um 202 legítimo, aparece em "Últimos envios"
 como "sinal de vida" e a tela diz "nada novo para enviar; o Flow confirmou que o portal
 está vivo". Nenhum parâmetro novo no `drenar` além de `origem`/`quem`/`envio_id`.
 
@@ -183,8 +210,14 @@ CREATE INDEX IF NOT EXISTS ix_erp_envio_lote_base_em ON erp_envio_lote (base, en
 ```
 
 - `drenagem.drenar` ganha `origem`, `quem` e `envio_id` (padrão `janela`; a drenagem
-  antes da foto em `_enviar_foto` passa `foto`), grava a linha antes do POST e completa
-  com o resultado depois. Uma linha por lote de eventos, inclusive o vazio.
+  antes da foto em `_enviar_foto` passa `foto`). Grava a linha na mesma transação de
+  `marcar_enviados` (antes do POST) e a fecha (`http`, contagens, `respondido_em`) na
+  **mesma transação** de `aplicar_resultados` + `registrar_202`
+  (`drenagem.py:105-107`); nos caminhos de erro (4xx/5xx/recuo) fecha com o `http` e
+  zero aceitos. Uma linha por lote de eventos, inclusive o vazio.
+- Join vazio na consulta (evento de antes do deploy, ou `rejeitado` que fica para
+  sempre enquanto a linha do lote saiu em 30 dias): origem mostrada como "origem não
+  registrada".
 - As **páginas da foto** (`foto.enviar`) não entram aqui: a foto já tem registro e
   situação próprios (`erp_foto`/`erp_foto_pagina`). "Últimos envios" mostra uma linha
   extra "Foto do dia: <situação> (<n> páginas)" lida de `erp_foto_repo.foto_do_dia`.
@@ -197,8 +230,9 @@ CREATE INDEX IF NOT EXISTS ix_erp_envio_lote_base_em ON erp_envio_lote (base, en
 `/admin/envio-flow` (estática, mesmo shell e `tokens.css`), entrada no menu de
 administração. Fiel ao mockup aprovado:
 
-- faixa de situação: última leitura do Fire, na fila, próxima saída (de
-  `janelas_envio`), último lote aceito, recusados em 30 dias, botão **Enviar agora**
+- faixa de situação: última leitura do Fire, na fila, próxima saída (helper novo
+  `janelas_envio.proxima_janela(agora)`, o mesmo usado na frase "Saem na janela de
+  <próxima>"), último lote aceito, recusados em 30 dias, botão **Enviar agora**
   (desabilitado com o motivo quando a rota recusaria: bloqueada, recuo, SP1 desligado);
 - "Consultar um pedido" com o resultado logo abaixo;
 - "Últimos envios": 20 lotes mais recentes de `erp_envio_lote` (quando, origem, quem,
@@ -222,7 +256,11 @@ pedido".
 - consulta: código do Fire, pedido do cliente com dígitos, pedido do cliente repetido
   (lista), inexistente, estado sem eventos (retenção), tipo desconhecido;
 - frases do resumo para cada combinação de situação;
-- enviar agora: cada recusa 409 (desligado, bloqueada, recuo, pedido pendente, 60 s);
+- enviar agora: cada recusa 409 (desligado, base sem credencial, bloqueada, recuo,
+  pedido pendente, 60 s); dois POSTs concorrentes → um 202 e um 409; `base_atendida`
+  e `listar_ativas` concordam; GET de `envio_id` desconhecido → 404; fila vazia → um
+  lote vazio só (não dois); dentro da janela o passo 1 é pulado quando a janela já
+  drenou;
   o request não abre conexão com o Fire nem com o Flow; o tick atende o pedido na ordem
   drenar → vigia forçada → drenar, grava `erp_envio_lote` com `origem='manual'`, `quem`
   e `envio_id`; vigia falhando ou em pausa de `_FALHA_ERP` ainda drena e o resultado
@@ -232,9 +270,19 @@ pedido".
 - o pedido manual é atendido uma vez só (dois ticks seguidos não drenam duas vezes);
 - rota não-admin → 403; outro ambiente → 404.
 
-## Perguntas para o Samuel
+## Decisões do Samuel
 
-1. **Schema novo `erp_envio_lote`** (aditivo, só no SQLite do portal). Ok?
+1. **Schema novo `erp_envio_lote`** (aditivo, só no SQLite do portal): aprovado em
+   26/10 ("bora").
+
+## Revisões
+
+- 26/10: leitura de builder (3 dúvidas + 2 afirmações corrigidas) e revisão Fable
+  (APROVADO, 4 Importantes + 5 Melhorias, todas incorporadas: predicado
+  `base_atendida`, um lote vazio só, lock do pedido manual, fim do polling, origem da
+  janela, join vazio, fechamento na mesma transação, `proxima_janela`, validação de `q`).
+- Não verificado: interação do envio manual com uma foto em envio (eventos pós-corte
+  chegando antes da foto terminar, já possível hoje pela janela das 8h).
 
 ## Decisões minhas (confira ao ler)
 
