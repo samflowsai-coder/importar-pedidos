@@ -53,7 +53,8 @@ def test_pagina_sem_innerhtml_nem_confirm_e_com_acessibilidade():
         "America/Sao_Paulo",
         "Lê o Fire agora e manda tudo o que estiver na fila",
         "Ainda rodando; veja Últimos envios daqui a pouco.",
-        "Nada novo para enviar; o Flow confirmou que o portal está vivo.",
+        'aria-describedby="motivo"',
+        'id="envio-status" role="status" aria-live="polite" tabindex="-1"',
     ):
         assert trecho in html
 
@@ -68,4 +69,7 @@ def test_pagina_nao_duplica_regras_do_servidor():
     assert "rotuloOrigem" not in html and "origem_rotulo" in html and "resultado_rotulo" in html
     assert "8h, 11h" not in html and "janelas" in html and "intervalo_vigia_min" in html
     assert "Fica registrado como envio manual seu." in html
+    assert (
+        "resumoEnvio" not in html and "Nada novo para enviar" not in html
+    )  # frase vem do servidor
     assert "#envio-status:empty" in html

@@ -337,6 +337,7 @@ def test_enviar_agora_202_e_acompanha(env_id, manual_limpo, monkeypatch):
     g = c.get(_url(env_id, f"/envio-manual/{envio_id}"))
     assert g.status_code == 200
     assert g.json()["situacao"] == "pendente" and g.json()["quem"]  # email do admin
+    assert g.json()["resumo"] is None  # só há resumo quando terminou
 
 
 def test_enviar_agora_409_sem_credencial(env_id, manual_limpo):

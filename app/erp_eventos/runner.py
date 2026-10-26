@@ -26,7 +26,6 @@ from app.erp.connection import FirebirdConnection
 from app.erp_eventos import consulta, drenagem, foto, produtor, vigia, vinculo
 from app.erp_eventos.canonico import formatar_instante
 from app.erp_eventos.envio import ClienteErpEventos, Ritmo
-from app.erp_eventos.foto import FUSO
 from app.erp_eventos.leitura import LeitorFirebird
 from app.erp_eventos.modelo import PedidoErp
 from app.persistence import context as env_context
@@ -40,7 +39,7 @@ from app.persistence import (
     router,
 )
 from app.persistence.erp_bases_repo import BaseErpConfig
-from app.utils.janelas_envio import inicio_da_janela, janela_aberta
+from app.utils.janelas_envio import FUSO, inicio_da_janela, janela_aberta
 from app.utils.logger import logger
 
 TICK_S = 30.0
@@ -58,6 +57,7 @@ _LOCKS_GUARD = threading.Lock()
 # Envio manual ("Enviar agora"): o request só registra o pedido; a thread atende.
 INTERVALO_MANUAL = timedelta(seconds=60)
 VALIDADE_RESULTADO = timedelta(hours=1)
+PEDIDO_MANUAL_TTL = timedelta(minutes=5)  # = POLL_MAX_MS da tela: depois disso ninguém espera mais
 _MANUAL_GUARD = threading.Lock()
 _PEDIDO_MANUAL: dict[tuple[str, str], str] = {}  # base → envio_id aguardando a thread
 _EM_ANDAMENTO: dict[tuple[str, str], str] = {}  # base → envio_id que a thread está atendendo
@@ -82,6 +82,24 @@ class EnvioManualRecusado(Exception):  # noqa: N818 - nome fixado pelo plano
         super().__init__(detalhe)
         self.codigo = codigo
         self.detalhe = detalhe
+
+
+def _vencido(envio_id: str, agora: datetime) -> bool:
+    r = _RESULTADOS.get(envio_id)
+    return (
+        bool(r)
+        and r["situacao"] == "pendente"
+        and r["pedido_em"] < formatar_instante(agora - PEDIDO_MANUAL_TTL)
+    )
+
+
+def _expirar_pedido(chave: tuple[str, str], agora: datetime) -> None:
+    """Fecha como `expirado` um pedido que ninguém atendeu a tempo. Segura `_MANUAL_GUARD`."""
+    envio_id = _PEDIDO_MANUAL.pop(chave, None)
+    if envio_id is not None and envio_id in _RESULTADOS:
+        _RESULTADOS[envio_id].update(
+            situacao="terminado", parou_por="expirado", terminado_em=formatar_instante(agora)
+        )
 
 
 def _checar_manual(cfg: BaseErpConfig, agora: datetime) -> EnvioManualRecusado | None:
@@ -111,6 +129,9 @@ def _checar_manual(cfg: BaseErpConfig, agora: datetime) -> EnvioManualRecusado |
             "recuo", f"O Flow pediu para esperar: nova tentativa às {hora:%H:%M}."
         )
     chave = (cfg.environment_id, cfg.base)
+    pendente = _PEDIDO_MANUAL.get(chave)
+    if pendente is not None and _vencido(pendente, agora):
+        _expirar_pedido(chave, agora)
     if chave in _PEDIDO_MANUAL or chave in _EM_ANDAMENTO:
         return EnvioManualRecusado(
             "em_andamento", "Já tem um envio manual em andamento para esta empresa."
@@ -159,8 +180,12 @@ def pedir_envio_manual(cfg: BaseErpConfig, quem: str, *, agora: datetime | None 
 
 def resultado_manual(envio_id: str) -> dict | None:
     """Estado do pedido; `None` se desconhecido ou terminado há mais de 1 h."""
-    limite = formatar_instante(_relogio() - VALIDADE_RESULTADO)
+    agora = _relogio()
+    limite = formatar_instante(agora - VALIDADE_RESULTADO)
     with _MANUAL_GUARD:
+        for chave, pendente in list(_PEDIDO_MANUAL.items()):
+            if _vencido(pendente, agora):
+                _expirar_pedido(chave, agora)
         for k in [
             k for k, r in _RESULTADOS.items() if r["terminado_em"] and r["terminado_em"] < limite
         ]:
@@ -172,9 +197,13 @@ def resultado_manual(envio_id: str) -> dict | None:
 def _retirar_pedido_manual(cfg: BaseErpConfig, agora: datetime) -> tuple[str, str] | None:
     chave = (cfg.environment_id, cfg.base)
     with _MANUAL_GUARD:
-        envio_id = _PEDIDO_MANUAL.pop(chave, None)
+        envio_id = _PEDIDO_MANUAL.get(chave)
         if envio_id is None:
             return None
+        if _vencido(envio_id, agora):
+            _expirar_pedido(chave, agora)
+            return None
+        del _PEDIDO_MANUAL[chave]
         _EM_ANDAMENTO[chave] = envio_id
         r = _RESULTADOS[envio_id]
         r["situacao"] = "em_andamento"

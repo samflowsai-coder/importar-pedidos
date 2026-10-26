@@ -874,7 +874,7 @@
         const f = view.foto_hoje;
         linhas.push(f.situacao === 'nao_criada'
           ? '<strong>Foto de hoje não criada:</strong> há pedido fora do contrato no ERP (veja o log do Portal).'
-          : 'Foto de hoje: ' + f.situacao + ' (' + f.paginas + ' página(s))');
+          : 'Foto de hoje: ' + escAttr(f.situacao) + ' (' + escAttr(f.paginas) + ' página(s))');
       }
       box.innerHTML = linhas.join('<br>');
       box.hidden = false;

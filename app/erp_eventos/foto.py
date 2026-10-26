@@ -22,7 +22,6 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
 
 from app.erp_eventos.canonico import formatar_instante
 from app.erp_eventos.contrato import ContratoInvalidoError, validar_pagina
@@ -32,9 +31,9 @@ from app.erp_eventos.lotes import decidir
 from app.erp_eventos.modelo import PedidoErp
 from app.persistence import erp_estado_repo, erp_foto_repo, router
 from app.persistence.erp_bases_repo import BaseErpConfig
+from app.utils.janelas_envio import FUSO
 from app.utils.logger import logger
 
-FUSO = ZoneInfo("America/Sao_Paulo")
 MAX_PEDIDOS = 200
 MAX_BYTES = 4_500_000
 VALIDADE = timedelta(hours=24)

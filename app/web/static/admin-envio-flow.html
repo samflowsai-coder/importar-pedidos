@@ -116,11 +116,11 @@
         <div class="m"><small>Último lote aceito</small><strong id="k-aceito">—</strong><span id="k-aceito-d"></span></div>
         <div class="m"><small>Recusados</small><strong id="k-rec">—</strong><span>últimos 30 dias</span></div>
         <div class="acao">
-          <button type="button" class="btn btn-primary" id="btn-enviar-agora" disabled>Enviar agora</button>
+          <button type="button" class="btn btn-primary" id="btn-enviar-agora" aria-describedby="motivo" disabled>Enviar agora</button>
           <p class="motivo" id="motivo" hidden></p>
         </div>
       </section>
-      <p id="envio-status" role="status" aria-live="polite"></p>
+      <p id="envio-status" role="status" aria-live="polite" tabindex="-1"></p>
 
       <section class="card busca">
         <label for="q">Consultar um pedido</label>
@@ -175,6 +175,11 @@
     let consultaAberta = null; // {q} ou {codigo}
     let pollTimer = null;
     let enviando = false;
+    // Gerações: respostas e polls de uma geração antiga são descartados.
+    // `geracao` muda ao trocar de ambiente e ao parar o polling; `geracaoConsulta`
+    // também a cada nova consulta (uma busca nova não pode derrubar o acompanhamento do envio).
+    let geracao = 0;
+    let geracaoConsulta = 0;
 
     // ── helpers ──────────────────────────────────────────────────────────
     function partes(iso) {
@@ -273,14 +278,28 @@
       envId = id;
       if (gravarUrl) history.replaceState(null, '', '?env=' + encodeURIComponent(id));
       pararPolling();
+      geracaoConsulta++;
       enviando = false;
       consultaAberta = null;
+      painel = null;
       limpar($('resultado'));
+      zerarPainel();
       $('envio-status').textContent = '';
       $('q').value = '';
       erroGeral('');
       $('corpo').hidden = false;
-      await carregarPainel();
+      if ((await carregarPainel()) === false) $('corpo').hidden = true;
+    }
+
+    function zerarPainel() {
+      ['k-vigia', 'k-fila', 'k-prox', 'k-aceito', 'k-rec'].forEach((k) => { $(k).textContent = '—'; });
+      ['k-vigia-d', 'k-vigia-i', 'k-prox-d', 'k-aceito-d'].forEach((k) => { $(k).textContent = ''; });
+      limpar($('envios'));
+      $('bloqueio').hidden = true;
+      $('bloqueio').textContent = '';
+      $('motivo').hidden = true;
+      $('motivo').textContent = '';
+      $('btn-enviar-agora').disabled = true;
     }
 
     // ── painel ───────────────────────────────────────────────────────────
@@ -292,10 +311,10 @@
     }
 
     async function carregarPainel() {
-      const amb = envId;
+      const ger = geracao;
       const r = await api(base() + '/painel');
-      if (amb !== envId) return;
-      if (!r.ok) { erroGeral(detalheDe(r, 'Não consegui carregar o painel.')); return; }
+      if (ger !== geracao) return null;
+      if (!r.ok) { erroGeral(detalheDe(r, 'Não consegui carregar o painel.')); return false; }
       erroGeral('');
       painel = r.corpo;
       const p = painel;
@@ -307,7 +326,8 @@
       $('k-prox').textContent = hhmm(p.proxima_janela);
       $('k-prox-d').textContent = diaLabel(p.proxima_janela);
       $('k-aceito').textContent = hhmm(p.ultimo_202_em);
-      const ult = (p.envios || []).find((e) => e.http === 202 && e.resultado_tom === 'ok');
+      // O lote do último aceite é o que respondeu no instante gravado em `ultimo_202_em`.
+      const ult = (p.envios || []).find((e) => e.http === 202 && e.resultado_tom === 'ok' && e.respondido_em === p.ultimo_202_em);
       $('k-aceito-d').textContent = p.ultimo_202_em
         ? diaLabel(p.ultimo_202_em) + (ult ? ' · ' + ult.origem_rotulo.toLowerCase() : '')
         : 'nenhum ainda';
@@ -326,6 +346,7 @@
       mot.hidden = !textoMotivo;
 
       desenharEnvios(p);
+      return true;
     }
 
     function desenharEnvios(p) {
@@ -382,9 +403,9 @@
       const termo = q.trim();
       if (!termo) return;
       consultaAberta = { q: termo };
-      const amb = envId;
+      const ger = ++geracaoConsulta;
       const r = await api(base() + '/pedidos?q=' + encodeURIComponent(termo));
-      if (amb !== envId) return;
+      if (ger !== geracaoConsulta) return;
       const box = $('resultado');
       limpar(box);
       if (!r.ok) { box.appendChild(cartaoVazio('Não consegui consultar', detalheDe(r, 'Erro ' + r.status + '.'))); return; }
@@ -396,9 +417,9 @@
 
     async function abrirPedido(codigo) {
       consultaAberta = { codigo };
-      const amb = envId;
+      const ger = ++geracaoConsulta;
       const r = await api(base() + '/pedidos/' + encodeURIComponent(codigo));
-      if (amb !== envId) return;
+      if (ger !== geracaoConsulta) return;
       const box = $('resultado');
       limpar(box);
       if (!r.ok) { box.appendChild(cartaoVazio('Não consegui abrir o pedido', detalheDe(r, 'Erro ' + r.status + '.'))); return; }
@@ -419,7 +440,7 @@
     function naoEncontrado(termo) {
       const quando = painel && painel.ultima_vigia_em ? ' A última leitura do Fire foi às ' + hhmm(painel.ultima_vigia_em) + '.' : '';
       return cartaoVazio('O portal não tem nada sobre "' + termo + '"',
-        'O portal só lê pedidos abertos no Fire (nem faturado, nem cancelado). Se o pedido existe, ele pode ter sido faturado ou cancelado antes da primeira leitura, ter sido criado há menos de 15 minutos, ou estar em outra empresa.' + quando);
+        'O portal só lê pedidos abertos no Fire (nem faturado, nem cancelado). Se o pedido existe, ele pode ter sido faturado ou cancelado antes da primeira leitura, ter sido criado há menos de ' + ((painel && painel.intervalo_vigia_min) || 15) + ' minutos, ou estar em outra empresa.' + quando);
     }
 
     function listaPedidos(pedidos, limitado) {
@@ -462,7 +483,7 @@
       if (bg) h2.appendChild(bg);
       esq.appendChild(h2);
       const cli = d.cliente_nome ? d.cliente_nome + (d.cliente_codigo != null ? ' (cliente ' + d.cliente_codigo + ')' : '') : (d.cliente_codigo != null ? 'cliente ' + d.cliente_codigo : '');
-      esq.appendChild(el('div', 'meta', ['Fire nº ' + d.erp_codigo, cli, plural(d.itens, 'item', 'itens')].filter(Boolean).join(' · ')));
+      esq.appendChild(el('div', 'meta', ['Fire nº ' + d.erp_codigo, cli, d.cliente_cnpj ? 'CNPJ ' + d.cliente_cnpj : '', plural(d.itens, 'item', 'itens')].filter(Boolean).join(' · ')));
       ph.appendChild(esq);
 
       const encerrado = d.leitura_tipo === 'ultima_mudanca';
@@ -536,8 +557,15 @@
       $('ov').classList.add('on');
       $('dlg-ok').focus();
     }
-    function fecharDialogo() {
+    function fecharDialogo(paraStatus) {
       $('ov').classList.remove('on');
+      if (paraStatus === true) {
+        // Envio em curso: o botão já não serve; o foco vai para a mensagem de status.
+        $('btn-enviar-agora').disabled = true;
+        const st = $('envio-status');
+        st.focus();
+        return;
+      }
       const alvo = focoAntes && document.contains(focoAntes) && !focoAntes.disabled ? focoAntes : $('btn-enviar-agora');
       if (alvo) alvo.focus();
     }
@@ -555,17 +583,17 @@
     function statusEnvio(txt) { $('envio-status').textContent = txt; }
 
     function pararPolling() {
+      geracao++;
       if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
     }
 
     async function enviarAgora() {
-      fecharDialogo();
       enviando = true;
-      $('btn-enviar-agora').disabled = true;
+      fecharDialogo(true);
       statusEnvio('Pedindo o envio…');
-      const amb = envId;
+      const ger = geracao;
       const r = await api(base() + '/enviar-agora', { method: 'POST' });
-      if (amb !== envId) return;
+      if (ger !== geracao) return;
       if (r.status !== 202 || !r.corpo || !r.corpo.envio_id) {
         enviando = false;
         statusEnvio(detalheDe(r, 'Não consegui pedir o envio (' + r.status + ').'));
@@ -573,12 +601,12 @@
         return;
       }
       statusEnvio('Envio pedido; acompanhando…');
-      acompanhar(r.corpo.envio_id, Date.now(), amb);
+      acompanhar(r.corpo.envio_id, Date.now(), ger);
     }
 
     function acompanhar(id, inicio, ambiente) {
       pollTimer = setTimeout(async () => {
-        if (ambiente !== envId) return;
+        if (ambiente !== geracao) return;
         if (Date.now() - inicio >= POLL_MAX_MS) {
           enviando = false;
           statusEnvio('Ainda rodando; veja Últimos envios daqui a pouco.');
@@ -588,7 +616,7 @@
         let r;
         try { r = await api(base() + '/envio-manual/' + encodeURIComponent(id)); }
         catch (_) { acompanhar(id, inicio, ambiente); return; }
-        if (ambiente !== envId) return;
+        if (ambiente !== geracao) return;
         if (r.status === 404) {
           enviando = false;
           statusEnvio(detalheDe(r, 'Envio não encontrado.'));
@@ -599,7 +627,7 @@
         const s = r.corpo;
         if (s.situacao === 'terminado') {
           enviando = false;
-          statusEnvio(resumoEnvio(s));
+          statusEnvio(s.resumo || 'Envio terminado.');
           await carregarPainel();
           await recarregarConsulta();
           return;
@@ -607,19 +635,6 @@
         statusEnvio(s.situacao === 'em_andamento' ? 'Enviando…' : 'Esperando a vez…');
         acompanhar(id, inicio, ambiente);
       }, POLL_MS);
-    }
-
-    function resumoEnvio(s) {
-      const aceitos = (s.aceitos || 0) + (s.duplicados || 0);
-      let txt;
-      if (!aceitos && !(s.rejeitados || 0)) {
-        txt = 'Nada novo para enviar; o Flow confirmou que o portal está vivo.';
-      } else {
-        txt = 'Enviado: ' + plural(s.lotes || 0, 'lote', 'lotes') + ', ' + plural(aceitos, 'aceito', 'aceitos') + ', ' + plural(s.rejeitados || 0, 'recusado', 'recusados') + '.';
-      }
-      if (s.vigia === 'falhou' || s.vigia === 'pulada') txt += ' O Fire não respondeu; mandei só o que já estava na fila.';
-      if (s.parou_por) txt += ' Parou por: ' + s.parou_por + '.';
-      return txt;
     }
 
     // ── ligações ─────────────────────────────────────────────────────────

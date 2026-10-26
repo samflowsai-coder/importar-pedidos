@@ -12,9 +12,10 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
 
+from app.erp_eventos.canonico import formatar_instante
 from app.erp_eventos.modelo import esta_aberto
 from app.persistence import erp_envio_lote_repo
-from app.utils.janelas_envio import FUSO, proxima_janela
+from app.utils.janelas_envio import FUSO, janela_aberta, proxima_janela
 
 ROTULOS: dict[str, str] = {
     "pedido_visto": "Pedido novo",
@@ -136,6 +137,43 @@ def _plural_recusado(n: int) -> str:
     return f"{n} recusado" if n == 1 else f"{n} recusados"
 
 
+_PAROU_POR = {
+    "esperando": "O Flow pediu para esperar; o resto sai na próxima tentativa.",
+    "bloqueada": "O envio foi bloqueado; veja o aviso no topo.",
+    "prazo": "O tempo do envio acabou; o resto sai no próximo.",
+    "erro": "Houve um erro no portal; veja o log.",
+}
+
+
+def resumo_envio_manual(resultado: dict) -> str:
+    """Frase da tela ao fim de um "Enviar agora" (a tela só exibe)."""
+    parou_por = resultado.get("parou_por")
+    if parou_por == "expirado":
+        return "O pedido expirou antes de ser atendido. Clique de novo se ainda precisar."
+    lotes = resultado.get("lotes") or 0
+    aceitos = (resultado.get("aceitos") or 0) + (resultado.get("duplicados") or 0)
+    recusados = resultado.get("rejeitados") or 0
+    fire_mudo = resultado.get("vigia") in ("falhou", "pulada")
+    if lotes == 0:
+        partes = ["Nada foi enviado."]
+        if fire_mudo:
+            partes.append("O Fire não respondeu.")
+    else:
+        if not aceitos and not recusados and not parou_por:
+            partes = ["Nada novo para enviar; o Flow confirmou que o portal está vivo."]
+        else:
+            partes = [
+                f"Enviado: {lotes} {'lote' if lotes == 1 else 'lotes'}, "
+                f"{aceitos} {'aceito' if aceitos == 1 else 'aceitos'}, "
+                f"{recusados} {'recusado' if recusados == 1 else 'recusados'}."
+            ]
+        if fire_mudo:
+            partes.append("O Fire não respondeu; mandei só o que já estava na fila.")
+    if parou_por in _PAROU_POR:
+        partes.append(_PAROU_POR[parou_por])
+    return " ".join(partes)
+
+
 def rotulo_lote(reg: erp_envio_lote_repo.LoteRegistro) -> dict:
     """Origem e resultado de um lote, prontos para a tela (a tela só exibe)."""
     if reg.respondido_em is None:
@@ -197,7 +235,11 @@ def _plural(n: int) -> str:
 
 
 def _frase(
-    eventos: list[EventoView], bloqueio: str | None, ultimo_http: int | None, agora: datetime
+    eventos: list[EventoView],
+    bloqueio: str | None,
+    ultimo_http: int | None,
+    agora: datetime,
+    proxima_tentativa_em: str | None = None,
 ) -> str:
     if bloqueio:
         return f"O envio está parado: {texto_bloqueio(bloqueio, ultimo_http)}"
@@ -213,10 +255,12 @@ def _frase(
             frase += f" {outro} ainda na fila."
         return frase
     if sem_resposta:
-        return (
-            f"O Flow ainda não recebeu {_plural(sem_resposta)}. "
-            f"Saem na janela de {_proxima_texto(agora)} ou agora pelo Enviar agora."
-        )
+        inicio = f"O Flow ainda não recebeu {_plural(sem_resposta)}. "
+        if proxima_tentativa_em and proxima_tentativa_em > formatar_instante(agora):
+            return f"{inicio}Saem na janela de {_proxima_texto(agora)}."  # recuo: sem botão
+        if janela_aberta(agora):
+            return f"{inicio}Saem no próximo envio, em instantes."
+        return f"{inicio}Saem na janela de {_proxima_texto(agora)} ou agora pelo Enviar agora."
     if not eventos:
         return ""
     ultimo = max(
@@ -241,6 +285,7 @@ def detalhe(
     bloqueio: str | None,
     agora: datetime,
     ultimo_http: int | None = None,
+    proxima_tentativa_em: str | None = None,
 ) -> PedidoDetalhe:
     est = conn.execute(
         "SELECT estado_json, visto_em, situacao, atualizado_em FROM erp_pedido_estado "
@@ -280,7 +325,7 @@ def detalhe(
         )
         for r in linhas
     ]
-    frase = _frase(eventos, bloqueio, ultimo_http, agora)
+    frase = _frase(eventos, bloqueio, ultimo_http, agora, proxima_tentativa_em)
 
     cli = conn.execute(
         "SELECT customer_name FROM imports WHERE fire_codigo = ? ORDER BY imported_at DESC LIMIT 1",

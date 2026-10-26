@@ -205,6 +205,81 @@ def test_detalhe_frases(conn, linhas, bloqueio, esperada):
     assert det(conn, bloqueio=bloqueio, agora=ag).frase == esperada
 
 
+def _pendente(conn):
+    estado(conn, 100)
+    evento(conn, 100, "e0")
+
+
+def test_frase_pendente_com_janela_aberta(conn):
+    _pendente(conn)
+    janela = datetime(2026, 10, 26, 20, 10, tzinfo=UTC)  # 17:10 em SP, janela das 17h
+    assert det(conn, agora=janela).frase == (
+        "O Flow ainda não recebeu 1 evento. Saem no próximo envio, em instantes."
+    )
+
+
+def test_frase_pendente_com_recuo_nao_oferece_enviar_agora(conn):
+    _pendente(conn)
+    d = det(conn, proxima_tentativa_em="2026-10-26T20:00:00.000+00:00")
+    assert d.frase == "O Flow ainda não recebeu 1 evento. Saem na janela de hoje às 17:00."
+    vencido = det(conn, proxima_tentativa_em="2026-10-26T19:00:00.000+00:00")
+    assert "ou agora pelo Enviar agora" in vencido.frase
+
+
+@pytest.mark.parametrize(
+    ("r", "esperado"),
+    [
+        (
+            {"parou_por": "expirado", "lotes": 0},
+            "O pedido expirou antes de ser atendido. Clique de novo se ainda precisar.",
+        ),
+        ({"lotes": 0, "vigia": "ok"}, "Nada foi enviado."),
+        ({"lotes": 0, "vigia": "falhou"}, "Nada foi enviado. O Fire não respondeu."),
+        ({"lotes": 0, "vigia": "pulada"}, "Nada foi enviado. O Fire não respondeu."),
+        (
+            {"lotes": 1, "vigia": "ok", "aceitos": 0, "rejeitados": 0},
+            "Nada novo para enviar; o Flow confirmou que o portal está vivo.",
+        ),
+        (
+            {"lotes": 1, "vigia": "ok", "aceitos": 1, "duplicados": 0, "rejeitados": 1},
+            "Enviado: 1 lote, 1 aceito, 1 recusado.",
+        ),
+        (
+            {"lotes": 2, "vigia": "ok", "aceitos": 2, "duplicados": 1, "rejeitados": 0},
+            "Enviado: 2 lotes, 3 aceitos, 0 recusados.",
+        ),
+        (
+            {"lotes": 1, "vigia": "falhou", "aceitos": 1},
+            "Enviado: 1 lote, 1 aceito, 0 recusados. "
+            "O Fire não respondeu; mandei só o que já estava na fila.",
+        ),
+        (
+            {"lotes": 1, "vigia": "ok", "aceitos": 1, "parou_por": "esperando"},
+            "Enviado: 1 lote, 1 aceito, 0 recusados. "
+            "O Flow pediu para esperar; o resto sai na próxima tentativa.",
+        ),
+        (
+            {"lotes": 0, "vigia": "ok", "parou_por": "bloqueada"},
+            "Nada foi enviado. O envio foi bloqueado; veja o aviso no topo.",
+        ),
+        (
+            {"lotes": 1, "vigia": "ok", "aceitos": 1, "parou_por": "prazo"},
+            "Enviado: 1 lote, 1 aceito, 0 recusados. O tempo do envio acabou; o resto sai no próximo.",
+        ),
+        (
+            {"lotes": 0, "vigia": None, "parou_por": "erro"},
+            "Nada foi enviado. Houve um erro no portal; veja o log.",
+        ),
+        (
+            {"lotes": 1, "vigia": "ok", "aceitos": 0, "rejeitados": 0, "parou_por": "prazo"},
+            "Enviado: 1 lote, 0 aceitos, 0 recusados. O tempo do envio acabou; o resto sai no próximo.",
+        ),
+    ],
+)
+def test_resumo_envio_manual(r, esperado):
+    assert consulta.resumo_envio_manual(r) == esperado
+
+
 def test_frase_bloqueio_sem_texto_usa_http(conn):
     estado(conn, 100)
     d = det(conn, bloqueio="novo_codigo", ultimo_http=418)
@@ -214,7 +289,7 @@ def test_frase_bloqueio_sem_texto_usa_http(conn):
 def test_proxima_dia_da_semana(conn):
     estado(conn, 100)
     evento(conn, 100, "e0")
-    sabado = datetime(2026, 10, 31, 20, 0, tzinfo=UTC)  # sáb 17:00 SP -> próxima seg
+    sabado = datetime(2026, 10, 31, 22, 0, tzinfo=UTC)  # sáb 19:00 SP (fechada) -> próxima seg
     assert "seg às 08:00" in det(conn, agora=sabado).frase
 
 

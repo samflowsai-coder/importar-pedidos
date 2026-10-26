@@ -445,6 +445,7 @@ def _detalhe_do_pedido(conn, cfg, erp_codigo: int) -> consulta.PedidoDetalhe:
         bloqueio=envio.bloqueio,
         agora=datetime.now(UTC),
         ultimo_http=envio.ultimo_http,
+        proxima_tentativa_em=envio.proxima_tentativa_em,
     )
 
 
@@ -544,6 +545,9 @@ def get_erp_base_manual_send(env_id: str, envio_id: str, _=Depends(require_admin
             status_code=404,
             detail="pedido não encontrado (o portal pode ter reiniciado); veja Últimos envios",
         )
+    resultado["resumo"] = (
+        consulta.resumo_envio_manual(resultado) if resultado["situacao"] == "terminado" else None
+    )
     return resultado
 
 

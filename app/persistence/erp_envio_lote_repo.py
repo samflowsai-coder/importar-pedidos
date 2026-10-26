@@ -99,4 +99,10 @@ def origens(conn: sqlite3.Connection, lote_ids: list[str]) -> dict[str, LoteRegi
 
 
 def apagar_antigos(conn: sqlite3.Connection, antes_de: str) -> int:
-    return conn.execute("DELETE FROM erp_envio_lote WHERE enviado_em < ?", (antes_de,)).rowcount
+    # Recusa nunca é podada; o lote que a originou fica enquanto ela existir.
+    return conn.execute(
+        "DELETE FROM erp_envio_lote WHERE enviado_em < ? AND lote_id NOT IN "
+        "(SELECT lote_id FROM erp_eventos_saida WHERE situacao = 'rejeitado' "
+        "AND lote_id IS NOT NULL)",
+        (antes_de,),
+    ).rowcount

@@ -110,7 +110,7 @@ def flow(monkeypatch):
 def _lotes_gravados(cfg):
     with router.env_connect(cfg.env_slug) as conn:
         return conn.execute(
-            "SELECT origem, quem, envio_id, eventos FROM erp_envio_lote ORDER BY enviado_em"
+            "SELECT origem, quem, envio_id, eventos FROM erp_envio_lote ORDER BY rowid"
         ).fetchall()
 
 
@@ -321,3 +321,49 @@ def test_resultado_expira_em_1h(cfg, monkeypatch):
 
 def test_resultado_desconhecido_none(cfg):
     assert runner.resultado_manual("nao-existe") is None
+
+
+def test_pedido_vencido_nao_e_atendido_quando_a_base_volta(cfg, flow, monkeypatch):
+    """Clique → base desligada → tick → base religada → tick: nada sai em nome de quem clicou."""
+    monkeypatch.setattr(runner, "_vigiar", lambda *a, **k: None)
+    _enfileirar(cfg, 1)
+    envio_id = runner.pedir_envio_manual(cfg, "ana", agora=FORA_DA_JANELA)
+    dias_depois = FORA_DA_JANELA + timedelta(days=3)
+    runner.processar_base(cfg, agora=dias_depois)  # base religada, pedido de 3 dias atrás
+    assert [g["origem"] for g in _lotes_gravados(cfg) if g["origem"] == "manual"] == []
+    monkeypatch.setattr(runner, "_relogio", lambda: dias_depois)
+    r = runner.resultado_manual(envio_id)
+    assert r["situacao"] == "terminado" and r["parou_por"] == "expirado"
+    assert runner._PEDIDO_MANUAL == {} and runner._EM_ANDAMENTO == {}
+
+
+def test_checar_descarta_pedido_vencido_antes_de_recusar(cfg):
+    envio_id = runner.pedir_envio_manual(cfg, "ana", agora=FORA_DA_JANELA)
+    assert runner.checar_envio_manual(cfg, FORA_DA_JANELA + timedelta(minutes=4)).codigo == (
+        "em_andamento"
+    )
+    assert runner.checar_envio_manual(cfg, FORA_DA_JANELA + timedelta(minutes=6)) is None
+    assert runner._RESULTADOS[envio_id]["parou_por"] == "expirado"
+
+
+def test_resultado_pendente_vencido_expira_na_limpeza(cfg, monkeypatch):
+    envio_id = runner.pedir_envio_manual(cfg, "ana", agora=FORA_DA_JANELA)
+    monkeypatch.setattr(runner, "_relogio", lambda: FORA_DA_JANELA + timedelta(minutes=6))
+    r = runner.resultado_manual(envio_id)
+    assert r["situacao"] == "terminado" and r["parou_por"] == "expirado"
+    assert runner._PEDIDO_MANUAL == {}
+
+
+def test_excecao_na_drenagem_termina_com_erro_e_libera(cfg, monkeypatch):
+    def explode(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(runner, "_vigiar", lambda *a, **k: None)
+    monkeypatch.setattr(runner.drenagem, "drenar", explode)
+    envio_id = runner.pedir_envio_manual(cfg, "ana", agora=FORA_DA_JANELA)
+    runner.processar_base(cfg, agora=FORA_DA_JANELA)
+    r = runner.resultado_manual(envio_id)
+    assert r["situacao"] == "terminado" and r["parou_por"] == "erro" and r["terminado_em"]
+    assert runner._EM_ANDAMENTO == {}
+    depois = FORA_DA_JANELA + timedelta(seconds=61)
+    assert runner.pedir_envio_manual(cfg, "ana", agora=depois)

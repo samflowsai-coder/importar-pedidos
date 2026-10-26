@@ -129,6 +129,23 @@ def test_apagar_antigos(cfg):
     assert restam == ["novo"]
 
 
+def test_apagar_antigos_poupa_lote_de_evento_recusado(cfg):
+    with router.env_connect(cfg.env_slug) as conn:
+        _abrir(conn, "recusou", em="2026-09-01T00:00:00+00:00")
+        _abrir(conn, "aceitou", em="2026-09-01T00:00:00+00:00")
+        for i, (lote, sit) in enumerate([("recusou", "rejeitado"), ("aceitou", "aceito")]):
+            conn.execute(
+                "INSERT INTO erp_eventos_saida (id, base, erp_codigo, seq, tipo, unidade, "
+                "payload_json, observado_em, situacao, lote_id, criado_em) "
+                "VALUES (?, 'mm', 1, ?, 'pedido_visto', 'u', '{}', 'x', ?, ?, 'x')",
+                (f"e{i}", i, sit, lote),
+            )
+        n = repo.apagar_antigos(conn, "2026-10-01T00:00:00+00:00")
+        restam = [r.lote_id for r in repo.recentes(conn, "mm")]
+    assert n == 1
+    assert restam == ["recusou"]
+
+
 def test_origem_invalida(cfg):
     with router.env_connect(cfg.env_slug) as conn, pytest.raises(ValueError):
         _abrir(conn, "X", origem="sei_la")
