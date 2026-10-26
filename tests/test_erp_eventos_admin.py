@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.persistence import db, environments_repo, erp_estado_repo, router
+from app.persistence import db, environments_repo, erp_bases_repo, erp_estado_repo, router
 from app.security import secret_store
 
 TENANT = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
@@ -89,3 +89,60 @@ def test_credencial_nova_tira_o_bloqueio_de_401_e_desbloquear_tira_os_outros(env
 
 def test_ambiente_inexistente_404(env_id):
     assert _client().get("/api/admin/environments/nao-existe/erp-base").status_code == 404
+
+
+# ── base_atendida: o predicado único de "a thread atende esta base" ───────────
+
+
+def _salvar(env_id, **kw):
+    args = dict(
+        base="mm",
+        papel="produtora",
+        tenant_id=TENANT,
+        destino_url="https://flow.test",
+        foto_hora=23,
+        ativo=True,
+        token=TOKEN,
+    )
+    args.update(kw)
+    erp_bases_repo.salvar(env_id, **args)
+    return erp_bases_repo.obter(env_id)
+
+
+def test_base_atendida_ok(env_id):
+    assert erp_bases_repo.base_atendida(_salvar(env_id)) is None
+
+
+def test_base_desligada(env_id):
+    assert erp_bases_repo.base_atendida(_salvar(env_id, ativo=False)) == "desligada"
+
+
+def test_ambiente_inativo(env_id):
+    cfg = _salvar(env_id)
+    environments_repo.soft_delete(env_id)
+    assert erp_bases_repo.base_atendida(erp_bases_repo.obter(env_id)) == "desligada"
+    assert cfg.ambiente_ativo is True
+
+
+def test_sem_credencial(env_id):
+    assert erp_bases_repo.base_atendida(_salvar(env_id, token="")) == "sem_credencial"
+
+
+def test_sem_config_nao_e_atendida():
+    assert erp_bases_repo.base_atendida(None) == "desligada"
+
+
+def test_listar_ativas_concorda_com_base_atendida(env_id):
+    # (base ativa, token, ambiente ativo): ok, desligada, sem credencial, ambiente inativo
+    for ativo, token, amb_ativo in [
+        (True, TOKEN, 1),
+        (False, TOKEN, 1),
+        (True, "", 1),
+        (True, TOKEN, 0),
+    ]:
+        with router.shared_connect() as conn:
+            conn.execute("UPDATE environments SET is_active = ? WHERE id = ?", (amb_ativo, env_id))
+        cfg = _salvar(env_id, ativo=ativo, token=token)
+        assert (cfg in erp_bases_repo.listar_ativas()) == (
+            erp_bases_repo.base_atendida(cfg) is None
+        )
