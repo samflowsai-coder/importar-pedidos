@@ -576,6 +576,7 @@
         <span>Enviar os pedidos desta empresa ao Flow</span>
       </label>
       <div id="erp-situacao" class="hint" hidden></div>
+      <div class="hint"><a id="erp-link-envio" href="#" hidden>Ver envio por pedido</a></div>
       <div class="actions" style="margin-top:1rem">
         <button type="button" id="btn-save-erp" class="btn btn-primary">Salvar envio de pedidos</button>
         <button type="button" id="btn-desbloquear-erp" class="btn btn-secondary" hidden>Retomar envio</button>
@@ -863,6 +864,9 @@
     function erpMostrarSituacao(view) {
       const box = document.getElementById('erp-situacao');
       const env = view.envio;
+      const link = document.getElementById('erp-link-envio');
+      link.hidden = !view.config;
+      if (view.config) link.href = '/admin/envio-flow?env=' + encodeURIComponent(envId);
       if (!view.config || !env) { box.hidden = true; erpDesbloquear.hidden = true; return; }
       const fila = view.fila || {};
       const linhas = [];
