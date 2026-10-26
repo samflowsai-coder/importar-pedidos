@@ -529,15 +529,29 @@ set/out (todos kits; `CAMILA`) foram remontados a partir do próprio Fire e regr
 `FirebirdExporter` (itens pelo SEQ) na cópia local de 23/10 (`mm_oct23.fdb`), com número de
 pedido de teste. Gravou 5/5, mesmos itens, QTD, preço, total por item e `ICMS_BASE`.
 Diferenças reais, medidas contra os 753 pedidos de operadora desde 01/06:
-- **`COND_PRAZO` e `PRAZO_MEDIO`:** a operadora preenche em 707/753 (94%); o portal grava NULL.
-  Condição de pagamento do pedido não vem. Origem do valor (cadastro do cliente?) a descobrir;
-  não preencher sem confirmar a origem com o fiscal.
-- **`OBS`:** preenchida em 737/753 (98%) com número do pedido e nota do cliente
-  (ex.: `SN-89B18EEE` + `NASMAR 1304`); o portal grava NULL em pedido comum.
-- **`REDUCAO` do item:** 563 de 6.877 linhas não têm 61,11 (0 ou vazio; as outras 6.314 têm); o
-  portal crava 61,11 do perfil em todas. Nas amostras, 4 linhas (uma em cada um de 4 dos 5
-  pedidos) divergiram, com o mesmo `ICMS_BASE`. Efeito fiscal: **pergunta
-  para o Elias** antes de qualquer gravação.
+- **`COND_PRAZO` e `PRAZO_MEDIO`:** a operadora preenche em 707/753 (94%); o portal grava NULL,
+  então a condição de pagamento do pedido não vem. **Origem medida na Fire viva da `.7`
+  (26/10, só SELECT):** não é cópia do cadastro (`CADASTRO.FIN_COND_PRAZO` está vazio em 607 de
+  756 clientes e nunca coincide com o pedido). O prazo é estável por cliente: 156 de 161
+  clientes usam um só (563 pedidos); 4 usam dois e **1 cliente varia a cada pedido** (6 prazos
+  em 135 pedidos), esse só sai do documento. Prazos mais usados: 120, 60, 130, 30, 180 dias.
+  Caminho candidato (decisão do Samuel, não tomada): sugerir o último prazo do cliente com
+  confirmação na tela, e ler do documento onde o parser puder.
+- **`OBS`:** preenchida em 737/753 (98%). Amostra dos pedidos de outubro na Fire viva: nota do
+  cliente (`COM CABIDE`), referência cruzada do intercompany (`<pedido> - NASMAR 1311`) e
+  composição (`KIT 3`), sempre com o número do pedido. É nota livre da operadora; o modelo
+  `Order` não tem campo de observação do pedido.
+- **Perfil fiscal (o achado maior):** o portal crava um perfil só (figura 1, CFOP 5.101, ICMS
+  18%, `REDUCAO` 61,11) em todo pedido. As operadoras escolhem a **figura fiscal pelo estado do
+  cliente**, e `FIGURA_FISCAL` (Fire viva, `UF_DESTINO`) guarda CFOP e alíquota de cada uma:
+  SP = figura 1 (5.101, 18%); MG/PR/RJ/RS/SC = 8 (6.101, 12%); demais estados = 17 (6.101, 7%);
+  AM = 23 (6.109, 7%, Suframa); exterior = 39 (7.949, 0%). Medido em jun-out: SP 600+114
+  pedidos; RN 45, AM 39, PE 7, RS 7, DF 5, RJ 5 e mais alguns. Hoje o portal gravaria figura, CFOP,
+  ICMS e redução errados em todo pedido de fora de SP (116 de 876 pedidos, 13%), com efeito
+  na nota. Duas dúvidas fiscais que os dados não resolvem, **para o Elias**: (a) a figura 1 da
+  tabela diz redução 33,33 e as linhas gravam 61,11; (b) 114 pedidos de SP saem com redução 0
+  (e 4 de fora de SP saem com 61,11, provável sobra do padrão da operadora, todos `CAMILA`).
+  Nenhum fix de perfil antes da resposta dele.
 - **`VALOR_TOTAL`/`TOTAL_PRODUTO`:** 1/5 diferiu 1 centavo (soma 2569,1589: Fire trunca para
   2569,15, o portal arredonda para 2569,16). Com preço de 4 casas (o do espelho inclusive) a soma tem fração além de 2 casas, e
   a impressão digital do §1.5 (que usa `VALOR_TOTAL`) falharia aberta nesse caso.
