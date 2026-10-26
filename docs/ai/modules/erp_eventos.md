@@ -32,6 +32,8 @@ Spec: `pcp-app/docs/superpowers/specs/2026-10-03-sp1-transporte-pedidos-fire-des
 | `app/erp_eventos/eco.py` | `correlacaoId` da data que o próprio Portal aplicou |
 | `app/erp_eventos/lote_fiscal.py` | emissor do `lote_fiscal` (produtor = envio do espelho do lote, `app/consolidators/integracao.py`) |
 | `app/erp_eventos/runner.py` | thread do processo web, trava por base |
+| `app/erp_eventos/consulta.py` | consulta por pedido: rótulos, frases, `texto_bloqueio`, `rotulo_lote` |
+| `app/persistence/erp_envio_lote_repo.py` | registro de cada lote (`erp_envio_lote`): origem janela/foto/manual, quem, `envio_id` |
 | `app/persistence/erp_bases_repo.py` | config + credencial cifrada por (ambiente, base) — `app_shared.db` |
 | `app/persistence/erp_estado_repo.py` / `erp_vinculo_repo.py` / `erp_foto_repo.py` | tabelas `erp_*` do banco do ambiente |
 | `tools/erp_medir.py` | medições SÓ LEITURA no ERP |
@@ -58,6 +60,15 @@ Spec: `pcp-app/docs/superpowers/specs/2026-10-03-sp1-transporte-pedidos-fire-des
 4. **retenção**: uma vez por dia, eventos `aceito`/`duplicado` com mais de 30 dias saem
    da fila; `rejeitado` fica (é o rastro). `erp_pedido_estado` não é podado: sem o estado
    de um pedido encerrado, a reabertura viraria `pedido_visto` em vez de `status_alterado`.
+
+**Pedido manual ("Enviar agora"):** `runner.pedir_envio_manual` só grava o pedido em
+memória, sob `_MANUAL_GUARD`. A thread atende no tick logo depois de `_lotes_da_janela`:
+`drenar` se houver pendentes, depois vigia forçada (respeitando `_FALHA_ERP`), depois
+`drenar`. Substitui a vigia normal daquele tick. O resultado fica em memória por 1 h
+(`envio-manual/{envio_id}`). `drenar(origem, quem, envio_id)` grava uma linha em
+`erp_envio_lote` por lote; a retenção de 30 dias apaga também `erp_envio_lote`.
+`erp_bases_repo.base_atendida` é o predicado único de "a thread atende esta base":
+`listar_ativas` e a rota filtram por ele.
 
 **Etapas isoladas:** vigia, foto, drenagem e envio da foto têm `try` próprios — ERP fora
 do ar ou foto inviável nunca param a drenagem nem o sinal de vida. Vigia que falha só
