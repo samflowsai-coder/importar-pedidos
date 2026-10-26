@@ -13,7 +13,7 @@ foto noturna do SP1 não segue as janelas (sai no `foto_hora` da base).
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.utils.logger import logger
@@ -53,6 +53,21 @@ def janela_aberta(agora: datetime | None = None) -> str | None:
 def inicio_da_janela(agora: datetime) -> datetime:
     """Início (hora cheia, com fuso) da janela que contém `agora`."""
     return agora.astimezone(FUSO).replace(minute=0, second=0, microsecond=0)
+
+
+def proxima_janela(agora: datetime) -> datetime:
+    """Início (aware, UTC) da próxima janela que começa DEPOIS de `agora`, pulando domingo."""
+    local = agora.astimezone(FUSO)
+    horas = _horas_das_janelas()
+    for dia in range(9):  # sobra para qualquer fim de semana
+        data = (local + timedelta(days=dia)).date()
+        if data.weekday() not in DIAS_UTEIS:
+            continue
+        for h in horas:
+            inicio = datetime(data.year, data.month, data.day, h, tzinfo=FUSO)
+            if inicio > local:
+                return inicio.astimezone(UTC)
+    raise RuntimeError("sem janela de envio configurada")  # inalcançável: horas nunca vazio
 
 
 def janelas_recentes(
