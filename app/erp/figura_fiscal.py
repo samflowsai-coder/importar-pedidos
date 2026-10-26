@@ -8,10 +8,11 @@ bonificação, remessa, não contribuinte). Por isso a escolha segue o que as
 operadoras da empresa já gravaram, em degraus, e nunca chuta. Só conta figura
 de venda (CFOP 5.10x/6.10x); bonificação, remessa e devolução ficam de fora.
 
-1. `cliente`: se ele tem pedido de venda na janela, só o histórico dele decide:
-   uma figura com DOMINANCIA dos pedidos. Histórico dividido recusa (não cai
-   para a UF: o próprio cliente mostrou que a figura dele não é a da UF);
-2. `uf`: cliente sem histórico de venda; na empresa, uma figura tem ao menos
+1. `cliente`: se ele tem pedido de venda na janela com figura que cobre a UF
+   atual dele, só esse histórico decide: uma figura com DOMINANCIA. Dividido
+   recusa (não cai para a UF: o cliente mostrou que a figura dele não é a da
+   UF). Figura de outra UF (cliente que mudou de estado) não conta;
+2. `uf`: cliente sem esse histórico; na empresa, uma figura tem ao menos
    MIN_PEDIDOS_UF pedidos e DOMINANCIA dos pedidos de venda da UF dele;
 3. `padrao`: a figura do ambiente (`fiscal_codfigfiscal`), se cobre a UF;
 4. nenhum: `FirebirdFiguraFiscalIndefinidaError` e o pedido não é gravado.
@@ -83,8 +84,9 @@ def escolher(
         codigo, n = max(vendas.items(), key=lambda kv: kv[1])
         return codigo if n >= minimo and Decimal(n) / total >= DOMINANCIA else None
 
-    if tem_venda(por_cliente, figura):
-        codigo = dominante(por_cliente, 1)
+    do_cliente = historico_na_uf(por_cliente, uf, figura)
+    if do_cliente:
+        codigo = dominante(do_cliente, 1)
         return (codigo, "cliente") if serve(codigo) else None
 
     codigo = dominante(por_uf, MIN_PEDIDOS_UF)
@@ -95,8 +97,12 @@ def escolher(
     return None
 
 
-def tem_venda(hist: dict[int, int], figura: Callable[[int], Figura | None]) -> bool:
-    return any(e_venda(figura(c)) for c in hist)
+def historico_na_uf(
+    hist: dict[int, int], uf: str, figura: Callable[[int], Figura | None]
+) -> dict[int, int]:
+    """Só os pedidos com figura de venda que cobre `uf`."""
+    uf = (uf or "").strip().upper()
+    return {c: n for c, n in hist.items() if e_venda(f := figura(c)) and uf in f.ufs}
 
 
 def resolver(cur, cliente: int, perfil: PerfilFiscal) -> PerfilFiscal:
@@ -132,7 +138,7 @@ def resolver(cur, cliente: int, perfil: PerfilFiscal) -> PerfilFiscal:
         return cache[codigo]
 
     por_uf: dict[int, int] = {}
-    if not tem_venda(por_cliente, figura):  # só consulta a UF se o cliente não decide
+    if not historico_na_uf(por_cliente, uf, figura):  # só consulta a UF se o cliente não decide
         cur.execute(queries.FIGURAS_DA_UF, (uf, desde, sistema))
         por_uf = {int(c): int(n) for c, n in cur.fetchall()}
 

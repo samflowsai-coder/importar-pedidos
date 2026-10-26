@@ -94,9 +94,11 @@ def test_padrao_que_nao_cobre_a_uf_recusa():
 
 
 def test_figura_que_nao_cobre_a_uf_do_cliente_e_descartada_em_todo_degrau():
-    # Cliente que mudou de estado: o histórico dele (1, SP) não vale para RN, e
-    # ele decide sozinho, então recusa em vez de pegar a figura da UF.
-    assert escolher("RN", {1: 5}, {17: 78}, 1, MM.get) is None
+    # Cliente que mudou de estado: o histórico dele em SP (1) não conta para RN;
+    # sem histórico que cubra RN, vale a figura da UF.
+    assert escolher("RN", {1: 5}, {17: 78}, 1, MM.get) == (17, "uf")
+    # Depois do 1º pedido digitado na 17, o histórico em RN decide sozinho.
+    assert escolher("RN", {1: 5, 17: 1}, {}, 1, MM.get) == (17, "cliente")
     # Figura sumida da tabela também é descartada.
     assert escolher("RN", {99: 5}, {}, 1, MM.get) is None
 
