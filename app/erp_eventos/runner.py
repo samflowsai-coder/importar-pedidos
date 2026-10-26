@@ -31,6 +31,7 @@ from app.persistence import context as env_context
 from app.persistence import (
     environments_repo,
     erp_bases_repo,
+    erp_envio_lote_repo,
     erp_estado_repo,
     erp_foto_repo,
     outbox_repo,
@@ -291,7 +292,9 @@ def _retencao_devida(cfg: BaseErpConfig, agora: datetime) -> bool:
 
 def _reter(cfg: BaseErpConfig, agora: datetime) -> None:
     with router.env_connect(cfg.env_slug) as conn:
-        n = erp_estado_repo.apagar_entregues_antigos(conn, formatar_instante(agora - RETENCAO_FILA))
+        corte = formatar_instante(agora - RETENCAO_FILA)
+        n = erp_estado_repo.apagar_entregues_antigos(conn, corte)
+        erp_envio_lote_repo.apagar_antigos(conn, corte)
     _ULTIMA_RETENCAO[(cfg.environment_id, cfg.base)] = foto.dia_local(agora)
     if n:
         logger.info(f"erp_eventos: retenção apagou {n} evento(s) entregue(s) da base '{cfg.base}'")
