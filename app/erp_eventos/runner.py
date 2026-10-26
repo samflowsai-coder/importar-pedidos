@@ -23,7 +23,7 @@ from decimal import Decimal
 
 from app.erp import depara_cliente
 from app.erp.connection import FirebirdConnection
-from app.erp_eventos import drenagem, foto, produtor, vigia, vinculo
+from app.erp_eventos import consulta, drenagem, foto, produtor, vigia, vinculo
 from app.erp_eventos.canonico import formatar_instante
 from app.erp_eventos.envio import ClienteErpEventos, Ritmo
 from app.erp_eventos.foto import FUSO
@@ -103,7 +103,8 @@ def _checar_manual(cfg: BaseErpConfig, agora: datetime) -> EnvioManualRecusado |
     if envio.bloqueio:
         return EnvioManualRecusado(
             "bloqueada",
-            f"Envio parado: {envio.bloqueio}. Corrija a causa e use Retomar envio.",
+            f"Envio parado: {consulta.texto_bloqueio(envio.bloqueio, envio.ultimo_http)} "
+            "Corrija a causa e use Retomar envio.",
         )
     if envio.proxima_tentativa_em and envio.proxima_tentativa_em > formatar_instante(agora):
         hora = datetime.fromisoformat(envio.proxima_tentativa_em).astimezone(FUSO)
@@ -140,6 +141,8 @@ def pedir_envio_manual(cfg: BaseErpConfig, quem: str, *, agora: datetime | None 
         _PEDIDO_MANUAL[chave] = envio_id
         _RESULTADOS[envio_id] = {
             "envio_id": envio_id,
+            "environment_id": cfg.environment_id,
+            "base": cfg.base,
             "quem": quem,
             "situacao": "pendente",
             "pedido_em": formatar_instante(agora),

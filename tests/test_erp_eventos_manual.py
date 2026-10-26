@@ -165,7 +165,10 @@ def test_pedido_recusado_bloqueada(cfg):
     _marcar(cfg, bloqueio="unidade_grande")
     e = _recusa(cfg)
     assert e.codigo == "bloqueada"
-    assert e.detalhe == ("Envio parado: unidade_grande. Corrija a causa e use Retomar envio.")
+    assert e.detalhe == (
+        "Envio parado: um pedido tem mais itens do que cabe num lote. Fale com o suporte. "
+        "Corrija a causa e use Retomar envio."
+    )
 
 
 def test_pedido_recusado_recuo_mostra_hora_local(cfg):

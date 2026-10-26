@@ -370,3 +370,27 @@ def test_repo_rejeitados_desde(env_id):
                 (f"i{i}", i, sit, resp),
             )
         assert erp_estado_repo.rejeitados_desde(conn, "mm", "2026-10-01T00:00:00.000+00:00") == 1
+
+
+def test_pedido_com_codigo_gigante_422(env_id):
+    c = _client()
+    _config(c, env_id)
+    assert c.get(_url(env_id, "/pedidos/99999999999999999999")).status_code == 422
+
+
+def test_envio_de_outro_ambiente_da_404(env_id, manual_limpo, tmp_path):
+    c = _client()
+    _config(c, env_id)
+    b = environments_repo.create(
+        slug="outra",
+        name="Outra",
+        watch_dir=str(tmp_path / "w2"),
+        output_dir=str(tmp_path / "o2"),
+        fb_path="",
+    )["id"]
+    c.put(_url(b), json=_payload(base="outra"))
+    envio_id = c.post(_url(b, "/enviar-agora")).json()["envio_id"]
+    ok = c.get(_url(b, f"/envio-manual/{envio_id}"))
+    assert ok.status_code == 200 and "environment_id" not in ok.json()
+    r = c.get(_url(env_id, f"/envio-manual/{envio_id}"))
+    assert r.status_code == 404 and r.json() == {"detail": _ERRO_MANUAL}

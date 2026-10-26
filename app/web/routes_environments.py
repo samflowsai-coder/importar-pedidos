@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import Path as PathParam
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -466,7 +467,9 @@ def search_erp_base_orders(
 
 
 @router.get("/{env_id}/erp-base/pedidos/{erp_codigo}")
-def get_erp_base_order(env_id: str, erp_codigo: int, _=Depends(require_admin)):
+def get_erp_base_order(
+    env_id: str, erp_codigo: int = PathParam(..., ge=0, le=2**63 - 1), _=Depends(require_admin)
+):
     cfg = _base_ou_404(env_id)
     with db_router.env_connect(cfg.env_slug) as conn:
         try:
@@ -496,9 +499,7 @@ def get_erp_base_panel(env_id: str, _=Depends(require_admin)):
         "recusados_30d": recusados,
         "bloqueio": envio.bloqueio,
         "bloqueio_texto": (
-            consulta.BLOQUEIOS.get(envio.bloqueio) or f"HTTP {envio.ultimo_http}."
-            if envio.bloqueio
-            else None
+            consulta.texto_bloqueio(envio.bloqueio, envio.ultimo_http) if envio.bloqueio else None
         ),
         "envio_manual": {
             "pode": recusa is None,
@@ -526,8 +527,13 @@ def send_erp_base_now(env_id: str, user=Depends(require_admin)):
 
 @router.get("/{env_id}/erp-base/envio-manual/{envio_id}")
 def get_erp_base_manual_send(env_id: str, envio_id: str, _=Depends(require_admin)):
-    _base_ou_404(env_id)
+    cfg = _base_ou_404(env_id)
     resultado = runner.resultado_manual(envio_id)
+    if resultado is not None and (
+        resultado.pop("environment_id", None) != cfg.environment_id
+        or resultado.pop("base", None) != cfg.base
+    ):
+        resultado = None
     if resultado is None:
         raise HTTPException(
             status_code=404,

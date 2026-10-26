@@ -41,6 +41,10 @@ _DIAS = ("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
 _SEM_ORIGEM = "origem não registrada"
 
 
+def texto_bloqueio(bloqueio: str, ultimo_http: int | None) -> str:
+    return BLOQUEIOS.get(bloqueio) or f"HTTP {ultimo_http}."
+
+
 def rotulo(tipo: str) -> str:
     return ROTULOS.get(tipo, tipo)
 
@@ -175,8 +179,7 @@ def _frase(
     eventos: list[EventoView], bloqueio: str | None, ultimo_http: int | None, agora: datetime
 ) -> str:
     if bloqueio:
-        texto = BLOQUEIOS.get(bloqueio) or f"HTTP {ultimo_http}."
-        return f"O envio está parado: {texto}"
+        return f"O envio está parado: {texto_bloqueio(bloqueio, ultimo_http)}"
     sem_resposta = sum(1 for e in eventos if e.situacao_tela in ("na_fila", "enviado"))
     recusados = sum(1 for e in eventos if e.situacao_tela == "recusado")
     if recusados:
