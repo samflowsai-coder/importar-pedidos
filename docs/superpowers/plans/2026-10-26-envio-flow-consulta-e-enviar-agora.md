@@ -20,7 +20,7 @@
 - `q`: `strip`, 1 a 40 caracteres (422 fora disso); lista de repetidos `LIMIT 50`.
 - Rótulos de tipo (exatos): `pedido_visto` Pedido novo · `pedido_excluido` Pedido excluído · `status_alterado` Status mudou · `item_incluido` Item incluído · `item_removido` Item removido · `quantidade_alterada` Quantidade mudou · `preco_alterado` Preço mudou · `data_entrega_alterada` Data de entrega mudou · `faturamento_detectado` Faturado · `lote_fiscal` Lote fiscal; desconhecido = nome cru.
 - Situação na tela: `pendente` sem `enviado_em` = "Na fila"; `pendente` com `enviado_em` = "Enviado, sem resposta"; `aceito` = "Aceito"; `duplicado` = "Aceito (duplicado)"; `rejeitado` = "Recusado". (Não existe situação `enviado` na tabela.)
-- Testes: venv `scratchpad/venv311` (o repo não tem `.venv`): `$V/bin/pytest`, `V=/private/tmp/claude-501/-Users-samuelalves-SamFlowsAI---Projeto-Cursor-importar-pedidos/5b62414d-8dd6-41f6-b6e5-27865495c63a/scratchpad/venv311`. `ruff check` do que tocar.
+- Testes: venv `scratchpad/venv311` (o repo não tem `.venv`): `$V/bin/python -m pytest` rodado da raiz do worktree (o venv tem install editável de outro worktree; `bin/pytest` importaria o app errado), `V=/private/tmp/claude-501/-Users-samuelalves-SamFlowsAI---Projeto-Cursor-importar-pedidos/5b62414d-8dd6-41f6-b6e5-27865495c63a/scratchpad/venv311`. `ruff check` do que tocar.
 
 ## Review Focus
 
@@ -51,9 +51,9 @@
   - `ORIGENS = ("janela", "foto", "manual")`; `abrir` com origem fora disso → `ValueError`.
 
 - [ ] **Step 1: Testes** — `test_abrir_e_fechar_lote` (abre com eventos=3, fecha com http=202/aceitos=2/rejeitados=1; `recentes` devolve 1 linha com esses valores e `respondido_em`); `test_recentes_ordem_e_limite` (25 lotes → 20, o mais novo primeiro); `test_origens_por_lote_id` (ids inexistentes ausentes do dict); `test_apagar_antigos` (só `enviado_em < antes_de`); `test_origem_invalida` (`ValueError`); `test_retencao_do_runner_apaga_lotes` (chama `runner._reter` e confere que lote de 31 dias sumiu, o de 1 dia ficou).
-- [ ] **Step 2:** rodar `$V/bin/pytest tests/test_erp_envio_lote_repo.py -v` → FAIL (módulo inexistente).
+- [ ] **Step 2:** rodar `$V/bin/python -m pytest tests/test_erp_envio_lote_repo.py -v` → FAIL (módulo inexistente).
 - [ ] **Step 3:** DDL exatamente o da spec §3 (tabela + índice `ix_erp_envio_lote_base_em`), repo com as funções acima, `_reter` chama `erp_envio_lote_repo.apagar_antigos` com o mesmo corte.
-- [ ] **Step 4:** rodar o arquivo → PASS; `$V/bin/pytest tests/test_erp_eventos_runner.py -q` → PASS.
+- [ ] **Step 4:** rodar o arquivo → PASS; `$V/bin/python -m pytest tests/test_erp_eventos_runner.py -q` → PASS.
 - [ ] **Step 5:** commit `feat(erp_eventos): registro de lotes erp_envio_lote`.
 
 ### Task 2: `drenar` registra cada lote com origem
@@ -70,7 +70,7 @@
 - [ ] **Step 1: Testes** — `test_lote_aceito_grava_registro_janela` (origem `janela`, `eventos`=n, `http`=202, `aceitos`=n); `test_lote_vazio_de_sinal_grava_registro` (`eventos`=0, http 202); `test_lote_manual_grava_quem_e_envio_id`; `test_lote_com_erro_5xx_fecha_com_http_e_zero_aceitos`; `test_lote_400_bloqueia_e_fecha_registro`; `test_enviar_foto_registra_origem_foto` (em `test_erp_eventos_runner.py`, drenagem antes da foto com pendentes → linha `foto`).
 - [ ] **Step 2:** rodar → FAIL.
 - [ ] **Step 3:** `abrir` na mesma transação de `marcar_enviados` (antes do POST); `fechar` na mesma transação de `aplicar_resultados` + `registrar_202` no caminho `aplicar`, e na transação de `registrar_espera`/`bloquear` nos caminhos de erro (aceitos 0, `http=resp.status`). O caminho `dividir` fecha o lote com o `http` recebido (413) antes do `continue`.
-- [ ] **Step 4:** `$V/bin/pytest tests/test_erp_eventos_drenagem.py tests/test_erp_eventos_runner.py -q` → PASS.
+- [ ] **Step 4:** `$V/bin/python -m pytest tests/test_erp_eventos_drenagem.py tests/test_erp_eventos_runner.py -q` → PASS.
 - [ ] **Step 5:** commit `feat(erp_eventos): drenar registra origem de cada lote`.
 
 ### Task 3: `proxima_janela`
@@ -123,7 +123,7 @@
   - `test_pedido_atendido_uma_vez` (dois ticks seguidos → um atendimento).
   - `test_dentro_da_janela_passo1_pulado` (às 14:10 a janela drena; o manual não acha pendentes no passo 1; lotes da janela ficam `origem='janela'`).
   - `test_resultado_expira_em_1h` e `test_resultado_desconhecido_none`.
-- [ ] **Step 2:** FAIL. **Step 3:** implementar. **Step 4:** `$V/bin/pytest tests/test_erp_eventos_manual.py tests/test_erp_eventos_runner.py -q` → PASS. **Step 5:** commit `feat(erp_eventos): envio manual atendido pela thread`.
+- [ ] **Step 2:** FAIL. **Step 3:** implementar. **Step 4:** `$V/bin/python -m pytest tests/test_erp_eventos_manual.py tests/test_erp_eventos_runner.py -q` → PASS. **Step 5:** commit `feat(erp_eventos): envio manual atendido pela thread`.
 
 ### Task 6: Consulta por pedido (módulo puro)
 
@@ -162,7 +162,7 @@
   - `GET .../erp-base/envio-manual/{envio_id}` → `resultado_manual` ou 404 `{"detail": "pedido não encontrado (o portal pode ter reiniciado); veja Últimos envios"}`.
 
 - [ ] **Step 1: Testes** (padrão do arquivo, `TestClient` + bypass de admin já usado lá): cada rota 403 para não-admin; 404 ambiente desconhecido; `q` 422; busca com 1 e com 2 resultados; `painel` com `pode=False` e motivo quando sem credencial; POST 202 e então GET do id `pendente`; POST 409 `sem_credencial` com a mensagem da spec; GET id desconhecido 404 com o texto exato; **o POST não abre conexão com Fire nem Flow** (monkeypatch `FirebirdConnection` e `ClienteErpEventos` para explodirem se instanciados).
-- [ ] **Step 2:** FAIL. **Step 3:** implementar. **Step 4:** `$V/bin/pytest tests/test_erp_eventos_admin.py -q` → PASS. **Step 5:** commit `feat(web): rotas de consulta e envio manual ao Flow`.
+- [ ] **Step 2:** FAIL. **Step 3:** implementar. **Step 4:** `$V/bin/python -m pytest tests/test_erp_eventos_admin.py -q` → PASS. **Step 5:** commit `feat(web): rotas de consulta e envio manual ao Flow`.
 
 ### Task 8: Tela `/admin/envio-flow`
 
@@ -187,4 +187,4 @@
 - Modify: `docs/ai/modules/erp_eventos.md` (arquivos críticos: `consulta.py`, `erp_envio_lote_repo.py`; fluxo: pedido manual no tick; tabela `erp_envio_lote`)
 - Modify: `docs/ai/modules/web.md` (3+2 rotas novas e a página)
 
-- [ ] **Step 1:** atualizar só as seções afetadas. **Step 2:** suíte completa `$V/bin/pytest tests -q` (as 2 falhas conhecidas de `test_env_leak_guard` são pré-existentes; qualquer outra falha bloqueia) e `ruff check app/ tests/`. **Step 3:** commit `docs(ai): envio ao Flow por pedido`.
+- [ ] **Step 1:** atualizar só as seções afetadas. **Step 2:** suíte completa `$V/bin/python -m pytest tests -q` (as 2 falhas conhecidas de `test_env_leak_guard` são pré-existentes; qualquer outra falha bloqueia) e `ruff check app/ tests/`. **Step 3:** commit `docs(ai): envio ao Flow por pedido`.
