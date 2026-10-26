@@ -9,6 +9,7 @@ Conectar no Firebird (embedded ou TCP) e inserir pedidos preservando o schema le
 - `app/erp/mapper.py` — mapeia `Order` → linhas do schema real (nomes de colunas).
 - `app/erp/product_check.py` — checagem de existência de produto antes de inserir.
 - `app/erp/exceptions.py` — exceções de domínio.
+- `app/erp/figura_fiscal.py` — figura do pedido pelo histórico da empresa (ver "Perfil fiscal").
 - `app/erp/fiscal.py` — `PerfilFiscal` + `perfil_para(env)`: constantes fiscais do
   pedido faturável, por ambiente (`CODFIGFISCAL` difere: 1 na MM, 5 na Nasmar).
 - `app/exporters/firebird_exporter.py` — orquestrador, chamado pelo pipeline com `EXPORT_MODE=db|both`.
@@ -46,6 +47,20 @@ até 2026-08; hoje cobrem o que a Fire viva realmente grava, medido contra
   `codfigfiscal` (o único que difere por empresa: 1 na MM, 5 na Nasmar —
   por isso mora em `environments.fiscal_codfigfiscal`, não no dataclass).
   `perfil_para(env)` cai no default medido quando o campo está ausente/NULL.
+- **Figura do pedido (`app/erp/figura_fiscal.py`, 2026-10-26).** A nota do Fire
+  sai da figura do cabeçalho: CFOP, alíquota e redução da nota são os da
+  `FIGURA_FISCAL` dela, não os do item (433 notas autorizadas da `.7`, 4.129/4.129
+  itens). A figura do ambiente só vale como último degrau: `figura_fiscal.resolver`
+  roda no insert depois do `CHECK_ORDER_EXISTS` e escolhe por (1) o histórico do
+  cliente, se unânime; (2) a figura dominante da UF dele na empresa (≥ 3 pedidos e
+  ≥ 90%); (3) o `fiscal_codfigfiscal` do ambiente, se a UF está no `UF_DESTINO`.
+  Toda figura escolhida precisa cobrir a UF. Sem decisão: `skip_reason
+  FIGURA_FISCAL_INDEFINIDA`, nada é gravado (409 no envio). O histórico ignora
+  `IMPORTADOR` e cancelados (janela de 365 dias). `CFOP_PRINCIPAL`, `ICMS_PORC` e
+  `REDUCAO` do item passam a ser os da figura (SP: redução 33,33, não mais 61,11).
+  Validado só-leitura na Fire viva: 182/182 clientes da MM e 78/79 da Nasmar com a
+  figura que a operadora usou (o outro recusa); como cliente novo, nenhuma figura
+  diferente (6 e 9 recusas). Testes: `tests/test_figura_fiscal.py`.
 - **`FirebirdExporter._find_product(cur, row)`** mudou de devolver só
   `product_seq: int | None` para **`tuple[int | None, str]`** — `(product_seq,
   unid)`. `unid` alimenta `CORPO_VENDAS.UNID`; `"UN"` é o fallback quando o

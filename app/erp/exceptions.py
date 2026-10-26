@@ -22,6 +22,15 @@ class FirebirdProductNotFoundError(FirebirdError):
         self.product_code = product_code
 
 
+class FirebirdFiguraFiscalIndefinidaError(FirebirdError):
+    """Nem o histórico do cliente, nem o da UF, nem o padrão do ambiente decidem a figura."""
+
+    def __init__(self, cliente: int, uf: str) -> None:
+        super().__init__(f"Figura fiscal indefinida para o cliente {cliente} (UF {uf or '?'}).")
+        self.cliente = cliente
+        self.uf = uf
+
+
 class FirebirdMappingError(FirebirdError):
     """Cannot map Order fields to ERP table columns (schema mismatch)."""
 

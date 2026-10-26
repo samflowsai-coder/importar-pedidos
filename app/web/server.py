@@ -2959,6 +2959,10 @@ def _send_one_to_fire(
                     "Fire rejeitou o pedido: produto de um item não existe no Fire. "
                     "Confira o vínculo do item e envie de novo."
                     if result.skip_reason == "PRODUCT_NOT_FOUND"
+                    else "Figura fiscal indefinida para este cliente: nem o histórico dele, "
+                    "nem o do estado no Fire decidem. Cadastre este pedido no Fire com a figura "
+                    "certa; os próximos deste cliente passam a usar a dela."
+                    if result.skip_reason == "FIGURA_FISCAL_INDEFINIDA"
                     else f"Fire rejeitou o pedido: {result.skip_reason or 'sem fire_codigo'}"
                 ),
             )
