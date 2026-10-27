@@ -153,8 +153,8 @@ def drenar(
                 logger.warning(
                     f"erp_eventos: lote {lote_id}: {faltando} id(s) sem resultado — seguem pendentes"
                 )
-            if lote and not resultados:
-                # 202 sem nenhum id casado: falha de protocolo, não "tudo pendente,
+            if lote and faltando:
+                # 202 sem id casado (ou parcial): falha de protocolo, não "tudo pendente,
                 # manda de novo já" — reenviar em laço é o que o contrato proíbe (I2).
                 espera = lotes.espera_crescente(envio.falhas_seguidas)
                 with router.env_connect(cfg.env_slug) as conn:
@@ -163,11 +163,14 @@ def drenar(
                         cfg.base,
                         carimbo,
                         http=202,
-                        erro=f"202 sem resultados casados: {str(resp.corpo)[:300]}",
+                        erro=f"202 com {faltando} id(s) sem resultado casado: {str(resp.corpo)[:300]}",
                         ate=formatar_instante(agora + timedelta(seconds=espera)),
                     )
-                    fechar_lote(conn)
-                logger.error(f"erp_eventos: lote {lote_id} voltou 202 sem nenhum resultado casado")
+                    if not resultados:  # com resultados o lote já foi fechado acima
+                        fechar_lote(conn)
+                logger.error(
+                    f"erp_eventos: lote {lote_id} voltou 202 sem resultado para {faltando} id(s)"
+                )
                 return ResultadoDrenagem(n_lotes, aceitos, duplicados, rejeitados, "esperando")
             if not lote:
                 return ResultadoDrenagem(n_lotes, aceitos, duplicados, rejeitados, None)
