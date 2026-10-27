@@ -14,7 +14,6 @@ from app.integrations.flowpcp import envio_portal
 from app.integrations.flowpcp.config import FlowPCPConfig
 from app.persistence import context as env_context
 from app.persistence import db, environments_repo, outbox_repo, repo
-from app.utils.janelas_envio import FUSO
 
 AGORA = datetime(2026, 10, 15, 10, 0, 0)
 
@@ -405,18 +404,23 @@ def test_interruptor_da_thread(monkeypatch):
 
 
 def test_drenar_num_domingo_a_noite_envia_o_pedido(env, monkeypatch):
-    pedido("a", dias=0)
-    chamadas = []
+    pedido("a", dias=0, fire_codigo=101)  # `drenar` usa a hora real: o pedido já é "antigo"
+    real = envio_portal.drenar_ambiente
 
-    def fake(e, c):
-        chamadas.append(e["slug"])
-        return {"enviados": 1}
+    def enviar(row, cfg):
+        outbox_repo.mark_sent(row.id)
 
     monkeypatch.setattr(envio_portal, "enabled_flowpcp_envs", lambda: {"mm": CFG})
-    monkeypatch.setattr(envio_portal, "drenar_ambiente", fake)
+    monkeypatch.setattr(
+        envio_portal,
+        "drenar_ambiente",
+        lambda e, c: real(e, c, ler_status=Fake({101: "PEDIDO"}).ler, enviar=enviar),
+    )
     monkeypatch.setattr(envio_portal, "update_outbox_metrics", lambda: None)
-    envio_portal.drenar(datetime(2026, 10, 18, 21, 0, tzinfo=FUSO))  # domingo 21h
-    assert chamadas == [env["slug"]]
+    envio_portal.drenar()  # sem janela: vale a qualquer hora
+    with db.connect() as conn:
+        status = conn.execute("SELECT status FROM outbox").fetchall()
+    assert [r["status"] for r in status] == ["sent"]
 
 
 def test_recusado_pelo_flow_nao_conta_como_enviado(env):

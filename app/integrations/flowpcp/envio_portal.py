@@ -234,7 +234,7 @@ def drenar_ambiente(
     return conta
 
 
-def drenar(agora: datetime | None = None) -> None:
+def drenar() -> None:
     """Drena a fila de cada ambiente habilitado, em toda chamada (sem janela)."""
     for slug, cfg in enabled_flowpcp_envs().items():
         env = environments_repo.get_by_slug(slug)
