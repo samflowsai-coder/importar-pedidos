@@ -32,8 +32,8 @@ Spec: `pcp-app/docs/superpowers/specs/2026-10-03-sp1-transporte-pedidos-fire-des
 | `app/erp_eventos/eco.py` | `correlacaoId` da data que o próprio Portal aplicou |
 | `app/erp_eventos/lote_fiscal.py` | emissor do `lote_fiscal` (produtor = envio do espelho do lote, `app/consolidators/integracao.py`) |
 | `app/erp_eventos/runner.py` | thread do processo web, trava por base |
-| `app/erp_eventos/consulta.py` | consulta por pedido: rótulos, frases, `texto_bloqueio`, `rotulo_lote` |
-| `app/persistence/erp_envio_lote_repo.py` | registro de cada lote (`erp_envio_lote`): origem janela/foto/manual, quem, `envio_id` |
+| `app/erp_eventos/consulta.py` | consulta por pedido: rótulos, frases, `texto_bloqueio`, `rotulo_lote` (a origem `janela` existe só no histórico de lotes antigos e ainda é tratada aqui) |
+| `app/persistence/erp_envio_lote_repo.py` | registro de cada lote (`erp_envio_lote`): origem auto/sinal/foto/manual, quem, `envio_id` |
 | `app/persistence/erp_bases_repo.py` | config + credencial cifrada por (ambiente, base) — `app_shared.db` |
 | `app/persistence/erp_estado_repo.py` / `erp_vinculo_repo.py` / `erp_foto_repo.py` | tabelas `erp_*` do banco do ambiente |
 | `tools/erp_medir.py` | medições SÓ LEITURA no ERP |
@@ -47,13 +47,13 @@ Spec: `pcp-app/docs/superpowers/specs/2026-10-03-sp1-transporte-pedidos-fire-des
    `produtoProdutor`, vínculo xlsx dos novos) → **uma transação**: estado + marca do
    `seq` + eventos. Lê tudo de novo a cada ciclo (medido: 323 pedidos em 0,3 s na cópia);
    não depende de `ULT_ALT_DTHR`, que não está provado mudar com item ou nota.
-2. **drenagem**: só nas **janelas de envio** (8h, 11h, 14h, 17h, seg-sáb, Brasília;
-   `app/utils/janelas_envio.py`, `PORTAL_FLOW_JANELAS`); fora delas a vigia segue
-   enfileirando. Lotes em série. **Pelo menos um lote por janela**: sem 202 desde o
-   início da janela, o runner pede o lote vazio (`_garantir_lote_na_janela`), mesmo com
-   o ERP fora — o Flow usa o 202 como sinal de vida e alerta janela sem nada. A foto
-   não segue as janelas; antes da primeira página, a fila observada até o `corteEm`
-   sai (única exceção às janelas), para a foto nunca chegar antes dos eventos dela.
+2. **drenagem**: em todo tick, a qualquer hora (sem janelas desde 27/10/2026; a variável
+   `PORTAL_FLOW_JANELAS` virou só um aviso em `app/utils/janelas_envio.py`). Lotes em série.
+   **Sinal de vida**: sem 202 há 55 min (`SINAL_DE_VIDA`; 55 e não 60 para sempre haver um lote por hora cheia), o runner pede um lote vazio
+   (`_garantir_sinal_de_vida`), mesmo com o ERP fora, porque o Flow usa o 202 como sinal de
+   vida e alerta se a base calar. A origem do lote é `auto` (fila) ou `sinal` (lote vazio).
+   Antes da primeira página da foto, a fila observada até o `corteEm` sai, para a foto
+   nunca chegar antes dos eventos dela.
 3. **foto**: no `foto_hora` local, uma por base por dia; páginas congeladas. Pedido fora
    do contrato → a foto do dia fica `nao_criada` (com o motivo, visível na tela) e não é
    tentada de novo até amanhã — uma foto sem ele diria ao Flow que saiu de aberto.
@@ -62,7 +62,7 @@ Spec: `pcp-app/docs/superpowers/specs/2026-10-03-sp1-transporte-pedidos-fire-des
    de um pedido encerrado, a reabertura viraria `pedido_visto` em vez de `status_alterado`.
 
 **Pedido manual ("Enviar agora"):** `runner.pedir_envio_manual` só grava o pedido em
-memória, sob `_MANUAL_GUARD`. A thread atende no tick logo depois de `_lotes_da_janela`:
+memória, sob `_MANUAL_GUARD`. A thread atende no tick logo depois de `_drenar_fila`:
 `drenar` se houver pendentes, depois vigia forçada (respeitando `_FALHA_ERP`), depois
 `drenar`. Substitui a vigia normal daquele tick. O resultado fica em memória por 1 h
 (`envio-manual/{envio_id}`). `drenar(origem, quem, envio_id)` grava uma linha em

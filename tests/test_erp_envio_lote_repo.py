@@ -50,7 +50,7 @@ def cfg(tmp_path: Path, monkeypatch):
     db.reset_init_cache()
 
 
-def _abrir(conn, lote_id, em="2026-10-26T12:00:00+00:00", origem="janela", eventos=1):
+def _abrir(conn, lote_id, em="2026-10-26T12:00:00+00:00", origem="auto", eventos=1):
     repo.abrir(
         conn,
         lote_id=lote_id,
@@ -149,6 +149,13 @@ def test_apagar_antigos_poupa_lote_de_evento_recusado(cfg):
 def test_origem_invalida(cfg):
     with router.env_connect(cfg.env_slug) as conn, pytest.raises(ValueError):
         _abrir(conn, "X", origem="sei_la")
+
+
+@pytest.mark.parametrize("origem", ["janela", "auto", "sinal", "foto", "manual"])
+def test_origens_aceitas(cfg, origem):
+    with router.env_connect(cfg.env_slug) as conn:
+        _abrir(conn, "O", origem=origem)
+        assert repo.recentes(conn, "mm")[0].origem == origem
 
 
 def test_retencao_do_runner_apaga_lotes(cfg):

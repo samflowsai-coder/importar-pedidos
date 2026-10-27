@@ -12,7 +12,7 @@ catálogo inteiro (`fullSync=true`) vai uma vez por dia, dentro da hora
 SP1). `PORTAL_FLOWPCP_CATALOGO_DIARIO` decide o modo: `simular` (padrão,
 `dryRun=true`: o Flow só compara), `gravar` (`dryRun=false`) ou `desligado`.
 Gravar nunca é padrão: só vira depois do ok do Samuel ao primeiro promote, para
-o envio diário não gravar um recorte que ninguém conferiu. Fora das janelas de envio de propósito: é um POST só,
+o envio diário não gravar um recorte que ninguém conferiu. Hora própria, fora da fila do recebimento: é um POST só,
 fora do horário de trabalho do Flow.
 
 "Já foi hoje" vem da cópia local (`catalogo_fire.extraido_em`, gravada a cada

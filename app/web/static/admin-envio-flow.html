@@ -98,7 +98,7 @@
   <div id="app-shell"></div>
   <main class="content">
     <h1>Envio ao Flow</h1>
-    <p class="sub">Pedidos do Fire que o portal lê e manda para o Flow. <span id="sub-janelas">A fila sai sozinha nas janelas do dia (seg–sáb).</span></p>
+    <p class="sub">Pedidos do Fire que o portal lê e manda para o Flow assim que mudam.</p>
 
     <div class="topo">
       <label for="amb">Empresa</label>
@@ -112,7 +112,7 @@
       <section class="card saude" aria-label="Situação do envio">
         <div class="m"><small>Última leitura do Fire</small><strong id="k-vigia">—</strong><span id="k-vigia-d"></span><span class="note" id="k-vigia-i" style="display:block"></span></div>
         <div class="m"><small>Na fila</small><strong id="k-fila">—</strong><span>eventos esperando</span></div>
-        <div class="m"><small>Próxima saída</small><strong id="k-prox">—</strong><span id="k-prox-d"></span></div>
+        <div class="m"><small>Envio</small><strong>Automático</strong><span id="k-prox-d"></span></div>
         <div class="m"><small>Último lote aceito</small><strong id="k-aceito">—</strong><span id="k-aceito-d"></span></div>
         <div class="m"><small>Recusados</small><strong id="k-rec">—</strong><span>últimos 30 dias</span></div>
         <div class="acao">
@@ -151,7 +151,7 @@
       <h2 id="dlg-t">Enviar a fila agora?</h2>
       <p id="dlg-p"></p>
       <ul class="dlg-lista">
-        <li>Mesma ordem e mesmas regras do envio da janela.</li>
+        <li>Mesma ordem e mesmas regras do envio automático.</li>
         <li>Fica registrado como envio manual seu.</li>
       </ul>
       <div class="acts">
@@ -292,7 +292,7 @@
     }
 
     function zerarPainel() {
-      ['k-vigia', 'k-fila', 'k-prox', 'k-aceito', 'k-rec'].forEach((k) => { $(k).textContent = '—'; });
+      ['k-vigia', 'k-fila', 'k-aceito', 'k-rec'].forEach((k) => { $(k).textContent = '—'; });
       ['k-vigia-d', 'k-vigia-i', 'k-prox-d', 'k-aceito-d'].forEach((k) => { $(k).textContent = ''; });
       limpar($('envios'));
       $('bloqueio').hidden = true;
@@ -303,13 +303,6 @@
     }
 
     // ── painel ───────────────────────────────────────────────────────────
-    function frasePrazos(horas) {
-      if (!horas || !horas.length) return 'A fila sai sozinha nas janelas do dia (seg–sáb).';
-      const hs = horas.map((h) => h + 'h');
-      const lista = hs.length === 1 ? hs[0] : hs.slice(0, -1).join(', ') + ' e ' + hs[hs.length - 1];
-      return 'A fila sai sozinha às ' + lista + ' (seg–sáb).';
-    }
-
     async function carregarPainel() {
       const ger = geracao;
       const r = await api(base() + '/painel');
@@ -321,10 +314,8 @@
       $('k-vigia').textContent = hhmm(p.ultima_vigia_em);
       $('k-vigia-d').textContent = p.ultima_vigia_em ? diaLabel(p.ultima_vigia_em) : 'ainda não leu';
       $('k-vigia-i').textContent = p.intervalo_vigia_min ? 'a cada ' + p.intervalo_vigia_min + ' min' : '';
-      $('sub-janelas').textContent = frasePrazos(p.janelas);
       $('k-fila').textContent = String(p.fila_pendente);
-      $('k-prox').textContent = hhmm(p.proxima_janela);
-      $('k-prox-d').textContent = diaLabel(p.proxima_janela);
+      $('k-prox-d').textContent = p.intervalo_vigia_min ? 'a cada leitura do Fire (' + p.intervalo_vigia_min + ' min)' : '';
       $('k-aceito').textContent = hhmm(p.ultimo_202_em);
       // O lote do último aceite é o que respondeu no instante gravado em `ultimo_202_em`.
       const ult = (p.envios || []).find((e) => e.http === 202 && e.resultado_tom === 'ok' && e.respondido_em === p.ultimo_202_em);

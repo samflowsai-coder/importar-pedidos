@@ -215,7 +215,7 @@ def _atualizar_envio(conn: sqlite3.Connection, base: str, agora: str, **campos) 
 
 
 def registrar_vigia(conn: sqlite3.Connection, base: str, agora: str) -> None:
-    _atualizar_envio(conn, base, agora, ultima_vigia_em=agora, sinal_pendente=1)
+    _atualizar_envio(conn, base, agora, ultima_vigia_em=agora)
 
 
 def pedir_sinal_de_vida(conn: sqlite3.Connection, base: str, agora: str) -> None:

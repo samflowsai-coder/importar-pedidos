@@ -47,13 +47,14 @@ def drenar(
     relogio: Callable[[], float] = time.monotonic,
     prazo_s: float = PRAZO_DRENAGEM_S,
     ate: str | None = None,
-    origem: str = "janela",
+    origem: str = "auto",
     quem: str | None = None,
     envio_id: str | None = None,
 ) -> ResultadoDrenagem:
     """`ate`: só eventos observados até esse instante, sem lote vazio de sinal
-    de vida (usado antes da foto, fora das janelas). `origem`/`quem`/`envio_id`
-    ficam no registro de cada lote (`erp_envio_lote`)."""
+    de vida (usado antes da foto). `origem`/`quem`/`envio_id`
+    ficam no registro de cada lote (`erp_envio_lote`); lote sem evento com
+    origem `auto` é registrado como `sinal` (sinal de vida)."""
     inicio = relogio()
     n_lotes = aceitos = duplicados = rejeitados = 0
     max_eventos = lotes.MAX_EVENTOS
@@ -97,7 +98,7 @@ def drenar(
                 conn,
                 lote_id=lote_id,
                 base=cfg.base,
-                origem=origem,
+                origem="sinal" if not ids and origem == "auto" else origem,
                 quem=quem,
                 envio_id=envio_id,
                 enviado_em=enviado_em,
@@ -152,8 +153,8 @@ def drenar(
                 logger.warning(
                     f"erp_eventos: lote {lote_id}: {faltando} id(s) sem resultado — seguem pendentes"
                 )
-            if lote and not resultados:
-                # 202 sem nenhum id casado: falha de protocolo, não "tudo pendente,
+            if lote and faltando:
+                # 202 sem id casado (ou parcial): falha de protocolo, não "tudo pendente,
                 # manda de novo já" — reenviar em laço é o que o contrato proíbe (I2).
                 espera = lotes.espera_crescente(envio.falhas_seguidas)
                 with router.env_connect(cfg.env_slug) as conn:
@@ -162,11 +163,14 @@ def drenar(
                         cfg.base,
                         carimbo,
                         http=202,
-                        erro=f"202 sem resultados casados: {str(resp.corpo)[:300]}",
+                        erro=f"202 com {faltando} id(s) sem resultado casado: {str(resp.corpo)[:300]}",
                         ate=formatar_instante(agora + timedelta(seconds=espera)),
                     )
-                    fechar_lote(conn)
-                logger.error(f"erp_eventos: lote {lote_id} voltou 202 sem nenhum resultado casado")
+                    if not resultados:  # com resultados o lote já foi fechado acima
+                        fechar_lote(conn)
+                logger.error(
+                    f"erp_eventos: lote {lote_id} voltou 202 sem resultado para {faltando} id(s)"
+                )
                 return ResultadoDrenagem(n_lotes, aceitos, duplicados, rejeitados, "esperando")
             if not lote:
                 return ResultadoDrenagem(n_lotes, aceitos, duplicados, rejeitados, None)

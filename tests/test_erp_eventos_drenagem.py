@@ -24,6 +24,8 @@ from app.security import secret_store
 
 TENANT = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 TOKEN = "fpe_" + "b" * 43
+from app.erp_eventos.canonico import formatar_instante  # noqa: E402
+
 T0 = datetime(2026, 10, 9, 13, 0, tzinfo=UTC)
 
 
@@ -109,7 +111,7 @@ def envio(cfg):
 
 def test_sem_pendente_com_sinal_devido_manda_lote_vazio(cfg):
     with router.env_connect("mm") as conn:
-        erp_estado_repo.registrar_vigia(conn, "mm", "2026-10-09T13:00:00.000+00:00")
+        erp_estado_repo.pedir_sinal_de_vida(conn, "mm", "2026-10-09T13:00:00.000+00:00")
     flow = Flow()
     rodar(cfg, flow)
     assert flow.lotes == [[]]
@@ -132,7 +134,8 @@ def test_id_sem_resultado_continua_pendente_e_reenvio_repete_o_mesmo_evento(cfg)
         202, {"resultados": [{"id": evs[0]["id"], "situacao": "aceito"}]}, None
     )
     flow = Flow([so_o_primeiro, aceita_tudo])
-    rodar(cfg, flow)
+    assert rodar(cfg, flow).parou_por == "esperando"  # resposta parcial: recua
+    rodar(cfg, flow, agora=T0 + timedelta(hours=1))  # passada a espera, reenvia
     assert flow.lotes[1] == flow.lotes[0][1:]  # mesmos bytes de evento
     with router.env_connect("mm") as conn:
         assert erp_estado_repo.contar(conn, "mm") == {"aceito": 3}
@@ -198,21 +201,21 @@ def lotes_registrados():
         return erp_envio_lote_repo.recentes(conn, "mm")
 
 
-def test_lote_aceito_grava_registro_janela(cfg):
+def test_lote_aceito_grava_registro_auto(cfg):
     enfileirar([3])
     rodar(cfg, Flow())
     (reg,) = lotes_registrados()
-    assert (reg.origem, reg.eventos, reg.http, reg.aceitos) == ("janela", 3, 202, 3)
+    assert (reg.origem, reg.eventos, reg.http, reg.aceitos) == ("auto", 3, 202, 3)
     assert (reg.duplicados, reg.rejeitados) == (0, 0)
     assert reg.quem is None and reg.envio_id is None and reg.respondido_em
 
 
 def test_lote_vazio_de_sinal_grava_registro(cfg):
     with router.env_connect("mm") as conn:
-        erp_estado_repo.registrar_vigia(conn, "mm", "2026-10-09T13:00:00.000+00:00")
+        erp_estado_repo.pedir_sinal_de_vida(conn, "mm", "2026-10-09T13:00:00.000+00:00")
     rodar(cfg, Flow())
     (reg,) = lotes_registrados()
-    assert (reg.eventos, reg.http, reg.aceitos) == (0, 202, 0)
+    assert (reg.origem, reg.eventos, reg.http, reg.aceitos) == ("sinal", 0, 202, 0)
 
 
 def test_lote_manual_grava_quem_e_envio_id(cfg):
@@ -315,6 +318,20 @@ def test_413_com_unidades_de_tamanhos_diferentes_nao_bloqueia(cfg):
     rodar(cfg, flow)
     assert [len(lote) for lote in flow.lotes] == [16, 12, 4]
     assert envio(cfg).bloqueio is None
+
+
+def test_202_parcial_sem_os_ids_espera_em_vez_de_reenviar_em_laco(cfg):
+    enfileirar([3])
+
+    def parcial(eventos):  # 202 que omite 2 dos 3 ids
+        return RespostaHttp(
+            202, {"resultados": [{"id": eventos[0]["id"], "situacao": "aceito"}]}, None
+        )
+
+    flow = Flow([parcial] * 5)
+    assert rodar(cfg, flow).parou_por == "esperando"
+    assert len(flow.lotes) == 1
+    assert envio(cfg).proxima_tentativa_em > formatar_instante(T0)
 
 
 def test_202_sem_nenhum_resultado_casado_espera_em_vez_de_reenviar_em_laco(cfg):

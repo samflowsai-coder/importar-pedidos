@@ -159,12 +159,12 @@ def test_detalhe_inexistente_levanta(conn):
         (
             [("pendente", None, None), ("aceito", None, "x")],
             None,
-            "O Flow ainda não recebeu 1 evento. Saem na janela de hoje às 17:00 ou agora pelo Enviar agora.",
+            "O Flow ainda não recebeu 1 evento. Saem no próximo envio, em instantes.",
         ),
         (
             [("pendente", "2026-10-26T19:00:00.000+00:00", None), ("pendente", None, None)],
             None,
-            "O Flow ainda não recebeu 2 eventos. Saem na janela de amanhã às 08:00 ou agora pelo Enviar agora.",
+            "O Flow ainda não recebeu 2 eventos. Saem no próximo envio, em instantes.",
         ),
         (
             [("rejeitado", None, "x")],
@@ -210,20 +210,29 @@ def _pendente(conn):
     evento(conn, 100, "e0")
 
 
-def test_frase_pendente_com_janela_aberta(conn):
+@pytest.mark.parametrize(
+    "agora",
+    [
+        datetime(2026, 10, 26, 20, 10, tzinfo=UTC),
+        datetime(2026, 10, 26, 23, 0, tzinfo=UTC),
+        datetime(2026, 10, 25, 0, 0, tzinfo=UTC),  # domingo 21h em SP
+    ],
+)
+def test_frase_pendente_sem_recuo_sai_no_proximo_envio(conn, agora):
     _pendente(conn)
-    janela = datetime(2026, 10, 26, 20, 10, tzinfo=UTC)  # 17:10 em SP, janela das 17h
-    assert det(conn, agora=janela).frase == (
+    assert det(conn, agora=agora).frase == (
         "O Flow ainda não recebeu 1 evento. Saem no próximo envio, em instantes."
     )
 
 
 def test_frase_pendente_com_recuo_nao_oferece_enviar_agora(conn):
     _pendente(conn)
-    d = det(conn, proxima_tentativa_em="2026-10-26T20:00:00.000+00:00")
-    assert d.frase == "O Flow ainda não recebeu 1 evento. Saem na janela de hoje às 17:00."
-    vencido = det(conn, proxima_tentativa_em="2026-10-26T19:00:00.000+00:00")
-    assert "ou agora pelo Enviar agora" in vencido.frase
+    agora = datetime(2026, 10, 26, 17, 10, tzinfo=UTC)  # 14:10 em SP
+    d = det(conn, agora=agora, proxima_tentativa_em="2026-10-26T17:30:00.000+00:00")
+    assert d.frase == "O Flow ainda não recebeu 1 evento. Saem às 14:30, quando o Flow liberar."
+    assert "Enviar agora" not in d.frase
+    vencido = det(conn, agora=agora, proxima_tentativa_em="2026-10-26T17:00:00.000+00:00")
+    assert "no próximo envio" in vencido.frase
 
 
 @pytest.mark.parametrize(
@@ -284,13 +293,6 @@ def test_frase_bloqueio_sem_texto_usa_http(conn):
     estado(conn, 100)
     d = det(conn, bloqueio="novo_codigo", ultimo_http=418)
     assert d.frase == "O envio está parado: HTTP 418."
-
-
-def test_proxima_dia_da_semana(conn):
-    estado(conn, 100)
-    evento(conn, 100, "e0")
-    sabado = datetime(2026, 10, 31, 22, 0, tzinfo=UTC)  # sáb 19:00 SP (fechada) -> próxima seg
-    assert "seg às 08:00" in det(conn, agora=sabado).frase
 
 
 def test_leitura_aberto_usa_ultima_vigia(conn):
@@ -455,6 +457,11 @@ def _lote(**kw):
 def test_rotulo_lote_resultado(kw, rotulo, tom):
     r = consulta.rotulo_lote(_lote(**kw))
     assert (r["resultado_rotulo"], r["resultado_tom"]) == (rotulo, tom)
+
+
+def test_rotulo_lote_origem_auto_e_sinal():
+    assert consulta.rotulo_lote(_lote(origem="auto"))["origem_rotulo"] == "Automático"
+    assert consulta.rotulo_lote(_lote(origem="sinal"))["origem_rotulo"] == "Sinal de vida"
 
 
 def test_rotulo_lote_origem():
