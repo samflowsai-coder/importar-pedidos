@@ -73,6 +73,8 @@ def _exporter_with_fake_cursor(monkeypatch, cursor: MagicMock) -> FirebirdExport
             return False
 
     monkeypatch.setattr(exporter, "_conn", MagicMock())
+    # A figura tem teste próprio (test_figura_fiscal.py); aqui o perfil passa intacto.
+    monkeypatch.setattr("app.erp.figura_fiscal.resolver", lambda cur, cliente, perfil: perfil)
     exporter._conn.is_configured.return_value = True
     exporter._conn.connect.return_value = _CtxConn()
     return exporter

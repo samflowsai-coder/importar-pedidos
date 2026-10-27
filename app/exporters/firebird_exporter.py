@@ -5,11 +5,12 @@ import threading
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.erp import queries
+from app.erp import figura_fiscal, queries
 from app.erp.connection import FirebirdConnection
 from app.erp.exceptions import (
     FirebirdClientNotFoundError,
     FirebirdError,
+    FirebirdFiguraFiscalIndefinidaError,
     FirebirdOrderAlreadyExistsError,
     FirebirdProductNotFoundError,
 )
@@ -186,6 +187,14 @@ class FirebirdExporter:
                 skipped=True,
                 skip_reason="CLIENT_NOT_FOUND",
             )
+        except FirebirdFiguraFiscalIndefinidaError as exc:
+            logger.warning(str(exc))
+            return FirebirdExportResult(
+                order_number=order.header.order_number,
+                items_inserted=0,
+                skipped=True,
+                skip_reason="CLIENTE_SEM_UF" if not exc.uf else "FIGURA_FISCAL_INDEFINIDA",
+            )
         except FirebirdProductNotFoundError as exc:
             logger.warning(str(exc))
             return FirebirdExportResult(
@@ -231,21 +240,24 @@ class FirebirdExporter:
             if cur.fetchone()[0] > 0:
                 raise FirebirdOrderAlreadyExistsError(pedido_cliente)
 
+        # 2b. Figura fiscal pelo histórico da empresa para este cliente (a nota
+        #     sai dela); sem decisão o pedido não é gravado.
+        perfil = figura_fiscal.resolver(cur, client_id, perfil_para(self._env))
+
         # 3. Get next PK for CAB_VENDAS
         cur.execute(queries.GET_NEXT_CABVENDAS_CODIGO)
         header_pk: int = cur.fetchone()[0]
 
         # 4. Insert header. valor_total soma os itens em Decimal e dt_entrega
         #    e a menor data de entrega entre eles (precisa dos erp_rows antes
-        #    do insert do cabecalho); perfil vem do ambiente atual
-        #    (CODFIGFISCAL difere MM x Nasmar), default medido se ausente.
+        #    do insert do cabecalho); perfil e o do ambiente com a figura
+        #    resolvida no passo 2b.
         #    `obs` so vem preenchido no espelho do lote intercompany (a
         #    lista de pedidos de origem); pedido comum grava NULL.
         indexados = _to_erp_rows_indexados(order)
         erp_rows = [row for _, row in indexados]
         valor_total = _valor_total(erp_rows)
         dt_entrega = _menor_dt_entrega(erp_rows)
-        perfil = perfil_para(self._env)
         header_params = self._mapper.order_to_cabvendas(
             order,
             header_pk,
@@ -265,7 +277,7 @@ class FirebirdExporter:
         )
 
         # 5. Insert items. Mesmo `perfil` do cabecalho (ICMS_PORC, REDUCAO,
-        #    CFOP_PRINCIPAL sao por ambiente, nao por item). CFOP_PRINCIPAL
+        #    CFOP_PRINCIPAL sao os da figura do pedido). CFOP_PRINCIPAL
         #    e o 16o valor do INSERT — anexado aqui, fora da tupla do mapper
         #    (que tem 15 elementos).
         items_inserted = 0
