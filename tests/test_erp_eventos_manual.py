@@ -246,9 +246,9 @@ def test_tick_atende_na_ordem(cfg, flow, monkeypatch):
 
 
 def test_fila_vazia_um_lote_vazio_so(cfg, flow, monkeypatch):
-    def vigia(c, *a, **k):  # sem mudança: só liga o sinal de vida
+    def vigia(c, *a, **k):  # sem mudança: só registra a leitura; o sinal é do _atender_manual
         with router.env_connect(cfg.env_slug) as conn:
-            erp_estado_repo.pedir_sinal_de_vida(conn, cfg.base, "2026-10-15T21:00:00.000+00:00")
+            erp_estado_repo.registrar_vigia(conn, cfg.base, "2026-10-15T21:00:00.000+00:00")
 
     with router.env_connect(cfg.env_slug) as conn:  # 202 recente: o auto não manda sinal
         erp_estado_repo.registrar_202(conn, cfg.base, "2026-10-15T20:50:00.000+00:00")
