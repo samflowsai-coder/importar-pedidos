@@ -2,7 +2,7 @@
 
 O envio novo já sai dividido por loja (`recebimento_por_loja`, interruptor por ambiente). Esta rota
 cobre o que foi ao Flow antes disso: monta o recebimento por loja a partir do snapshot do import e
-enfileira na fila normal do Portal (que tem o token e as janelas de envio). Só enfileira a loja cujo
+enfileira na fila normal do Portal (que tem o token e o envio ao Flow). Só enfileira a loja cujo
 pedido no Fire ainda está aberto: pedido faturado está finalizado e não vai ao Flow. Dry-run por
 padrão (`aplicar=false`). Independe do `EXPORT_MODE`: é o caminho do Flow, não o do Fire.
 """

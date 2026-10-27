@@ -8,6 +8,7 @@ ainda tem a variável no `.env`.
 from __future__ import annotations
 
 import os
+import threading
 from zoneinfo import ZoneInfo
 
 from app.utils.logger import logger
@@ -15,12 +16,14 @@ from app.utils.logger import logger
 FUSO = ZoneInfo("America/Sao_Paulo")
 
 _avisou = False
+_trava = threading.Lock()
 
 
 def avisar_variavel_obsoleta() -> None:
     """Um warning por processo se `PORTAL_FLOW_JANELAS` ainda estiver no ambiente."""
     global _avisou
-    if _avisou or not os.environ.get("PORTAL_FLOW_JANELAS", "").strip():
-        return
-    _avisou = True
+    with _trava:
+        if _avisou or not os.environ.get("PORTAL_FLOW_JANELAS", "").strip():
+            return
+        _avisou = True
     logger.warning("PORTAL_FLOW_JANELAS não é mais usada: o envio ao Flow sai quando há dado")

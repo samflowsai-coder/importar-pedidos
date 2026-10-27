@@ -5,7 +5,7 @@
 - `corteEm` = instante ANTES da leitura; a leitura é um snapshot read-only, e
   a vigia da base não roda junto (mesma trava), então todo evento depois tem
   `observadoEm > corteEm`;
-- a fila só sai nas janelas de envio, mas a foto não: antes da primeira
+- a fila sai a qualquer hora, mas a foto tem ordem própria: antes da primeira
   página, os eventos com `observadoEm <= corteEm` ainda pendentes saem
   (`runner._enviar_foto`, só eles), e a foto espera enquanto houver algum;
   a validade de 24 h é conferida antes dessa espera;
@@ -42,8 +42,7 @@ SCHEMA = "pedido.snapshot_erp.v1"
 
 def devida(cfg: BaseErpConfig, agora: datetime, ja_existe: bool) -> bool:
     """Só DENTRO da hora da foto (5h → das 5:00 às 5:59). Com ">=", ligar a base
-    às 22h tirava a foto na hora e, com ela, mandava a fila fora das janelas
-    (14/10/2026). Portal fora do ar a hora toda = sem foto no dia: o Flow alerta
+    às 22h tirava a foto na hora, fora do horário combinado (14/10/2026). Portal fora do ar a hora toda = sem foto no dia: o Flow alerta
     `foto_incompleta`, que é o aviso certo."""
     if cfg.foto_hora is None or ja_existe:
         return False
