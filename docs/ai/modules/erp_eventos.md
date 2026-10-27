@@ -33,7 +33,7 @@ Spec: `pcp-app/docs/superpowers/specs/2026-10-03-sp1-transporte-pedidos-fire-des
 | `app/erp_eventos/lote_fiscal.py` | emissor do `lote_fiscal` (produtor = envio do espelho do lote, `app/consolidators/integracao.py`) |
 | `app/erp_eventos/runner.py` | thread do processo web, trava por base |
 | `app/erp_eventos/consulta.py` | consulta por pedido: rótulos, frases, `texto_bloqueio`, `rotulo_lote` |
-| `app/persistence/erp_envio_lote_repo.py` | registro de cada lote (`erp_envio_lote`): origem janela/foto/manual, quem, `envio_id` |
+| `app/persistence/erp_envio_lote_repo.py` | registro de cada lote (`erp_envio_lote`): origem auto/sinal/foto/manual (janela só no histórico), quem, `envio_id` |
 | `app/persistence/erp_bases_repo.py` | config + credencial cifrada por (ambiente, base) — `app_shared.db` |
 | `app/persistence/erp_estado_repo.py` / `erp_vinculo_repo.py` / `erp_foto_repo.py` | tabelas `erp_*` do banco do ambiente |
 | `tools/erp_medir.py` | medições SÓ LEITURA no ERP |

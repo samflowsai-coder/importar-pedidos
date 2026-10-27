@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
-ORIGENS = ("janela", "foto", "manual")
+ORIGENS = ("janela", "auto", "sinal", "foto", "manual")  # `janela`: só linhas antigas
 
 _COLUNAS = (
     "lote_id, base, origem, quem, envio_id, enviado_em, eventos, "

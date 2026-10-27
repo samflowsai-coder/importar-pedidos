@@ -224,6 +224,8 @@ def test_dois_pedidos_concorrentes_um_aceito(cfg):
 
 
 def test_tick_atende_na_ordem(cfg, flow, monkeypatch):
+    # Sem o envio automático do tick: prova os dois passos do manual (fila, vigia, fila).
+    monkeypatch.setattr(runner, "_drenar_fila", lambda c: None)
     _enfileirar(cfg, 1, 2)
 
     def vigia(c, *a, **k):
@@ -248,10 +250,13 @@ def test_fila_vazia_um_lote_vazio_so(cfg, flow, monkeypatch):
         with router.env_connect(cfg.env_slug) as conn:
             erp_estado_repo.pedir_sinal_de_vida(conn, cfg.base, "2026-10-15T21:00:00.000+00:00")
 
+    with router.env_connect(cfg.env_slug) as conn:  # 202 recente: o auto não manda sinal
+        erp_estado_repo.registrar_202(conn, cfg.base, "2026-10-15T20:50:00.000+00:00")
     monkeypatch.setattr(runner, "_vigiar", vigia)
     envio_id = runner.pedir_envio_manual(cfg, "ana", agora=FORA_DA_JANELA)
     runner.processar_base(cfg, agora=FORA_DA_JANELA)
     assert flow.lotes == [0]
+    assert [g["origem"] for g in _lotes_gravados(cfg)] == ["manual"]  # vazio manual não vira sinal
     assert runner.resultado_manual(envio_id)["lotes"] == 1
 
 
@@ -296,16 +301,33 @@ def test_pedido_atendido_uma_vez(cfg, flow, monkeypatch):
     assert runner._PEDIDO_MANUAL == {}
 
 
-def test_dentro_da_janela_passo1_pulado(cfg, flow, monkeypatch):
+def test_fila_que_o_tick_ja_levou_passo1_pulado(cfg, flow, monkeypatch):
+    """O envio normal (auto) roda antes do atendimento: o manual encontra a fila vazia."""
     monkeypatch.setattr(runner, "_relogio", lambda: JANELA_14H)
     monkeypatch.setattr(runner, "_vigiar", lambda *a, **k: None)
     _enfileirar(cfg, 1, 2)
     runner.pedir_envio_manual(cfg, "ana", agora=JANELA_14H)
     runner.processar_base(cfg, agora=JANELA_14H)
     origens = [g["origem"] for g in _lotes_gravados(cfg)]
-    assert origens[0] == "janela"  # a janela levou a fila
+    assert origens[0] == "auto"  # o envio automático levou a fila
     with router.env_connect(cfg.env_slug) as conn:
         assert erp_estado_repo.pendentes(conn, cfg.base, limite=1) == []
+
+
+def test_fora_de_horario_o_auto_leva_a_fila_e_o_manual_so_o_da_vigia(cfg, flow, monkeypatch):
+    _enfileirar(cfg, 1, 2)
+
+    def vigia(c, *a, **k):
+        _enfileirar(cfg, 3)
+
+    monkeypatch.setattr(runner, "_vigiar", vigia)
+    envio_id = runner.pedir_envio_manual(cfg, "ana", agora=FORA_DA_JANELA)
+    runner.processar_base(cfg, agora=FORA_DA_JANELA)
+    assert flow.lotes == [2, 1]
+    assert [tuple(g) for g in _lotes_gravados(cfg)] == [
+        ("auto", None, None, 2),
+        ("manual", "ana", envio_id, 1),
+    ]
 
 
 def test_resultado_expira_em_1h(cfg, monkeypatch):

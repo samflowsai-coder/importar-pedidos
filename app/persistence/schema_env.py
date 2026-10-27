@@ -293,7 +293,7 @@ CREATE TABLE IF NOT EXISTS erp_eventos_saida (
 CREATE TABLE IF NOT EXISTS erp_envio_lote (
     lote_id      TEXT PRIMARY KEY,
     base         TEXT NOT NULL,
-    origem       TEXT NOT NULL,          -- 'janela' | 'foto' | 'manual'
+    origem       TEXT NOT NULL,          -- 'auto' | 'sinal' | 'foto' | 'manual' ('janela' em linhas antigas)
     quem         TEXT,                   -- e-mail do admin quando manual
     envio_id     TEXT,                   -- agrupa os lotes de um "Enviar agora"
     enviado_em   TEXT NOT NULL,

@@ -198,11 +198,11 @@ def lotes_registrados():
         return erp_envio_lote_repo.recentes(conn, "mm")
 
 
-def test_lote_aceito_grava_registro_janela(cfg):
+def test_lote_aceito_grava_registro_auto(cfg):
     enfileirar([3])
     rodar(cfg, Flow())
     (reg,) = lotes_registrados()
-    assert (reg.origem, reg.eventos, reg.http, reg.aceitos) == ("janela", 3, 202, 3)
+    assert (reg.origem, reg.eventos, reg.http, reg.aceitos) == ("auto", 3, 202, 3)
     assert (reg.duplicados, reg.rejeitados) == (0, 0)
     assert reg.quem is None and reg.envio_id is None and reg.respondido_em
 
@@ -212,7 +212,7 @@ def test_lote_vazio_de_sinal_grava_registro(cfg):
         erp_estado_repo.registrar_vigia(conn, "mm", "2026-10-09T13:00:00.000+00:00")
     rodar(cfg, Flow())
     (reg,) = lotes_registrados()
-    assert (reg.eventos, reg.http, reg.aceitos) == (0, 202, 0)
+    assert (reg.origem, reg.eventos, reg.http, reg.aceitos) == ("sinal", 0, 202, 0)
 
 
 def test_lote_manual_grava_quem_e_envio_id(cfg):

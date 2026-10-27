@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -26,6 +26,7 @@ from tests.test_erp_eventos_origem import pedidos_foto
 TENANT = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 NOITE = datetime(2026, 10, 10, 2, 30, tzinfo=UTC)  # 23:30 em São Paulo
 JANELA_14H = datetime(2026, 10, 15, 17, 10, tzinfo=UTC)  # quinta, 14:10 em São Paulo
+DOMINGO_21H = datetime(2026, 10, 25, 21, 0, tzinfo=UTC)  # domingo, 18:00 em São Paulo (sem janela)
 
 
 @pytest.fixture
@@ -74,15 +75,15 @@ def test_vigia_e_foto_quebradas_nao_impedem_a_drenagem(cfg, monkeypatch):
     assert (cfg.environment_id, cfg.base) in runner._FALHA_ERP  # próxima tentativa só em 5 min
 
 
-def test_fora_da_janela_nao_manda_lote_mas_a_foto_segue(cfg, monkeypatch):
+def test_fora_de_horario_a_fila_sai_e_a_foto_segue(cfg, monkeypatch):
     chamadas = []
     monkeypatch.setattr(runner, "_vigiar", lambda *a, **k: None)
     monkeypatch.setattr(runner, "_criar_foto", lambda *a, **k: None)
     monkeypatch.setattr(drenagem, "drenar", lambda *a, **k: chamadas.append("drenar"))
     monkeypatch.setattr(runner, "_enviar_foto", lambda c: chamadas.append("foto"))
     monkeypatch.setattr(runner, "_relogio", lambda: NOITE)
-    runner.processar_base(cfg, agora=NOITE)  # 23:30: fora de qualquer janela
-    assert chamadas == ["foto"]
+    runner.processar_base(cfg, agora=NOITE)  # 23:30: não há mais janela
+    assert chamadas == ["drenar", "foto"]
 
 
 def _envio(cfg):
@@ -90,53 +91,142 @@ def _envio(cfg):
         return erp_estado_repo.obter_envio(conn, cfg.base)
 
 
-def test_janela_sem_lote_ainda_pede_o_lote_vazio_de_sinal_de_vida(cfg):
-    with router.env_connect(cfg.env_slug) as conn:  # último 202 na janela anterior (11h)
-        erp_estado_repo.registrar_202(conn, cfg.base, "2026-10-15T14:30:00.000+00:00")
-    runner._garantir_lote_na_janela(cfg, JANELA_14H)
+class FlowLotes:
+    """Dublê do POST /eventos: guarda os eventos de cada lote recebido."""
+
+    lotes: list[list[dict]] = []
+
+    def __init__(self, **kw):
+        pass
+
+    def enviar_lote(self, lote_id, eventos):
+        FlowLotes.lotes.append(eventos)
+        return RespostaHttp(
+            202, {"resultados": [{"id": e["id"], "situacao": "aceito"} for e in eventos]}, None
+        )
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def flow_lotes(monkeypatch):
+    FlowLotes.lotes = []
+    monkeypatch.setattr(runner, "ClienteErpEventos", FlowLotes)
+    monkeypatch.setattr(runner, "_ritmo", Ritmo(0))
+    monkeypatch.setattr(foto, "enviar", lambda *a, **k: None)
+    monkeypatch.setattr(foto, "devida", lambda *a, **k: False)
+    return FlowLotes
+
+
+def _origens(cfg):
+    with router.env_connect(cfg.env_slug) as conn:
+        linhas = conn.execute("SELECT origem, eventos FROM erp_envio_lote ORDER BY rowid")
+        return [tuple(r) for r in linhas]
+
+
+def _tick(cfg, monkeypatch, agora, vigia=lambda *a, **k: None):
+    monkeypatch.setattr(runner, "_vigiar", vigia)
+    monkeypatch.setattr(runner, "_relogio", lambda: agora)
+    runner.processar_base(cfg, agora=agora)
+
+
+def _ultimo_202(cfg, instante: datetime):
+    with router.env_connect(cfg.env_slug) as conn:
+        erp_estado_repo.registrar_202(conn, cfg.base, runner.formatar_instante(instante))
+
+
+def test_sem_202_ha_mais_de_60_min_pede_o_sinal_de_vida(cfg):
+    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=61))
+    runner._garantir_sinal_de_vida(cfg, DOMINGO_21H)
     assert _envio(cfg).sinal_pendente
 
 
-def test_janela_que_ja_teve_lote_nao_pede_outro(cfg):
-    with router.env_connect(cfg.env_slug) as conn:  # 14:05 em São Paulo
-        erp_estado_repo.registrar_202(conn, cfg.base, "2026-10-15T17:05:00.000+00:00")
-    runner._garantir_lote_na_janela(cfg, JANELA_14H)
+def test_202_recente_nao_pede_sinal_de_vida(cfg):
+    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=59))
+    runner._garantir_sinal_de_vida(cfg, DOMINGO_21H)
     assert not _envio(cfg).sinal_pendente
 
 
-def test_lote_vazio_da_janela_sai_mesmo_sem_vigia(cfg, monkeypatch):
-    """ERP fora a manhã toda: a vigia não roda, mas a janela manda o sinal de vida."""
-    monkeypatch.setattr(runner, "_vigiar", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
-    monkeypatch.setattr(foto, "enviar", lambda *a, **k: None)
-    lotes = []
-
-    class Flow:
-        def __init__(self, **kw):
-            pass
-
-        def enviar_lote(self, lote_id, eventos):
-            lotes.append(eventos)
-            return RespostaHttp(202, {"resultados": []}, None)
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(runner, "ClienteErpEventos", Flow)
-    monkeypatch.setattr(runner, "_ritmo", Ritmo(0))
-    monkeypatch.setattr(runner, "_relogio", lambda: JANELA_14H)
-    runner.processar_base(cfg, agora=JANELA_14H)
-    assert lotes == [[]]
+def test_domingo_a_noite_a_fila_sai_com_origem_auto(cfg, flow_lotes, monkeypatch):
+    with router.env_connect(cfg.env_slug) as conn:
+        erp_estado_repo.enfileirar(
+            conn,
+            [_evento(n, "2026-10-25T20:30:00.000+00:00") for n in (1, 2, 3)],
+            "2026-10-25T20:30:00.000+00:00",
+        )
+    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=5))
+    _tick(cfg, monkeypatch, DOMINGO_21H)
+    assert [len(e) for e in flow_lotes.lotes] == [3]
+    assert _origens(cfg) == [("auto", 3)]
 
 
-def test_sinal_de_vida_da_janela_sai_antes_da_vigia(cfg, monkeypatch):
-    """Vigia travada no ERP não pode segurar o lote da janela."""
+def test_fila_vazia_com_61_min_de_silencio_manda_um_lote_de_sinal(cfg, flow_lotes, monkeypatch):
+    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=61))
+    _tick(cfg, monkeypatch, DOMINGO_21H)
+    assert flow_lotes.lotes == [[]]
+    assert _origens(cfg) == [("sinal", 0)]
+
+
+def test_fila_vazia_com_59_min_de_silencio_nao_manda_nada(cfg, flow_lotes, monkeypatch):
+    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=59))
+    _tick(cfg, monkeypatch, DOMINGO_21H)
+    assert flow_lotes.lotes == []
+
+
+def test_dois_ticks_logo_apos_um_202_nao_mandam_sinal(cfg, flow_lotes, monkeypatch):
+    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=61))
+    _tick(cfg, monkeypatch, DOMINGO_21H)  # o sinal sai e o 202 zera a contagem
+    _tick(cfg, monkeypatch, DOMINGO_21H + timedelta(seconds=30))
+    _tick(cfg, monkeypatch, DOMINGO_21H + timedelta(seconds=60))
+    assert flow_lotes.lotes == [[]]
+
+
+def test_vigia_que_lanca_nao_segura_o_sinal_de_vida(cfg, flow_lotes, monkeypatch):
+    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=61))
+
+    def quebra(*a, **k):
+        raise RuntimeError("Fire fora do ar")
+
+    _tick(cfg, monkeypatch, DOMINGO_21H, vigia=quebra)
+    assert flow_lotes.lotes == [[]]
+    assert (cfg.environment_id, cfg.base) in runner._FALHA_ERP
+
+
+def test_recuo_pedido_pelo_flow_segura_a_fila_cheia(cfg, flow_lotes, monkeypatch):
+    with router.env_connect(cfg.env_slug) as conn:
+        erp_estado_repo.enfileirar(
+            conn, [_evento(1, "2026-10-25T20:30:00.000+00:00")], "2026-10-25T20:30:00.000+00:00"
+        )
+        erp_estado_repo._atualizar_envio(
+            conn,
+            cfg.base,
+            "2026-10-25T20:59:00.000+00:00",
+            proxima_tentativa_em="2099-01-01T00:00:00.000+00:00",  # a drenagem usa o relógio real
+        )
+    _tick(cfg, monkeypatch, DOMINGO_21H)
+    assert flow_lotes.lotes == []
+
+
+def test_base_bloqueada_nao_manda_lote_nem_sinal(cfg, flow_lotes, monkeypatch):
+    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=120))
+    with router.env_connect(cfg.env_slug) as conn:
+        erp_estado_repo.bloquear(
+            conn, cfg.base, "2026-10-25T20:00:00.000+00:00", motivo="auth", http=401, erro="x"
+        )
+    _tick(cfg, monkeypatch, DOMINGO_21H)
+    assert flow_lotes.lotes == []
+
+
+def test_envio_sai_antes_da_vigia(cfg, monkeypatch):
+    """Vigia travada no ERP não pode segurar o envio nem o sinal de vida."""
     ordem = []
     monkeypatch.setattr(runner, "_relogio", lambda: JANELA_14H)
-    monkeypatch.setattr(runner, "_lotes_da_janela", lambda c: ordem.append("lotes"))
+    monkeypatch.setattr(runner, "_drenar_fila", lambda c: ordem.append("envio"))
     monkeypatch.setattr(runner, "_vigiar", lambda *a, **k: ordem.append("vigia"))
     monkeypatch.setattr(foto, "enviar", lambda *a, **k: None)
     runner.processar_base(cfg, agora=JANELA_14H)
-    assert ordem == ["lotes", "vigia"]
+    assert ordem == ["envio", "vigia"]
 
 
 def test_vigia_que_falhou_espera_5_minutos(cfg, monkeypatch):

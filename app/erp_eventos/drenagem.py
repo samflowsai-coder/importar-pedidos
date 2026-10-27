@@ -47,13 +47,14 @@ def drenar(
     relogio: Callable[[], float] = time.monotonic,
     prazo_s: float = PRAZO_DRENAGEM_S,
     ate: str | None = None,
-    origem: str = "janela",
+    origem: str = "auto",
     quem: str | None = None,
     envio_id: str | None = None,
 ) -> ResultadoDrenagem:
     """`ate`: só eventos observados até esse instante, sem lote vazio de sinal
-    de vida (usado antes da foto, fora das janelas). `origem`/`quem`/`envio_id`
-    ficam no registro de cada lote (`erp_envio_lote`)."""
+    de vida (usado antes da foto). `origem`/`quem`/`envio_id`
+    ficam no registro de cada lote (`erp_envio_lote`); lote sem evento com
+    origem `auto` é registrado como `sinal` (sinal de vida)."""
     inicio = relogio()
     n_lotes = aceitos = duplicados = rejeitados = 0
     max_eventos = lotes.MAX_EVENTOS
@@ -97,7 +98,7 @@ def drenar(
                 conn,
                 lote_id=lote_id,
                 base=cfg.base,
-                origem=origem,
+                origem="sinal" if not ids and origem == "auto" else origem,
                 quem=quem,
                 envio_id=envio_id,
                 enviado_em=enviado_em,

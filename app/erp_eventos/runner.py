@@ -39,7 +39,7 @@ from app.persistence import (
     router,
 )
 from app.persistence.erp_bases_repo import BaseErpConfig
-from app.utils.janelas_envio import FUSO, inicio_da_janela, janela_aberta
+from app.utils.janelas_envio import FUSO
 from app.utils.logger import logger
 
 TICK_S = 30.0
@@ -49,6 +49,7 @@ _ENV_VAR = "PORTAL_ERP_VIGIA"
 
 _ritmo = Ritmo()
 PAUSA_APOS_FALHA = timedelta(minutes=5)
+SINAL_DE_VIDA = timedelta(minutes=60)  # sem 202 por isto → lote vazio de sinal de vida
 _FALHA_ERP: dict[tuple[str, str], datetime] = {}
 _LOCKS: dict[tuple[str, str], threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -359,10 +360,10 @@ def processar_base(cfg: BaseErpConfig, *, agora: datetime | None = None) -> None
         # drenagem do que já está na fila nem o sinal de vida (revisão C1).
         # ERP fora do ar: vigia e foto tentam de novo em 5 min, não a cada 30 s
         # (`fdb` não tem timeout; host inalcançável segura a conexão).
-        # Lotes só nas janelas de envio (8h/11h/14h/17h, seg-sáb), e ANTES de ler
-        # o ERP: uma vigia travada (fdb sem timeout) não segura o sinal de vida
-        # da janela. O que a vigia enfileirar agora sai no próximo tick.
-        _etapa(cfg, "lotes da janela", lambda: _lotes_da_janela(cfg))
+        # A fila sai em todo tick (sem janela) e ANTES de ler o ERP: uma vigia
+        # travada (fdb sem timeout) não segura o envio nem o sinal de vida. O que
+        # a vigia enfileirar agora sai no próximo tick.
+        _etapa(cfg, "envio", lambda: _drenar_fila(cfg))
 
         chave = (cfg.environment_id, cfg.base)
         falhou_em = _FALHA_ERP.get(chave)
@@ -410,10 +411,10 @@ _FOTO_AGUARDANDO: dict[str, int] = {}
 def _enviar_foto(cfg: BaseErpConfig) -> None:
     """A foto só sai depois de tudo o que foi observado ATÉ o corte dela.
 
-    A fila só sai nas janelas, mas a foto sai no `foto_hora` (5h): sem isto, um
+    A foto sai no `foto_hora` (5h) e a fila sai em todo tick; mesmo assim, se a
+    fila anterior ao corte ainda não entrou (Flow recuando, base bloqueada), um
     pedido faturado às 19h estaria na foto antes de o Flow receber o evento, e
-    a conciliação da manhã divergiria. Exceção única às janelas (decisão do
-    Samuel, 14/10/2026): na hora da foto, a fila anterior ao corte sai antes."""
+    a conciliação da manhã divergiria. Por isso a foto espera essa fila."""
     with router.env_connect(cfg.env_slug) as conn:
         f = erp_foto_repo.em_envio(conn, cfg.base)
     if f is None or foto.expirar_se_vencida(cfg, f, _relogio()):
@@ -425,7 +426,7 @@ def _enviar_foto(cfg: BaseErpConfig) -> None:
     )
     try:
         if devendo:
-            # Só o que é anterior ao corte: o resto espera a janela.
+            # Só o que é anterior ao corte: o resto segue o fluxo normal.
             drenagem.drenar(cfg, cliente=cliente, ritmo=_ritmo, ate=f.corte_em, origem="foto")
             with router.env_connect(cfg.env_slug) as conn:
                 devendo = erp_estado_repo.pendentes_ate(conn, cfg.base, f.corte_em)
@@ -447,11 +448,9 @@ def _relogio() -> datetime:
     return datetime.now(UTC)
 
 
-def _lotes_da_janela(cfg: BaseErpConfig) -> None:
+def _drenar_fila(cfg: BaseErpConfig) -> None:
     agora = _relogio()  # hora do envio, não a do início do tick
-    if janela_aberta(agora) is None:
-        return  # fora da janela: a fila só cresce; a foto não segue as janelas
-    _garantir_lote_na_janela(cfg, agora)
+    _garantir_sinal_de_vida(cfg, agora)
     cliente = ClienteErpEventos(
         destino_url=cfg.destino_url, tenant_id=cfg.tenant_id, token=cfg.token or ""
     )
@@ -461,14 +460,14 @@ def _lotes_da_janela(cfg: BaseErpConfig) -> None:
         cliente.close()
 
 
-def _garantir_lote_na_janela(cfg: BaseErpConfig, agora: datetime) -> None:
-    """Pelo menos um lote por janela, mesmo vazio: o Flow usa o 202 como sinal
-    de vida e alerta se uma janela passar sem nada. Sem 202 desde o início desta
-    janela → pede o lote vazio (a drenagem o manda se a fila estiver vazia)."""
-    inicio = formatar_instante(inicio_da_janela(agora))
+def _garantir_sinal_de_vida(cfg: BaseErpConfig, agora: datetime) -> None:
+    """O Flow usa o 202 como sinal de vida e alerta se a base calar. Sem 202 há
+    `SINAL_DE_VIDA` → pede o lote vazio (a drenagem o manda se a fila estiver
+    vazia; com fila cheia, o próprio lote com dado é o 202)."""
+    limite = formatar_instante(agora - SINAL_DE_VIDA)
     with router.env_connect(cfg.env_slug) as conn:
         envio = erp_estado_repo.obter_envio(conn, cfg.base)
-        if not envio.sinal_pendente and (envio.ultimo_202_em or "") < inicio:
+        if not envio.sinal_pendente and (envio.ultimo_202_em or "") < limite:
             erp_estado_repo.pedir_sinal_de_vida(conn, cfg.base, formatar_instante(agora))
 
 
