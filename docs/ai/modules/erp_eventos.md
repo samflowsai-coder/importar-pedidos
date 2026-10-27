@@ -32,7 +32,7 @@ Spec: `pcp-app/docs/superpowers/specs/2026-10-03-sp1-transporte-pedidos-fire-des
 | `app/erp_eventos/eco.py` | `correlacaoId` da data que o próprio Portal aplicou |
 | `app/erp_eventos/lote_fiscal.py` | emissor do `lote_fiscal` (produtor = envio do espelho do lote, `app/consolidators/integracao.py`) |
 | `app/erp_eventos/runner.py` | thread do processo web, trava por base |
-| `app/erp_eventos/consulta.py` | consulta por pedido: rótulos, frases, `texto_bloqueio`, `rotulo_lote` |
+| `app/erp_eventos/consulta.py` | consulta por pedido: rótulos, frases, `texto_bloqueio`, `rotulo_lote` (a origem `janela` existe só no histórico de lotes antigos e ainda é tratada aqui) |
 | `app/persistence/erp_envio_lote_repo.py` | registro de cada lote (`erp_envio_lote`): origem auto/sinal/foto/manual, quem, `envio_id` |
 | `app/persistence/erp_bases_repo.py` | config + credencial cifrada por (ambiente, base) — `app_shared.db` |
 | `app/persistence/erp_estado_repo.py` / `erp_vinculo_repo.py` / `erp_foto_repo.py` | tabelas `erp_*` do banco do ambiente |
@@ -49,7 +49,7 @@ Spec: `pcp-app/docs/superpowers/specs/2026-10-03-sp1-transporte-pedidos-fire-des
    não depende de `ULT_ALT_DTHR`, que não está provado mudar com item ou nota.
 2. **drenagem**: em todo tick, a qualquer hora (sem janelas desde 27/10/2026; a variável
    `PORTAL_FLOW_JANELAS` virou só um aviso em `app/utils/janelas_envio.py`). Lotes em série.
-   **Sinal de vida**: sem 202 há 60 min (`SINAL_DE_VIDA`), o runner pede um lote vazio
+   **Sinal de vida**: sem 202 há 55 min (`SINAL_DE_VIDA`; 55 e não 60 para sempre haver um lote por hora cheia), o runner pede um lote vazio
    (`_garantir_sinal_de_vida`), mesmo com o ERP fora, porque o Flow usa o 202 como sinal de
    vida e alerta se a base calar. A origem do lote é `auto` (fila) ou `sinal` (lote vazio).
    Antes da primeira página da foto, a fila observada até o `corteEm` sai, para a foto

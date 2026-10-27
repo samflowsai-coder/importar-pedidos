@@ -49,7 +49,10 @@ _ENV_VAR = "PORTAL_ERP_VIGIA"
 
 _ritmo = Ritmo()
 PAUSA_APOS_FALHA = timedelta(minutes=5)
-SINAL_DE_VIDA = timedelta(minutes=60)  # sem 202 por isto → lote vazio de sinal de vida
+# Sem 202 por isto → lote vazio de sinal de vida. 55 e não 60: o tick escorrega ~30 s,
+# e 60 deixaria horas cheias sem lote — a régua antiga (por janela) do Flow alertaria.
+# Segue bem abaixo da régua nova do Flow (90 min).
+SINAL_DE_VIDA = timedelta(minutes=55)
 _FALHA_ERP: dict[tuple[str, str], datetime] = {}
 _LOCKS: dict[tuple[str, str], threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -454,6 +457,12 @@ def _relogio() -> datetime:
 def _drenar_fila(cfg: BaseErpConfig) -> None:
     agora = _relogio()  # hora do envio, não a do início do tick
     _garantir_sinal_de_vida(cfg, agora)
+    with router.env_connect(cfg.env_slug) as conn:
+        nada = not erp_estado_repo.obter_envio(
+            conn, cfg.base
+        ).sinal_pendente and not erp_estado_repo.pendentes(conn, cfg.base, limite=1)
+    if nada:  # fila vazia e sem sinal: nem abre o cliente HTTP
+        return
     cliente = ClienteErpEventos(
         destino_url=cfg.destino_url, tenant_id=cfg.tenant_id, token=cfg.token or ""
     )

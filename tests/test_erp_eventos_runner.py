@@ -136,14 +136,14 @@ def _ultimo_202(cfg, instante: datetime):
         erp_estado_repo.registrar_202(conn, cfg.base, runner.formatar_instante(instante))
 
 
-def test_sem_202_ha_mais_de_60_min_pede_o_sinal_de_vida(cfg):
-    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=61))
+def test_sem_202_ha_mais_de_55_min_pede_o_sinal_de_vida(cfg):
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=56))
     runner._garantir_sinal_de_vida(cfg, DOMINGO_18H_SP)
     assert _envio(cfg).sinal_pendente
 
 
 def test_202_recente_nao_pede_sinal_de_vida(cfg):
-    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=59))
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=54))
     runner._garantir_sinal_de_vida(cfg, DOMINGO_18H_SP)
     assert not _envio(cfg).sinal_pendente
 
@@ -161,21 +161,21 @@ def test_domingo_a_noite_a_fila_sai_com_origem_auto(cfg, flow_lotes, monkeypatch
     assert _origens(cfg) == [("auto", 3)]
 
 
-def test_fila_vazia_com_61_min_de_silencio_manda_um_lote_de_sinal(cfg, flow_lotes, monkeypatch):
-    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=61))
+def test_fila_vazia_com_56_min_de_silencio_manda_um_lote_de_sinal(cfg, flow_lotes, monkeypatch):
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=56))
     _tick(cfg, monkeypatch, DOMINGO_18H_SP)
     assert flow_lotes.lotes == [[]]
     assert _origens(cfg) == [("sinal", 0)]
 
 
-def test_fila_vazia_com_59_min_de_silencio_nao_manda_nada(cfg, flow_lotes, monkeypatch):
-    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=59))
+def test_fila_vazia_com_54_min_de_silencio_nao_manda_nada(cfg, flow_lotes, monkeypatch):
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=54))
     _tick(cfg, monkeypatch, DOMINGO_18H_SP)
     assert flow_lotes.lotes == []
 
 
 def test_dois_ticks_logo_apos_um_202_nao_mandam_sinal(cfg, flow_lotes, monkeypatch):
-    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=61))
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=56))
     _tick(cfg, monkeypatch, DOMINGO_18H_SP)  # o sinal sai e o 202 zera a contagem
     _tick(cfg, monkeypatch, DOMINGO_18H_SP + timedelta(seconds=30))
     _tick(cfg, monkeypatch, DOMINGO_18H_SP + timedelta(seconds=60))
@@ -198,7 +198,7 @@ def test_vigia_real_com_202_recente_nao_gera_lote_vazio(cfg, flow_lotes, monkeyp
 
 
 def test_vigia_que_lanca_nao_segura_o_sinal_de_vida(cfg, flow_lotes, monkeypatch):
-    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=61))
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=56))
 
     def quebra(*a, **k):
         raise RuntimeError("Fire fora do ar")
@@ -523,3 +523,11 @@ def test_enviar_foto_registra_origem_foto(cfg, monkeypatch):
     with router.env_connect("mm") as conn:
         regs = erp_envio_lote_repo.recentes(conn, "mm")
     assert [(r.origem, r.eventos, r.aceitos) for r in regs] == [("foto", 1, 1)]
+
+
+def test_tick_com_fila_vazia_e_sem_sinal_nao_cria_o_cliente_http(cfg, flow_lotes, monkeypatch):
+    criados = []
+    monkeypatch.setattr(runner, "ClienteErpEventos", lambda **k: criados.append(k))
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=5))
+    _tick(cfg, monkeypatch, DOMINGO_18H_SP)
+    assert criados == []
