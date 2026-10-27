@@ -466,13 +466,8 @@ def test_ean_e_codigo_nfe_listados_com_null_passam(campo):
     assert codigo is None and item.camposAlterados == [campo]
 
 
-def test_par_novo_sem_codigo_do_apontae_e_recusado_na_borda():
+def test_produto_novo_sem_codigo_do_apontae_passa():
+    # A exigência do código é a flag por empresa do Flow (exigeCodigoMes, contrato P4a), não do Portal.
     par = dict(BOM, tipo="simples", unidadeErp="PAR", tipoItemSped=3, componentes=None, codigoNfe=None)
-    item, cod, msg = validar_item(par)
-    assert item is None and cod == "contrato_invalido" and "codigoMes" in msg
-    assert validar_item(dict(par, codigoMes="8362"))[1] is None
-    assert validar_item(dict(par, codigoNfe="KG01ST"))[1] is None
-
-
-def test_kit_novo_sem_codigo_do_apontae_passa():
+    assert validar_item(par)[1] is None
     assert validar_item(dict(BOM, codigoNfe=None, codigoMes=None))[1] is None

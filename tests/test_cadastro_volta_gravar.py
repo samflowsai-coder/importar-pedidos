@@ -312,7 +312,7 @@ def _outro(n, **kw):
 
 def _atualizar(seq, **kw):
     return {**PAR, "cadastroId": "44444444-4444-4444-8444-444444444444", "versao": 2,
-            "acao": "atualizar", "erpProdutoId": seq, "marcaErp": None, **kw}
+            "acao": "atualizar", "erpProdutoId": seq, "marcaErp": None, "codigoMes": None, **kw}
 
 
 # --- brief ---------------------------------------------------------------

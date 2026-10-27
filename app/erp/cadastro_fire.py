@@ -115,8 +115,8 @@ def _como_a_tela(campos: dict) -> dict:
     descrição; código do produto na nota = o do Flow, senão o código alternativo
     se couber na coluna. Sem nenhum dos dois fica NULL, como a tela faz no kit
     (3382): o kit nunca leva código do Apontaê e o SEQ não é inventado (colidiria
-    com os 445 códigos numéricos curtos que já existem). O par sem código é
-    recusado antes, na borda (`cadastro_schema.validar_item`)."""
+    com os 445 códigos numéricos curtos que já existem). Exigir o código no par
+    é da flag por empresa do Flow (exigeCodigoMes), não do Portal."""
     alternativo = campos.get("CODPROD_ALTERN")
     codigo_nfe = campos.get("CODPARANFE") or (
         alternativo if alternativo and len(alternativo) <= CODPARANFE_MAX else None

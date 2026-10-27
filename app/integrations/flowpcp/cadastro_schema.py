@@ -256,9 +256,6 @@ def validar_item(bruto: dict) -> tuple[CadastroPendente | None, str | None, str 
         return None, "contrato_invalido", f"{item.acao} exige erpProdutoId"
     if item.acao == "criar" and item.marcaErp is None:
         return None, "contrato_invalido", "criar exige marcaErp"
-    if item.acao == "criar" and item.tipo == "simples" and not (item.codigoMes or item.codigoNfe):
-        # Regra de 22/10/2026: par novo nasce ligado ao Apontaê; sem código a nota sairia sem cProd.
-        return None, "contrato_invalido", "par novo sem código do Apontaê (codigoMes)"
     if item.acao == "inativar" and item.marcaErp is not None:
         return None, "contrato_invalido", "inativar exige marcaErp null"
     if item.tipo in ("simples", "material") and item.componentes is not None:
