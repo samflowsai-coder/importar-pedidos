@@ -273,8 +273,8 @@ def test_painel_sem_credencial_nao_pode(env_id, manual_limpo):
     }
     assert p["envios"] == [] and p["foto_hoje"] is None and p["bloqueio"] is None
     assert p["bloqueio_texto"] is None and p["recusados_30d"] == 0 and p["fila_pendente"] == 0
-    assert p["janelas"] == [8, 11, 14, 17] and p["intervalo_vigia_min"] == 15
-    assert p["proxima_janela"]
+    assert "janelas" not in p and "proxima_janela" not in p
+    assert p["intervalo_vigia_min"] == 15
 
 
 def test_painel_com_bloqueio_recusados_e_fila(env_id, manual_limpo):

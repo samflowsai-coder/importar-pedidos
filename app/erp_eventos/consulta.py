@@ -15,7 +15,7 @@ from datetime import date, datetime
 from app.erp_eventos.canonico import formatar_instante
 from app.erp_eventos.modelo import esta_aberto
 from app.persistence import erp_envio_lote_repo
-from app.utils.janelas_envio import FUSO, janela_aberta, proxima_janela
+from app.utils.janelas_envio import FUSO
 
 ROTULOS: dict[str, str] = {
     "pedido_visto": "Pedido novo",
@@ -38,7 +38,6 @@ BLOQUEIOS: dict[str, str] = {
     "lote_grande_demais": "um lote passou do tamanho máximo. Fale com o suporte.",
 }
 
-_DIAS = ("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
 _SEM_ORIGEM = "origem não registrada"
 
 
@@ -124,8 +123,12 @@ def _local(iso: str) -> datetime:
 
 
 def _origem_lote(reg: erp_envio_lote_repo.LoteRegistro) -> str:
-    if reg.origem == "janela":
+    if reg.origem == "janela":  # só em linhas antigas
         return f"Janela das {_local(reg.enviado_em).hour}h"
+    if reg.origem == "auto":
+        return "Automático"
+    if reg.origem == "sinal":
+        return "Sinal de vida"
     if reg.origem == "foto":
         return "Antes da foto"
     if reg.origem == "manual":
@@ -219,17 +222,6 @@ def _situacao_tela(situacao: str, enviado_em: str | None) -> str:
     return "recusado" if situacao == "rejeitado" else situacao
 
 
-def _proxima_texto(agora: datetime) -> str:
-    prox = proxima_janela(agora).astimezone(FUSO)
-    dias = (prox.date() - agora.astimezone(FUSO).date()).days
-    hora = prox.strftime("%H:%M")
-    if dias == 0:
-        return f"hoje às {hora}"
-    if dias == 1:
-        return f"amanhã às {hora}"
-    return f"{_DIAS[prox.weekday()]} às {hora}"
-
-
 def _plural(n: int) -> str:
     return f"{n} evento" if n == 1 else f"{n} eventos"
 
@@ -257,10 +249,9 @@ def _frase(
     if sem_resposta:
         inicio = f"O Flow ainda não recebeu {_plural(sem_resposta)}. "
         if proxima_tentativa_em and proxima_tentativa_em > formatar_instante(agora):
-            return f"{inicio}Saem na janela de {_proxima_texto(agora)}."  # recuo: sem botão
-        if janela_aberta(agora):
-            return f"{inicio}Saem no próximo envio, em instantes."
-        return f"{inicio}Saem na janela de {_proxima_texto(agora)} ou agora pelo Enviar agora."
+            hora = datetime.fromisoformat(proxima_tentativa_em).astimezone(FUSO)
+            return f"{inicio}Saem às {hora:%H:%M}, quando o Flow liberar."  # recuo: sem botão
+        return f"{inicio}Saem no próximo envio, em instantes."
     if not eventos:
         return ""
     ultimo = max(

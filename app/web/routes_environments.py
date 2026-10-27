@@ -38,7 +38,6 @@ from app.persistence import (
 )
 from app.persistence import preco_revisao_repo as revs
 from app.persistence import router as db_router
-from app.utils.janelas_envio import horas_das_janelas, proxima_janela
 from app.utils.logger import logger
 from app.web.auth import require_admin
 
@@ -498,7 +497,6 @@ def get_erp_base_panel(env_id: str, _=Depends(require_admin)):
     return {
         "ultima_vigia_em": envio.ultima_vigia_em,
         "fila_pendente": fila.get("pendente", 0),
-        "proxima_janela": formatar_instante(proxima_janela(agora)),
         "ultimo_202_em": envio.ultimo_202_em,
         "recusados_30d": recusados,
         "bloqueio": envio.bloqueio,
@@ -509,7 +507,6 @@ def get_erp_base_panel(env_id: str, _=Depends(require_admin)):
             "pode": recusa is None,
             "motivo": recusa.detalhe if recusa else None,
         },
-        "janelas": list(horas_das_janelas()),
         "intervalo_vigia_min": int(runner.INTERVALO_VIGIA.total_seconds() // 60),
         "envios": [{**asdict(e), **consulta.rotulo_lote(e)} for e in envios],
         "foto_hoje": (

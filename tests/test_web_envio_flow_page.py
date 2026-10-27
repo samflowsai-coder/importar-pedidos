@@ -67,7 +67,9 @@ def test_tela_de_ambiente_nao_duplica_os_textos_de_bloqueio():
 def test_pagina_nao_duplica_regras_do_servidor():
     html = (STATIC / "admin-envio-flow.html").read_text(encoding="utf-8")
     assert "rotuloOrigem" not in html and "origem_rotulo" in html and "resultado_rotulo" in html
-    assert "8h, 11h" not in html and "janelas" in html and "intervalo_vigia_min" in html
+    assert "8h, 11h" not in html and "intervalo_vigia_min" in html
+    assert "Próxima saída" not in html and "janela" not in html.lower()
+    assert "Envio" in html and "automático" in html.lower()
     assert "Fica registrado como envio manual seu." in html
     assert (
         "resumoEnvio" not in html and "Nada novo para enviar" not in html
