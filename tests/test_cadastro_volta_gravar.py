@@ -304,8 +304,10 @@ def _no_catalogo(env_conn, seq):
 
 def _outro(n, **kw):
     """Outro produto do Flow (cadastroId e produtoId próprios)."""
+    # Como o Flow (fila.ts): só o criar de par leva codigoMes; kit e pack vão sem.
+    sem_codigo = {"codigoMes": None} if kw.get("tipo") in ("kit", "pack") else {}
     return {**PAR, "cadastroId": f"5555555{n}-5555-4555-8555-555555555555",
-            "produtoId": f"6666666{n}-6666-4666-8666-666666666666", **kw}
+            "produtoId": f"6666666{n}-6666-4666-8666-666666666666", **sem_codigo, **kw}
 
 
 def _atualizar(seq, **kw):
@@ -826,7 +828,7 @@ def test_item_invalido_responde_definitivo(modo, env_slug, env_conn):
 
 def test_componente_invalido_vai_com_frase_de_contrato(modo, env_slug, env_conn):
     modo("criar")
-    kit = {**PAR, "tipo": "kit", "componentes": []}
+    kit = {**PAR, "tipo": "kit", "componentes": [], "codigoMes": None}
     flow = Flow([kit])
     _rodar(env_slug, flow, FireGravavel(), env_conn)
     erro = flow.posts[0][1]["erro"]

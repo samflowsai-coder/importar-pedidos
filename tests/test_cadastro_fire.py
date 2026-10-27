@@ -450,13 +450,13 @@ def test_criar_nao_sobrescreve_codigo_da_nota_que_o_flow_mandou():
 
 
 @pytest.mark.parametrize("alternativo", [None, "X" * 25])
-def test_criar_sem_codigo_para_a_nota_e_recusado_antes_do_banco(alternativo):
-    # CODPARANFE é varchar(20) e nunca é inventado (o SEQ colidiria com códigos numéricos existentes).
-    fire, reservas = _Fire(), []
-    with pytest.raises(ValueError, match="código para a nota"):
-        cf.criar(fire, campos={**CAMPOS, "CODPROD_ALTERN": alternativo}, componentes=None,
-                 hoje=date(2026, 10, 27), ao_reservar=reservas.append)
-    assert fire.sqls == [] and reservas == []
+def test_criar_sem_codigo_que_caiba_deixa_o_codigo_da_nota_nulo_como_a_tela_no_kit(alternativo):
+    # Kit nunca leva código do Apontaê; CODPARANFE é varchar(20) e o SEQ não é inventado.
+    fire = _Fire()
+    cf.criar(fire, campos={**CAMPOS, "CODPROD_ALTERN": alternativo}, componentes=[(3170, 3.0)],
+             hoje=date(2026, 10, 27), ao_reservar=lambda s: None)
+    linha = _linha_inserida(fire)
+    assert linha["CODPARANFE"] is None and linha["DESCRICAO2"] == "MEIA SOQUETE"
 
 
 def test_criar_com_alternativo_longo_usa_o_codigo_do_flow():

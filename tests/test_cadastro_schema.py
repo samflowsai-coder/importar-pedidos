@@ -288,7 +288,7 @@ def _item(**mudancas):
         "cor": None,
         "componentes": None,
         "marcaErp": {"codigo": 17},
-        "codigoMes": None,
+        "codigoMes": "8362",  # par novo leva o código do Apontaê (regra de 22/10/2026)
         "aprovadoEm": "2026-10-17T13:00:00.123Z",
     }
     base.update(mudancas)
@@ -464,3 +464,15 @@ def test_campo_listado_que_nao_limpa_com_null_e_contrato_invalido(campo):
 def test_ean_e_codigo_nfe_listados_com_null_passam(campo):
     item, codigo, _ = validar_item(_atualizar(camposAlterados=[campo], **{campo: None}))
     assert codigo is None and item.camposAlterados == [campo]
+
+
+def test_par_novo_sem_codigo_do_apontae_e_recusado_na_borda():
+    par = dict(BOM, tipo="simples", unidadeErp="PAR", tipoItemSped=3, componentes=None, codigoNfe=None)
+    item, cod, msg = validar_item(par)
+    assert item is None and cod == "contrato_invalido" and "codigoMes" in msg
+    assert validar_item(dict(par, codigoMes="8362"))[1] is None
+    assert validar_item(dict(par, codigoNfe="KG01ST"))[1] is None
+
+
+def test_kit_novo_sem_codigo_do_apontae_passa():
+    assert validar_item(dict(BOM, codigoNfe=None, codigoMes=None))[1] is None
