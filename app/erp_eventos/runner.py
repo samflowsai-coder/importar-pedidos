@@ -39,7 +39,7 @@ from app.persistence import (
     router,
 )
 from app.persistence.erp_bases_repo import BaseErpConfig
-from app.utils.janelas_envio import FUSO
+from app.utils.janelas_envio import FUSO, avisar_variavel_obsoleta
 from app.utils.logger import logger
 
 TICK_S = 30.0
@@ -533,6 +533,7 @@ def tick() -> None:
 
 def loop() -> None:
     logger.info("erp_eventos: loop iniciado")
+    avisar_variavel_obsoleta()
     while True:
         time.sleep(TICK_S)
         try:

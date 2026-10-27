@@ -404,11 +404,6 @@ def test_interruptor_da_thread(monkeypatch):
     assert not envio_portal.envio_habilitado()
 
 
-# ── Janelas de envio: 8h, 11h, 14h, 17h, segunda a sábado (Brasília) ─────────
-
-SP = FUSO
-
-
 def test_drenar_num_domingo_a_noite_envia_o_pedido(env, monkeypatch):
     pedido("a", dias=0)
     chamadas = []
@@ -420,7 +415,7 @@ def test_drenar_num_domingo_a_noite_envia_o_pedido(env, monkeypatch):
     monkeypatch.setattr(envio_portal, "enabled_flowpcp_envs", lambda: {"mm": CFG})
     monkeypatch.setattr(envio_portal, "drenar_ambiente", fake)
     monkeypatch.setattr(envio_portal, "update_outbox_metrics", lambda: None)
-    envio_portal.drenar(datetime(2026, 10, 18, 21, 0, tzinfo=SP))  # domingo 21h
+    envio_portal.drenar(datetime(2026, 10, 18, 21, 0, tzinfo=FUSO))  # domingo 21h
     assert chamadas == [env["slug"]]
 
 

@@ -68,6 +68,7 @@ from app.observability.metrics import update_outbox_metrics
 from app.persistence import context as env_context
 from app.persistence import db, environments_repo, outbox_repo, repo
 from app.persistence.outbox_repo import OutboxRow
+from app.utils.janelas_envio import avisar_variavel_obsoleta
 from app.utils.logger import logger
 from app.worker.jobs.drain_outbox import _process_flowpcp_row
 from app.worker.jobs.poll_flowpcp import run_poll_flowpcp
@@ -284,6 +285,7 @@ def loop() -> None:
         "flowpcp.envio: loop iniciado (decisões do Flow "
         f"{'LIGADAS' if decisoes_habilitadas() else 'desligadas'})"
     )
+    avisar_variavel_obsoleta()
     ultima_decisao = datetime.min
     while True:
         time.sleep(TICK_S)

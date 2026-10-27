@@ -26,6 +26,7 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 1) **Tela nova "Envio ao Flow" (/admin/envio-flow, só admin).** Mostra a situação do envio dos pedidos abertos do Fire para o Flow, os últimos envios e de onde veio cada um (janela, foto ou manual). Busca um pedido pelo número do cliente ou pelo código do Fire e diz, em uma frase, se ele já chegou ao Flow, se está na fila ou se foi recusado e por quê. Na tela do ambiente, o resumo do envio ganha o link "ver envio por pedido".
 2) **Botão "Enviar agora", fora das janelas de 8, 11, 14 e 17h.** Lê o Fire na hora e manda tudo o que estiver na fila, nas mesmas regras da janela, e fica registrado em nome de quem clicou. Começa em cerca de 30 segundos; o clique vale por 5 minutos e há intervalo mínimo de 1 minuto entre dois envios. Quando o envio está parado, o botão fica desligado e diz o motivo.
 3) **Gravação direta no Fire escolhe a figura fiscal pelo histórico do cliente e pela UF dele.** Antes usava a mesma figura em todo pedido do ambiente, o que daria nota errada para cliente de outro estado; sem uma figura segura o pedido não é gravado e a tela diz o motivo. Só vale quando a gravação direta no Fire estiver ligada: com planilha, como hoje, nada muda.
+4) **Pedidos vão ao Flow assim que mudam.** O que for digitado ou alterado no Fire chega ao Flow na próxima leitura (até 15 minutos), e os pedidos importados no portal saem em segundos, em vez de esperar 8h, 11h, 14h ou 17h. A tela Envio ao Flow mostra o envio como automático.
 
 ## 20261022-1753
 

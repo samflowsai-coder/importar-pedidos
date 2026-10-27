@@ -180,7 +180,6 @@ PORTAL_LOTES=                    # 0 desliga a thread de fechamento dos lotes; a
 
 # FlowPCP — fila do /recebimento e decisões, numa thread do processo web
 PORTAL_FLOWPCP_ENVIO=            # 0 desliga a thread que entrega a fila do Flow; ausente = ligado
-PORTAL_FLOW_JANELAS=             # horas das janelas de envio ao Flow (seg-sáb, 1 h cada); ausente = 8,11,14,17
 PORTAL_FLOWPCP_DECISOES=         # 1 liga a leitura das decisões do Flow (ESCREVE DT_ENTREGA no Fire); ausente = desligado
 PORTAL_FLOWPCP_CATALOGO_HORA=    # hora (Brasília) do envio diário do catálogo ao Flow; ausente = 5
 PORTAL_FLOWPCP_CATALOGO_DIARIO=  # simular (padrão: Flow só compara) | gravar | desligado
@@ -203,7 +202,7 @@ PORTAL_FLOWPCP_CLIENTE_MATRIZ_<SLUG>=  # (ex.: PORTAL_FLOWPCP_CLIENTE_MATRIZ_MM=
 # Trava de preço — conversa com o Flow (contrato precos v1), na mesma thread do FlowPCP
 PORTAL_FLOWPCP_PRECOS=           # 0 desliga a sync da tabela, o envio de revisões e as decisões de preço; ausente = ligado.
                                  # Só age em ambiente com trava ≠ desligado. Tabela a cada 60 s (observando ou ligado);
-                                 # envio/decisões a cada 30 s (só ligado); independe das janelas do Flow.
+                                 # envio/decisões a cada 30 s (só ligado); sem janela de horário.
                                  # Roda na thread do PORTAL_FLOWPCP_ENVIO: com ele em 0 a thread não sobe e a
                                  # conversa de preço com o Flow para junto.
 

@@ -484,7 +484,7 @@ erro, em memória: some quando o portal reinicia.
 
 ## 6. Trava de preço (contrato precos v1)
 
-`precos.rodar(agora)`, na thread `flowpcp-envio` (`envio_portal.ciclo`), fora das janelas.
+`precos.rodar(agora)`, na thread `flowpcp-envio` (`envio_portal.ciclo`), a cada ciclo, sem janela de horário.
 Por ambiente ativo com a trava ≠ `desligado` e `environments.cnpj` válido, com a config do
 Flow de `preco_fonte_slug or slug` (Nasmar: config da MM, `empresaFaturadora` = CNPJ da Nasmar;
 cópia no db do próprio ambiente):
@@ -547,8 +547,8 @@ Riscos conhecidos:
   página chegar, a cópia fica sem `completo_em` e a trava bloqueia (`copia_desatualizada`).
   Autocura na mesma volta ou na seguinte (60 s), se as páginas vierem.
 
-Intervalos: tabela 60 s (trava ≠ `desligado`), envio e decisões 30 s (só `ligado`); independem
-das janelas do Flow. `PORTAL_FLOWPCP_PRECOS=0` desliga tudo.
+Intervalos: tabela 60 s (trava ≠ `desligado`), envio e decisões 30 s (só `ligado`); não
+dependem de horário. `PORTAL_FLOWPCP_PRECOS=0` desliga tudo.
 
 **Só a thread do processo web roda isso**: `envio_portal.ciclo` chama `precos.rodar`; o worker
 docker (`python -m app.worker`) **não** chama. O deploy Windows roda `ui.py`, então vale.
