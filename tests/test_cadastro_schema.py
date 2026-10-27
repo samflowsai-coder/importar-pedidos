@@ -288,7 +288,7 @@ def _item(**mudancas):
         "cor": None,
         "componentes": None,
         "marcaErp": {"codigo": 17},
-        "codigoMes": "8362",  # par novo leva o código do Apontaê (regra de 22/10/2026)
+        "codigoMes": None,
         "aprovadoEm": "2026-10-17T13:00:00.123Z",
     }
     base.update(mudancas)

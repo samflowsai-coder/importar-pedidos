@@ -1502,7 +1502,7 @@ def test_atualizar_sem_a_chave_grava_tudo_como_na_rev4(modo, env_slug, env_conn)
     _no_catalogo(env_conn, "3170")
     modo("criar_e_atualizar")
     fire = _fire_3170()
-    item = _atualizar("3170", marcaErp={"codigo": 17}, codigoMes=None)
+    item = _atualizar("3170", marcaErp={"codigo": 17})
     assert "camposAlterados" not in item
     _rodar(env_slug, Flow([item]), fire, env_conn)
     ((sql, params),) = _updates(fire)
@@ -1518,7 +1518,7 @@ def test_criar_que_virou_atualizar_com_lista_completa_igual_a_rev4(modo, env_slu
     """Seção 4: a lista traz todos os campos preenchidos; o UPDATE é o mesmo da rev. 4."""
     comps = [{"erpProdutoId": "3100", "quantidade": 3}] if tipo == "kit" else None
     base = _atualizar("3170", tipo=tipo, marcaErp={"codigo": 17}, ean="7891234567895",
-                      codigoNfe="NFE-2", componentes=comps, codigoMes=None,
+                      codigoNfe="NFE-2", componentes=comps,
                       unidadeErp="KIT" if tipo == "kit" else "PAR")
     lista = ["nome", "unidadeErp", "ean", "ncm", "tipoItemSped", "grupoErp", "codigoNfe",
              *(["componentes"] if tipo == "kit" else []), "marcaErp"]
