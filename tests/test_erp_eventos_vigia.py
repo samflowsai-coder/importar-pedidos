@@ -132,12 +132,15 @@ def test_primeira_vigia_manda_visto_e_itens_na_mesma_unidade(bases):
     assert evs[1][4]["item"]["produtoProdutor"] == 4410  # base produtora: o próprio produto
 
 
-def test_vigia_sem_mudanca_nao_gera_evento_mas_marca_sinal_de_vida(bases):
+def test_vigia_sem_mudanca_nao_gera_evento_nem_liga_o_sinal_de_vida(bases):
     rodar(bases["mm"], Leitor([pedido()]))
     r = rodar(bases["mm"], Leitor([pedido()]), agora=T0 + timedelta(minutes=15))
     assert r.eventos == 0
     with router.env_connect("mm") as conn:
-        assert conn.execute("SELECT sinal_pendente FROM erp_envio_estado").fetchone()[0] == 1
+        row = conn.execute(
+            "SELECT sinal_pendente, ultima_vigia_em FROM erp_envio_estado"
+        ).fetchone()
+    assert row[0] == 0 and row[1]  # o sinal de vida é do runner (silêncio de 1 h), não da vigia
 
 
 def test_mudanca_de_quantidade_continua_o_seq(bases):

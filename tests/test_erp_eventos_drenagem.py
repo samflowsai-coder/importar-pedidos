@@ -109,7 +109,7 @@ def envio(cfg):
 
 def test_sem_pendente_com_sinal_devido_manda_lote_vazio(cfg):
     with router.env_connect("mm") as conn:
-        erp_estado_repo.registrar_vigia(conn, "mm", "2026-10-09T13:00:00.000+00:00")
+        erp_estado_repo.pedir_sinal_de_vida(conn, "mm", "2026-10-09T13:00:00.000+00:00")
     flow = Flow()
     rodar(cfg, flow)
     assert flow.lotes == [[]]
@@ -209,7 +209,7 @@ def test_lote_aceito_grava_registro_auto(cfg):
 
 def test_lote_vazio_de_sinal_grava_registro(cfg):
     with router.env_connect("mm") as conn:
-        erp_estado_repo.registrar_vigia(conn, "mm", "2026-10-09T13:00:00.000+00:00")
+        erp_estado_repo.pedir_sinal_de_vida(conn, "mm", "2026-10-09T13:00:00.000+00:00")
     rodar(cfg, Flow())
     (reg,) = lotes_registrados()
     assert (reg.origem, reg.eventos, reg.http, reg.aceitos) == ("sinal", 0, 202, 0)

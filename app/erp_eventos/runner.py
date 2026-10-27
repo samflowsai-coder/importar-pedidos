@@ -251,6 +251,9 @@ def _atender_manual(
             if _etapa(cfg, "vigia manual", vigiar_fn):
                 _FALHA_ERP.pop(chave, None)
                 parcial["vigia"] = "ok"
+                # Enviar agora com fila vazia ainda manda 1 lote (vazio, origem manual).
+                with router.env_connect(cfg.env_slug) as conn:
+                    erp_estado_repo.pedir_sinal_de_vida(conn, cfg.base, formatar_instante(agora))
             else:
                 _FALHA_ERP[chave] = agora
                 erp_liberado = False
@@ -455,7 +458,7 @@ def _drenar_fila(cfg: BaseErpConfig) -> None:
         destino_url=cfg.destino_url, tenant_id=cfg.tenant_id, token=cfg.token or ""
     )
     try:
-        drenagem.drenar(cfg, cliente=cliente, ritmo=_ritmo)
+        drenagem.drenar(cfg, cliente=cliente, ritmo=_ritmo, agora_fn=_relogio)
     finally:
         cliente.close()
 

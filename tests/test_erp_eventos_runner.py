@@ -26,7 +26,7 @@ from tests.test_erp_eventos_origem import pedidos_foto
 TENANT = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 NOITE = datetime(2026, 10, 10, 2, 30, tzinfo=UTC)  # 23:30 em São Paulo
 JANELA_14H = datetime(2026, 10, 15, 17, 10, tzinfo=UTC)  # quinta, 14:10 em São Paulo
-DOMINGO_21H = datetime(2026, 10, 25, 21, 0, tzinfo=UTC)  # domingo, 18:00 em São Paulo (sem janela)
+DOMINGO_18H_SP = datetime(2026, 10, 25, 21, 0, tzinfo=UTC)  # domingo, 18:00 em São Paulo
 
 
 @pytest.fixture
@@ -137,14 +137,14 @@ def _ultimo_202(cfg, instante: datetime):
 
 
 def test_sem_202_ha_mais_de_60_min_pede_o_sinal_de_vida(cfg):
-    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=61))
-    runner._garantir_sinal_de_vida(cfg, DOMINGO_21H)
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=61))
+    runner._garantir_sinal_de_vida(cfg, DOMINGO_18H_SP)
     assert _envio(cfg).sinal_pendente
 
 
 def test_202_recente_nao_pede_sinal_de_vida(cfg):
-    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=59))
-    runner._garantir_sinal_de_vida(cfg, DOMINGO_21H)
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=59))
+    runner._garantir_sinal_de_vida(cfg, DOMINGO_18H_SP)
     assert not _envio(cfg).sinal_pendente
 
 
@@ -155,40 +155,55 @@ def test_domingo_a_noite_a_fila_sai_com_origem_auto(cfg, flow_lotes, monkeypatch
             [_evento(n, "2026-10-25T20:30:00.000+00:00") for n in (1, 2, 3)],
             "2026-10-25T20:30:00.000+00:00",
         )
-    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=5))
-    _tick(cfg, monkeypatch, DOMINGO_21H)
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=5))
+    _tick(cfg, monkeypatch, DOMINGO_18H_SP)
     assert [len(e) for e in flow_lotes.lotes] == [3]
     assert _origens(cfg) == [("auto", 3)]
 
 
 def test_fila_vazia_com_61_min_de_silencio_manda_um_lote_de_sinal(cfg, flow_lotes, monkeypatch):
-    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=61))
-    _tick(cfg, monkeypatch, DOMINGO_21H)
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=61))
+    _tick(cfg, monkeypatch, DOMINGO_18H_SP)
     assert flow_lotes.lotes == [[]]
     assert _origens(cfg) == [("sinal", 0)]
 
 
 def test_fila_vazia_com_59_min_de_silencio_nao_manda_nada(cfg, flow_lotes, monkeypatch):
-    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=59))
-    _tick(cfg, monkeypatch, DOMINGO_21H)
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=59))
+    _tick(cfg, monkeypatch, DOMINGO_18H_SP)
     assert flow_lotes.lotes == []
 
 
 def test_dois_ticks_logo_apos_um_202_nao_mandam_sinal(cfg, flow_lotes, monkeypatch):
-    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=61))
-    _tick(cfg, monkeypatch, DOMINGO_21H)  # o sinal sai e o 202 zera a contagem
-    _tick(cfg, monkeypatch, DOMINGO_21H + timedelta(seconds=30))
-    _tick(cfg, monkeypatch, DOMINGO_21H + timedelta(seconds=60))
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=61))
+    _tick(cfg, monkeypatch, DOMINGO_18H_SP)  # o sinal sai e o 202 zera a contagem
+    _tick(cfg, monkeypatch, DOMINGO_18H_SP + timedelta(seconds=30))
+    _tick(cfg, monkeypatch, DOMINGO_18H_SP + timedelta(seconds=60))
     assert flow_lotes.lotes == [[]]
 
 
+def test_vigia_real_com_202_recente_nao_gera_lote_vazio(cfg, flow_lotes, monkeypatch):
+    """A vigia (a cada 15 min) não liga o sinal de vida: 202 há 5 min = nenhum POST."""
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=5))
+
+    def vigia_real(*a, **k):
+        with router.env_connect(cfg.env_slug) as conn:
+            erp_estado_repo.registrar_vigia(
+                conn, cfg.base, runner.formatar_instante(DOMINGO_18H_SP)
+            )
+
+    _tick(cfg, monkeypatch, DOMINGO_18H_SP, vigia=vigia_real)
+    _tick(cfg, monkeypatch, DOMINGO_18H_SP + timedelta(seconds=30), vigia=vigia_real)
+    assert flow_lotes.lotes == []
+
+
 def test_vigia_que_lanca_nao_segura_o_sinal_de_vida(cfg, flow_lotes, monkeypatch):
-    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=61))
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=61))
 
     def quebra(*a, **k):
         raise RuntimeError("Fire fora do ar")
 
-    _tick(cfg, monkeypatch, DOMINGO_21H, vigia=quebra)
+    _tick(cfg, monkeypatch, DOMINGO_18H_SP, vigia=quebra)
     assert flow_lotes.lotes == [[]]
     assert (cfg.environment_id, cfg.base) in runner._FALHA_ERP
 
@@ -202,19 +217,19 @@ def test_recuo_pedido_pelo_flow_segura_a_fila_cheia(cfg, flow_lotes, monkeypatch
             conn,
             cfg.base,
             "2026-10-25T20:59:00.000+00:00",
-            proxima_tentativa_em="2099-01-01T00:00:00.000+00:00",  # a drenagem usa o relógio real
+            proxima_tentativa_em=runner.formatar_instante(DOMINGO_18H_SP + timedelta(minutes=5)),
         )
-    _tick(cfg, monkeypatch, DOMINGO_21H)
+    _tick(cfg, monkeypatch, DOMINGO_18H_SP)
     assert flow_lotes.lotes == []
 
 
 def test_base_bloqueada_nao_manda_lote_nem_sinal(cfg, flow_lotes, monkeypatch):
-    _ultimo_202(cfg, DOMINGO_21H - timedelta(minutes=120))
+    _ultimo_202(cfg, DOMINGO_18H_SP - timedelta(minutes=120))
     with router.env_connect(cfg.env_slug) as conn:
         erp_estado_repo.bloquear(
             conn, cfg.base, "2026-10-25T20:00:00.000+00:00", motivo="auth", http=401, erro="x"
         )
-    _tick(cfg, monkeypatch, DOMINGO_21H)
+    _tick(cfg, monkeypatch, DOMINGO_18H_SP)
     assert flow_lotes.lotes == []
 
 
