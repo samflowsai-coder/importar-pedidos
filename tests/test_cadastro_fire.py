@@ -423,3 +423,48 @@ def test_candidatos_por_data_filtra_so_a_janela_parametrizada():
                        "CODIGO_EAN13": None, "CLASSIF_FISCAL": "61159500",
                        "DATA_CAD": date(2026, 10, 17)}]
     assert fire.commits == 0
+
+
+def _linha_inserida(fire):
+    sql, valores = [s for s in fire.sqls if s[0].startswith("INSERT INTO PRODUTOS ")][0]
+    colunas = sql[sql.index("(") + 1:sql.index(")")].split(", ")
+    return dict(zip(colunas, valores, strict=True))
+
+
+def test_criar_preenche_descricao_interna_e_codigo_da_nota_como_a_tela():
+    # Tela do Fire (pares 3999-4022, 27/10): DESCRICAO2 = DESCRICAO e CODPARANFE = CODPROD_ALTERN.
+    fire = _Fire()
+    cf.criar(fire, campos={**CAMPOS, "CODPROD_ALTERN": "8362"}, componentes=None,
+             hoje=date(2026, 10, 27), ao_reservar=lambda s: None)
+    linha = _linha_inserida(fire)
+    assert linha["DESCRICAO2"] == "MEIA SOQUETE"
+    assert linha["CODPARANFE"] == "8362"
+    assert linha["CODSUBGRUPO"] == 1
+
+
+def test_criar_nao_sobrescreve_codigo_da_nota_que_o_flow_mandou():
+    fire = _Fire()
+    cf.criar(fire, campos={**CAMPOS, "CODPROD_ALTERN": "8362", "CODPARANFE": "KG01ST"}, componentes=None,
+             hoje=date(2026, 10, 27), ao_reservar=lambda s: None)
+    assert _linha_inserida(fire)["CODPARANFE"] == "KG01ST"
+
+
+def test_criar_sem_codigo_alternativo_usa_o_seq_no_codigo_da_nota():
+    fire = _Fire(max_seq=4022)
+    cf.criar(fire, campos=CAMPOS, componentes=None, hoje=date(2026, 10, 27), ao_reservar=lambda s: None)
+    assert _linha_inserida(fire)["CODPARANFE"] == "4023"
+
+
+def test_criar_nunca_grava_texto_vazio():
+    fire = _Fire()
+    cf.criar(fire, campos={**CAMPOS, "CODIGO_EAN13": "  ", "CODPROD_ALTERN": ""}, componentes=None,
+             hoje=date(2026, 10, 27), ao_reservar=lambda s: None)
+    linha = _linha_inserida(fire)
+    assert "" not in [v.strip() for v in linha.values() if isinstance(v, str)]
+    assert linha["CODIGO_EAN13"] is None and linha["CODPROD_ALTERN"] is None
+
+
+def test_atualizar_texto_vazio_vira_nulo():
+    fire = _Fire()
+    cf.atualizar(fire, seq=3990, campos={"CODIGO_EAN13": ""}, componentes=None)
+    assert fire.sqls[0] == ("UPDATE PRODUTOS SET CODIGO_EAN13 = ? WHERE SEQ = ?", (None, 3990))

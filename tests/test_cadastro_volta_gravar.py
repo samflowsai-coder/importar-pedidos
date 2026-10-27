@@ -332,7 +332,8 @@ def test_criar_grava_e_confirma(modo, env_slug, env_conn):
     assert _reserva(flow)["acoes"] == ("criar",) and _reserva(flow)["limite"] == cv.LIMITE_GRAVACAO
     assert 3171 in fire.produtos
     assert fire.produtos[3171]["MARCA"] == "Kolosh" and fire.produtos[3171]["GRUPO"] == 8
-    assert "DESCRICAO2" not in fire.produtos[3171]
+    # DESCRICAO2 é a descrição interna da tela: recebe a descrição, nunca a cor (17/10 e 27/10/2026).
+    assert fire.produtos[3171]["DESCRICAO2"] == fire.produtos[3171]["DESCRICAO"]
     cid, corpo = flow.posts[0]
     assert cid == PAR["cadastroId"]
     assert corpo["erpProdutoId"] == "3171" and corpo["gravadoEm"].endswith("Z")

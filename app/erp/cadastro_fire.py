@@ -23,6 +23,7 @@ from typing import Literal
 from loguru import logger
 
 from app.erp.exceptions import FirebirdConnectionError
+from app.erp.mapper import texto_ou_nulo
 
 COLUNAS_PERMITIDAS = frozenset(
     {"DESCRICAO", "UNIDADE", "CODIGO_EAN13", "CLASSIF_FISCAL", "CODITEMSPED",
@@ -78,7 +79,7 @@ _GDS = {
 _SQLCODE = {-803: "colisao", -913: "lock", -530: "recusa"}
 
 # Colunas que o gravador monta sozinho ou que não são do Flow: nunca em PADROES_P0.
-_RESERVADAS = frozenset({"SEQ", "BLOQUEADO", "DATA_CAD"})
+_RESERVADAS = frozenset({"SEQ", "BLOQUEADO", "DATA_CAD", "DESCRICAO2"})
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,21 @@ def _checa_colunas(campos: dict) -> None:
     fora = set(campos) - COLUNAS_PERMITIDAS
     if fora:
         raise ValueError(f"coluna fora da lista do gravador: {sorted(fora)}")
+
+
+def _sem_texto_vazio(campos: dict) -> dict:
+    return {k: texto_ou_nulo(v) for k, v in campos.items()}
+
+
+def _como_a_tela(campos: dict, seq: int) -> dict:
+    """Colunas que a tela do Fire preenche no cadastro novo e o Flow não manda
+    (pares 3999-4022 abertos e salvos na tela, 27/10/2026): descrição interna =
+    descrição; código do produto na nota = o do Flow, senão o código alternativo,
+    senão o SEQ (nunca fica vazio)."""
+    return {
+        "DESCRICAO2": campos.get("DESCRICAO"),
+        "CODPARANFE": campos.get("CODPARANFE") or campos.get("CODPROD_ALTERN") or str(seq),
+    }
 
 
 def _valida_padroes(padroes: dict) -> None:
@@ -172,7 +188,7 @@ def _insere_composicao(cur, pai: int, componentes: list[tuple[int, float]]) -> N
 
 def criar(conn, *, campos, componentes, hoje: date, ao_reservar: Callable[[int], None]) -> Gravacao:
     _checa_colunas(campos)
-    linha = {**PADROES_P0, **campos}
+    campos = _sem_texto_vazio(campos)
     with _lock:
         for _ in range(TENTATIVAS_SEQ):
             cur = conn.cursor()
@@ -184,6 +200,7 @@ def criar(conn, *, campos, componentes, hoje: date, ao_reservar: Callable[[int],
                 except Exception as exc:
                     raise ReservaFalhouError("reserva do SEQ no livro falhou") from exc
                 insercao = True
+                linha = {**PADROES_P0, **campos, **_como_a_tela(campos, seq)}
                 colunas = ["SEQ", "BLOQUEADO", "DATA_CAD", *linha]
                 valores = (seq, "Nao", hoje, *linha.values())
                 cur.execute(
@@ -228,6 +245,7 @@ def _atualizar_uma_vez(conn, seq: int, campos, componentes, estado: dict) -> Gra
 
 def atualizar(conn, *, seq: int, campos, componentes) -> Gravacao:
     _checa_colunas(campos)
+    campos = _sem_texto_vazio(campos)
     if componentes is None:
         return _atualizar_uma_vez(conn, seq, campos, componentes, {})
     # Composição usa MAX(CODIGO)+1: mesmo lock e nova tentativa do criar.

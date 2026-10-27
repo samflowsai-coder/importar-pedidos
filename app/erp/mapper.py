@@ -31,6 +31,12 @@ def _digits_only(value: str | None) -> str:
     return re.sub(r"\D", "", value)
 
 
+def texto_ou_nulo(value):
+    """Texto vazio ou só espaços vira None: onde a tela do Fire deixa a coluna sem
+    valor ela grava NULL, nunca '' (27/10/2026). Fonte única para toda escrita no Fire."""
+    return None if isinstance(value, str) and not value.strip() else value
+
+
 def parse_date(value: str | None) -> date | None:
     if not value:
         return None
@@ -95,7 +101,7 @@ class FireSistemasMapper:
             client_id,                    # CLIENTE
             self.STATUS_INICIAL,          # STATUS = 'PEDIDO'
             pedido_cliente,               # PEDIDO_CLIENTE
-            obs,                          # OBS
+            texto_ou_nulo(obs),           # OBS
             dt_entrega,                   # DT_ENTREGA
             dt_entrega,                   # DT_BASE_FAT (= DT_ENTREGA em 100% dos medidos)
             valor_total,                  # VALOR_TOTAL
@@ -135,7 +141,7 @@ class FireSistemasMapper:
         qty = item.quantidade or 0.0
         unit_price = item.preco_unitario or 0.0
         total = item_total(item)
-        desc = (item.descricao or "")[:100]
+        desc = texto_ou_nulo((item.descricao or "")[:100])
         delivery = parse_date(item.data_entrega)
 
         return (
@@ -146,7 +152,7 @@ class FireSistemasMapper:
             qty,                   # QTD
             unit_price,            # PRECO_UNITARIO
             total,                 # TOTAL
-            unid,                  # UNID
+            texto_ou_nulo(unid),   # UNID
             delivery,              # DT_ENTREGA_ITEM
             perfil.icms_porc,      # ICMS_PORC
             Decimal("0"),          # ICMS_BASE
