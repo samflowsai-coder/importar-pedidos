@@ -63,7 +63,7 @@ class _Fire:
         return [], 1
 
 
-CAMPOS = {"DESCRICAO": "MEIA SOQUETE", "UNIDADE": "PAR", "GRUPO": 8, "MARCA": "Kolosh"}
+CAMPOS = {"DESCRICAO": "MEIA SOQUETE", "UNIDADE": "PAR", "GRUPO": 8, "MARCA": "Kolosh", "CODPROD_ALTERN": "81991"}
 
 
 def test_criar_reserva_antes_do_insert_e_commita():
@@ -449,15 +449,27 @@ def test_criar_nao_sobrescreve_codigo_da_nota_que_o_flow_mandou():
     assert _linha_inserida(fire)["CODPARANFE"] == "KG01ST"
 
 
-def test_criar_sem_codigo_alternativo_usa_o_seq_no_codigo_da_nota():
-    fire = _Fire(max_seq=4022)
-    cf.criar(fire, campos=CAMPOS, componentes=None, hoje=date(2026, 10, 27), ao_reservar=lambda s: None)
-    assert _linha_inserida(fire)["CODPARANFE"] == "4023"
+@pytest.mark.parametrize("alternativo", [None, "X" * 25])
+def test_criar_sem_codigo_para_a_nota_e_recusado_antes_do_banco(alternativo):
+    # CODPARANFE é varchar(20) e nunca é inventado (o SEQ colidiria com códigos numéricos existentes).
+    fire, reservas = _Fire(), []
+    with pytest.raises(ValueError, match="código para a nota"):
+        cf.criar(fire, campos={**CAMPOS, "CODPROD_ALTERN": alternativo}, componentes=None,
+                 hoje=date(2026, 10, 27), ao_reservar=reservas.append)
+    assert fire.sqls == [] and reservas == []
+
+
+def test_criar_com_alternativo_longo_usa_o_codigo_do_flow():
+    fire = _Fire()
+    cf.criar(fire, campos={**CAMPOS, "CODPROD_ALTERN": "X" * 25, "CODPARANFE": "KG01ST"}, componentes=None,
+             hoje=date(2026, 10, 27), ao_reservar=lambda s: None)
+    assert _linha_inserida(fire)["CODPARANFE"] == "KG01ST"
 
 
 def test_criar_nunca_grava_texto_vazio():
     fire = _Fire()
-    cf.criar(fire, campos={**CAMPOS, "CODIGO_EAN13": "  ", "CODPROD_ALTERN": ""}, componentes=None,
+    cf.criar(fire, campos={**CAMPOS, "CODIGO_EAN13": "  ", "CODPROD_ALTERN": "", "CODPARANFE": "8362"},
+             componentes=None,
              hoje=date(2026, 10, 27), ao_reservar=lambda s: None)
     linha = _linha_inserida(fire)
     assert "" not in [v.strip() for v in linha.values() if isinstance(v, str)]

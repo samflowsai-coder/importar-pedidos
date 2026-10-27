@@ -106,15 +106,26 @@ def _sem_texto_vazio(campos: dict) -> dict:
     return {k: texto_ou_nulo(v) for k, v in campos.items()}
 
 
-def _como_a_tela(campos: dict, seq: int) -> dict:
+CODPARANFE_MAX = 20  # PRODUTOS.CODPARANFE é varchar(20); CODPROD_ALTERN é varchar(30) (MM .7, 27/10/2026)
+
+
+def _como_a_tela(campos: dict) -> dict:
     """Colunas que a tela do Fire preenche no cadastro novo e o Flow não manda
     (pares 3999-4022 abertos e salvos na tela, 27/10/2026): descrição interna =
-    descrição; código do produto na nota = o do Flow, senão o código alternativo,
-    senão o SEQ (nunca fica vazio)."""
-    return {
-        "DESCRICAO2": campos.get("DESCRICAO"),
-        "CODPARANFE": campos.get("CODPARANFE") or campos.get("CODPROD_ALTERN") or str(seq),
-    }
+    descrição; código do produto na nota = o do Flow, senão o código alternativo.
+    Sem nenhum dos dois (ou alternativo maior que a coluna) o cadastro é recusado:
+    o código da nota nunca fica vazio nem é inventado (o SEQ colidiria com os 445
+    códigos numéricos curtos que já existem e mudaria o item no SPED depois)."""
+    alternativo = campos.get("CODPROD_ALTERN")
+    codigo_nfe = campos.get("CODPARANFE") or (
+        alternativo if alternativo and len(alternativo) <= CODPARANFE_MAX else None
+    )
+    if not codigo_nfe:
+        raise ValueError(
+            "produto novo sem código para a nota: o Flow não mandou codigoNfe e o "
+            f"código do Apontaê falta ou passa de {CODPARANFE_MAX} caracteres"
+        )
+    return {"DESCRICAO2": campos.get("DESCRICAO"), "CODPARANFE": codigo_nfe}
 
 
 def _valida_padroes(padroes: dict) -> None:
@@ -189,6 +200,7 @@ def _insere_composicao(cur, pai: int, componentes: list[tuple[int, float]]) -> N
 def criar(conn, *, campos, componentes, hoje: date, ao_reservar: Callable[[int], None]) -> Gravacao:
     _checa_colunas(campos)
     campos = _sem_texto_vazio(campos)
+    da_tela = _como_a_tela(campos)
     with _lock:
         for _ in range(TENTATIVAS_SEQ):
             cur = conn.cursor()
@@ -200,7 +212,7 @@ def criar(conn, *, campos, componentes, hoje: date, ao_reservar: Callable[[int],
                 except Exception as exc:
                     raise ReservaFalhouError("reserva do SEQ no livro falhou") from exc
                 insercao = True
-                linha = {**PADROES_P0, **campos, **_como_a_tela(campos, seq)}
+                linha = {**PADROES_P0, **campos, **da_tela}
                 colunas = ["SEQ", "BLOQUEADO", "DATA_CAD", *linha]
                 valores = (seq, "Nao", hoje, *linha.values())
                 cur.execute(

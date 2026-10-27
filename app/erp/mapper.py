@@ -31,7 +31,7 @@ def _digits_only(value: str | None) -> str:
     return re.sub(r"\D", "", value)
 
 
-def texto_ou_nulo(value):
+def texto_ou_nulo(value: object) -> object:
     """Texto vazio ou só espaços vira None: onde a tela do Fire deixa a coluna sem
     valor ela grava NULL, nunca '' (27/10/2026). Fonte única para toda escrita no Fire."""
     return None if isinstance(value, str) and not value.strip() else value
