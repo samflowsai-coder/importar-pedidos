@@ -151,6 +151,15 @@ def contar(conn: sqlite3.Connection, base: str) -> dict[str, int]:
     return {r["situacao"]: r["n"] for r in rows}
 
 
+def rejeitados_desde(conn: sqlite3.Connection, base: str, desde: str) -> int:
+    """Eventos que o Flow recusou com resposta a partir de `desde` (instante canônico)."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM erp_eventos_saida "
+        "WHERE base = ? AND situacao = 'rejeitado' AND respondido_em >= ?",
+        (base, desde),
+    ).fetchone()[0]
+
+
 def apagar_entregues_antigos(conn: sqlite3.Connection, antes_de: str) -> int:
     """aceito/duplicado saem depois da janela; rejeitado fica (é o rastro do problema)."""
     cur = conn.execute(

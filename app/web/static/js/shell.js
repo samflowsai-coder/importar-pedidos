@@ -41,6 +41,7 @@
     config:  { label: 'Configurações', icon: ICONS.settings, route: 'config', adminOnly: true,
       children: [
         { label: 'Ambientes',      href: '/admin/ambientes',         icon: ICONS.db, route: 'admin-ambientes' },
+        { label: 'Envio ao Flow',  href: '/admin/envio-flow',        icon: ICONS.update, route: 'admin-envio-flow' },
         { label: 'Diretórios',     href: '/configuracoes/diretorios', icon: ICONS.folder, route: 'config-diretorios' },
         { label: 'Usuários',       href: '/configuracoes/usuarios',   icon: ICONS.users, route: 'config-usuarios' },
         { label: 'Atualização',    href: '/admin/atualizacao',       icon: ICONS.update, route: 'admin-atualizacao' },
@@ -56,6 +57,7 @@
     '/admin/ambientes/novo':      'admin-ambientes',
     '/configuracoes/diretorios':  'config-diretorios',
     '/configuracoes/usuarios':    'config-usuarios',
+    '/admin/envio-flow':          'admin-envio-flow',
     '/admin/atualizacao':         'admin-atualizacao',
     '/admin/roteamento':          'admin-roteamento',
   };
@@ -142,7 +144,7 @@
       </a>`);
 
     if (showConfig) {
-      const expanded = ['admin-ambientes', 'config-diretorios', 'config-usuarios', 'admin-atualizacao', 'admin-roteamento'].includes(active);
+      const expanded = ['admin-ambientes', 'admin-envio-flow', 'config-diretorios', 'config-usuarios', 'admin-atualizacao', 'admin-roteamento'].includes(active);
       const childLinks = NAV_DEF.config.children.map((c) => `
         <a class="app-nav-link ${active === c.route ? 'active' : ''}"
            href="${c.href}" data-route="${c.route}">

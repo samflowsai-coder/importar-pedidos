@@ -46,6 +46,9 @@ class BaseErpConfig:
     # Há credencial gravada, mas não decifra (chave do secret_store trocada):
     # para a tela dizer "salve de novo" em vez de "nenhuma credencial".
     token_ilegivel: bool = False
+    # O ambiente dono da base está ativo (`environments.is_active`). Base de
+    # ambiente apagado não é atendida pela thread.
+    ambiente_ativo: bool = True
 
 
 def _agora() -> str:
@@ -141,11 +144,13 @@ def _montar(row) -> BaseErpConfig:
         intermediarios=frozenset({inter}) if len(inter) == 14 else frozenset(),
         revenda_slug=(row["intercompany_env_slug"] or "").strip() or None,
         token_ilegivel=bool(row["token_enc"]) and token is None,
+        ambiente_ativo=bool(row["ambiente_ativo"]),
     )
 
 
 _SELECT = """
-    SELECT b.*, e.slug, e.intercompany_cnpj, e.intercompany_env_slug
+    SELECT b.*, e.slug, e.intercompany_cnpj, e.intercompany_env_slug,
+           e.is_active AS ambiente_ativo
     FROM erp_bases b JOIN environments e ON e.id = b.environment_id
 """
 
@@ -156,17 +161,31 @@ def obter(environment_id: str) -> BaseErpConfig | None:
     return _montar(row) if row else None
 
 
+def base_atendida(cfg: BaseErpConfig | None) -> str | None:
+    """None se a thread atende a base; senão o motivo: "desligada" (base ou ambiente
+    inativo, ou sem config) ou "sem_credencial" (token ausente ou ilegível).
+    Único predicado: `listar_ativas` e a tela filtram por ele."""
+    if cfg is None or not cfg.ativo or not cfg.ambiente_ativo:
+        return "desligada"
+    if not cfg.token:
+        return "sem_credencial"
+    return None
+
+
 def listar_ativas() -> list[BaseErpConfig]:
-    """Bases ligadas, de ambientes ativos, com credencial. Ordem estável por slug."""
+    """Bases que `base_atendida` aceita. Ordem estável por slug."""
     with router.shared_connect() as conn:
+        # Pré-filtro (atalho): evita decifrar token de base desligada a cada tick.
+        # Quem decide é `base_atendida`; o teste de concordância prova a equivalência.
         rows = conn.execute(
             _SELECT + " WHERE b.ativo = 1 AND e.is_active = 1 ORDER BY e.slug"
         ).fetchall()
     saida = []
     for cfg in (_montar(r) for r in rows):
-        if cfg.token:
+        motivo = base_atendida(cfg)
+        if motivo is None:
             saida.append(cfg)
-        else:
+        elif motivo == "sem_credencial":
             # Ligada sem credencial legível (nunca salva, ou chave do
             # secret_store trocada): não envia, e diz por quê a cada volta.
             logger.warning(f"erp_eventos: base '{cfg.base}' ligada sem credencial — ignorada")

@@ -15,24 +15,30 @@ Endpoint `POST /{id}/test` valida pastas + tenta conexão Firebird.
 from __future__ import annotations
 
 import re
-from datetime import UTC, date, datetime
+from dataclasses import asdict
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import Path as PathParam
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from app.erp_eventos import consulta, runner
 from app.erp_eventos.canonico import formatar_instante
 from app.erp_eventos.foto import dia_local
 from app.persistence import (
     environments_repo,
     erp_bases_repo,
+    erp_envio_lote_repo,
     erp_estado_repo,
     erp_foto_repo,
     precos_repo,
 )
 from app.persistence import preco_revisao_repo as revs
 from app.persistence import router as db_router
+from app.utils.janelas_envio import horas_das_janelas, proxima_janela
 from app.utils.logger import logger
 from app.web.auth import require_admin
 
@@ -361,6 +367,9 @@ def _erp_base_view(env_id: str) -> dict:
         foto = erp_foto_repo.foto_do_dia(conn, cfg.base, dia_local(datetime.now(UTC)))
     view["envio"] = {
         "bloqueio": envio.bloqueio,
+        "bloqueio_texto": (
+            consulta.texto_bloqueio(envio.bloqueio, envio.ultimo_http) if envio.bloqueio else None
+        ),
         "ultimo_http": envio.ultimo_http,
         "ultimo_erro": envio.ultimo_erro,
         "ultimo_202_em": envio.ultimo_202_em,
@@ -409,6 +418,137 @@ def unblock_environment_erp_base(env_id: str, _=Depends(require_admin)):
     with db_router.env_connect(cfg.env_slug) as conn:
         erp_estado_repo.desbloquear(conn, cfg.base, formatar_instante(datetime.now(UTC)))
     return _erp_base_view(env_id)
+
+
+def _base_ou_404(env_id: str) -> erp_bases_repo.BaseErpConfig:
+    if environments_repo.get(env_id) is None:
+        raise HTTPException(status_code=404, detail="Ambiente não encontrado")
+    cfg = erp_bases_repo.obter(env_id)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="Base do ERP não configurada")
+    return cfg
+
+
+def _detalhe_json(d: consulta.PedidoDetalhe) -> dict:
+    """Resumo no topo, ao lado dos outros campos; eventos como lista de dicts."""
+    corpo = asdict(d)
+    return {**corpo.pop("resumo"), **corpo}
+
+
+def _detalhe_do_pedido(conn, cfg, erp_codigo: int) -> consulta.PedidoDetalhe:
+    envio = erp_estado_repo.obter_envio(conn, cfg.base)
+    return consulta.detalhe(
+        conn,
+        cfg.base,
+        erp_codigo,
+        ultima_vigia_em=envio.ultima_vigia_em,
+        bloqueio=envio.bloqueio,
+        agora=datetime.now(UTC),
+        ultimo_http=envio.ultimo_http,
+        proxima_tentativa_em=envio.proxima_tentativa_em,
+    )
+
+
+_BUSCA_MAX = 50
+
+
+@router.get("/{env_id}/erp-base/pedidos")
+def search_erp_base_orders(
+    env_id: str, q: str = Query(..., min_length=1), _=Depends(require_admin)
+):
+    cfg = _base_ou_404(env_id)
+    q = q.strip()
+    if not 1 <= len(q) <= 40:
+        raise HTTPException(status_code=422, detail="q deve ter de 1 a 40 caracteres")
+    with db_router.env_connect(cfg.env_slug) as conn:
+        achados = consulta.buscar(conn, cfg.base, q, limite=_BUSCA_MAX + 1)
+        limitado = len(achados) > _BUSCA_MAX
+        achados = achados[:_BUSCA_MAX]
+        corpo: dict = {"pedidos": [asdict(p) for p in achados], "limitado": limitado}
+        if len(achados) == 1:
+            corpo["detalhe"] = _detalhe_json(_detalhe_do_pedido(conn, cfg, achados[0].erp_codigo))
+    return corpo
+
+
+@router.get("/{env_id}/erp-base/pedidos/{erp_codigo}")
+def get_erp_base_order(
+    env_id: str, erp_codigo: int = PathParam(..., ge=0, le=2**63 - 1), _=Depends(require_admin)
+):
+    cfg = _base_ou_404(env_id)
+    with db_router.env_connect(cfg.env_slug) as conn:
+        try:
+            return _detalhe_json(_detalhe_do_pedido(conn, cfg, erp_codigo))
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Pedido não encontrado") from exc
+
+
+@router.get("/{env_id}/erp-base/painel")
+def get_erp_base_panel(env_id: str, _=Depends(require_admin)):
+    cfg = _base_ou_404(env_id)
+    agora = datetime.now(UTC)
+    with db_router.env_connect(cfg.env_slug) as conn:
+        envio = erp_estado_repo.obter_envio(conn, cfg.base)
+        fila = erp_estado_repo.contar(conn, cfg.base)
+        recusados = erp_estado_repo.rejeitados_desde(
+            conn, cfg.base, formatar_instante(agora - timedelta(days=30))
+        )
+        envios = erp_envio_lote_repo.recentes(conn, cfg.base, 20)
+        foto = erp_foto_repo.foto_do_dia(conn, cfg.base, dia_local(agora))
+    recusa = runner.checar_envio_manual(cfg, agora)
+    return {
+        "ultima_vigia_em": envio.ultima_vigia_em,
+        "fila_pendente": fila.get("pendente", 0),
+        "proxima_janela": formatar_instante(proxima_janela(agora)),
+        "ultimo_202_em": envio.ultimo_202_em,
+        "recusados_30d": recusados,
+        "bloqueio": envio.bloqueio,
+        "bloqueio_texto": (
+            consulta.texto_bloqueio(envio.bloqueio, envio.ultimo_http) if envio.bloqueio else None
+        ),
+        "envio_manual": {
+            "pode": recusa is None,
+            "motivo": recusa.detalhe if recusa else None,
+        },
+        "janelas": list(horas_das_janelas()),
+        "intervalo_vigia_min": int(runner.INTERVALO_VIGIA.total_seconds() // 60),
+        "envios": [{**asdict(e), **consulta.rotulo_lote(e)} for e in envios],
+        "foto_hoje": (
+            {"situacao": foto.situacao, "paginas": foto.total_paginas, "motivo": foto.motivo}
+            if foto
+            else None
+        ),
+    }
+
+
+@router.post("/{env_id}/erp-base/enviar-agora", status_code=202)
+def send_erp_base_now(env_id: str, user=Depends(require_admin)):
+    """Só registra o pedido; a thread do runner lê o Fire e fala com o Flow."""
+    cfg = _base_ou_404(env_id)
+    try:
+        envio_id = runner.pedir_envio_manual(cfg, user.email)
+    except runner.EnvioManualRecusado as exc:
+        return JSONResponse(status_code=409, content={"detail": exc.detalhe, "codigo": exc.codigo})
+    return {"envio_id": envio_id}
+
+
+@router.get("/{env_id}/erp-base/envio-manual/{envio_id}")
+def get_erp_base_manual_send(env_id: str, envio_id: str, _=Depends(require_admin)):
+    cfg = _base_ou_404(env_id)
+    resultado = runner.resultado_manual(envio_id)
+    if resultado is not None and (
+        resultado.pop("environment_id", None) != cfg.environment_id
+        or resultado.pop("base", None) != cfg.base
+    ):
+        resultado = None
+    if resultado is None:
+        raise HTTPException(
+            status_code=404,
+            detail="pedido não encontrado (o portal pode ter reiniciado); veja Últimos envios",
+        )
+    resultado["resumo"] = (
+        consulta.resumo_envio_manual(resultado) if resultado["situacao"] == "terminado" else None
+    )
+    return resultado
 
 
 _SEQ = re.compile(r"[0-9]{1,10}")

@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 from app.erp_eventos import lotes
 from app.erp_eventos.canonico import formatar_instante
 from app.erp_eventos.envio import ClienteErpEventos, Ritmo
-from app.persistence import erp_estado_repo, router
+from app.persistence import erp_envio_lote_repo, erp_estado_repo, router
 from app.persistence.erp_bases_repo import BaseErpConfig
 from app.utils.logger import logger
 
@@ -47,9 +47,13 @@ def drenar(
     relogio: Callable[[], float] = time.monotonic,
     prazo_s: float = PRAZO_DRENAGEM_S,
     ate: str | None = None,
+    origem: str = "janela",
+    quem: str | None = None,
+    envio_id: str | None = None,
 ) -> ResultadoDrenagem:
     """`ate`: só eventos observados até esse instante, sem lote vazio de sinal
-    de vida (usado antes da foto, fora das janelas)."""
+    de vida (usado antes da foto, fora das janelas). `origem`/`quem`/`envio_id`
+    ficam no registro de cada lote (`erp_envio_lote`)."""
     inicio = relogio()
     n_lotes = aceitos = duplicados = rejeitados = 0
     max_eventos = lotes.MAX_EVENTOS
@@ -87,7 +91,18 @@ def drenar(
         ids = [p.id for p in lote]
         ritmo.aguardar(cfg.tenant_id, "eventos")
         with router.env_connect(cfg.env_slug) as conn:
-            erp_estado_repo.marcar_enviados(conn, ids, lote_id, formatar_instante(agora_fn()))
+            enviado_em = formatar_instante(agora_fn())
+            erp_estado_repo.marcar_enviados(conn, ids, lote_id, enviado_em)
+            erp_envio_lote_repo.abrir(
+                conn,
+                lote_id=lote_id,
+                base=cfg.base,
+                origem=origem,
+                quem=quem,
+                envio_id=envio_id,
+                enviado_em=enviado_em,
+                eventos=len(ids),
+            )
         resp = cliente.enviar_lote(lote_id, [json.loads(p.payload_json) for p in lote])
         n_lotes += 1
         agora = agora_fn()
@@ -99,16 +114,33 @@ def drenar(
         )
         carimbo = formatar_instante(agora)
 
+        def fechar_lote(conn, *, ac=0, du=0, re=0):
+            erp_envio_lote_repo.fechar(
+                conn,
+                lote_id,
+                http=resp.status,
+                aceitos=ac,
+                duplicados=du,
+                rejeitados=re,
+                respondido_em=carimbo,
+            )
+
         if decisao.acao == "aplicar":
             resultados = lotes.ler_resultados(ids, resp.corpo or {})
+            situacoes = [s for s, _ in resultados.values()]
+            rej = situacoes.count("rejeitado")
             if resultados or not lote:
                 with router.env_connect(cfg.env_slug) as conn:
                     erp_estado_repo.aplicar_resultados(conn, resultados, carimbo)
                     erp_estado_repo.registrar_202(conn, cfg.base, carimbo)
-            situacoes = [s for s, _ in resultados.values()]
+                    fechar_lote(
+                        conn,
+                        ac=situacoes.count("aceito"),
+                        du=situacoes.count("duplicado"),
+                        re=rej,
+                    )
             aceitos += situacoes.count("aceito")
             duplicados += situacoes.count("duplicado")
-            rej = situacoes.count("rejeitado")
             rejeitados += rej
             if rej:
                 logger.warning(
@@ -133,6 +165,7 @@ def drenar(
                         erro=f"202 sem resultados casados: {str(resp.corpo)[:300]}",
                         ate=formatar_instante(agora + timedelta(seconds=espera)),
                     )
+                    fechar_lote(conn)
                 logger.error(f"erp_eventos: lote {lote_id} voltou 202 sem nenhum resultado casado")
                 return ResultadoDrenagem(n_lotes, aceitos, duplicados, rejeitados, "esperando")
             if not lote:
@@ -148,6 +181,8 @@ def drenar(
                 # O próximo lote é exatamente a 1ª metade: termina numa fronteira
                 # de unidade, então nenhuma unidade passa do teto (revisão I1).
                 max_eventos = len(metades[0])
+                with router.env_connect(cfg.env_slug) as conn:
+                    fechar_lote(conn)
                 continue
 
         if decisao.acao == "esperar":
@@ -156,6 +191,7 @@ def drenar(
                 erp_estado_repo.registrar_espera(
                     conn, cfg.base, carimbo, http=resp.status, erro=resp.erro or "", ate=ate
                 )
+                fechar_lote(conn)
             logger.warning(
                 f"erp_eventos: base '{cfg.base}' HTTP {resp.status} — nova tentativa em {decisao.espera_s:.0f}s"
             )
@@ -170,6 +206,7 @@ def drenar(
                 http=resp.status,
                 erro=resp.erro or "",
             )
+            fechar_lote(conn)
         logger.critical(
             f"erp_eventos: base '{cfg.base}' BLOQUEADA ({decisao.bloqueio}, HTTP {resp.status}) — "
             "envio parado até ação em /admin/ambientes"

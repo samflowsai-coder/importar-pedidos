@@ -15,6 +15,7 @@ from app.persistence import (
     db,
     environments_repo,
     erp_bases_repo,
+    erp_envio_lote_repo,
     erp_estado_repo,
     erp_foto_repo,
     router,
@@ -386,3 +387,34 @@ def test_foto_vencida_expira_mesmo_esperando_a_fila(cfg, monkeypatch):
             "SELECT situacao FROM erp_foto WHERE foto_id = ?", (foto_id,)
         ).fetchone()[0]
     assert situacao == "expirada"
+
+
+def test_enviar_foto_registra_origem_foto(cfg, monkeypatch):
+    with router.env_connect("mm") as conn:
+        erp_estado_repo.enfileirar(
+            conn, [_evento(1, "2026-10-10T01:00:00.000+00:00")], "2026-10-10T01:00:00.000+00:00"
+        )
+    foto.criar(cfg, corte=NOITE, pedidos=pedidos_foto(2))
+
+    class Flow:
+        def __init__(self, **kw):
+            pass
+
+        def enviar_lote(self, lote_id, eventos):
+            return RespostaHttp(
+                202, {"resultados": [{"id": e["id"], "situacao": "aceito"} for e in eventos]}, None
+            )
+
+        def enviar_pagina(self, pagina):
+            return RespostaHttp(202, {"completa": False}, None)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(runner, "ClienteErpEventos", Flow)
+    monkeypatch.setattr(runner, "_ritmo", Ritmo(0))
+    monkeypatch.setattr(runner, "_relogio", lambda: NOITE)
+    runner._enviar_foto(cfg)
+    with router.env_connect("mm") as conn:
+        regs = erp_envio_lote_repo.recentes(conn, "mm")
+    assert [(r.origem, r.eventos, r.aceitos) for r in regs] == [("foto", 1, 1)]

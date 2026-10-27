@@ -576,6 +576,7 @@
         <span>Enviar os pedidos desta empresa ao Flow</span>
       </label>
       <div id="erp-situacao" class="hint" hidden></div>
+      <div class="hint"><a id="erp-link-envio" href="#" hidden>Ver envio por pedido</a></div>
       <div class="actions" style="margin-top:1rem">
         <button type="button" id="btn-save-erp" class="btn btn-primary">Salvar envio de pedidos</button>
         <button type="button" id="btn-desbloquear-erp" class="btn btn-secondary" hidden>Retomar envio</button>
@@ -853,21 +854,18 @@
     const ev = (n) => erpFs.querySelector('[name="' + n + '"]');
     const erpStatus = document.getElementById('erp-status');
     const erpDesbloquear = document.getElementById('btn-desbloquear-erp');
-    const BLOQUEIOS = {
-      credencial: 'o Flow recusou a credencial (401). Salve uma credencial nova.',
-      lote_invalido: 'o Flow recusou um lote inteiro (400). Corrija a causa e retome.',
-      unidade_grande: 'um pedido tem mais itens do que cabe num lote. Fale com o suporte.',
-      lote_grande_demais: 'um lote passou do tamanho máximo. Fale com o suporte.',
-    };
 
     function erpMostrarSituacao(view) {
       const box = document.getElementById('erp-situacao');
       const env = view.envio;
+      const link = document.getElementById('erp-link-envio');
+      link.hidden = !view.config;
+      if (view.config) link.href = '/admin/envio-flow?env=' + encodeURIComponent(envId);
       if (!view.config || !env) { box.hidden = true; erpDesbloquear.hidden = true; return; }
       const fila = view.fila || {};
       const linhas = [];
       if (env.bloqueio) {
-        linhas.push('<strong>Envio parado:</strong> ' + (BLOQUEIOS[env.bloqueio] || ('HTTP ' + env.ultimo_http + '.')));
+        linhas.push('<strong>Envio parado:</strong> ' + escAttr(env.bloqueio_texto || ('HTTP ' + env.ultimo_http + '.')));
       }
       linhas.push('Última leitura do ERP: ' + (env.ultima_vigia_em ? new Date(env.ultima_vigia_em).toLocaleString('pt-BR') : 'ainda não leu'));
       linhas.push('Último lote aceito pelo Flow: ' + (env.ultimo_202_em ? new Date(env.ultimo_202_em).toLocaleString('pt-BR') : 'nenhum'));
@@ -876,7 +874,7 @@
         const f = view.foto_hoje;
         linhas.push(f.situacao === 'nao_criada'
           ? '<strong>Foto de hoje não criada:</strong> há pedido fora do contrato no ERP (veja o log do Portal).'
-          : 'Foto de hoje: ' + f.situacao + ' (' + f.paginas + ' página(s))');
+          : 'Foto de hoje: ' + escAttr(f.situacao) + ' (' + escAttr(f.paginas) + ' página(s))');
       }
       box.innerHTML = linhas.join('<br>');
       box.hidden = false;

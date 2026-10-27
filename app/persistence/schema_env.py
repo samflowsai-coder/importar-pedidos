@@ -289,6 +289,23 @@ CREATE TABLE IF NOT EXISTS erp_eventos_saida (
     criado_em      TEXT NOT NULL
 );
 
+-- Registro de lotes enviados ao Flow (origem, quem, contagens); vazio também conta.
+CREATE TABLE IF NOT EXISTS erp_envio_lote (
+    lote_id      TEXT PRIMARY KEY,
+    base         TEXT NOT NULL,
+    origem       TEXT NOT NULL,          -- 'janela' | 'foto' | 'manual'
+    quem         TEXT,                   -- e-mail do admin quando manual
+    envio_id     TEXT,                   -- agrupa os lotes de um "Enviar agora"
+    enviado_em   TEXT NOT NULL,
+    eventos      INTEGER NOT NULL,
+    http         INTEGER,
+    aceitos      INTEGER NOT NULL DEFAULT 0,
+    duplicados   INTEGER NOT NULL DEFAULT 0,
+    rejeitados   INTEGER NOT NULL DEFAULT 0,
+    respondido_em TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_erp_envio_lote_base_em ON erp_envio_lote (base, enviado_em);
+
 -- Saúde do envio por base: espera, bloqueio, sinal de vida.
 -- bloqueio: NULL | 'credencial' | 'lote_invalido' | 'unidade_grande' | 'http_<status>'.
 CREATE TABLE IF NOT EXISTS erp_envio_estado (

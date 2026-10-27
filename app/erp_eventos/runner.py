@@ -17,12 +17,13 @@ from __future__ import annotations
 import os
 import threading
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from app.erp import depara_cliente
 from app.erp.connection import FirebirdConnection
-from app.erp_eventos import drenagem, foto, produtor, vigia, vinculo
+from app.erp_eventos import consulta, drenagem, foto, produtor, vigia, vinculo
 from app.erp_eventos.canonico import formatar_instante
 from app.erp_eventos.envio import ClienteErpEventos, Ritmo
 from app.erp_eventos.leitura import LeitorFirebird
@@ -31,13 +32,14 @@ from app.persistence import context as env_context
 from app.persistence import (
     environments_repo,
     erp_bases_repo,
+    erp_envio_lote_repo,
     erp_estado_repo,
     erp_foto_repo,
     outbox_repo,
     router,
 )
 from app.persistence.erp_bases_repo import BaseErpConfig
-from app.utils.janelas_envio import inicio_da_janela, janela_aberta
+from app.utils.janelas_envio import FUSO, inicio_da_janela, janela_aberta
 from app.utils.logger import logger
 
 TICK_S = 30.0
@@ -52,6 +54,17 @@ _LOCKS: dict[tuple[str, str], threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
 
 
+# Envio manual ("Enviar agora"): o request só registra o pedido; a thread atende.
+INTERVALO_MANUAL = timedelta(seconds=60)
+VALIDADE_RESULTADO = timedelta(hours=1)
+PEDIDO_MANUAL_TTL = timedelta(minutes=5)  # = POLL_MAX_MS da tela: depois disso ninguém espera mais
+_MANUAL_GUARD = threading.Lock()
+_PEDIDO_MANUAL: dict[tuple[str, str], str] = {}  # base → envio_id aguardando a thread
+_EM_ANDAMENTO: dict[tuple[str, str], str] = {}  # base → envio_id que a thread está atendendo
+_ATENDIDO_EM: dict[tuple[str, str], datetime] = {}  # base → fim do último atendimento
+_RESULTADOS: dict[str, dict] = {}
+
+
 def habilitado() -> bool:
     return os.environ.get(_ENV_VAR, "1").strip() != "0"
 
@@ -59,6 +72,207 @@ def habilitado() -> bool:
 def _lock(cfg: BaseErpConfig) -> threading.Lock:
     with _LOCKS_GUARD:
         return _LOCKS.setdefault((cfg.environment_id, cfg.base), threading.Lock())
+
+
+class EnvioManualRecusado(Exception):  # noqa: N818 - nome fixado pelo plano
+    """`codigo`: vigia_desligada | desligada | sem_credencial | bloqueada | recuo |
+    em_andamento | intervalo. `detalhe` é o texto da tela."""
+
+    def __init__(self, codigo: str, detalhe: str):
+        super().__init__(detalhe)
+        self.codigo = codigo
+        self.detalhe = detalhe
+
+
+def _vencido(envio_id: str, agora: datetime) -> bool:
+    r = _RESULTADOS.get(envio_id)
+    return (
+        bool(r)
+        and r["situacao"] == "pendente"
+        and r["pedido_em"] < formatar_instante(agora - PEDIDO_MANUAL_TTL)
+    )
+
+
+def _expirar_pedido(chave: tuple[str, str], agora: datetime) -> None:
+    """Fecha como `expirado` um pedido que ninguém atendeu a tempo. Segura `_MANUAL_GUARD`."""
+    envio_id = _PEDIDO_MANUAL.pop(chave, None)
+    if envio_id is not None and envio_id in _RESULTADOS:
+        _RESULTADOS[envio_id].update(
+            situacao="terminado", parou_por="expirado", terminado_em=formatar_instante(agora)
+        )
+
+
+def _checar_manual(cfg: BaseErpConfig, agora: datetime) -> EnvioManualRecusado | None:
+    """Corpo de `checar_envio_manual`; o chamador segura `_MANUAL_GUARD`."""
+    if not habilitado():
+        return EnvioManualRecusado(
+            "vigia_desligada", "O envio de pedidos ao Flow está desligado neste portal."
+        )
+    motivo = erp_bases_repo.base_atendida(cfg)
+    if motivo == "desligada":
+        return EnvioManualRecusado("desligada", "Envio desligado nesta empresa.")
+    if motivo == "sem_credencial":
+        return EnvioManualRecusado(
+            "sem_credencial",
+            "Base ligada sem credencial: salve a credencial na edição do ambiente.",
+        )
+    with router.env_connect(cfg.env_slug) as conn:
+        envio = erp_estado_repo.obter_envio(conn, cfg.base)
+    if envio.bloqueio:
+        return EnvioManualRecusado(
+            "bloqueada",
+            f"Envio parado: {consulta.texto_bloqueio(envio.bloqueio, envio.ultimo_http)}",
+        )
+    if envio.proxima_tentativa_em and envio.proxima_tentativa_em > formatar_instante(agora):
+        hora = datetime.fromisoformat(envio.proxima_tentativa_em).astimezone(FUSO)
+        return EnvioManualRecusado(
+            "recuo", f"O Flow pediu para esperar: nova tentativa às {hora:%H:%M}."
+        )
+    chave = (cfg.environment_id, cfg.base)
+    pendente = _PEDIDO_MANUAL.get(chave)
+    if pendente is not None and _vencido(pendente, agora):
+        _expirar_pedido(chave, agora)
+    if chave in _PEDIDO_MANUAL or chave in _EM_ANDAMENTO:
+        return EnvioManualRecusado(
+            "em_andamento", "Já tem um envio manual em andamento para esta empresa."
+        )
+    atendido = _ATENDIDO_EM.get(chave)
+    if atendido is not None and agora - atendido < INTERVALO_MANUAL:
+        return EnvioManualRecusado("intervalo", "Aguarde um minuto entre envios manuais.")
+    return None
+
+
+def checar_envio_manual(cfg: BaseErpConfig, agora: datetime) -> EnvioManualRecusado | None:
+    """Mesmas checagens de `pedir_envio_manual`, sem gravar nada (usada pela tela)."""
+    with _MANUAL_GUARD:
+        return _checar_manual(cfg, agora)
+
+
+def pedir_envio_manual(cfg: BaseErpConfig, quem: str, *, agora: datetime | None = None) -> str:
+    """Registra o pedido; a thread o atende no próximo tick. Não lê o Fire nem
+    fala com o Flow. Levanta `EnvioManualRecusado`."""
+    agora = agora or _relogio()
+    chave = (cfg.environment_id, cfg.base)
+    with _MANUAL_GUARD:
+        recusa = _checar_manual(cfg, agora)
+        if recusa is not None:
+            raise recusa
+        envio_id = str(uuid.uuid4())
+        _PEDIDO_MANUAL[chave] = envio_id
+        _RESULTADOS[envio_id] = {
+            "envio_id": envio_id,
+            "environment_id": cfg.environment_id,
+            "base": cfg.base,
+            "quem": quem,
+            "situacao": "pendente",
+            "pedido_em": formatar_instante(agora),
+            "iniciado_em": None,
+            "terminado_em": None,
+            "vigia": None,
+            "lotes": 0,
+            "aceitos": 0,
+            "duplicados": 0,
+            "rejeitados": 0,
+            "parou_por": None,
+        }
+    return envio_id
+
+
+def resultado_manual(envio_id: str) -> dict | None:
+    """Estado do pedido; `None` se desconhecido ou terminado há mais de 1 h."""
+    agora = _relogio()
+    limite = formatar_instante(agora - VALIDADE_RESULTADO)
+    with _MANUAL_GUARD:
+        for chave, pendente in list(_PEDIDO_MANUAL.items()):
+            if _vencido(pendente, agora):
+                _expirar_pedido(chave, agora)
+        for k in [
+            k for k, r in _RESULTADOS.items() if r["terminado_em"] and r["terminado_em"] < limite
+        ]:
+            del _RESULTADOS[k]
+        r = _RESULTADOS.get(envio_id)
+        return dict(r) if r else None
+
+
+def _retirar_pedido_manual(cfg: BaseErpConfig, agora: datetime) -> tuple[str, str] | None:
+    chave = (cfg.environment_id, cfg.base)
+    with _MANUAL_GUARD:
+        envio_id = _PEDIDO_MANUAL.get(chave)
+        if envio_id is None:
+            return None
+        if _vencido(envio_id, agora):
+            _expirar_pedido(chave, agora)
+            return None
+        del _PEDIDO_MANUAL[chave]
+        _EM_ANDAMENTO[chave] = envio_id
+        r = _RESULTADOS[envio_id]
+        r["situacao"] = "em_andamento"
+        r["iniciado_em"] = formatar_instante(agora)
+        return envio_id, r["quem"]
+
+
+def _drenar_manual(cfg: BaseErpConfig, envio_id: str, quem: str):
+    cliente = ClienteErpEventos(
+        destino_url=cfg.destino_url, tenant_id=cfg.tenant_id, token=cfg.token or ""
+    )
+    try:
+        return drenagem.drenar(
+            cfg, cliente=cliente, ritmo=_ritmo, origem="manual", quem=quem, envio_id=envio_id
+        )
+    finally:
+        cliente.close()
+
+
+def _atender_manual(
+    cfg: BaseErpConfig, envio_id: str, quem: str, agora: datetime, vigiar_fn
+) -> bool:
+    """drenar (se há fila) → vigia forçada → drenar. Devolve se o ERP segue liberado."""
+    chave = (cfg.environment_id, cfg.base)
+    falhou_em = _FALHA_ERP.get(chave)
+    erp_liberado = falhou_em is None or agora - falhou_em >= PAUSA_APOS_FALHA
+    parcial = {"vigia": None, "lotes": 0, "aceitos": 0, "duplicados": 0, "rejeitados": 0}
+    parou_por = None
+
+    def somar(res) -> None:
+        nonlocal parou_por
+        parcial["lotes"] += res.lotes
+        parcial["aceitos"] += res.aceitos
+        parcial["duplicados"] += res.duplicados
+        parcial["rejeitados"] += res.rejeitados
+        parou_por = res.parou_por or parou_por
+
+    try:
+        with router.env_connect(cfg.env_slug) as conn:
+            ha_fila = bool(erp_estado_repo.pendentes(conn, cfg.base, limite=1))
+        if ha_fila:  # manda o que já existe antes de ler o ERP (fdb sem timeout)
+            somar(_drenar_manual(cfg, envio_id, quem))
+        if erp_liberado:
+            if _etapa(cfg, "vigia manual", vigiar_fn):
+                _FALHA_ERP.pop(chave, None)
+                parcial["vigia"] = "ok"
+            else:
+                _FALHA_ERP[chave] = agora
+                erp_liberado = False
+                parcial["vigia"] = "falhou"
+        else:
+            parcial["vigia"] = "pulada"
+        somar(_drenar_manual(cfg, envio_id, quem))
+    except Exception as exc:  # noqa: BLE001 — o pedido sempre termina
+        logger.error(f"erp_eventos: envio manual {envio_id} da base '{cfg.base}' falhou: {exc!r}")
+        parou_por = "erro"
+    finally:
+        fim = _relogio()
+        with _MANUAL_GUARD:
+            _RESULTADOS[envio_id].update(
+                parcial,
+                parou_por=parou_por,
+                situacao="terminado",
+                terminado_em=formatar_instante(fim),
+            )
+            _EM_ANDAMENTO.pop(chave, None)
+            _ATENDIDO_EM[chave] = fim
+    logger.info(f"erp_eventos: envio manual {envio_id} ({quem}) base '{cfg.base}': {parcial}")
+    return erp_liberado
 
 
 def _resolver_clientes(cfg: BaseErpConfig):
@@ -153,7 +367,16 @@ def processar_base(cfg: BaseErpConfig, *, agora: datetime | None = None) -> None
         chave = (cfg.environment_id, cfg.base)
         falhou_em = _FALHA_ERP.get(chave)
         erp_liberado = falhou_em is None or agora - falhou_em >= PAUSA_APOS_FALHA
-        if vigia_devida and erp_liberado:
+        # Pedido manual: a vigia forçada dele toma o lugar da vigia normal deste tick.
+        manual = _retirar_pedido_manual(cfg, agora)
+        if manual is not None:
+            erp_liberado = _atender_manual(
+                cfg,
+                *manual,
+                agora,
+                lambda: _vigiar(cfg, fb_cfg, agora, resolver_clientes, resolver_produtores),
+            )
+        elif vigia_devida and erp_liberado:
             if _etapa(
                 cfg,
                 "vigia",
@@ -203,7 +426,7 @@ def _enviar_foto(cfg: BaseErpConfig) -> None:
     try:
         if devendo:
             # Só o que é anterior ao corte: o resto espera a janela.
-            drenagem.drenar(cfg, cliente=cliente, ritmo=_ritmo, ate=f.corte_em)
+            drenagem.drenar(cfg, cliente=cliente, ritmo=_ritmo, ate=f.corte_em, origem="foto")
             with router.env_connect(cfg.env_slug) as conn:
                 devendo = erp_estado_repo.pendentes_ate(conn, cfg.base, f.corte_em)
             if devendo:
@@ -291,7 +514,9 @@ def _retencao_devida(cfg: BaseErpConfig, agora: datetime) -> bool:
 
 def _reter(cfg: BaseErpConfig, agora: datetime) -> None:
     with router.env_connect(cfg.env_slug) as conn:
-        n = erp_estado_repo.apagar_entregues_antigos(conn, formatar_instante(agora - RETENCAO_FILA))
+        corte = formatar_instante(agora - RETENCAO_FILA)
+        n = erp_estado_repo.apagar_entregues_antigos(conn, corte)
+        erp_envio_lote_repo.apagar_antigos(conn, corte)
     _ULTIMA_RETENCAO[(cfg.environment_id, cfg.base)] = foto.dia_local(agora)
     if n:
         logger.info(f"erp_eventos: retenção apagou {n} evento(s) entregue(s) da base '{cfg.base}'")
