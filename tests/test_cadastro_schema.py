@@ -464,3 +464,10 @@ def test_campo_listado_que_nao_limpa_com_null_e_contrato_invalido(campo):
 def test_ean_e_codigo_nfe_listados_com_null_passam(campo):
     item, codigo, _ = validar_item(_atualizar(camposAlterados=[campo], **{campo: None}))
     assert codigo is None and item.camposAlterados == [campo]
+
+
+def test_produto_novo_sem_codigo_do_apontae_passa():
+    # A exigência do código é a flag por empresa do Flow (exigeCodigoMes, contrato P4a), não do Portal.
+    par = dict(BOM, tipo="simples", unidadeErp="PAR", tipoItemSped=3, componentes=None, codigoNfe=None)
+    assert validar_item(par)[1] is None
+    assert validar_item(dict(BOM, codigoNfe=None, codigoMes=None))[1] is None

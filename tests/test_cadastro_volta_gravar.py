@@ -26,7 +26,7 @@ PAR = {
     "acao": "criar", "erpProdutoId": None, "tipo": "simples", "nome": "MEIA SOQUETE",
     "unidadeErp": "PAR", "ean": None, "ncm": "61159500", "tipoItemSped": 3,
     "grupoErp": {"codigo": "8"}, "codigoNfe": None, "cor": None, "componentes": None,
-    "marcaErp": {"codigo": 17}, "codigoMes": None, "aprovadoEm": "2026-10-17T13:00:00.123Z",
+    "marcaErp": {"codigo": 17}, "codigoMes": "81991", "aprovadoEm": "2026-10-17T13:00:00.123Z",
 }
 JARGAO = ("Fire", "SEQ", "erpProdutoId", "componentes[")
 
@@ -304,13 +304,15 @@ def _no_catalogo(env_conn, seq):
 
 def _outro(n, **kw):
     """Outro produto do Flow (cadastroId e produtoId próprios)."""
+    # Como o Flow (fila.ts): só o criar de par leva codigoMes; kit e pack vão sem.
+    sem_codigo = {"codigoMes": None} if kw.get("tipo") in ("kit", "pack") else {}
     return {**PAR, "cadastroId": f"5555555{n}-5555-4555-8555-555555555555",
-            "produtoId": f"6666666{n}-6666-4666-8666-666666666666", **kw}
+            "produtoId": f"6666666{n}-6666-4666-8666-666666666666", **sem_codigo, **kw}
 
 
 def _atualizar(seq, **kw):
     return {**PAR, "cadastroId": "44444444-4444-4444-8444-444444444444", "versao": 2,
-            "acao": "atualizar", "erpProdutoId": seq, "marcaErp": None, **kw}
+            "acao": "atualizar", "erpProdutoId": seq, "marcaErp": None, "codigoMes": None, **kw}
 
 
 # --- brief ---------------------------------------------------------------
@@ -332,7 +334,8 @@ def test_criar_grava_e_confirma(modo, env_slug, env_conn):
     assert _reserva(flow)["acoes"] == ("criar",) and _reserva(flow)["limite"] == cv.LIMITE_GRAVACAO
     assert 3171 in fire.produtos
     assert fire.produtos[3171]["MARCA"] == "Kolosh" and fire.produtos[3171]["GRUPO"] == 8
-    assert "DESCRICAO2" not in fire.produtos[3171]
+    # DESCRICAO2 é a descrição interna da tela: recebe a descrição, nunca a cor (17/10 e 27/10/2026).
+    assert fire.produtos[3171]["DESCRICAO2"] == fire.produtos[3171]["DESCRICAO"]
     cid, corpo = flow.posts[0]
     assert cid == PAR["cadastroId"]
     assert corpo["erpProdutoId"] == "3171" and corpo["gravadoEm"].endswith("Z")
@@ -825,7 +828,7 @@ def test_item_invalido_responde_definitivo(modo, env_slug, env_conn):
 
 def test_componente_invalido_vai_com_frase_de_contrato(modo, env_slug, env_conn):
     modo("criar")
-    kit = {**PAR, "tipo": "kit", "componentes": []}
+    kit = {**PAR, "tipo": "kit", "componentes": [], "codigoMes": None}
     flow = Flow([kit])
     _rodar(env_slug, flow, FireGravavel(), env_conn)
     erro = flow.posts[0][1]["erro"]

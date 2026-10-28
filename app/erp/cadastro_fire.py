@@ -23,19 +23,24 @@ from typing import Literal
 from loguru import logger
 
 from app.erp.exceptions import FirebirdConnectionError
+from app.erp.mapper import texto_ou_nulo
 
 COLUNAS_PERMITIDAS = frozenset(
     {"DESCRICAO", "UNIDADE", "CODIGO_EAN13", "CLASSIF_FISCAL", "CODITEMSPED",
      "CODPARANFE", "CODPROD_ALTERN", "GRUPO", "MARCA"}
 )
 # Par 3566 e kit 3382 da tela contra par 3567 e kit 3568 do Portal (cópia de abril);
-# perfil da parte A: 30/30 kits e 11/11 pares nas duas primeiras. CODSUBGRUPO=1 não
-# entrou: as amostras da tela vieram nulas.
+# perfil da parte A: 30/30 kits e 11/11 pares nas duas primeiras. CODSUBGRUPO=1 entrou
+# depois (19/10/2026, MM de produção, só leitura): dos 320 produtos do grupo 8 com
+# SEQ>3566, 253 têm subgrupo 1 (124/136 pares, 129/184 kits); os outros 4 em 100%
+# (CODORIG_MERC 0 em 318/320). Sem ele o produto sai de LIST_PRODUTOS_CATALOGO_MEIAS.
+# O código 1 (MEIAS) é o da MM: em outro ambiente, conferir GRUPO_PRODUTOS_SUB dele.
 PADROES_P0: dict[str, object] = {
     "EST_MINIMO_GERENCIA": "Nao",
     "PRODUZIDO": "Nao",
     "CODORIG_MERC": 0,
     "PRE_CADASTRO": "Nao",
+    "CODSUBGRUPO": 1,
 }
 TENTATIVAS_SEQ = 3
 _lock = threading.Lock()
@@ -74,7 +79,7 @@ _GDS = {
 _SQLCODE = {-803: "colisao", -913: "lock", -530: "recusa"}
 
 # Colunas que o gravador monta sozinho ou que não são do Flow: nunca em PADROES_P0.
-_RESERVADAS = frozenset({"SEQ", "BLOQUEADO", "DATA_CAD"})
+_RESERVADAS = frozenset({"SEQ", "BLOQUEADO", "DATA_CAD", "DESCRICAO2"})
 
 
 @dataclass(frozen=True)
@@ -95,6 +100,28 @@ def _checa_colunas(campos: dict) -> None:
     fora = set(campos) - COLUNAS_PERMITIDAS
     if fora:
         raise ValueError(f"coluna fora da lista do gravador: {sorted(fora)}")
+
+
+def _sem_texto_vazio(campos: dict) -> dict:
+    return {k: texto_ou_nulo(v) for k, v in campos.items()}
+
+
+CODPARANFE_MAX = 20  # PRODUTOS.CODPARANFE é varchar(20); CODPROD_ALTERN é varchar(30) (MM .7, 27/10/2026)
+
+
+def _como_a_tela(campos: dict) -> dict:
+    """Colunas que a tela do Fire preenche no cadastro novo e o Flow não manda
+    (pares 3999-4022 abertos e salvos na tela, 27/10/2026): descrição interna =
+    descrição; código do produto na nota = o do Flow, senão o código alternativo
+    se couber na coluna. Sem nenhum dos dois fica NULL, como a tela faz no kit
+    (3382): o kit nunca leva código do Apontaê e o SEQ não é inventado (colidiria
+    com os 445 códigos numéricos curtos que já existem). Exigir o código no par
+    é da flag por empresa do Flow (exigeCodigoMes), não do Portal."""
+    alternativo = campos.get("CODPROD_ALTERN")
+    codigo_nfe = campos.get("CODPARANFE") or (
+        alternativo if alternativo and len(alternativo) <= CODPARANFE_MAX else None
+    )
+    return {"DESCRICAO2": campos.get("DESCRICAO"), "CODPARANFE": codigo_nfe}
 
 
 def _valida_padroes(padroes: dict) -> None:
@@ -168,7 +195,8 @@ def _insere_composicao(cur, pai: int, componentes: list[tuple[int, float]]) -> N
 
 def criar(conn, *, campos, componentes, hoje: date, ao_reservar: Callable[[int], None]) -> Gravacao:
     _checa_colunas(campos)
-    linha = {**PADROES_P0, **campos}
+    campos = _sem_texto_vazio(campos)
+    da_tela = _como_a_tela(campos)
     with _lock:
         for _ in range(TENTATIVAS_SEQ):
             cur = conn.cursor()
@@ -180,6 +208,7 @@ def criar(conn, *, campos, componentes, hoje: date, ao_reservar: Callable[[int],
                 except Exception as exc:
                     raise ReservaFalhouError("reserva do SEQ no livro falhou") from exc
                 insercao = True
+                linha = {**PADROES_P0, **campos, **da_tela}
                 colunas = ["SEQ", "BLOQUEADO", "DATA_CAD", *linha]
                 valores = (seq, "Nao", hoje, *linha.values())
                 cur.execute(
@@ -224,6 +253,7 @@ def _atualizar_uma_vez(conn, seq: int, campos, componentes, estado: dict) -> Gra
 
 def atualizar(conn, *, seq: int, campos, componentes) -> Gravacao:
     _checa_colunas(campos)
+    campos = _sem_texto_vazio(campos)
     if componentes is None:
         return _atualizar_uma_vez(conn, seq, campos, componentes, {})
     # Composição usa MAX(CODIGO)+1: mesmo lock e nova tentativa do criar.

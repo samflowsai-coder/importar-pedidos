@@ -63,7 +63,7 @@ class _Fire:
         return [], 1
 
 
-CAMPOS = {"DESCRICAO": "MEIA SOQUETE", "UNIDADE": "PAR", "GRUPO": 8, "MARCA": "Kolosh"}
+CAMPOS = {"DESCRICAO": "MEIA SOQUETE", "UNIDADE": "PAR", "GRUPO": 8, "MARCA": "Kolosh", "CODPROD_ALTERN": "81991"}
 
 
 def test_criar_reserva_antes_do_insert_e_commita():
@@ -297,7 +297,15 @@ def test_padroes_p0_sao_os_que_a_tela_grava():
     # P0 parte B (18/10): diff tela x Portal numa cópia da MM, igual ao perfil da parte A.
     assert cf.PADROES_P0 == {
         "EST_MINIMO_GERENCIA": "Nao", "PRODUZIDO": "Nao", "CODORIG_MERC": 0, "PRE_CADASTRO": "Nao",
+        "CODSUBGRUPO": 1,
     }
+
+
+def test_atualizar_nao_inclui_padroes_p0_no_set():
+    fire = _Fire()
+    cf.atualizar(fire, seq=3990, campos={"UNIDADE": "KIT"}, componentes=None)
+    sql = [s for s in fire.sqls if s[0].startswith("UPDATE PRODUTOS SET")][0][0]
+    assert not any(col in sql for col in cf.PADROES_P0)
 
 
 def test_criar_grava_os_padroes_p0_junto_dos_campos_do_flow():
@@ -415,3 +423,60 @@ def test_candidatos_por_data_filtra_so_a_janela_parametrizada():
                        "CODIGO_EAN13": None, "CLASSIF_FISCAL": "61159500",
                        "DATA_CAD": date(2026, 10, 17)}]
     assert fire.commits == 0
+
+
+def _linha_inserida(fire):
+    sql, valores = [s for s in fire.sqls if s[0].startswith("INSERT INTO PRODUTOS ")][0]
+    colunas = sql[sql.index("(") + 1:sql.index(")")].split(", ")
+    return dict(zip(colunas, valores, strict=True))
+
+
+def test_criar_preenche_descricao_interna_e_codigo_da_nota_como_a_tela():
+    # Tela do Fire (pares 3999-4022, 27/10): DESCRICAO2 = DESCRICAO e CODPARANFE = CODPROD_ALTERN.
+    fire = _Fire()
+    cf.criar(fire, campos={**CAMPOS, "CODPROD_ALTERN": "8362"}, componentes=None,
+             hoje=date(2026, 10, 27), ao_reservar=lambda s: None)
+    linha = _linha_inserida(fire)
+    assert linha["DESCRICAO2"] == "MEIA SOQUETE"
+    assert linha["CODPARANFE"] == "8362"
+    assert linha["CODSUBGRUPO"] == 1
+
+
+def test_criar_nao_sobrescreve_codigo_da_nota_que_o_flow_mandou():
+    fire = _Fire()
+    cf.criar(fire, campos={**CAMPOS, "CODPROD_ALTERN": "8362", "CODPARANFE": "KG01ST"}, componentes=None,
+             hoje=date(2026, 10, 27), ao_reservar=lambda s: None)
+    assert _linha_inserida(fire)["CODPARANFE"] == "KG01ST"
+
+
+@pytest.mark.parametrize("alternativo", [None, "X" * 25])
+def test_criar_sem_codigo_que_caiba_deixa_o_codigo_da_nota_nulo_como_a_tela_no_kit(alternativo):
+    # Kit nunca leva código do Apontaê; CODPARANFE é varchar(20) e o SEQ não é inventado.
+    fire = _Fire()
+    cf.criar(fire, campos={**CAMPOS, "CODPROD_ALTERN": alternativo}, componentes=[(3170, 3.0)],
+             hoje=date(2026, 10, 27), ao_reservar=lambda s: None)
+    linha = _linha_inserida(fire)
+    assert linha["CODPARANFE"] is None and linha["DESCRICAO2"] == "MEIA SOQUETE"
+
+
+def test_criar_com_alternativo_longo_usa_o_codigo_do_flow():
+    fire = _Fire()
+    cf.criar(fire, campos={**CAMPOS, "CODPROD_ALTERN": "X" * 25, "CODPARANFE": "KG01ST"}, componentes=None,
+             hoje=date(2026, 10, 27), ao_reservar=lambda s: None)
+    assert _linha_inserida(fire)["CODPARANFE"] == "KG01ST"
+
+
+def test_criar_nunca_grava_texto_vazio():
+    fire = _Fire()
+    cf.criar(fire, campos={**CAMPOS, "CODIGO_EAN13": "  ", "CODPROD_ALTERN": "", "CODPARANFE": "8362"},
+             componentes=None,
+             hoje=date(2026, 10, 27), ao_reservar=lambda s: None)
+    linha = _linha_inserida(fire)
+    assert "" not in [v.strip() for v in linha.values() if isinstance(v, str)]
+    assert linha["CODIGO_EAN13"] is None and linha["CODPROD_ALTERN"] is None
+
+
+def test_atualizar_texto_vazio_vira_nulo():
+    fire = _Fire()
+    cf.atualizar(fire, seq=3990, campos={"CODIGO_EAN13": ""}, componentes=None)
+    assert fire.sqls[0] == ("UPDATE PRODUTOS SET CODIGO_EAN13 = ? WHERE SEQ = ?", (None, 3990))

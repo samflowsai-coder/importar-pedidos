@@ -202,3 +202,19 @@ def test_corpo_bate_com_o_insert_corpo_vendas_de_verdade():
     assert CORPO == cols[:15]
     # +1 = CFOP_PRINCIPAL, que o exporter anexa fora do mapper (nao entra em CORPO).
     assert queries.INSERT_CORPO_VENDAS.count("?") == len(CORPO) + 1
+
+
+def test_texto_vazio_vai_ao_fire_como_nulo():
+    """Onde a tela do Fire deixa sem valor ela grava NULL (MM .7, pedidos desde 06/2026:
+    OBS 17 nulos x 0 vazios; descrição do item 45 x 2). O Portal faz igual (27/10/2026)."""
+    from app.models.order import ERPRow
+
+    m = FireSistemasMapper()
+    cab = _campos(m.order_to_cabvendas(
+        _pedido(), header_pk=1, client_id=2, perfil=perfil_para(None),
+        valor_total=Decimal("10"), obs="  "))
+    assert cab["OBS"] is None
+    row = ERPRow(pedido="X", descricao="", quantidade=1.0, preco_unitario=1.0)
+    item = _item_campos(m.item_to_corpovendas(row, 1, 1, None, perfil=perfil_para(None), unid=" "))
+    assert item["DESCRICAO"] is None
+    assert item["UNID"] is None
