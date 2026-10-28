@@ -24,6 +24,7 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 ## Não publicado
 
 1) **Pedidos vão ao Flow assim que mudam.** O que for digitado ou alterado no Fire chega ao Flow na próxima leitura (até 15 minutos), e os pedidos importados no portal saem em segundos, em vez de esperar 8h, 11h, 14h ou 17h. A tela Envio ao Flow mostra o envio como automático.
+2) **Produto novo criado pelo portal no Fire sai como a tela do Fire grava.** A descrição interna sai igual à descrição, o subgrupo sai Meias e o código do produto na nota sai com o código do Flow ou, sem ele, com o do Apontaê; sem nenhum dos dois fica em branco, como a tela faz com kit. Campo de texto sem valor passa a ser gravado sem valor (nulo) em vez de texto vazio, no produto e no pedido.
 
 ## 20261026-2236
 
