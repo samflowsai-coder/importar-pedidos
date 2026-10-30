@@ -450,19 +450,15 @@ def _sem_mudanca(lote: _Lote, item: CadastroPendente) -> None:
 
 
 def _cod_produto_igual_ao_fiscal(item: CadastroPendente, campos: dict) -> None:
-    """"Cód do Produto" (CODPROD_ALTERN) = "Código Fiscal" (CODPARANFE) nos cadastros do
-    Flow (decisão do dono, 30/10/2026). `codigoMes` (par) é a ponte do Apontaê e vence;
-    sem ele, o fiscal vira o Cód do Produto (kit/pack). Limpar `codigoNfe` NÃO limpa o Cód
-    do Produto: sem ler o Fire não se sabe se ele era o fiscal ou a ponte do Apontaê."""
-    fiscal = item.codigoNfe
-    if item.acao == "inativar" or not fiscal or not vai_ao_erp(item, "codigoNfe"):
+    """"Cód do Produto" (CODPROD_ALTERN) = "Código Fiscal" (CODPARANFE) no `criar` de kit e
+    pack (decisão do dono, 30/10/2026). Só aí: par e produto antigo usam CODPROD_ALTERN como
+    ponte do Apontaê e chave de casamento de pedido. `codigoMes`, se vier, vence. `atualizar`
+    não mexe: o Flow manda `codigoMes` null (= não mexer) e `codigoNfe` pode mudar em
+    qualquer tipo, então não se sabe sem ler o Fire o que há em CODPROD_ALTERN."""
+    if item.tipo not in ("kit", "pack") or item.acao != "criar":
         return
-    if item.codigoMes:
-        if "CODPROD_ALTERN" in campos:
-            logger.warning(f"flowpcp.cadastro_volta cadastro={item.cadastroId} v{item.versao}: "
-                           "produto com codigoNfe e codigoMes: Cód do Produto segue o Apontaê")
-        return
-    campos["CODPROD_ALTERN"] = fiscal
+    if item.codigoNfe and not item.codigoMes:
+        campos["CODPROD_ALTERN"] = item.codigoNfe
 
 
 def _campos(item: CadastroPendente, marcas: dict) -> dict:
