@@ -1537,3 +1537,81 @@ def test_criar_que_virou_atualizar_com_lista_completa_igual_a_rev4(modo, env_slu
             assert flow.posts[0][1]["resultado"] == "gravado"
             escritas.append(fire.escritas)
     assert escritas[0] == escritas[1] and escritas[0]
+
+
+# --- Cód do Produto (CODPROD_ALTERN) igual ao Código Fiscal (CODPARANFE) --------
+
+
+def _campos(item, marcas=None):
+    from app.integrations.flowpcp import cadastro_gravacao as cg
+    from app.integrations.flowpcp.cadastro_schema import CadastroPendente
+
+    return cg._campos(CadastroPendente(**item), marcas or {17: "Kolosh"})
+
+
+KIT = {**PAR, "tipo": "kit", "unidadeErp": "KIT", "codigoMes": None,
+       "componentes": [{"erpProdutoId": "3170", "quantidade": 2}],
+       "codigoNfe": "16636821001_RIAC"}
+
+
+def test_kit_so_com_codigo_fiscal_grava_o_mesmo_valor_no_cod_do_produto(modo, env_slug, env_conn):
+    modo("criar")
+    fire = FireGravavel()
+    _rodar(env_slug, Flow([KIT]), fire, env_conn)
+    p = fire.produtos[3171]
+    assert p["CODPARANFE"] == "16636821001_RIAC" and p["CODPROD_ALTERN"] == "16636821001_RIAC"
+
+
+def test_par_com_codigo_mes_segue_o_apontae(modo, env_slug, env_conn):
+    modo("criar")
+    fire = FireGravavel()
+    _rodar(env_slug, Flow([PAR]), fire, env_conn)
+    assert fire.produtos[3171]["CODPROD_ALTERN"] == "81991"
+
+
+def test_com_os_dois_vence_o_codigo_mes_e_avisa_uma_vez(avisos):
+    campos = _campos({**PAR, "codigoNfe": "NFE-9"})
+    assert campos["CODPARANFE"] == "NFE-9" and campos["CODPROD_ALTERN"] == "81991"
+    assert sum("Cód do Produto segue o Apontaê" in a for a in avisos) == 1
+
+
+def test_sem_nenhum_dos_dois_nao_grava_cod_do_produto():
+    assert "CODPROD_ALTERN" not in _campos({**PAR, "codigoMes": None, "codigoNfe": None})
+
+
+def test_atualizar_codigo_fiscal_sem_codigo_mes_acompanha(modo, env_slug, env_conn):
+    _no_catalogo(env_conn, "3170")
+    modo("criar_e_atualizar")
+    fire = _fire_3170()
+    item = _atualizar("3170", codigoNfe="NFE-2", camposAlterados=["codigoNfe"])
+    _rodar(env_slug, Flow([item]), fire, env_conn)
+    assert _updates(fire) == [(
+        "UPDATE PRODUTOS SET CODPARANFE = ?, CODPROD_ALTERN = ? WHERE SEQ = ?",
+        ("NFE-2", "NFE-2", 3170))]
+
+
+def test_atualizar_sem_codigo_fiscal_na_lista_nao_toca_cod_do_produto():
+    c = _campos(_atualizar("3170", codigoNfe="NFE-2", camposAlterados=["nome"]))
+    assert "CODPROD_ALTERN" not in c and "CODPARANFE" not in c
+
+
+def test_atualizar_com_codigo_mes_nao_sobrescreve_a_ponte():
+    c = _campos(_atualizar("3170", codigoNfe="NFE-2", codigoMes="709374",
+                           camposAlterados=["codigoNfe"]))
+    assert c == {"CODPARANFE": "NFE-2"}
+
+
+def test_limpar_codigo_fiscal_nao_apaga_o_cod_do_produto():
+    # Sem ler o Fire não dá para saber se CODPROD_ALTERN era o fiscal ou a ponte do Apontaê.
+    c = _campos(_atualizar("3170", codigoNfe=None, camposAlterados=["codigoNfe"]))
+    assert c == {"CODPARANFE": None}
+
+
+def test_reentrega_grava_o_mesmo_valor(modo, env_slug, env_conn):
+    modo("criar_e_atualizar")
+    _no_catalogo(env_conn, "3170")
+    fire = _fire_3170()
+    item = _atualizar("3170", codigoNfe="NFE-2", camposAlterados=["codigoNfe"])
+    assert _campos(item) == _campos(item) == {"CODPARANFE": "NFE-2", "CODPROD_ALTERN": "NFE-2"}
+    _rodar(env_slug, Flow([item]), fire, env_conn)
+    assert fire.produtos[3170]["CODPROD_ALTERN"] == "NFE-2"

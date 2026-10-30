@@ -449,6 +449,22 @@ def _sem_mudanca(lote: _Lote, item: CadastroPendente) -> None:
 # --- gravação (ERP aberto) ---------------------------------------------------
 
 
+def _cod_produto_igual_ao_fiscal(item: CadastroPendente, campos: dict) -> None:
+    """"Cód do Produto" (CODPROD_ALTERN) = "Código Fiscal" (CODPARANFE) nos cadastros do
+    Flow (decisão do dono, 30/10/2026). `codigoMes` (par) é a ponte do Apontaê e vence;
+    sem ele, o fiscal vira o Cód do Produto (kit/pack). Limpar `codigoNfe` NÃO limpa o Cód
+    do Produto: sem ler o Fire não se sabe se ele era o fiscal ou a ponte do Apontaê."""
+    fiscal = item.codigoNfe
+    if item.acao == "inativar" or not fiscal or not vai_ao_erp(item, "codigoNfe"):
+        return
+    if item.codigoMes:
+        if "CODPROD_ALTERN" in campos:
+            logger.warning(f"flowpcp.cadastro_volta cadastro={item.cadastroId} v{item.versao}: "
+                           "produto com codigoNfe e codigoMes: Cód do Produto segue o Apontaê")
+        return
+    campos["CODPROD_ALTERN"] = fiscal
+
+
 def _campos(item: CadastroPendente, marcas: dict) -> dict:
     """Colunas do Fire. `criar`: só o que veio. `atualizar`: null = não mexer, salvo
     `ean`/`codigoNfe` (limpar). `marcaErp` null = não mexer em MARCA. `atualizar` com
@@ -464,6 +480,7 @@ def _campos(item: CadastroPendente, marcas: dict) -> dict:
             campos[coluna] = valor
         elif item.acao == "atualizar" and wire in LIMPA_COM_NULL:
             campos[coluna] = None
+    _cod_produto_igual_ao_fiscal(item, campos)
     if vai_ao_erp(item, "grupoErp"):
         campos["GRUPO"] = int(item.grupoErp.codigo)
     if item.marcaErp is not None and vai_ao_erp(item, "marcaErp"):
