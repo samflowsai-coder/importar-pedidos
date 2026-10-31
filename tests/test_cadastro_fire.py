@@ -178,11 +178,13 @@ def test_classificar_erro_conexao_pelo_tipo():
     assert cf.classificar_erro(FirebirdConnectionError("sem rede")) == "conexao"
 
 
-def test_nenhum_delete_em_produtos():
+def test_delete_em_produtos_so_dentro_de_excluir():
     import inspect
 
+    padrao = r'(?i)delete\s+from\s+"?produtos"?\b(?!_)'
     fonte = inspect.getsource(cf)
-    assert not re.search(r'(?i)delete\s+from\s+"?produtos"?\b(?!_)', fonte)
+    assert len(re.findall(padrao, fonte)) == 1  # um único DELETE em PRODUTOS no módulo
+    assert re.search(padrao, inspect.getsource(cf.excluir))  # e é o da ação `excluir`
     assert re.search(r"(?i)delete\s+from\s+produtos_kit", fonte)  # a regex enxerga o que deve
 
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -26,7 +27,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from app.erp import cadastro_fire
+from app.erp import cadastro_fire, produto_referencias
 from app.integrations.flowpcp import cadastro_recuperacao, capacidades
 from app.integrations.flowpcp import cadastro_volta as cv
 from app.integrations.flowpcp.cadastro_resultado import (
@@ -44,10 +45,11 @@ from app.integrations.flowpcp.cadastro_schema import (
     validar_item,
 )
 from app.observability import metrics
+from app.persistence import cadastro_exclusao_repo as backup_repo
 from app.persistence import cadastro_volta_repo as repo
 from app.utils.logger import logger
 
-_ACOES = ("criar", "atualizar", "inativar")
+_ACOES = ("criar", "atualizar", "inativar", "excluir")
 _TIPOS = ("simples", "kit", "pack", "material")
 _PENDENTES = ("gravado_sem_volta", "erro_a_enviar")
 # Já têm desfecho (ou uma pessoa decide): o item reentregue não é processado.
@@ -61,7 +63,8 @@ _FECHA = {
     Desfecho.ORFAO: "orfao",
     Desfecho.SUPERADO: "superado",
 }
-_GRAVADO = {"criar": "criado", "atualizar": "atualizado", "inativar": "inativado"}
+_GRAVADO = {"criar": "criado", "atualizar": "atualizado", "inativar": "inativado",
+            "excluir": "excluido"}
 _ESPERA_BUG = timedelta(minutes=60)
 _ESPERA_CREDENCIAL = timedelta(minutes=5)
 _ROTULO_SEGURO = re.compile(r"^[a-z_]{1,40}$")
@@ -88,6 +91,9 @@ class _Lote:
     resumo: dict = field(default_factory=dict)
     nomes: dict = field(default_factory=dict)
     marcas: dict = field(default_factory=dict)
+    # Colunas do ERP que podem guardar um SEQ de produto, lidas do catálogo uma vez por ciclo,
+    # só quando há `excluir` a gravar.
+    alvos_de_uso: list | None = None
     # Credencial recusada ou resultado incerto no ERP: nada mais neste ciclo.
     parar: bool = False
 
@@ -115,9 +121,10 @@ def _resposta(status_http: int | None, corpo: dict | None) -> str:
 def _orfao_ou_superado(lote: _Lote, cid: str, versao: int, corpo_resposta) -> tuple:
     """409 de um `gravado`: órfão só se o Portal CRIOU o produto (contrato §5). Decide
     pela `acao` que o livro guardou (o que o Portal fez de fato): em `atualizar`/`inativar`
-    o produto já existia no ERP e o 409 fecha como `superado`."""
+    o produto já existia no ERP e o 409 fecha como `superado`; em `excluir` não há produto
+    novo sem vínculo, então também."""
     linha = repo.buscar(lote.env_conn, cid, versao)
-    if (linha or {}).get("acao") not in ("atualizar", "inativar"):
+    if (linha or {}).get("acao") not in ("atualizar", "inativar", "excluir"):
         return Desfecho.ORFAO, None
     erro = corpo_resposta.get("error") if isinstance(corpo_resposta, dict) else None
     if erro == "conflito_codigo":
@@ -380,6 +387,8 @@ def _triar(lote: _Lote, bruto: object, vistos: set) -> CadastroPendente | None:
         return None
     if item.acao == "criar":
         return item if _livre_pela_9b(lote, item) else None
+    if item.acao == "excluir":
+        return _triar_excluir(lote, item)
     no_escopo = cv._no_escopo(lote.env_conn, item) or repo.seq_criado_pelo_portal(
         lote.env_conn, item.erpProdutoId
     )
@@ -389,6 +398,28 @@ def _triar(lote: _Lote, bruto: object, vistos: set) -> CadastroPendente | None:
         return None
     if item.acao == "atualizar" and item.camposAlterados == []:
         _sem_mudanca(lote, item)
+        return None
+    return item
+
+
+def _triar_excluir(lote: _Lote, item: CadastroPendente) -> CadastroPendente | None:
+    """Portão e origem do `excluir`, sem abrir o ERP. Só o produto que um `criar` do Flow
+    gravou no ERP é apagável; produto da fábrica é definitivo (nunca se apaga)."""
+    cid, versao = str(item.cadastroId), item.versao
+    if not cv.excluir_ligado(lote.slug):
+        lote.conta("pulados")
+        logger.warning(lote.log(cid, versao, f"excluir sem {cv.VAR_EXCLUIR}; não processado"))
+        return None
+    if lote.modo != "criar_e_atualizar":
+        # O Flow só entrega `excluir` quando o Portal pede (e o Portal só pede neste modo), mas
+        # a ação é destrutiva: a proteção não pode depender só do contrato do outro lado.
+        lote.conta("pulados")
+        logger.warning(lote.log(cid, versao, f"excluir fora do modo criar_e_atualizar "
+                                             f"({lote.modo}); não processado"))
+        return None
+    if repo.criar_que_gravou_seq(lote.env_conn, item.erpProdutoId, str(item.produtoId)) is None:
+        _responder_erro(lote, cid, versao, item, "definitivo", "produto_nao_criado_pelo_flow",
+                        "o livro não tem um criar deste produto com esse código")
         return None
     return item
 
@@ -422,7 +453,7 @@ def _campos(item: CadastroPendente, marcas: dict) -> dict:
     """Colunas do Fire. `criar`: só o que veio. `atualizar`: null = não mexer, salvo
     `ean`/`codigoNfe` (limpar). `marcaErp` null = não mexer em MARCA. `atualizar` com
     `camposAlterados` (rev. 5): só as colunas dos campos listados (`vai_ao_erp`)."""
-    if item.acao == "inativar":
+    if item.acao in ("inativar", "excluir"):
         return {}
     campos: dict = {}
     for wire, coluna in cv.COLUNAS.items():
@@ -441,7 +472,8 @@ def _campos(item: CadastroPendente, marcas: dict) -> dict:
 
 
 def _componentes(item: CadastroPendente) -> list[tuple[int, float]] | None:
-    if item.acao == "inativar" or item.componentes is None or not vai_ao_erp(item, "componentes"):
+    if item.acao in ("inativar", "excluir") or item.componentes is None \
+            or not vai_ao_erp(item, "componentes"):
         return None
     return [(int(c.erpProdutoId), c.quantidade) for c in item.componentes]
 
@@ -451,6 +483,8 @@ def _plano(item: CadastroPendente, campos: dict, componentes) -> dict:
     `camposAlterados`, o plano diz quais campos a correção muda; lista vazia não vai ao ERP."""
     if item.camposAlterados == []:
         return {"acao": item.acao, "sem_mudanca": True}
+    if item.acao == "excluir":
+        return {"acao": "excluir", "tabela": "PRODUTOS", "tipo": item.tipo, "seq": item.erpProdutoId}
     plano = {
         "acao": item.acao,
         "tabela": "PRODUTOS",
@@ -533,6 +567,9 @@ def _executar(lote: _Lote, fire, item: CadastroPendente, campos, componentes):
 
 
 def _gravar_item(lote: _Lote, fire, item: CadastroPendente) -> None:
+    if item.acao == "excluir":
+        _excluir_item(lote, fire, item)
+        return
     cid, versao, conn = str(item.cadastroId), item.versao, lote.env_conn
     # De novo aqui: outra versão do mesmo produto pode ter gravado neste mesmo lote.
     if item.acao == "criar" and not _livre_pela_9b(lote, item):
@@ -583,6 +620,198 @@ def _gravar_item(lote: _Lote, fire, item: CadastroPendente) -> None:
         lote.nomes[cv._normaliza_nome(item.nome)] = [gravacao.seq]
     if not lote.parar:
         _enviar(lote, cid, versao, corpo, 0)
+
+
+def _responder_gravado(lote: _Lote, item: CadastroPendente, seq: str) -> None:
+    """`gravado` do `excluir` (apagado agora, ou já não existia): livro e envio."""
+    cid, versao, conn = str(item.cadastroId), item.versao, lote.env_conn
+    corpo = corpo_gravado(versao, seq, lote.relogio())
+    if not repo.marcar_gravado(conn, cid, versao, erp_produto_id=seq, corpo_json=json.dumps(corpo)):
+        conn.commit()
+        lote.parar = True
+        logger.error(lote.log(cid, versao, f"excluído no ERP (código {seq}) mas o livro não "
+                                           "mudou; lote parado"))
+        return
+    conn.commit()
+    lote.conta("gravados")
+    metrics.cadastro_volta_total.labels(env=lote.slug, resultado="excluido").inc()
+    if not lote.parar:
+        _enviar(lote, cid, versao, corpo, 0)
+
+
+def _na_janela_do_criar(lido: dict, criar: dict) -> bool:
+    """`DATA_CAD` do produto lido cai na janela em que o `criar` do Flow o cadastrou. Fora dela
+    o código foi reaproveitado (o Fire dá MAX+1): é outro produto, que não se apaga."""
+    janela = cadastro_recuperacao.janela_da_reserva(criar)
+    data_cad = cadastro_recuperacao._data(lido.get("DATA_CAD"))
+    return janela is not None and data_cad is not None and janela[0] <= data_cad <= janela[1]
+
+
+def _id_valido(valor: object) -> bool:
+    """SEQ que cabe na frase ao Flow (mesmo formato do contrato: 1 a 9 dígitos, sem zero à esquerda)."""
+    return re.fullmatch(r"[1-9][0-9]{0,8}", str(valor)) is not None
+
+
+def _e_o_produto(lido: dict, item: CadastroPendente, criar: dict) -> bool:
+    """A descrição do produto lido no Fire é a que o Flow conhece (a do item, ou a que o
+    `criar` gravou). Cobre o código reaproveitado por outro produto dentro da janela do
+    DATA_CAD, inclusive depois de a fábrica apagar à mão e cadastrar outro no mesmo dia."""
+    descricao = lido.get("DESCRICAO")
+    if not isinstance(descricao, str):
+        return False
+    aceitos = {cv._normaliza_nome(item.nome)}
+    try:
+        plano = json.loads(criar.get("plano_json") or "{}")
+        nome_criado = plano["campos"]["DESCRICAO"]
+        if isinstance(nome_criado, str):
+            aceitos.add(cv._normaliza_nome(nome_criado))
+    except (TypeError, ValueError, KeyError):
+        pass
+    return cv._normaliza_nome(descricao) in aceitos
+
+
+def _guardar_backup(lote: _Lote, item: CadastroPendente, linha: dict, kit: list[dict]) -> str | None:
+    """Backup no SQLite, commitado e conferido por releitura ANTES de qualquer DELETE.
+    -> None (ok) | "transitorio" | "definitivo"."""
+    cid, versao, conn = str(item.cadastroId), item.versao, lote.env_conn
+    try:
+        backup_repo.guardar(conn, cid, versao, int(item.erpProdutoId), linha, kit)
+        conn.commit()
+        gravado = backup_repo.buscar(conn, cid, versao)
+        if gravado is None or backup_repo.restaurar(gravado) != (linha, kit):
+            raise RuntimeError("backup não confere na releitura")
+    except TypeError as exc:  # coluna de tipo que o backup não sabe guardar: esperar não resolve
+        _desfazer_sqlite(conn)
+        logger.error(lote.log(cid, versao, f"backup: {exc}"))
+        return "definitivo"
+    except Exception as exc:  # noqa: BLE001 — sem backup nada é apagado
+        _desfazer_sqlite(conn)
+        logger.error(lote.log(cid, versao, f"backup falhou ({type(exc).__name__})"))
+        return "transitorio"
+    return None
+
+
+def _desfazer_sqlite(conn) -> None:
+    try:
+        conn.rollback()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _divergiu_do_backup(lote: _Lote, item: CadastroPendente, motivo: str) -> None:
+    """Há backup de uma tentativa anterior e o produto lido agora não é o dele: o DELETE daquela
+    tentativa pode ter comitado e o código ter sido reaproveitado. Não dá para afirmar ao Flow
+    nem que apagou nem que não: `incerto`, uma pessoa resolve (o backup fica intacto)."""
+    cid, versao, conn = str(item.cadastroId), item.versao, lote.env_conn
+    if not repo.marcar_desfecho(conn, cid, versao, "incerto", alerta="excluir_divergente"):
+        logger.warning(lote.log(cid, versao, "incerto não aplicado no livro"))
+    conn.commit()
+    lote.conta("incertos")
+    logger.error(lote.log(cid, versao, f"excluir {item.erpProdutoId}: {motivo} em relação ao "
+                                       "backup da tentativa anterior; incerto, nem apaga nem "
+                                       "responde (backup intacto em cadastro_exclusao_backup)"))
+
+
+def _guardas_e_delete(lote: _Lote, fire, item: CadastroPendente, criar: dict) -> str:  # noqa: C901
+    """Guardas na ordem: backup anterior, janela do DATA_CAD, identidade, kit, uso no ERP, backup;
+    só então o DELETE. -> "apagado" | "ja_excluido" | "barrado" (o erro ou o incerto já foi dado).
+    Levanta o que o ERP ou o livro levantarem; quem chama classifica."""
+    cid, versao, conn = str(item.cadastroId), item.versao, lote.env_conn
+    seq = int(item.erpProdutoId)
+    feito = backup_repo.buscar(conn, cid, versao)
+    if feito is not None and feito["aplicado_em"] is not None:
+        return "ja_excluido"  # o DELETE comitou numa passagem anterior e o livro não soube
+    linha = cadastro_fire.ler_linha_completa(fire, seq)
+    if linha is None:
+        return "ja_excluido"
+    anterior = backup_repo.restaurar(feito) if feito is not None else None
+    if anterior is not None and anterior[0] != linha:
+        # Antes da janela e do nome: com backup de uma tentativa anterior, "outro produto no
+        # código" não prova que nada foi apagado (o DELETE anterior pode ter comitado).
+        _divergiu_do_backup(lote, item, "o produto lido mudou")
+        return "barrado"
+    if not _na_janela_do_criar(linha, criar):
+        _erro(lote, cid, versao, "definitivo", "produto_nao_criado_pelo_flow",
+              "DATA_CAD fora da janela do criar do Flow: o código foi reaproveitado",
+              rollback_comprovado=True)
+        return "barrado"
+    if not _e_o_produto(linha, item, criar):
+        _erro(lote, cid, versao, "definitivo", "produto_mudou",
+              "o produto lido no ERP não é o que o Flow criou", rollback_comprovado=True)
+        return "barrado"
+    pais = cadastro_fire.pais_do_componente(fire, seq)
+    if pais:
+        validos = [str(p) for p in pais[:5] if _id_valido(p)]
+        _erro(lote, cid, versao, "transitorio", "ligado_a_kit",
+              f"componente de {len(pais)} kit(s) no ERP", rollback_comprovado=True,
+              mensagem=mensagem_para_flow("ligado_a_kit", ", ".join(validos) or None))
+        return "barrado"
+    try:
+        if lote.alvos_de_uso is None:
+            lote.alvos_de_uso = produto_referencias.alvos_do_fire(fire)
+    except produto_referencias.CatalogoIncompletoError as exc:
+        logger.error(lote.log(cid, versao, f"guarda de uso impossível: {exc}"))
+        _erro(lote, cid, versao, "transitorio", "consulta_erp_falhou", str(exc),
+              rollback_comprovado=True)
+        return "barrado"
+    uso = produto_referencias.primeiro_uso(fire, seq, lote.alvos_de_uso)
+    if uso is not None:
+        _erro(lote, cid, versao, "definitivo", "em_uso_no_erp", f"em uso em {uso}",
+              rollback_comprovado=True, mensagem=mensagem_para_flow("em_uso_no_erp", uso))
+        return "barrado"
+    kit = cadastro_fire.ler_kit_completo(fire, seq)
+    if anterior is not None and anterior[1] != kit:
+        _divergiu_do_backup(lote, item, "a composição mudou")
+        return "barrado"
+    falha = _guardar_backup(lote, item, linha, kit)
+    if falha is not None:
+        _erro(lote, cid, versao, falha, "backup_falhou", "backup não gravado",
+              rollback_comprovado=True)
+        return "barrado"
+    cadastro_fire.excluir(fire, seq=seq, linhas_kit=len(kit))
+    # O nome apagado sai do cache do lote: um `criar` com ele mais adiante não é `nome_existe`.
+    nome = cv._normaliza_nome(str(linha.get("DESCRICAO") or ""))
+    restantes = [x for x in lote.nomes.get(nome, []) if x != seq]
+    if restantes:
+        lote.nomes[nome] = restantes
+    else:
+        lote.nomes.pop(nome, None)
+    return "apagado"
+
+
+def _excluir_item(lote: _Lote, fire, item: CadastroPendente) -> None:
+    """Reserva o item, roda as guardas e o DELETE e responde ao Flow. Tudo que só lê o ERP corre
+    antes de qualquer escrita; falha de leitura é transitória, e falha do livro (SQLite) também."""
+    cid, versao, conn = str(item.cadastroId), item.versao, lote.env_conn
+    if not _reservar(lote, cid, versao, produto_id=str(item.produtoId), acao=item.acao,
+                     tipo=item.tipo, plano=_plano(item, {}, None)):
+        return
+    criar = repo.criar_que_gravou_seq(conn, item.erpProdutoId, str(item.produtoId))
+    if criar is None:  # a triagem já conferiu; o livro mudou desde então
+        _erro(lote, cid, versao, "definitivo", "produto_nao_criado_pelo_flow",
+              "o livro não tem um criar deste produto com esse código", rollback_comprovado=True)
+        return
+    try:
+        resultado = _guardas_e_delete(lote, fire, item, criar)
+    except sqlite3.Error as exc:  # o livro falhou antes de qualquer escrita no ERP
+        _desfazer_sqlite(conn)
+        logger.error(lote.log(cid, versao, f"livro falhou ({type(exc).__name__}); nada apagado"))
+        _erro(lote, cid, versao, "transitorio", "consulta_erp_falhou",
+              f"livro: {type(exc).__name__}", rollback_comprovado=True)
+        return
+    except Exception as exc:  # noqa: BLE001 — classificado em _falha_do_erp; nunca str(exc) ao Flow
+        _falha_do_erp(lote, fire, item, exc)
+        return
+    if resultado == "barrado":
+        return
+    if resultado == "apagado":
+        try:
+            backup_repo.marcar_aplicado(conn, cid, versao)
+            conn.commit()
+        except Exception as exc:  # noqa: BLE001 — o Fire já comitou; a reentrega responde pelo livro
+            logger.error(lote.log(cid, versao, f"excluído no ERP mas o backup não foi marcado "
+                                               f"({type(exc).__name__})"))
+    _responder_gravado(lote, item, item.erpProdutoId)
 
 
 def _sem_gravar(lote: _Lote, cid: str, versao: int, conferencia: tuple) -> None:

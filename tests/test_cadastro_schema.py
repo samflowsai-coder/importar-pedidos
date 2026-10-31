@@ -471,3 +471,66 @@ def test_produto_novo_sem_codigo_do_apontae_passa():
     par = dict(BOM, tipo="simples", unidadeErp="PAR", tipoItemSped=3, componentes=None, codigoNfe=None)
     assert validar_item(par)[1] is None
     assert validar_item(dict(BOM, codigoNfe=None, codigoMes=None))[1] is None
+
+
+# --- excluir (cadastroExcluirV1) -------------------------------------------
+
+
+def _excluir(**kw):
+    base = {
+        "cadastroId": "7b0c1c3e-0f7e-4a51-9c39-2a8f3f1d9a11",
+        "produtoId": "77777777-7777-4777-8777-777777777771",
+        "versao": 2,
+        "acao": "excluir",
+        "erpProdutoId": "709219",
+        "camposAlterados": None,
+        "tipo": "simples",
+        "nome": "MEIA SOQUETE",
+        "aprovadoEm": "2026-10-30T12:00:00Z",
+    }
+    return {**base, **kw}
+
+
+def test_excluir_valido_sem_os_campos_de_criar():
+    item, cod, msg = validar_item(_excluir())
+    assert cod is None, msg
+    assert item.acao == "excluir" and item.erpProdutoId == "709219" and item.grupoErp is None
+
+
+@pytest.mark.parametrize("tipo", ["simples", "kit", "pack"])
+def test_excluir_aceita_os_tipos_do_contrato(tipo):
+    item, cod, _ = validar_item(_excluir(tipo=tipo))
+    assert cod is None and item.tipo == tipo
+
+
+def test_excluir_sem_erp_produto_id_e_contrato_invalido():
+    _, cod, msg = validar_item(_excluir(erpProdutoId=None))
+    assert cod == "contrato_invalido" and "excluir exige erpProdutoId" in msg
+
+
+def test_excluir_com_marca_e_contrato_invalido():
+    _, cod, _ = validar_item(_excluir(marcaErp={"codigo": 17}))
+    assert cod == "contrato_invalido"
+
+
+def test_excluir_com_campos_alterados_e_contrato_invalido():
+    _, cod, _ = validar_item(_excluir(camposAlterados=["nome"]))
+    assert cod == "contrato_invalido"
+
+
+@pytest.mark.parametrize("comps", [None, [{"erpProdutoId": "3170", "quantidade": 3}], "lixo"])
+def test_excluir_ignora_componentes(comps):
+    item, cod, _ = validar_item(_excluir(tipo="kit", componentes=comps))
+    assert cod is None and item.componentes is None
+
+
+def test_excluir_nao_afrouxa_o_criar_sem_grupo():
+    # `grupoErp` continua obrigatório nas ações antigas, com a mesma mensagem de antes.
+    bruto = {k: v for k, v in BOM.items() if k != "grupoErp"}
+    _, cod, msg = validar_item(bruto)
+    assert cod == "contrato_invalido" and "grupoErp" in msg
+
+
+def test_excluir_nome_excedido_segue_limite_do_fire():
+    _, cod, _ = validar_item(_excluir(nome="X" * 201))
+    assert cod == "campo_excede_fire"

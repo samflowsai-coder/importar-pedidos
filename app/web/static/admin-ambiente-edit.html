@@ -1594,6 +1594,7 @@
       portoes.replaceChildren();
       catLinha(portoes, 'Portão da P0', d && d.p0_ok === true ? 'liberado' : 'não liberado', d && d.p0_ok === true ? undefined : 'aviso');
       catLinha(portoes, 'Portão de inativar', d && d.inativar_ligado === true ? 'ligado' : 'desligado');
+      catLinha(portoes, 'Portão de excluir', d && d.excluir_ligado === true ? 'ligado' : 'desligado');
       voltaCartao('orfaos', nOrf, 'err');
       voltaCartao('incertos', nInc, 'aviso');
       voltaCartao('sem-volta', nSem, 'aviso');
@@ -1603,7 +1604,7 @@
       // A linha some sem medição (null: Flow fora ou modo sem gravação) e com o portão de
       // inativar ligado em criar_e_atualizar (o modo consome tudo; o 0 não informa nada).
       const nAg = resumo ? resumo.aguardando_modo : null;
-      const consomeTudo = modo === 'criar_e_atualizar' && d.inativar_ligado === true;
+      const consomeTudo = modo === 'criar_e_atualizar' && d.inativar_ligado === true;  // excluir não entra na contagem: o modo nunca o pede em 'aguardando'
       ag.hidden = typeof nAg !== 'number' || consomeTudo;
       if (typeof nAg === 'number') document.getElementById('volta-n-aguardando').textContent = String(nAg);
       const corpo = document.getElementById('volta-tabela-corpo');
