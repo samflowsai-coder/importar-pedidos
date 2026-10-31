@@ -27,6 +27,7 @@ PRODUTO = {
     "PESO": Decimal("0.350"),
     "FOTO": b"\x00\x01\xff",
     "OBS": None,
+    "HORA": time(8, 30, 15),
 }
 KIT = [{"CODIGO": 90, "CODPRODUTO_PAI": 709219, "CODPRODUTO": 3170, "QTD": Decimal("3")}]
 
