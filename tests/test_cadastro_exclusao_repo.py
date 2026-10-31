@@ -1,7 +1,7 @@
 """Backup restaurável das linhas apagadas pelo `excluir` (SQLite do ambiente)."""
 
 import json
-from datetime import date
+from datetime import date, time
 from decimal import Decimal
 
 import pytest

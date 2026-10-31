@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -409,6 +410,13 @@ def _triar_excluir(lote: _Lote, item: CadastroPendente) -> CadastroPendente | No
         lote.conta("pulados")
         logger.warning(lote.log(cid, versao, f"excluir sem {cv.VAR_EXCLUIR}; não processado"))
         return None
+    if lote.modo != "criar_e_atualizar":
+        # O Flow só entrega `excluir` quando o Portal pede (e o Portal só pede neste modo), mas
+        # a ação é destrutiva: a proteção não pode depender só do contrato do outro lado.
+        lote.conta("pulados")
+        logger.warning(lote.log(cid, versao, f"excluir fora do modo criar_e_atualizar "
+                                             f"({lote.modo}); não processado"))
+        return None
     if repo.criar_que_gravou_seq(lote.env_conn, item.erpProdutoId, str(item.produtoId)) is None:
         _responder_erro(lote, cid, versao, item, "definitivo", "produto_nao_criado_pelo_flow",
                         "o livro não tem um criar deste produto com esse código")
@@ -690,82 +698,117 @@ def _desfazer_sqlite(conn) -> None:
         pass
 
 
-def _excluir_item(lote: _Lote, fire, item: CadastroPendente) -> None:  # noqa: C901
-    """Guardas na ordem: origem, janela do DATA_CAD, kit, uso no ERP, backup; só então o DELETE.
-    Tudo que só lê o ERP roda antes de qualquer escrita; falha de leitura é transitória."""
+def _divergiu_do_backup(lote: _Lote, item: CadastroPendente, motivo: str) -> None:
+    """Há backup de uma tentativa anterior e o produto lido agora não é o dele: o DELETE daquela
+    tentativa pode ter comitado e o código ter sido reaproveitado. Não dá para afirmar ao Flow
+    nem que apagou nem que não: `incerto`, uma pessoa resolve (o backup fica intacto)."""
+    cid, versao, conn = str(item.cadastroId), item.versao, lote.env_conn
+    if not repo.marcar_desfecho(conn, cid, versao, "incerto", alerta="excluir_divergente"):
+        logger.warning(lote.log(cid, versao, "incerto não aplicado no livro"))
+    conn.commit()
+    lote.conta("incertos")
+    logger.error(lote.log(cid, versao, f"excluir {item.erpProdutoId}: {motivo} em relação ao "
+                                       "backup da tentativa anterior; incerto, nem apaga nem "
+                                       "responde (backup intacto em cadastro_exclusao_backup)"))
+
+
+def _guardas_e_delete(lote: _Lote, fire, item: CadastroPendente, criar: dict) -> str:  # noqa: C901
+    """Guardas na ordem: origem, janela do DATA_CAD, identidade, kit, uso no ERP, backup; só
+    então o DELETE. -> "apagado" | "ja_excluido" | "barrado" (o erro ou o incerto já foi dado).
+    Levanta o que o ERP ou o livro levantarem; quem chama classifica."""
+    cid, versao, conn = str(item.cadastroId), item.versao, lote.env_conn
+    seq = int(item.erpProdutoId)
+    feito = backup_repo.buscar(conn, cid, versao)
+    if feito is not None and feito["aplicado_em"] is not None:
+        return "ja_excluido"  # o DELETE comitou numa passagem anterior e o livro não soube
+    linha = cadastro_fire.ler_linha_completa(fire, seq)
+    if linha is None:
+        return "ja_excluido"
+    if not _na_janela_do_criar(linha, criar):
+        _erro(lote, cid, versao, "definitivo", "produto_nao_criado_pelo_flow",
+              "DATA_CAD fora da janela do criar do Flow: o código foi reaproveitado",
+              rollback_comprovado=True)
+        return "barrado"
+    anterior = backup_repo.restaurar(feito) if feito is not None else None
+    if not _e_o_produto(linha, item, criar) or (anterior is not None and anterior[0] != linha):
+        if anterior is not None:
+            _divergiu_do_backup(lote, item, "o produto lido mudou")
+        else:
+            _erro(lote, cid, versao, "definitivo", "produto_mudou",
+                  "o produto lido no ERP não é o que o Flow criou", rollback_comprovado=True)
+        return "barrado"
+    pais = cadastro_fire.pais_do_componente(fire, seq)
+    if pais:
+        validos = [str(p) for p in pais[:5] if _id_valido(p)]
+        _erro(lote, cid, versao, "transitorio", "ligado_a_kit",
+              f"componente de {len(pais)} kit(s) no ERP", rollback_comprovado=True,
+              mensagem=mensagem_para_flow("ligado_a_kit", ", ".join(validos) or None))
+        return "barrado"
+    try:
+        if lote.alvos_de_uso is None:
+            lote.alvos_de_uso = produto_referencias.alvos_do_fire(fire)
+    except produto_referencias.CatalogoIncompletoError as exc:
+        logger.error(lote.log(cid, versao, f"guarda de uso impossível: {exc}"))
+        _erro(lote, cid, versao, "transitorio", "consulta_erp_falhou", str(exc),
+              rollback_comprovado=True)
+        return "barrado"
+    uso = produto_referencias.primeiro_uso(fire, seq, lote.alvos_de_uso)
+    if uso is not None:
+        _erro(lote, cid, versao, "definitivo", "em_uso_no_erp", f"em uso em {uso}",
+              rollback_comprovado=True, mensagem=mensagem_para_flow("em_uso_no_erp", uso))
+        return "barrado"
+    kit = cadastro_fire.ler_kit_completo(fire, seq)
+    if anterior is not None and anterior[1] != kit:
+        _divergiu_do_backup(lote, item, "a composição mudou")
+        return "barrado"
+    falha = _guardar_backup(lote, item, linha, kit)
+    if falha is not None:
+        _erro(lote, cid, versao, falha, "backup_falhou", "backup não gravado",
+              rollback_comprovado=True)
+        return "barrado"
+    cadastro_fire.excluir(fire, seq=seq, linhas_kit=len(kit))
+    # O nome apagado sai do cache do lote: um `criar` com ele mais adiante não é `nome_existe`.
+    nome = cv._normaliza_nome(str(linha.get("DESCRICAO") or ""))
+    restantes = [x for x in lote.nomes.get(nome, []) if x != seq]
+    if restantes:
+        lote.nomes[nome] = restantes
+    else:
+        lote.nomes.pop(nome, None)
+    return "apagado"
+
+
+def _excluir_item(lote: _Lote, fire, item: CadastroPendente) -> None:
+    """Reserva o item, roda as guardas e o DELETE e responde ao Flow. Tudo que só lê o ERP corre
+    antes de qualquer escrita; falha de leitura é transitória, e falha do livro (SQLite) também."""
     cid, versao, conn = str(item.cadastroId), item.versao, lote.env_conn
     if not _reservar(lote, cid, versao, produto_id=str(item.produtoId), acao=item.acao,
                      tipo=item.tipo, plano=_plano(item, {}, None)):
         return
-    seq = int(item.erpProdutoId)
     criar = repo.criar_que_gravou_seq(conn, item.erpProdutoId, str(item.produtoId))
     if criar is None:  # a triagem já conferiu; o livro mudou desde então
         _erro(lote, cid, versao, "definitivo", "produto_nao_criado_pelo_flow",
               "o livro não tem um criar deste produto com esse código", rollback_comprovado=True)
         return
     try:
-        feito = backup_repo.buscar(conn, cid, versao)
-        if feito is not None and feito["aplicado_em"] is not None:
-            # O DELETE comitou numa passagem anterior e o livro não soube: só responde.
-            _responder_gravado(lote, item, item.erpProdutoId)
-            return
-        linha = cadastro_fire.ler_linha_completa(fire, seq)
-        if linha is None:  # já excluído: idempotente
-            _responder_gravado(lote, item, item.erpProdutoId)
-            return
-        if not _na_janela_do_criar(linha, criar):
-            _erro(lote, cid, versao, "definitivo", "produto_nao_criado_pelo_flow",
-                  "DATA_CAD fora da janela do criar do Flow: o código foi reaproveitado",
-                  rollback_comprovado=True)
-            return
-        anterior = backup_repo.restaurar(feito) if feito is not None else None
-        if not _e_o_produto(linha, item, criar) or (anterior is not None and anterior[0] != linha):
-            # Outro produto no mesmo código, ou o produto mudou desde a tentativa anterior
-            # (cujo backup fica intacto): quem decide é uma pessoa, nada é apagado.
-            _erro(lote, cid, versao, "definitivo", "produto_mudou",
-                  "o produto lido no ERP não é o que o Flow criou / mudou desde o backup",
-                  rollback_comprovado=True)
-            return
-        pais = cadastro_fire.pais_do_componente(fire, seq)
-        if pais:
-            validos = [str(p) for p in pais[:5] if _id_valido(p)]
-            _erro(lote, cid, versao, "transitorio", "ligado_a_kit",
-                  f"componente de {len(pais)} kit(s) no ERP", rollback_comprovado=True,
-                  mensagem=mensagem_para_flow("ligado_a_kit", ", ".join(validos) or None))
-            return
-        try:
-            if lote.alvos_de_uso is None:
-                lote.alvos_de_uso = produto_referencias.alvos_do_fire(fire)
-        except produto_referencias.CatalogoIncompletoError as exc:
-            logger.error(lote.log(cid, versao, f"guarda de uso impossível: {exc}"))
-            _erro(lote, cid, versao, "transitorio", "consulta_erp_falhou", str(exc),
-                  rollback_comprovado=True)
-            return
-        uso = produto_referencias.primeiro_uso(fire, seq, lote.alvos_de_uso)
-        if uso is not None:
-            _erro(lote, cid, versao, "definitivo", "em_uso_no_erp", f"em uso em {uso}",
-                  rollback_comprovado=True, mensagem=mensagem_para_flow("em_uso_no_erp", uso))
-            return
-        kit = cadastro_fire.ler_kit_completo(fire, seq)
-        if anterior is not None and anterior[1] != kit:
-            _erro(lote, cid, versao, "definitivo", "produto_mudou",
-                  "a composição mudou desde o backup", rollback_comprovado=True)
-            return
-        falha = _guardar_backup(lote, item, linha, kit)
-        if falha is not None:
-            _erro(lote, cid, versao, falha, "backup_falhou", "backup não gravado",
-                  rollback_comprovado=True)
-            return
-        cadastro_fire.excluir(fire, seq=seq, linhas_kit=len(kit))
+        resultado = _guardas_e_delete(lote, fire, item, criar)
+    except sqlite3.Error as exc:  # o livro falhou antes de qualquer escrita no ERP
+        _desfazer_sqlite(conn)
+        logger.error(lote.log(cid, versao, f"livro falhou ({type(exc).__name__}); nada apagado"))
+        _erro(lote, cid, versao, "transitorio", "consulta_erp_falhou",
+              f"livro: {type(exc).__name__}", rollback_comprovado=True)
+        return
     except Exception as exc:  # noqa: BLE001 — classificado em _falha_do_erp; nunca str(exc) ao Flow
         _falha_do_erp(lote, fire, item, exc)
         return
-    try:
-        backup_repo.marcar_aplicado(conn, cid, versao)
-        conn.commit()
-    except Exception as exc:  # noqa: BLE001 — o Fire já comitou; a reentrega responde pelo livro
-        logger.error(lote.log(cid, versao, f"excluído no ERP mas o backup não foi marcado "
-                                           f"({type(exc).__name__})"))
+    if resultado == "barrado":
+        return
+    if resultado == "apagado":
+        try:
+            backup_repo.marcar_aplicado(conn, cid, versao)
+            conn.commit()
+        except Exception as exc:  # noqa: BLE001 — o Fire já comitou; a reentrega responde pelo livro
+            logger.error(lote.log(cid, versao, f"excluído no ERP mas o backup não foi marcado "
+                                               f"({type(exc).__name__})"))
     _responder_gravado(lote, item, item.erpProdutoId)
 
 

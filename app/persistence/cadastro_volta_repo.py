@@ -512,12 +512,18 @@ def criar_que_gravou_seq(
     """O `criar` deste produto que gravou `seq` no ERP e o Flow reconheceu (ou vai reconhecer):
     a prova de que o Portal criou aquele produto. Origem do `excluir`. Exige a ação `criar`
     e o mesmo `produto_id` (um `atualizar` de produto antigo ou o SEQ de outro produto não
-    provam nada); `orfao` fica de fora, o Flow nunca vinculou aquele produto."""
+    provam nada); `orfao` fica de fora, o Flow nunca vinculou aquele produto. Se OUTRO produto
+    gravou depois um `criar` com o mesmo código (SEQ reaproveitado), o código já não é deste."""
     linhas = _dicts(
         conn.execute(
-            "SELECT * FROM cadastro_volta WHERE acao = 'criar' AND erp_produto_id = ? "
-            "AND produto_id = ? AND estado IN ('gravado_sem_volta', 'confirmado') "
-            "ORDER BY iniciado_em DESC, rowid DESC LIMIT 1",
+            "SELECT * FROM cadastro_volta c WHERE c.acao = 'criar' AND c.erp_produto_id = ? "
+            "AND c.produto_id = ? AND c.estado IN ('gravado_sem_volta', 'confirmado') "
+            # O Fire reaproveita o SEQ do maior produto apagado: se OUTRO produto gravou depois
+            # um `criar` com este mesmo código, o código já não é deste.
+            "AND NOT EXISTS (SELECT 1 FROM cadastro_volta o WHERE o.acao = 'criar' "
+            "AND o.erp_produto_id = c.erp_produto_id AND o.produto_id != c.produto_id "
+            "AND o.rowid > c.rowid AND o.estado IN ('gravado_sem_volta', 'confirmado')) "
+            "ORDER BY c.iniciado_em DESC, c.rowid DESC LIMIT 1",
             (str(seq), produto_id),
         )
     )

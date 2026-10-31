@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +25,8 @@ def _codifica(valor: Any) -> Any:
         return {"t": "datetime", "v": valor.isoformat()}
     if isinstance(valor, date):
         return {"t": "date", "v": valor.isoformat()}
+    if isinstance(valor, time):
+        return {"t": "time", "v": valor.isoformat()}
     if isinstance(valor, Decimal):
         return {"t": "decimal", "v": str(valor)}
     if isinstance(valor, (bytes, bytearray, memoryview)):
@@ -41,6 +43,8 @@ def _decodifica(valor: Any) -> Any:
             return datetime.fromisoformat(v)
         if t == "date":
             return date.fromisoformat(v)
+        if t == "time":
+            return time.fromisoformat(v)
         if t == "decimal":
             return Decimal(v)
         if t == "bytes":

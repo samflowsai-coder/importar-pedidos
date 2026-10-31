@@ -5,7 +5,7 @@ Flow e Fire falsos; SQLite do ambiente real. O Fire falso estende o de
 """
 
 import json
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -76,6 +76,8 @@ class FireExcluivel(FireGravavel):
         return super().executar(sql, params)
 
     def _responder(self, sql, params):  # noqa: C901
+        if sql.startswith("SELECT RDB$GET_CONTEXT('SYSTEM', 'ENGINE_VERSION')"):
+            return [("2.5.7",)], 1
         if sql == pr.SQL_CATALOGO:
             return [tuple(c) for c in self.catalogo], 0
         if sql.startswith("SELECT FIRST 1 1 FROM"):
@@ -473,7 +475,12 @@ def test_coluna_que_o_backup_nao_serializa_e_definitiva_e_nao_apaga(ligar, env_c
     ligar()
     _criado_pelo_flow(env_conn)
     esquisito = {
-        SEQ: {"SEQ": SEQ, "DESCRICAO": "MEIA SOQUETE", "DATA_CAD": date(2026, 10, 17), "COISA": object()}
+        SEQ: {
+            "SEQ": SEQ,
+            "DESCRICAO": "MEIA SOQUETE",
+            "DATA_CAD": date(2026, 10, 17),
+            "COISA": object(),
+        }
     }
     flow, fire = Flow([_excluir()]), FireExcluivel(produtos=esquisito)
     _rodar(flow, fire, env_conn)
@@ -568,9 +575,10 @@ def test_retentativa_com_o_mesmo_produto_usa_o_backup_que_ja_existe(ligar, env_c
     assert SEQ not in fire.produtos and flow.posts[0][1]["resultado"] == "gravado"
 
 
-def test_seq_reaproveitado_apos_commit_ambiguo_nao_apaga_o_produto_novo(ligar, env_conn):
+def test_seq_reaproveitado_apos_commit_ambiguo_nao_apaga_o_produto_novo(ligar, env_conn, erros):
     """Achado da revisão: o DELETE comitou, a resposta se perdeu, o Fire deu o mesmo SEQ a um
-    produto novo (mesmo nome, mesmo dia). O backup original tem que sobreviver e nada é apagado."""
+    produto novo (mesmo nome, mesmo dia). O backup original sobrevive, nada é apagado e o item
+    fica `incerto` para uma pessoa (não dá para afirmar ao Flow que nada foi apagado)."""
     ligar()
     _criado_pelo_flow(env_conn)
     original = {
@@ -593,10 +601,14 @@ def test_seq_reaproveitado_apos_commit_ambiguo_nao_apaga_o_produto_novo(ligar, e
     }
     flow, fire = Flow([_excluir()]), FireExcluivel(produtos=novo)
     _rodar(flow, fire, env_conn)
-    erro = _erro(flow)
-    assert erro["tipo"] == "definitivo" and erro["codigo"] == "produto_mudou"
+    assert flow.posts == []  # nem apagou nem erro: a pessoa decide
+    assert (
+        _livro(env_conn)["estado"] == "incerto"
+        and _livro(env_conn)["alerta"] == "excluir_divergente"
+    )
     assert fire.deletes == [] and SEQ in fire.produtos
     assert bk.restaurar(bk.buscar(env_conn, EXCLUIR_ID, 3))[0] == original  # intocado
+    assert any("incerto" in e for e in erros)
 
 
 def test_kit_que_mudou_desde_o_backup_nao_apaga(ligar, env_conn):
@@ -615,7 +627,8 @@ def test_kit_que_mudou_desde_o_backup_nao_apaga(ligar, env_conn):
     flow = Flow([_excluir(seq=PAI_KIT, tipo="kit", nome="KIT3")])
     fire = FireExcluivel(produtos={PAI_KIT: linha}, kit=[(91, PAI_KIT, 3999, 3)])
     _rodar(flow, fire, env_conn)
-    assert _erro(flow)["codigo"] == "produto_mudou" and fire.deletes == []
+    assert flow.posts == [] and fire.deletes == []
+    assert _livro(env_conn)["estado"] == "incerto"
 
 
 def test_seq_reaproveitado_por_produto_de_outro_nome_nao_apaga(ligar, env_conn):
@@ -716,3 +729,114 @@ def test_nunca_chega_a_apagar_o_que_nao_e_o_seq_pedido(ligar, env_conn):
     _rodar(Flow([_excluir()]), fire, env_conn)
     assert list(fire.produtos) == [SEQ + 1]
     assert all(p == (SEQ,) for s, p in fire.escritas if s.startswith("DELETE FROM PRODUTOS WHERE"))
+
+
+# --- achados do /revisar ----------------------------------------------------------------------
+
+
+def test_excluir_fora_do_modo_criar_e_atualizar_nao_apaga(ligar, env_conn, avisos):
+    """Variável ligada mas modo `criar`: um `excluir` que o Flow mande sem ser pedido é pulado."""
+    ligar(excluir=True, modo="criar")
+    _criado_pelo_flow(env_conn)
+    flow, fire = Flow([_excluir()]), FireExcluivel()
+    _rodar(flow, fire, env_conn)
+    assert flow.posts == [] and fire.deletes == [] and SEQ in fire.produtos
+    assert any("criar_e_atualizar" in a for a in avisos)
+
+
+def test_falha_do_sqlite_do_livro_e_transitoria_e_nao_apaga(ligar, env_conn, monkeypatch):
+    import sqlite3
+
+    ligar()
+    _criado_pelo_flow(env_conn)
+
+    def trava(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(bk, "buscar", trava)
+    flow, fire = Flow([_excluir()]), FireExcluivel()
+    _rodar(flow, fire, env_conn)
+    erro = _erro(flow)
+    assert erro["tipo"] == "transitorio" and erro["codigo"] == "consulta_erp_falhou"
+    assert fire.deletes == [] and SEQ in fire.produtos
+
+
+def test_nome_apagado_sai_do_cache_do_lote(ligar, env_conn):
+    """Um `criar` com o mesmo nome, mais adiante no mesmo lote, não é `nome_existe`."""
+    from tests.test_cadastro_volta_gravar import PAR
+
+    ligar()
+    _criado_pelo_flow(env_conn)
+    criar_igual = {
+        **PAR,
+        "cadastroId": "77777777-0000-4000-8000-000000000001",
+        "produtoId": "77777777-0000-4000-8000-000000000002",
+        "nome": "MEIA SOQUETE",
+        "codigoMes": None,
+    }
+    fire = FireExcluivel(marcas={17: "Kolosh"})
+    flow = Flow([_excluir(), criar_igual])
+    _rodar(flow, fire, env_conn)
+    resultados = {c: b["resultado"] for c, b in flow.posts}
+    assert resultados[EXCLUIR_ID] == "gravado"
+    assert resultados["77777777-0000-4000-8000-000000000001"] == "gravado"
+
+
+def test_criar_mais_recente_de_outro_produto_tira_a_origem(ligar, env_conn):
+    """A foi excluído, B (outro produto) ganhou o mesmo SEQ: um `excluir` velho de A não vale."""
+    ligar()
+    _criado_pelo_flow(env_conn)  # criar de A (PROD) no SEQ
+    env_conn.execute(
+        "INSERT INTO cadastro_volta (cadastro_id, versao, estado, acao, tipo, produto_id, "
+        "erp_produto_id, seq_reservado, iniciado_em) VALUES (?, 1, 'confirmado', 'criar', "
+        "'simples', ?, ?, ?, '2026-10-17 15:00:00')",
+        ("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", OUTRO_PRODUTO, str(SEQ), SEQ),
+    )
+    env_conn.commit()
+    flow, fire = Flow([_excluir()]), FireExcluivel()
+    _rodar(flow, fire, env_conn)
+    assert _erro(flow)["codigo"] == "produto_nao_criado_pelo_flow"
+    assert fire.deletes == [] and SEQ in fire.produtos
+    # e o dono atual consegue excluir o seu
+    assert repo.criar_que_gravou_seq(env_conn, str(SEQ), OUTRO_PRODUTO) is not None
+
+
+def test_conexao_cai_no_delete_recuperacao_libera_e_a_reentrega_exclui(ligar, env_conn):
+    ligar()
+    _criado_pelo_flow(env_conn)
+    fire = FireExcluivel(falhas={"DELETE FROM PRODUTOS WHERE": [FdbError("x", -902, 335544721)]})
+    flow = Flow([_excluir()])
+    _rodar(flow, fire, env_conn)
+    assert flow.posts == [] and _livro(env_conn)["estado"] == "em_andamento"
+    assert SEQ in fire.produtos and bk.buscar(env_conn, EXCLUIR_ID, 3)["aplicado_em"] is None
+    flow2 = Flow([_excluir()])
+    cv.processar_ambiente(
+        "mm", _client=flow2, _fire_conn=fire, _env_conn=env_conn, _relogio=_depois(horas=2)
+    )
+    assert SEQ not in fire.produtos
+    assert flow2.posts[0][1]["resultado"] == "gravado"
+    assert bk.buscar(env_conn, EXCLUIR_ID, 3)["aplicado_em"] is not None
+
+
+def test_conexao_cai_no_delete_e_o_codigo_foi_reaproveitado_vira_incerto(ligar, env_conn):
+    ligar()
+    _criado_pelo_flow(env_conn)
+    fire = FireExcluivel(falhas={"DELETE FROM PRODUTOS WHERE": [FdbError("x", -902, 335544721)]})
+    _rodar(Flow([_excluir()]), fire, env_conn)
+    original = bk.restaurar(bk.buscar(env_conn, EXCLUIR_ID, 3))[0]
+    # o DELETE tinha comitado: o Fire deu o mesmo código a outro produto do mesmo dia
+    fire.produtos = {SEQ: {**original, "UNIDADE": "CX"}}
+    flow2 = Flow([_excluir()])
+    cv.processar_ambiente(
+        "mm", _client=flow2, _fire_conn=fire, _env_conn=env_conn, _relogio=_depois(horas=2)
+    )
+    assert flow2.posts == [] and SEQ in fire.produtos
+    assert _livro(env_conn)["estado"] == "incerto"
+    assert bk.restaurar(bk.buscar(env_conn, EXCLUIR_ID, 3))[0] == original
+
+
+def _depois(horas):
+    """Relógio no futuro do `iniciado_em` real da linha (que o SQLite carimba com a hora de agora)."""
+    r = Relogio()
+    r.agora = datetime.now(UTC) + timedelta(hours=horas)
+    return r
