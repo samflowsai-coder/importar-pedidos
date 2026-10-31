@@ -14,40 +14,26 @@ Serve para o diff da P0: o que a tela do Fire gravou para um produto novo.
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# O catálogo, o guarda de SELECT e a validação de identificador moram em um lugar só.
+from app.erp.produto_referencias import (  # noqa: E402
+    PREFIXOS_SISTEMA as _PREFIXOS_SISTEMA,
+)
+from app.erp.produto_referencias import (  # noqa: E402
+    SQL_CATALOGO,
+    TIPOS_INTEIROS,
+    _ident,
+    so_select,
+)
 
 COLUNAS_PRODUTO = frozenset(
     {"SEQ", "CODPRODUTO", "CODPRODUTO_PAI", "PRODUTO", "CODPROD", "SEQPRODUTO", "COD_PRODUTO"}
 )
-_PREFIXOS_SISTEMA = ("RDB$", "MON$", "SEC$")
 LIMITE_LINHAS = 50
-TIPOS_INTEIROS = frozenset({7, 8, 16})  # SMALLINT, INTEGER, BIGINT
 MAX_TEXTO = 200
-_SO_SELECT = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
-_IDENT = re.compile(r"^[A-Z][A-Z0-9_$]*$")
-
-SQL_CATALOGO = (
-    "SELECT TRIM(RF.RDB$RELATION_NAME), TRIM(RF.RDB$FIELD_NAME), F.RDB$FIELD_TYPE "
-    "FROM RDB$RELATION_FIELDS RF "
-    "JOIN RDB$FIELDS F ON F.RDB$FIELD_NAME = RF.RDB$FIELD_SOURCE "
-    "JOIN RDB$RELATIONS R ON R.RDB$RELATION_NAME = RF.RDB$RELATION_NAME "
-    "WHERE COALESCE(R.RDB$SYSTEM_FLAG, 0) = 0 AND R.RDB$VIEW_BLR IS NULL"
-)
-
-
-def so_select(sql: str) -> str:
-    # `raise`, não `assert`: com `python -O` o assert some e a guarda junto.
-    if not _SO_SELECT.match(sql):
-        raise RuntimeError("ferramenta só leitura: apenas SELECT")
-    return sql
-
-
-def _ident(nome: str) -> str:
-    if not _IDENT.fullmatch(nome):
-        raise ValueError(f"identificador inválido: {nome!r}")
-    return f'"{nome}"'
 
 
 def escolher_alvos(catalogo: list[tuple[str, str, int]]) -> list[tuple[str, str]]:
@@ -78,7 +64,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seq", type=int, required=True)
     args = ap.parse_args(argv)
 
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from app.erp.connection import FirebirdConnection
     from app.persistence import environments_repo
 

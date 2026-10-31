@@ -161,6 +161,20 @@ CREATE TABLE IF NOT EXISTS cadastro_volta (
     PRIMARY KEY (cadastro_id, versao)
 );
 
+-- Backup do que a ação `excluir` apaga do Fire (linha de PRODUTOS + linhas de PRODUTOS_KIT do
+-- pai, em JSON que preserva tipo). Gravado e commitado ANTES do DELETE; (cadastro_id, versao)
+-- é único, então a reentrega não duplica. `aplicado_em` = o DELETE comitou no Fire.
+CREATE TABLE IF NOT EXISTS cadastro_exclusao_backup (
+    cadastro_id  TEXT NOT NULL,
+    versao       INTEGER NOT NULL,
+    seq          INTEGER NOT NULL,
+    produto_json TEXT NOT NULL,
+    kit_json     TEXT NOT NULL,
+    criado_em    TEXT NOT NULL DEFAULT (datetime('now')),
+    aplicado_em  TEXT,
+    PRIMARY KEY (cadastro_id, versao)
+);
+
 -- Cópia local dos clientes ativos do Fire ("manter no importador"). Snapshot
 -- substitutivo a cada sync; envio ao Flow é gated por flowpcp_clientes_push.
 CREATE TABLE IF NOT EXISTS clientes_fire (
@@ -515,6 +529,7 @@ CREATE INDEX IF NOT EXISTS idx_erp_eventos_pendentes   ON erp_eventos_saida(base
 CREATE INDEX IF NOT EXISTS idx_erp_lote_perna_chave    ON erp_lote_perna(chave_lote);
 
 CREATE INDEX IF NOT EXISTS idx_cadastro_volta_produto  ON cadastro_volta(produto_id);
+CREATE INDEX IF NOT EXISTS idx_cadastro_exclusao_seq   ON cadastro_exclusao_backup(seq);
 """
 
 # Cada entrada: (table, column_name, ALTER TABLE DDL) — aplicada só se a coluna ainda não existir.

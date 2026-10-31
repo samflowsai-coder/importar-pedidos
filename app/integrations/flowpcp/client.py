@@ -52,7 +52,7 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 _TETO_BRUTO = 64 * 1024
 # Apply do catálogo: o Flow tem maxDuration 300 s e um apply por vez (409).
 APPLY_TIMEOUT_SECONDS = 300.0
-_ORDEM_ACOES = ("criar", "atualizar", "inativar")
+_ORDEM_ACOES = ("criar", "atualizar", "inativar", "excluir")
 
 
 @dataclass(frozen=True)
@@ -196,7 +196,7 @@ class FlowPCPClient:
         if acoes:
             pedidas = set(acoes)
             if not pedidas <= set(_ORDEM_ACOES):
-                raise ValueError("acoes com valor fora de criar/atualizar/inativar")
+                raise ValueError("acoes com valor fora de criar/atualizar/inativar/excluir")
             params["acoes"] = ",".join(a for a in _ORDEM_ACOES if a in pedidas)
         try:
             resp = self._client.get(_CADASTROS_PENDENTES_PATH, params=params)

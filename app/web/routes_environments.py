@@ -810,6 +810,7 @@ def cadastro_volta_flowpcp(env_id: str, _=Depends(require_admin)):
         "thread_desligada": not envio_habilitado(),
         "p0_ok": cadastro_volta.p0_ok(env["slug"]),
         "inativar_ligado": cadastro_volta.inativar_ligado(env["slug"]),
+        "excluir_ligado": cadastro_volta.excluir_ligado(env["slug"]),
         "sem_volta": por_estado.get("gravado_sem_volta", 0) + por_estado.get("erro_a_enviar", 0),
         "n_orfaos": por_estado.get("orfao", 0),
         "n_incertos": por_estado.get("incerto", 0) + n_antigos,
