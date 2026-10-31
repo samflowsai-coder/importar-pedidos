@@ -64,16 +64,14 @@ def guardar(
     produto: dict,
     kit: list[dict],
 ) -> bool:
-    """Uma linha por `(cadastro_id, versao)`: a reentrega não duplica. Antes de o DELETE
-    comitar (`aplicado_em` nulo) o backup é renovado com o estado de agora; depois, nunca
-    mais muda. True se gravou, False se já estava aplicado. Não faz commit: quem chama
-    commita e confere antes do DELETE."""
+    """Uma linha por `(cadastro_id, versao)`, que NUNCA é sobrescrita: se uma tentativa anterior
+    já guardou o backup, ele continua sendo o do produto que existia na época (se o código foi
+    reaproveitado por outro produto, o backup original não pode se perder). True se gravou,
+    False se já existia. Não faz commit: quem chama commita e confere antes do DELETE."""
     produto_json, kit_json = _json(produto), _json(kit)  # levanta antes de tocar no banco
     cur = conn.execute(
-        "INSERT INTO cadastro_exclusao_backup (cadastro_id, versao, seq, produto_json, kit_json) "
-        "VALUES (?, ?, ?, ?, ?) ON CONFLICT (cadastro_id, versao) DO UPDATE SET "
-        "seq = excluded.seq, produto_json = excluded.produto_json, "
-        "kit_json = excluded.kit_json, criado_em = datetime('now') WHERE aplicado_em IS NULL",
+        "INSERT OR IGNORE INTO cadastro_exclusao_backup "
+        "(cadastro_id, versao, seq, produto_json, kit_json) VALUES (?, ?, ?, ?, ?)",
         (cadastro_id, versao, int(seq), produto_json, kit_json),
     )
     return cur.rowcount == 1

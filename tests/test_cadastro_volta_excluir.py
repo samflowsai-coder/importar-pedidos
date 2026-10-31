@@ -277,7 +277,7 @@ def test_exclui_kit_apaga_a_composicao_antes_do_produto_e_guarda_tudo(ligar, env
             "DATA_CAD": date(2026, 10, 17),
         }
     }
-    flow = Flow([_excluir(seq=PAI_KIT, tipo="kit")])
+    flow = Flow([_excluir(seq=PAI_KIT, tipo="kit", nome="KIT3")])
     fire = FireExcluivel(produtos=produtos, kit=kit)
     _rodar(flow, fire, env_conn)
     assert fire.deletes == [
@@ -417,6 +417,17 @@ def test_par_ligado_a_kit_e_transitorio(ligar, env_conn):
     assert _livro(env_conn)["estado"] == "transitorio"
 
 
+def test_kit_pai_com_codigo_fora_do_formato_continua_transitorio(ligar, env_conn):
+    ligar()
+    _criado_pelo_flow(env_conn)
+    flow = Flow([_excluir()])
+    fire = FireExcluivel(kit=[(90, 1234567890, SEQ, 3)])
+    _rodar(flow, fire, env_conn)
+    erro = _erro(flow)
+    assert erro["tipo"] == "transitorio" and erro["codigo"] == "ligado_a_kit"
+    assert fire.deletes == []
+
+
 def test_o_kit_sai_e_o_par_e_reentregue_e_exclui(ligar, env_conn):
     ligar()
     _criado_pelo_flow(env_conn)
@@ -462,7 +473,7 @@ def test_coluna_que_o_backup_nao_serializa_e_definitiva_e_nao_apaga(ligar, env_c
     ligar()
     _criado_pelo_flow(env_conn)
     esquisito = {
-        SEQ: {"SEQ": SEQ, "DESCRICAO": "X", "DATA_CAD": date(2026, 10, 17), "COISA": object()}
+        SEQ: {"SEQ": SEQ, "DESCRICAO": "MEIA SOQUETE", "DATA_CAD": date(2026, 10, 17), "COISA": object()}
     }
     flow, fire = Flow([_excluir()]), FireExcluivel(produtos=esquisito)
     _rodar(flow, fire, env_conn)
@@ -479,7 +490,7 @@ def test_contagem_divergente_desfaz_tudo_e_e_transitorio(ligar, env_conn):
     _criado_pelo_flow(env_conn, seq=PAI_KIT)
     produtos = {PAI_KIT: {"SEQ": PAI_KIT, "DESCRICAO": "KIT3", "DATA_CAD": date(2026, 10, 17)}}
     kit = [(90, PAI_KIT, 3170, 3), (91, PAI_KIT, 3171, 3)]
-    flow = Flow([_excluir(seq=PAI_KIT, tipo="kit")])
+    flow = Flow([_excluir(seq=PAI_KIT, tipo="kit", nome="KIT3")])
     fire = FireExcluivel(produtos=produtos, kit=kit, kit_a_mais=1)
     _rodar(flow, fire, env_conn)
     erro = _erro(flow)
@@ -540,14 +551,105 @@ def test_delete_comitou_mas_o_livro_nao_soube_responde_gravado_sem_tocar_no_fire
     assert fire.deletes == [] and SEQ in fire.produtos
 
 
-def test_backup_de_tentativa_anterior_nao_aplicada_e_atualizado(ligar, env_conn):
+def test_retentativa_com_o_mesmo_produto_usa_o_backup_que_ja_existe(ligar, env_conn):
     ligar()
     _criado_pelo_flow(env_conn)
-    bk.guardar(env_conn, EXCLUIR_ID, 3, SEQ, {"SEQ": SEQ, "DESCRICAO": "ANTIGO"}, [])
+    antigo = {
+        "SEQ": SEQ,
+        "DESCRICAO": "MEIA SOQUETE",
+        "BLOQUEADO": "Nao",
+        "DATA_CAD": date(2026, 10, 17),
+        "UNIDADE": "PAR",
+    }
+    bk.guardar(env_conn, EXCLUIR_ID, 3, SEQ, antigo, [])
     env_conn.commit()
-    _rodar(Flow([_excluir()]), FireExcluivel(), env_conn)
-    produto, _ = bk.restaurar(bk.buscar(env_conn, EXCLUIR_ID, 3))
-    assert produto["DESCRICAO"] == "MEIA SOQUETE"
+    flow, fire = Flow([_excluir()]), FireExcluivel()
+    _rodar(flow, fire, env_conn)
+    assert SEQ not in fire.produtos and flow.posts[0][1]["resultado"] == "gravado"
+
+
+def test_seq_reaproveitado_apos_commit_ambiguo_nao_apaga_o_produto_novo(ligar, env_conn):
+    """Achado da revisão: o DELETE comitou, a resposta se perdeu, o Fire deu o mesmo SEQ a um
+    produto novo (mesmo nome, mesmo dia). O backup original tem que sobreviver e nada é apagado."""
+    ligar()
+    _criado_pelo_flow(env_conn)
+    original = {
+        "SEQ": SEQ,
+        "DESCRICAO": "MEIA SOQUETE",
+        "BLOQUEADO": "Nao",
+        "DATA_CAD": date(2026, 10, 17),
+        "UNIDADE": "PAR",
+    }
+    bk.guardar(env_conn, EXCLUIR_ID, 3, SEQ, original, [])
+    env_conn.commit()
+    novo = {
+        SEQ: {
+            "SEQ": SEQ,
+            "DESCRICAO": "MEIA SOQUETE",
+            "BLOQUEADO": "Nao",
+            "DATA_CAD": date(2026, 10, 17),
+            "UNIDADE": "CX",
+        }
+    }
+    flow, fire = Flow([_excluir()]), FireExcluivel(produtos=novo)
+    _rodar(flow, fire, env_conn)
+    erro = _erro(flow)
+    assert erro["tipo"] == "definitivo" and erro["codigo"] == "produto_mudou"
+    assert fire.deletes == [] and SEQ in fire.produtos
+    assert bk.restaurar(bk.buscar(env_conn, EXCLUIR_ID, 3))[0] == original  # intocado
+
+
+def test_kit_que_mudou_desde_o_backup_nao_apaga(ligar, env_conn):
+    ligar()
+    _criado_pelo_flow(env_conn, seq=PAI_KIT)
+    linha = {"SEQ": PAI_KIT, "DESCRICAO": "KIT3", "DATA_CAD": date(2026, 10, 17)}
+    bk.guardar(
+        env_conn,
+        EXCLUIR_ID,
+        3,
+        PAI_KIT,
+        linha,
+        [{"CODIGO": 90, "CODPRODUTO_PAI": PAI_KIT, "CODPRODUTO": 3170, "QTD": 3}],
+    )
+    env_conn.commit()
+    flow = Flow([_excluir(seq=PAI_KIT, tipo="kit", nome="KIT3")])
+    fire = FireExcluivel(produtos={PAI_KIT: linha}, kit=[(91, PAI_KIT, 3999, 3)])
+    _rodar(flow, fire, env_conn)
+    assert _erro(flow)["codigo"] == "produto_mudou" and fire.deletes == []
+
+
+def test_seq_reaproveitado_por_produto_de_outro_nome_nao_apaga(ligar, env_conn):
+    """Sem backup anterior: a fábrica apagou à mão e cadastrou outro produto no mesmo dia."""
+    ligar()
+    _criado_pelo_flow(env_conn)
+    outro = {
+        SEQ: {
+            "SEQ": SEQ,
+            "DESCRICAO": "CUECA BOXER",
+            "BLOQUEADO": "Nao",
+            "DATA_CAD": date(2026, 10, 17),
+        }
+    }
+    flow, fire = Flow([_excluir()]), FireExcluivel(produtos=outro)
+    _rodar(flow, fire, env_conn)
+    assert _erro(flow)["codigo"] == "produto_mudou"
+    assert fire.deletes == [] and SEQ in fire.produtos
+    assert bk.buscar(env_conn, EXCLUIR_ID, 3) is None
+
+
+def test_nome_do_criar_tambem_vale_como_identidade(ligar, env_conn):
+    """O Flow renomeou depois do criar e o Fire ainda tem o nome do criar: é o mesmo produto."""
+    ligar()
+    env_conn.execute(
+        "INSERT INTO cadastro_volta (cadastro_id, versao, estado, acao, tipo, produto_id, "
+        "erp_produto_id, seq_reservado, iniciado_em, plano_json) "
+        "VALUES (?, 1, 'confirmado', 'criar', 'simples', ?, ?, ?, '2026-10-17 13:00:00', ?)",
+        (CRIAR_ID, PROD, str(SEQ), SEQ, json.dumps({"campos": {"DESCRICAO": "MEIA SOQUETE"}})),
+    )
+    env_conn.commit()
+    flow, fire = Flow([_excluir(nome="MEIA SOQUETE RENOMEADA")]), FireExcluivel()
+    _rodar(flow, fire, env_conn)
+    assert SEQ not in fire.produtos and flow.posts[0][1]["resultado"] == "gravado"
 
 
 # --- desfecho no Flow ------------------------------------------------------------------------
@@ -607,7 +709,7 @@ def test_nunca_chega_a_apagar_o_que_nao_e_o_seq_pedido(ligar, env_conn):
     ligar()
     _criado_pelo_flow(env_conn)
     produtos = {
-        SEQ: {"SEQ": SEQ, "DESCRICAO": "A", "DATA_CAD": date(2026, 10, 17)},
+        SEQ: {"SEQ": SEQ, "DESCRICAO": "MEIA SOQUETE", "DATA_CAD": date(2026, 10, 17)},
         SEQ + 1: {"SEQ": SEQ + 1, "DESCRICAO": "B", "DATA_CAD": date(2026, 10, 17)},
     }
     fire = FireExcluivel(produtos=produtos)

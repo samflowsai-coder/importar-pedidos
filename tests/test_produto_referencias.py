@@ -28,11 +28,27 @@ def test_ident_so_aceita_nome_de_coluna():
         pr._ident('X"; DROP TABLE PRODUTOS; --')
 
 
+# Colunas com PROD, MATERIAL, TECIDO ou VARIANTE no nome que foram LIDAS e deixadas de fora de
+# propósito (31/10/2026, catálogo da .7). Coluna nova com essas palavras aparece como falha aqui
+# e alguém decide se entra na regra ou nesta lista.
+REVISADAS_FORA = {
+    ("PRODUTOS", "CODFAMILIA_TECIDO"),  # família de tecido, não produto
+    ("PRODUTOS", "CONFEC_TIPO_COMP_TECIDOS"),  # tipo de composição
+    ("PRODUTOS", "TECIDO_CODGAVETA"),  # gaveta de estoque
+    ("PRODUTOS_KIT", "CODPRODUTO"),  # filho do kit: guarda própria (ligado_a_kit)
+    ("PRODUTOS_KIT", "CODPRODUTO_PAI"),  # pai: apagado junto com o kit
+    ("TXT_CONFIG", "GRUPOTECIDOCOMPRADO"),
+    ("TXT_CONFIG", "GRUPOTECIDOCRU"),
+    ("TXT_CONFIG", "GRUPOTECIDOPRONTO"),  # grupos de configuração
+    ("TXT_PECAS", "CODFORN_TECIDO"),  # fornecedor
+}
+
+
 def test_alvos_do_catalogo_real_cobrem_o_que_a_varredura_de_28_10_provou(catalogo_real):
     alvos = pr.colunas_de_uso(catalogo_real)
     tabelas = {t for t, _ in alvos}
     assert pr.TABELAS_OBRIGATORIAS <= tabelas
-    assert len(alvos) >= 60  # 69 colunas inteiras com PROD no nome na .7 em 31/10/2026
+    assert len(alvos) == 85  # 69 com PROD + material, tecido e variante, na .7 em 31/10/2026
     # a chave de cada tabela não é referência a produto; o pai do kit é apagado junto
     assert ("PRODUTOS", "SEQ") not in alvos
     assert ("PRODUTOS_KIT", "CODPRODUTO_PAI") not in alvos
@@ -41,6 +57,17 @@ def test_alvos_do_catalogo_real_cobrem_o_que_a_varredura_de_28_10_provou(catalog
     assert ("PRODUTOS", "CONFEC_COD_PROD_NF") in alvos
     assert ("NOTAPROD", "CODPRODUTO_ORIGEM") in alvos
     assert ("PRODUTOS_ENG", "CODPRODUTO_ENG") in alvos
+    # sem "PROD" no nome, mas guardam produto (achado da revisão)
+    assert ("PRODUTOS", "TOALHA_CODTECIDO") in alvos
+    assert ("PRODUTOS_CONFEC_FICHA", "CODMATERIAL") in alvos
+    assert ("PRODUTOS", "CODVARIANTE") in alvos
+
+
+def test_nenhuma_coluna_com_palavra_de_produto_fica_de_fora_sem_revisao(catalogo_real):
+    alvos = set(pr.colunas_de_uso(catalogo_real))
+    palavras = ("PROD", "MATERIAL", "TECIDO", "VARIANTE")
+    fora = {(t, c) for t, c, _ in catalogo_real if any(p in c for p in palavras)} - alvos
+    assert fora == REVISADAS_FORA
 
 
 def test_alvos_ignoram_texto_sistema_e_colunas_sem_prod():

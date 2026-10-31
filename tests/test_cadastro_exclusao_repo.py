@@ -38,20 +38,14 @@ def test_ida_e_volta_preserva_tipos(conn):
     assert repo.restaurar(linha) == (PRODUTO, KIT)
 
 
-def test_reentrega_nao_duplica_e_antes_de_aplicar_renova(conn):
+def test_reentrega_nao_duplica_nem_sobrescreve_nunca(conn):
     assert repo.guardar(conn, "c1", 2, 709219, PRODUTO, KIT) is True
-    atual = {**PRODUTO, "DESCRICAO": "EDITADO NA TELA"}
-    assert repo.guardar(conn, "c1", 2, 709219, atual, []) is True  # nada apagado ainda
+    outro = {**PRODUTO, "DESCRICAO": "OUTRO PRODUTO, MESMO CODIGO"}
+    assert repo.guardar(conn, "c1", 2, 709219, outro, []) is False
     n = conn.execute("SELECT COUNT(*) FROM cadastro_exclusao_backup").fetchone()[0]
-    assert (
-        n == 1 and repo.restaurar(repo.buscar(conn, "c1", 2))[0]["DESCRICAO"] == "EDITADO NA TELA"
-    )
-
-
-def test_depois_de_aplicado_o_backup_nunca_mais_muda(conn):
-    repo.guardar(conn, "c1", 2, 709219, PRODUTO, KIT)
+    assert n == 1 and repo.restaurar(repo.buscar(conn, "c1", 2)) == (PRODUTO, KIT)
     repo.marcar_aplicado(conn, "c1", 2)
-    assert repo.guardar(conn, "c1", 2, 709219, {**PRODUTO, "DESCRICAO": "OUTRA"}, []) is False
+    assert repo.guardar(conn, "c1", 2, 709219, outro, []) is False
     assert repo.restaurar(repo.buscar(conn, "c1", 2)) == (PRODUTO, KIT)
 
 

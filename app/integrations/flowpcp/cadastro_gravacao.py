@@ -639,6 +639,29 @@ def _na_janela_do_criar(lido: dict, criar: dict) -> bool:
     return janela is not None and data_cad is not None and janela[0] <= data_cad <= janela[1]
 
 
+def _id_valido(valor: object) -> bool:
+    """SEQ que cabe na frase ao Flow (mesmo formato do contrato: 1 a 9 dígitos, sem zero à esquerda)."""
+    return re.fullmatch(r"[1-9][0-9]{0,8}", str(valor)) is not None
+
+
+def _e_o_produto(lido: dict, item: CadastroPendente, criar: dict) -> bool:
+    """A descrição do produto lido no Fire é a que o Flow conhece (a do item, ou a que o
+    `criar` gravou). Cobre o código reaproveitado por outro produto dentro da janela do
+    DATA_CAD, inclusive depois de a fábrica apagar à mão e cadastrar outro no mesmo dia."""
+    descricao = lido.get("DESCRICAO")
+    if not isinstance(descricao, str):
+        return False
+    aceitos = {cv._normaliza_nome(item.nome)}
+    try:
+        plano = json.loads(criar.get("plano_json") or "{}")
+        nome_criado = plano["campos"]["DESCRICAO"]
+        if isinstance(nome_criado, str):
+            aceitos.add(cv._normaliza_nome(nome_criado))
+    except (TypeError, ValueError, KeyError):
+        pass
+    return cv._normaliza_nome(descricao) in aceitos
+
+
 def _guardar_backup(lote: _Lote, item: CadastroPendente, linha: dict, kit: list[dict]) -> str | None:
     """Backup no SQLite, commitado e conferido por releitura ANTES de qualquer DELETE.
     -> None (ok) | "transitorio" | "definitivo"."""
@@ -695,12 +718,20 @@ def _excluir_item(lote: _Lote, fire, item: CadastroPendente) -> None:  # noqa: C
                   "DATA_CAD fora da janela do criar do Flow: o código foi reaproveitado",
                   rollback_comprovado=True)
             return
+        anterior = backup_repo.restaurar(feito) if feito is not None else None
+        if not _e_o_produto(linha, item, criar) or (anterior is not None and anterior[0] != linha):
+            # Outro produto no mesmo código, ou o produto mudou desde a tentativa anterior
+            # (cujo backup fica intacto): quem decide é uma pessoa, nada é apagado.
+            _erro(lote, cid, versao, "definitivo", "produto_mudou",
+                  "o produto lido no ERP não é o que o Flow criou / mudou desde o backup",
+                  rollback_comprovado=True)
+            return
         pais = cadastro_fire.pais_do_componente(fire, seq)
         if pais:
-            detalhe = ", ".join(str(p) for p in pais[:5])
+            validos = [str(p) for p in pais[:5] if _id_valido(p)]
             _erro(lote, cid, versao, "transitorio", "ligado_a_kit",
                   f"componente de {len(pais)} kit(s) no ERP", rollback_comprovado=True,
-                  mensagem=mensagem_para_flow("ligado_a_kit", detalhe))
+                  mensagem=mensagem_para_flow("ligado_a_kit", ", ".join(validos) or None))
             return
         try:
             if lote.alvos_de_uso is None:
@@ -716,6 +747,10 @@ def _excluir_item(lote: _Lote, fire, item: CadastroPendente) -> None:  # noqa: C
                   rollback_comprovado=True, mensagem=mensagem_para_flow("em_uso_no_erp", uso))
             return
         kit = cadastro_fire.ler_kit_completo(fire, seq)
+        if anterior is not None and anterior[1] != kit:
+            _erro(lote, cid, versao, "definitivo", "produto_mudou",
+                  "a composição mudou desde o backup", rollback_comprovado=True)
+            return
         falha = _guardar_backup(lote, item, linha, kit)
         if falha is not None:
             _erro(lote, cid, versao, falha, "backup_falhou", "backup não gravado",

@@ -93,6 +93,7 @@ _MENSAGENS_ERRO: dict[str, str] = {
     "erp_ocupado": "O ERP estava ocupado; o Portal tenta de novo.",
     "consulta_erp_falhou": "Não foi possível consultar o ERP agora; o Portal tenta de novo.",
     "produto_nao_criado_pelo_flow": "Este produto não foi criado pelo Flow, então o Portal não o exclui do ERP. A exclusão fica com a área de cadastro.",
+    "produto_mudou": "O produto no ERP não é mais o mesmo que o Flow criou (os dados mudaram desde a última tentativa). O Portal não apagou nada; a área de cadastro confere.",
     "backup_falhou": "O Portal não conseguiu guardar a cópia de segurança antes de excluir. Nada foi apagado.",
 }
 _TABELA_USO = re.compile(r"^[A-Z][A-Z0-9_$]*\.[A-Z][A-Z0-9_$]*$")
@@ -116,7 +117,10 @@ def mensagem_para_flow(codigo: str, detalhe: str | None = None) -> str:
         tabela = detalhe.split(".", 1)[0]
         return f"Este produto está em uso no ERP (tabela {tabela}) e não pode ser excluído."
     if codigo == "ligado_a_kit":
-        if detalhe is None or not _CODIGOS_KIT.fullmatch(detalhe):
+        if detalhe is None:
+            return ("Este produto ainda faz parte de um kit no ERP. "
+                    "O Portal tenta de novo depois que o kit for excluído.")
+        if not _CODIGOS_KIT.fullmatch(detalhe):
             raise ValueError("detalhe fora de códigos de kit")
         return (f"Este produto ainda faz parte de um kit no ERP (código {detalhe}). "
                 "O Portal tenta de novo depois que o kit for excluído.")
