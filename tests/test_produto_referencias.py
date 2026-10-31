@@ -28,7 +28,7 @@ def test_ident_so_aceita_nome_de_coluna():
         pr._ident('X"; DROP TABLE PRODUTOS; --')
 
 
-# Colunas com PROD, MATERIAL, TECIDO ou VARIANTE no nome que foram LIDAS e deixadas de fora de
+# Colunas com PROD, MATERIAL, TECIDO, VARIANTE ou FIO no nome que foram LIDAS e deixadas de fora de
 # propósito (31/10/2026, catálogo da .7). Coluna nova com essas palavras aparece como falha aqui
 # e alguém decide se entra na regra ou nesta lista.
 REVISADAS_FORA = {
@@ -41,6 +41,20 @@ REVISADAS_FORA = {
     ("TXT_CONFIG", "GRUPOTECIDOCRU"),
     ("TXT_CONFIG", "GRUPOTECIDOPRONTO"),  # grupos de configuração
     ("TXT_PECAS", "CODFORN_TECIDO"),  # fornecedor
+    # fio: quantidades, cor, grupo, fornecedor e itens de nota (não são o produto)
+    ("NOTAPROD", "CODFORNPROCEDFIO"),
+    ("NOTAPROD", "CODITEMNF_LOTE_FIO_ENT"),
+    ("NOTA_FIOS_CAIXAS", "CODESTLOCALFIO"),
+    ("PRODUTOS", "CODCORFIO"),
+    ("PRODUTOS", "FIO_CABOS"),
+    ("PRODUTOS", "QTD_FIOS"),
+    ("PRODUTOS", "QTD_FIOS_URD"),
+    ("PRODUTOS_RAPORTE_FIOS", "QTD_FIOS"),
+    ("PROD_AJUSTES", "CODITEM_NF_SAIDA_FIO"),
+    ("TXT_CONFIG", "GRUPOFIO"),
+    ("TXT_FICHA_TECIDOS", "QTD_FIOS"),
+    ("TXT_PROC_PROG_PCS_FIOS", "CODITEMFIO_FICHA"),
+    ("TXT_URDUMES", "QTD_FIOS"),
 }
 
 
@@ -48,7 +62,7 @@ def test_alvos_do_catalogo_real_cobrem_o_que_a_varredura_de_28_10_provou(catalog
     alvos = pr.colunas_de_uso(catalogo_real)
     tabelas = {t for t, _ in alvos}
     assert pr.TABELAS_OBRIGATORIAS <= tabelas
-    assert len(alvos) == 85  # 69 com PROD + material, tecido e variante, na .7 em 31/10/2026
+    assert len(alvos) == 93  # 69 com PROD + material, tecido, variante e fio, na .7 em 31/10/2026
     # a chave de cada tabela não é referência a produto; o pai do kit é apagado junto
     assert ("PRODUTOS", "SEQ") not in alvos
     assert ("PRODUTOS_KIT", "CODPRODUTO_PAI") not in alvos
@@ -61,11 +75,12 @@ def test_alvos_do_catalogo_real_cobrem_o_que_a_varredura_de_28_10_provou(catalog
     assert ("PRODUTOS", "TOALHA_CODTECIDO") in alvos
     assert ("PRODUTOS_CONFEC_FICHA", "CODMATERIAL") in alvos
     assert ("PRODUTOS", "CODVARIANTE") in alvos
+    assert ("PRODUTOS_FIOS_FICHA", "CODFIO") in alvos
 
 
 def test_nenhuma_coluna_com_palavra_de_produto_fica_de_fora_sem_revisao(catalogo_real):
     alvos = set(pr.colunas_de_uso(catalogo_real))
-    palavras = ("PROD", "MATERIAL", "TECIDO", "VARIANTE")
+    palavras = ("PROD", "MATERIAL", "TECIDO", "VARIANTE", "FIO")
     fora = {(t, c) for t, c, _ in catalogo_real if any(p in c for p in palavras)} - alvos
     assert fora == REVISADAS_FORA
 

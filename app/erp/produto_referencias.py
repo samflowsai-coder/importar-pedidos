@@ -24,12 +24,12 @@ SQL_CATALOGO = (
     "JOIN RDB$RELATIONS R ON R.RDB$RELATION_NAME = RF.RDB$RELATION_NAME "
     "WHERE COALESCE(R.RDB$SYSTEM_FLAG, 0) = 0 AND R.RDB$VIEW_BLR IS NULL"
 )
-# Colunas que guardam produto sem "PROD" no nome: material da ficha de confecção, tecido
-# (tecido também é linha de PRODUTOS) e variante. Sem chave estrangeira no Fire (0 FKs para
+# Colunas que guardam produto sem "PROD" no nome: material da ficha de confecção, tecido e fio
+# (também são linhas de PRODUTOS) e variante. Sem chave estrangeira no Fire (0 FKs para
 # PRODUTOS na .7, 31/10/2026), o nome é a única pista. Revisadas e deixadas de fora de
 # propósito (não guardam SEQ): CODFAMILIA_TECIDO, CONFEC_TIPO_COMP_TECIDOS, TECIDO_CODGAVETA,
 # GRUPOTECIDO*, CODITEM*/COD_ITEM* (itens de nota, venda e OP), ORIG_CODIGO* (documento de origem).
-_EXTRA_NOME = re.compile(r"CODMATERIAL|CODTECIDO|CODVARIANTE")
+_EXTRA_NOME = re.compile(r"CODMATERIAL|CODTECIDO|CODVARIANTE|CODFIO")
 # Tabelas que a varredura de 28/10/2026 provou ter coluna de produto. Se o catálogo lido
 # não trouxer alguma, a leitura está incompleta e nada é excluído.
 TABELAS_OBRIGATORIAS = frozenset(
@@ -63,7 +63,7 @@ def _ident(nome: str) -> str:
 
 def colunas_de_uso(catalogo: list[tuple[str, str, int]]) -> list[tuple[str, str]]:
     """(tabela, coluna) do catálogo (tabela, coluna, tipo) que pode guardar um SEQ de produto:
-    inteira, com PROD (ou material, tecido e variante: `_EXTRA_NOME`) no nome, em tabela de
+    inteira, com PROD (ou material, tecido, fio e variante: `_EXTRA_NOME`) no nome, em tabela de
     usuário, fora de `_FORA`."""
     return sorted(
         {
