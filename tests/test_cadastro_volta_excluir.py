@@ -840,3 +840,41 @@ def _depois(horas):
     r = Relogio()
     r.agora = datetime.now(UTC) + timedelta(hours=horas)
     return r
+
+
+def test_codigo_reaproveitado_fora_da_janela_com_backup_anterior_vira_incerto(ligar, env_conn):
+    """O `excluir` costuma chegar dias depois do `criar`: o produto novo tem DATA_CAD de hoje,
+    fora da janela. Com backup anterior isso não prova que nada foi apagado: `incerto`."""
+    ligar()
+    _criado_pelo_flow(env_conn)
+    fire = FireExcluivel(falhas={"DELETE FROM PRODUTOS WHERE": [FdbError("x", -902, 335544721)]})
+    _rodar(Flow([_excluir()]), fire, env_conn)
+    original = bk.restaurar(bk.buscar(env_conn, EXCLUIR_ID, 3))[0]
+    fire.produtos = {SEQ: {**original, "DESCRICAO": "OUTRO", "DATA_CAD": date(2026, 10, 30)}}
+    flow2 = Flow([_excluir()])
+    cv.processar_ambiente(
+        "mm", _client=flow2, _fire_conn=fire, _env_conn=env_conn, _relogio=_depois(horas=2)
+    )
+    assert flow2.posts == [] and SEQ in fire.produtos
+    assert _livro(env_conn)["estado"] == "incerto"
+
+
+def test_origem_desempata_por_iniciado_em_e_nao_so_por_rowid(env_conn):
+    """`reservar` reaproveita a linha antiga (rowid antigo, iniciado_em novo): o criar mais
+    recente é o de maior iniciado_em, não o de maior rowid."""
+
+    def criar(cid, produto, quando):
+        env_conn.execute(
+            "INSERT INTO cadastro_volta (cadastro_id, versao, estado, acao, tipo, produto_id, "
+            "erp_produto_id, seq_reservado, iniciado_em) VALUES (?, 1, 'confirmado', 'criar', "
+            "'simples', ?, ?, ?, ?)",
+            (cid, produto, str(SEQ), SEQ, quando),
+        )
+
+    criar(
+        "b1b1b1b1-b1b1-41b1-81b1-b1b1b1b1b1b1", OUTRO_PRODUTO, "2026-10-17 16:00:00"
+    )  # B: rowid 1
+    criar(CRIAR_ID, PROD, "2026-10-17 13:00:00")  # A: rowid 2, mas gravou antes
+    env_conn.commit()
+    assert repo.criar_que_gravou_seq(env_conn, str(SEQ), OUTRO_PRODUTO) is not None  # B é o dono
+    assert repo.criar_que_gravou_seq(env_conn, str(SEQ), PROD) is None  # A já não é

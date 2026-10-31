@@ -522,7 +522,8 @@ def criar_que_gravou_seq(
             # um `criar` com este mesmo código, o código já não é deste.
             "AND NOT EXISTS (SELECT 1 FROM cadastro_volta o WHERE o.acao = 'criar' "
             "AND o.erp_produto_id = c.erp_produto_id AND o.produto_id != c.produto_id "
-            "AND o.rowid > c.rowid AND o.estado IN ('gravado_sem_volta', 'confirmado')) "
+            "AND (o.iniciado_em, o.rowid) > (c.iniciado_em, c.rowid) "
+            "AND o.estado IN ('gravado_sem_volta', 'confirmado')) "
             "ORDER BY c.iniciado_em DESC, c.rowid DESC LIMIT 1",
             (str(seq), produto_id),
         )

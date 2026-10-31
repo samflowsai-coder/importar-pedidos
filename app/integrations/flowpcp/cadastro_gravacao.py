@@ -713,8 +713,8 @@ def _divergiu_do_backup(lote: _Lote, item: CadastroPendente, motivo: str) -> Non
 
 
 def _guardas_e_delete(lote: _Lote, fire, item: CadastroPendente, criar: dict) -> str:  # noqa: C901
-    """Guardas na ordem: origem, janela do DATA_CAD, identidade, kit, uso no ERP, backup; só
-    então o DELETE. -> "apagado" | "ja_excluido" | "barrado" (o erro ou o incerto já foi dado).
+    """Guardas na ordem: backup anterior, janela do DATA_CAD, identidade, kit, uso no ERP, backup;
+    só então o DELETE. -> "apagado" | "ja_excluido" | "barrado" (o erro ou o incerto já foi dado).
     Levanta o que o ERP ou o livro levantarem; quem chama classifica."""
     cid, versao, conn = str(item.cadastroId), item.versao, lote.env_conn
     seq = int(item.erpProdutoId)
@@ -724,18 +724,20 @@ def _guardas_e_delete(lote: _Lote, fire, item: CadastroPendente, criar: dict) ->
     linha = cadastro_fire.ler_linha_completa(fire, seq)
     if linha is None:
         return "ja_excluido"
+    anterior = backup_repo.restaurar(feito) if feito is not None else None
+    if anterior is not None and anterior[0] != linha:
+        # Antes da janela e do nome: com backup de uma tentativa anterior, "outro produto no
+        # código" não prova que nada foi apagado (o DELETE anterior pode ter comitado).
+        _divergiu_do_backup(lote, item, "o produto lido mudou")
+        return "barrado"
     if not _na_janela_do_criar(linha, criar):
         _erro(lote, cid, versao, "definitivo", "produto_nao_criado_pelo_flow",
               "DATA_CAD fora da janela do criar do Flow: o código foi reaproveitado",
               rollback_comprovado=True)
         return "barrado"
-    anterior = backup_repo.restaurar(feito) if feito is not None else None
-    if not _e_o_produto(linha, item, criar) or (anterior is not None and anterior[0] != linha):
-        if anterior is not None:
-            _divergiu_do_backup(lote, item, "o produto lido mudou")
-        else:
-            _erro(lote, cid, versao, "definitivo", "produto_mudou",
-                  "o produto lido no ERP não é o que o Flow criou", rollback_comprovado=True)
+    if not _e_o_produto(linha, item, criar):
+        _erro(lote, cid, versao, "definitivo", "produto_mudou",
+              "o produto lido no ERP não é o que o Flow criou", rollback_comprovado=True)
         return "barrado"
     pais = cadastro_fire.pais_do_componente(fire, seq)
     if pais:
