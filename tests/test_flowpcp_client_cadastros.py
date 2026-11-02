@@ -156,3 +156,13 @@ def test_post_429_nao_repete():
 
     _cliente(handler).post_cadastro_resultado("2222", {"versao": 1})
     assert len(chamadas) == 1
+
+
+def test_acoes_com_excluir_em_ordem_canonica():
+    vistos = _vistos_get(limite=20, acoes=("excluir", "inativar", "atualizar", "criar"))
+    assert vistos == [{"limite": "20", "acoes": "criar,atualizar,inativar,excluir"}]
+
+
+def test_acao_fora_da_lista_continua_recusada():
+    with pytest.raises(ValueError):
+        _cliente(lambda req: None).list_cadastros_pendentes(acoes=("apagar",))

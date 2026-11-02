@@ -268,7 +268,7 @@ def _decidir(fire, env_conn, linha: dict, iniciado: datetime | None) -> tuple:
     seqs = [seq] if seq is not None else []
     if iniciado is None:
         return ("incerto", "iniciado_em ilegível no livro", seqs)
-    if acao in ("atualizar", "inativar"):
+    if acao in ("atualizar", "inativar", "excluir"):
         return ("reaplicar", f"{acao} é idempotente")
     if linha["plano_json"] is None and seq is None:
         # Sem plano a linha foi reservada só para responder erro: nada saiu ao ERP.

@@ -1,7 +1,8 @@
 """Única porta de ESCRITA do cadastro de produto no Fire (volta Flow -> Fire).
 
-Uma transação por cadastro, SQL sempre parametrizado, nunca DELETE em PRODUTOS
-(só a composição do pai em PRODUTOS_KIT é trocada). `PRODUTOS.SEQ` e
+Uma transação por cadastro, SQL sempre parametrizado. DELETE só em `excluir`
+(PRODUTOS_KIT do pai e depois PRODUTOS, na mesma transação); nas outras ações só a
+composição do pai em PRODUTOS_KIT é trocada. `PRODUTOS.SEQ` e
 `PRODUTOS_KIT.CODIGO` não têm gerador: MAX+1 sob lock, e colisão com a tela do
 Fire tenta de novo em transação nova (spec 2026-10-16 §6.3).
 
@@ -96,6 +97,11 @@ class ReservaFalhouError(Exception):
     """`ao_reservar` (livro SQLite) falhou: não é erro do Fire e não se repete."""
 
 
+class ContagemDivergenteError(Exception):
+    """`excluir`: o DELETE apagou um número de linhas diferente do esperado (o kit mudou, ou
+    o produto sumiu, entre a leitura e o DELETE). A transação foi desfeita; tenta de novo."""
+
+
 def _checa_colunas(campos: dict) -> None:
     fora = set(campos) - COLUNAS_PERMITIDAS
     if fora:
@@ -150,6 +156,8 @@ def classificar_erro(exc: BaseException) -> Literal["colisao", "lock", "conexao"
     gdscode), por último o texto (frase inteira, conexão antes de lock)."""
     if isinstance(exc, FirebirdConnectionError):
         return "conexao"
+    if isinstance(exc, ContagemDivergenteError):
+        return "lock"  # o estado mudou debaixo do comando: transitório, nunca recusa do ERP
     args = getattr(exc, "args", ())
     if len(args) == 3 and isinstance(args[1], int) and isinstance(args[2], int):
         if args[2] in _GDS:
@@ -333,5 +341,66 @@ def inserir_marcas(conn, itens: list[tuple[int, str]]) -> None:
     try:
         for codigo, nome in itens:
             cur.execute("INSERT INTO PRODUTOS_MARCA (CODIGO, MARCA) VALUES (?, ?)", (codigo, nome))
+    finally:
+        cur.close()
+
+
+def ler_linha_completa(conn, seq: int) -> dict | None:
+    """Linha inteira de PRODUTOS (todas as colunas), para o backup do `excluir`."""
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM PRODUTOS WHERE SEQ = ?", (seq,))
+        linha = cur.fetchone()
+        if linha is None:
+            return None
+        return dict(zip((d[0].strip() for d in cur.description), linha, strict=True))
+    finally:
+        cur.close()
+
+
+def ler_kit_completo(conn, seq: int) -> list[dict]:
+    """Linhas de PRODUTOS_KIT em que `seq` é o pai (a composição), para o backup."""
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM PRODUTOS_KIT WHERE CODPRODUTO_PAI = ? ORDER BY CODIGO", (seq,))
+        nomes = [d[0].strip() for d in cur.description]
+        return [dict(zip(nomes, r, strict=True)) for r in cur.fetchall()]
+    finally:
+        cur.close()
+
+
+def pais_do_componente(conn, seq: int) -> list[int]:
+    """SEQs dos kits que ainda têm `seq` como componente. Par ligado a kit não se exclui."""
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT CODPRODUTO_PAI FROM PRODUTOS_KIT WHERE CODPRODUTO = ? ORDER BY CODPRODUTO_PAI",
+            (seq,),
+        )
+        return [int(r[0]) for r in cur.fetchall()]
+    finally:
+        cur.close()
+
+
+def excluir(conn, *, seq: int, linhas_kit: int) -> Gravacao:
+    """Apaga o produto: PRODUTOS_KIT do pai e depois PRODUTOS, numa transação, conferindo
+    a contagem de cada DELETE. Qualquer divergência ou falha desfaz tudo e relança.
+    `linhas_kit` é quantas linhas de composição o chamador leu (e salvou no backup)."""
+    cur = conn.cursor()
+    try:
+        if linhas_kit:
+            cur.execute("DELETE FROM PRODUTOS_KIT WHERE CODPRODUTO_PAI = ?", (seq,))
+            if cur.rowcount != linhas_kit:
+                raise ContagemDivergenteError(
+                    f"kit do SEQ {seq}: apagou {cur.rowcount}, esperava {linhas_kit}"
+                )
+        cur.execute("DELETE FROM PRODUTOS WHERE SEQ = ?", (seq,))
+        if cur.rowcount != 1:
+            raise ContagemDivergenteError(f"SEQ {seq}: apagou {cur.rowcount}, esperava 1")
+        conn.commit()
+        return Gravacao(seq=seq, acao="excluir")
+    except BaseException:
+        _desfaz(conn)
+        raise
     finally:
         cur.close()

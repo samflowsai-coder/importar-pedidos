@@ -123,6 +123,14 @@ class CadastroPendente(_Estrito):
         return v
 
 
+class CadastroExcluir(CadastroPendente):
+    """`cadastroExcluirV1`: o Flow manda só a identidade do produto, sem os campos de
+    cadastro (`grupoErp` não vem). As ações antigas seguem exigindo `grupoErp`."""
+
+    acao: Literal["excluir"]  # type: ignore[assignment]
+    grupoErp: GrupoRef | None = None  # type: ignore[assignment]  # noqa: N815
+
+
 class PendentesResposta(BaseModel):
     """Resposta da fila. Tolera chave nova; `cadastros` fica crua: item que não é
     objeto vira erro só dele em `validar_item`. `capacidades` malformada = nenhuma
@@ -227,11 +235,14 @@ def chaves_desconhecidas(bruto: dict) -> list[str]:
 
 def validar_item(bruto: dict) -> tuple[CadastroPendente | None, str | None, str | None]:
     """`(item, None, None)` se válido; senão `(None, codigo_erro, mensagem)`."""
-    if isinstance(bruto, dict) and bruto.get("acao") == "inativar" and "componentes" in bruto:
-        # inativar ignora componentes: qualquer valor, sem validar.
+    modelo = CadastroPendente
+    if isinstance(bruto, dict) and bruto.get("acao") in ("inativar", "excluir") and "componentes" in bruto:
+        # inativar e excluir ignoram componentes: qualquer valor, sem validar.
         bruto = {**bruto, "componentes": None}
+    if isinstance(bruto, dict) and bruto.get("acao") == "excluir":
+        modelo = CadastroExcluir
     try:
-        item = CadastroPendente.model_validate(bruto)
+        item = modelo.model_validate(bruto)
     except ValidationError as exc:
         return None, "contrato_invalido", _mensagem_pydantic(exc)
     except Exception:  # noqa: BLE001 — entrada que nem vira dict de verdade
@@ -256,8 +267,8 @@ def validar_item(bruto: dict) -> tuple[CadastroPendente | None, str | None, str 
         return None, "contrato_invalido", f"{item.acao} exige erpProdutoId"
     if item.acao == "criar" and item.marcaErp is None:
         return None, "contrato_invalido", "criar exige marcaErp"
-    if item.acao == "inativar" and item.marcaErp is not None:
-        return None, "contrato_invalido", "inativar exige marcaErp null"
+    if item.acao in ("inativar", "excluir") and item.marcaErp is not None:
+        return None, "contrato_invalido", f"{item.acao} exige marcaErp null"
     if item.tipo in ("simples", "material") and item.componentes is not None:
         return None, "contrato_invalido", f"{item.tipo} exige componentes null"
     erro = _erro_campos_alterados(item)

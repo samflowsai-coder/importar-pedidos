@@ -45,6 +45,7 @@ INTERVALO = timedelta(minutes=5)
 LIMITE_FILA = 50
 VAR_P0 = "PORTAL_FLOWPCP_CADASTRO_P0"
 VAR_INATIVAR = "PORTAL_FLOWPCP_CADASTRO_VOLTA_INATIVAR"
+VAR_EXCLUIR = "PORTAL_FLOWPCP_CADASTRO_VOLTA_EXCLUIR"
 LIMITE_GRAVACAO = 20
 LIMITE_PENDENCIAS = 20
 PRAZO_LOTE = timedelta(minutes=8)  # a reserva do Flow dura 10 min (regra de ouro 4)
@@ -121,10 +122,17 @@ def inativar_ligado(slug: str) -> bool:
     return slug.lower() in _lista_var(VAR_INATIVAR)
 
 
+def excluir_ligado(slug: str) -> bool:
+    """Portão do `excluir`: sem o slug em `PORTAL_FLOWPCP_CADASTRO_VOLTA_EXCLUIR` o Portal nem
+    pede a ação ao Flow e, se ela chegar, não age."""
+    return slug.lower() in _lista_var(VAR_EXCLUIR)
+
+
 def _acoes(slug: str, m: str) -> tuple[str, ...]:
     if m == "criar":
         return ("criar",)
-    return ("criar", "atualizar", "inativar") if inativar_ligado(slug) else ("criar", "atualizar")
+    acoes = ("criar", "atualizar", "inativar") if inativar_ligado(slug) else ("criar", "atualizar")
+    return (*acoes, "excluir") if excluir_ligado(slug) else acoes
 
 
 def _abrir_fire_escrita(slug: str):
@@ -323,7 +331,19 @@ def _decidir(bruto, env_conn, fire_conn, nomes, marcas):
     item, codigo, msg = validar_item(bruto)
     if item is None:
         return "erro_definitivo", None, codigo, msg, None
-    if item.acao != "criar" and not _no_escopo(env_conn, item):
+    if item.acao == "excluir":
+        origem = cadastro_volta_repo.criar_que_gravou_seq(
+            env_conn, item.erpProdutoId, str(item.produtoId)
+        )
+        if origem is None:
+            return (
+                "erro_definitivo",
+                item,
+                "produto_nao_criado_pelo_flow",
+                "o livro não tem um criar deste produto com esse código",
+                None,
+            )
+    elif item.acao != "criar" and not _no_escopo(env_conn, item):
         origem = "dos materiais" if item.tipo == "material" else "do catálogo"
         return (
             "erro_definitivo",

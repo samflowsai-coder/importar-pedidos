@@ -92,7 +92,12 @@ _MENSAGENS_ERRO: dict[str, str] = {
     "conexao_recusada": "O ERP recusou a conexão.",
     "erp_ocupado": "O ERP estava ocupado; o Portal tenta de novo.",
     "consulta_erp_falhou": "Não foi possível consultar o ERP agora; o Portal tenta de novo.",
+    "produto_nao_criado_pelo_flow": "Este produto não foi criado pelo Flow, então o Portal não o exclui do ERP. A exclusão fica com a área de cadastro.",
+    "produto_mudou": "O produto no ERP não é mais o mesmo que o Flow criou (os dados mudaram desde a última tentativa). O Portal não apagou nada; a área de cadastro confere.",
+    "backup_falhou": "O Portal não conseguiu guardar a cópia de segurança antes de excluir. Nada foi apagado.",
 }
+_TABELA_USO = re.compile(r"^[A-Z][A-Z0-9_$]*\.[A-Z][A-Z0-9_$]*$")
+_CODIGOS_KIT = re.compile(r"^[1-9][0-9]{0,8}(, [1-9][0-9]{0,8}){0,4}$")
 _MENSAGEM_DESCONHECIDA = "Motivo não identificado. Fale com o suporte do Portal."
 
 
@@ -106,6 +111,19 @@ def mensagem_para_flow(codigo: str, detalhe: str | None = None) -> str:
         return f"Este produto já foi criado no ERP (código {erp_id}) e não foi vinculado. Fale com a área de cadastro."
     if codigo == "nome_existe":
         return mensagem_nome_existe(_exige_erp_id(detalhe))
+    if codigo == "em_uso_no_erp":
+        if detalhe is None or not _TABELA_USO.fullmatch(detalhe):
+            raise ValueError("detalhe fora de TABELA.COLUNA")
+        tabela = detalhe.split(".", 1)[0]
+        return f"Este produto está em uso no ERP (tabela {tabela}) e não pode ser excluído."
+    if codigo == "ligado_a_kit":
+        if detalhe is None:
+            return ("Este produto ainda faz parte de um kit no ERP. "
+                    "O Portal tenta de novo depois que o kit for excluído.")
+        if not _CODIGOS_KIT.fullmatch(detalhe):
+            raise ValueError("detalhe fora de códigos de kit")
+        return (f"Este produto ainda faz parte de um kit no ERP (código {detalhe}). "
+                "O Portal tenta de novo depois que o kit for excluído.")
     return _MENSAGENS_ERRO.get(codigo, _MENSAGEM_DESCONHECIDA)
 
 

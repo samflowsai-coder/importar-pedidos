@@ -56,7 +56,8 @@ TRANSICOES: dict[str, frozenset[str]] = {
     "erro_registrado": frozenset({"erro_a_enviar"}),
     "transitorio": frozenset({"erro_a_enviar"}),
     # `gravado_sem_volta` só de `atualizar`/`inativar` (409 do Flow, contrato §5): o
-    # produto já existia no ERP. O `criar` que gravou vira `orfao`, nunca `superado`.
+    # produto já existia no ERP (ou, no `excluir`, já foi apagado). O `criar` que gravou
+    # vira `orfao`, nunca `superado`.
     "superado": frozenset({"erro_a_enviar", "gravado_sem_volta"}),
     "incerto": frozenset({"em_andamento"}),
 }
@@ -287,7 +288,7 @@ def marcar_desfecho(
     """True se mudou. Só vale a lista branca `TRANSICOES` (destino -> origens):
     o que pode ter comitado no ERP (`incerto`, `liberado` com SEQ, `gravado_sem_volta`,
     `confirmado`, `orfao`) nunca volta a um estado reaproveitável por aqui.
-    `gravado_sem_volta` -> `superado` só vale para `atualizar`/`inativar`.
+    `gravado_sem_volta` -> `superado` só vale para `atualizar`/`inativar`/`excluir`.
     `em_andamento` com SEQ só chega a `transitorio` (reaproveitável) se o SEQ foi
     zerado antes por `marcar_erro_a_enviar(rollback_comprovado=True)`; sem isso,
     `reservar` recusa `transitorio` com SEQ.
@@ -299,7 +300,7 @@ def marcar_desfecho(
     marcas = ", ".join("?" for _ in origens)
     sem_criar = _SO_SEM_CRIAR.get(estado)
     filtro = (
-        " AND NOT (estado = ? AND COALESCE(acao, '') NOT IN ('atualizar', 'inativar'))"
+        " AND NOT (estado = ? AND COALESCE(acao, '') NOT IN ('atualizar', 'inativar', 'excluir'))"
         if sem_criar else ""
     )
     cur = conn.execute(
@@ -503,6 +504,31 @@ def seq_criado_pelo_portal(conn: sqlite3.Connection, seq: str) -> bool:
         (seq,),
     ).fetchone()
     return row is not None
+
+
+def criar_que_gravou_seq(
+    conn: sqlite3.Connection, seq: str, produto_id: str
+) -> dict[str, Any] | None:
+    """O `criar` deste produto que gravou `seq` no ERP e o Flow reconheceu (ou vai reconhecer):
+    a prova de que o Portal criou aquele produto. Origem do `excluir`. Exige a ação `criar`
+    e o mesmo `produto_id` (um `atualizar` de produto antigo ou o SEQ de outro produto não
+    provam nada); `orfao` fica de fora, o Flow nunca vinculou aquele produto. Se OUTRO produto
+    gravou depois um `criar` com o mesmo código (SEQ reaproveitado), o código já não é deste."""
+    linhas = _dicts(
+        conn.execute(
+            "SELECT * FROM cadastro_volta c WHERE c.acao = 'criar' AND c.erp_produto_id = ? "
+            "AND c.produto_id = ? AND c.estado IN ('gravado_sem_volta', 'confirmado') "
+            # O Fire reaproveita o SEQ do maior produto apagado: se OUTRO produto gravou depois
+            # um `criar` com este mesmo código, o código já não é deste.
+            "AND NOT EXISTS (SELECT 1 FROM cadastro_volta o WHERE o.acao = 'criar' "
+            "AND o.erp_produto_id = c.erp_produto_id AND o.produto_id != c.produto_id "
+            "AND (o.iniciado_em, o.rowid) > (c.iniciado_em, c.rowid) "
+            "AND o.estado IN ('gravado_sem_volta', 'confirmado')) "
+            "ORDER BY c.iniciado_em DESC, c.rowid DESC LIMIT 1",
+            (str(seq), produto_id),
+        )
+    )
+    return linhas[0] if linhas else None
 
 
 def em_andamento(conn: sqlite3.Connection) -> list[dict[str, Any]]:

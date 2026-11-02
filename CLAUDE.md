@@ -206,6 +206,9 @@ PORTAL_FLOWPCP_PRECOS=           # 0 desliga a sync da tabela, o envio de revis�
                                  # Roda na thread do PORTAL_FLOWPCP_ENVIO: com ele em 0 a thread não sobe e a
                                  # conversa de preço com o Flow para junto.
 
+# Volta de cadastros do Flow (modo e portões por ambiente, slugs separados por vírgula)
+PORTAL_FLOWPCP_CADASTRO_VOLTA_EXCLUIR=  # slug que liga a ação `excluir` (apaga produto criado pelo Flow); ausente = desligado
+
 # Webhooks do Gestor
 WEBHOOK_SECRET_GESTOR=
 WEBHOOK_SECRET_GESTOR_PREVIOUS=  # janela de rotação

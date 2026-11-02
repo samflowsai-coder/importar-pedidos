@@ -54,6 +54,7 @@ def test_livro_vazio(setup, monkeypatch):
         "thread_desligada": False,
         "p0_ok": False,
         "inativar_ligado": False,
+        "excluir_ligado": False,
         "sem_volta": 0,
         "n_orfaos": 0,
         "n_incertos": 0,
@@ -110,6 +111,7 @@ def test_listas_de_atencao_e_portoes(setup, monkeypatch):
     r = _get(env["id"])
     body = r.json()
     assert body["p0_ok"] is True and body["inativar_ligado"] is False
+    assert body["excluir_ligado"] is False
     assert body["sem_volta"] == 2 and body["n_orfaos"] == 1 and body["n_incertos"] == 2
     assert [x["cadastro_id"] for x in body["orfaos"]] == ["o1"]
     assert {x["cadastro_id"] for x in body["incertos"]} == {"i1", "t1"}
