@@ -541,15 +541,18 @@ def check_order(
                         ckey = produto_depara_repo.client_key(
                             order.header.customer_cnpj, order.header.customer_name
                         )
-                        depara_map = produto_depara_repo.lookup(
+                        lidos = produto_depara_repo.lookup(
                             sconn,
                             ckey,
                             codigos=todos_codigos,
                             eans=todos_eans,
                         )
-                        codigos_catalogo = catalogo_fire_repo.codprod_por_seq(
-                            sconn, [v["fire_produto_id"] for v in depara_map.values()]
+                        codprod = catalogo_fire_repo.codprod_por_seq(
+                            sconn, [v["fire_produto_id"] for v in lidos.values()]
                         )
+                    # Só vale com as duas leituras: v1 sem catálogo marcaria todo item
+                    # vinculado como "sem código" (o envio, nesse caso, segue sem v1).
+                    depara_map, codigos_catalogo = lidos, codprod
                 except Exception as exc:  # noqa: BLE001 — sem ambiente ativo / db off: pula degrau
                     from app.utils.logger import logger
 

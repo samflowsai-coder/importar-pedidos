@@ -1301,6 +1301,26 @@ def test_item_casado_direto_com_v1_sem_codigo_tambem_acusa(mock_db, mock_fb, moc
     assert "99" in item["motivo"]
 
 
+@patch("app.erp.product_check.catalogo_fire_repo")
+@patch("app.erp.product_check.produto_depara_repo")
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.db")
+def test_falha_ao_ler_o_catalogo_nao_acusa_sem_codigo(mock_db, mock_fb, mock_depara, mock_cat):
+    """Leitura do catálogo falhou depois do lookup do v1: o envio, nesse caso, segue
+    sem v1 (`_vinculos_de_para` captura), então o preview não pode marcar todo item
+    vinculado como "sem código na planilha"."""
+    mock_db.connect.return_value.__enter__.return_value = MagicMock()
+    mock_depara.lookup.return_value = {
+        ("codigo", "REF-X"): {"fire_produto_id": "77", "fire_codigo": "77"},
+    }
+    mock_cat.codprod_por_seq.side_effect = RuntimeError("catalogo_fire indisponível")
+    produtos = [(77, "KIT77", "KIT", 5.0)]
+    report, _ = _check_fisico(mock_fb, produtos, ["REF-X"])
+    item = report["items"][0]
+    assert not item.get("sem_codigo_planilha")
+    assert "motivo" not in item
+
+
 def test_escolha_pontual_limpa_o_aviso_de_planilha_do_v1():
     from app.erp.produto_chave import Candidato
 

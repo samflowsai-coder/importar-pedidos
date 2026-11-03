@@ -3127,6 +3127,12 @@ function esc(s) {
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+// Item casado cujo vínculo v1 não tem código no catálogo: a planilha recusa.
+// Fonte única do contador do resumo e da marca na linha. Em `ligado` o envio
+// não lê o v1 (sai o produto decidido), então não há o que acusar.
+function semCodigoNaPlanilha(m, data) {
+  return !!(m && m.match && m.sem_codigo_planilha && data && data.produto_chave_modo !== 'ligado');
+}
 function escJs(s)   { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 function escPath(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 
@@ -3886,7 +3892,7 @@ function renderPreview(data) {
     const comTroca = check.available ? (check.items || []).filter(i => i.troca_no_fire) : [];
     const trocasCertas = comTroca.filter(i => i.match && i.troca_no_fire.conferido).length;
     const palpites = comTroca.length - trocasCertas;
-    const semCodigoPlanilha = check.available ? (check.items || []).filter(i => i.sem_codigo_planilha).length : 0;
+    const semCodigoPlanilha = check.available ? (check.items || []).filter(i => semCodigoNaPlanilha(i, data)).length : 0;
     const trocaBit = [
       trocasCertas > 0
         ? `<span style="color:var(--warn-strong);font-weight:600">⚠ O Fire vai gravar outro produto em ${trocasCertas} item(ns) ao importar esta planilha (marcados com "vira" na coluna Fire). Depois de importar, troque o produto desses itens no pedido do Fire.</span>`
@@ -4030,9 +4036,10 @@ function renderPreview(data) {
           cell += `<div style="color:var(--warn-strong);font-weight:600;font-size:11px;margin-top:2px;white-space:nowrap"
                         title="${esc(trocaTitle)}">⚠ vira ${esc(alvo)}</div>`;
         }
-        if (!prod && check && check.available && m && m.match && m.sem_codigo_planilha) {
+        if (check && check.available && semCodigoNaPlanilha(m, data)) {
           // O export recusa este item (vínculo sem código no catálogo): mesmo
           // aviso "warn-strong" do "vira", com o mesmo botão Vincular do item sem match.
+          // Vale também ao lado do selo de produto (`observando`), onde a recusa é real.
           const linkBtn = isCommitted
             ? ` <button class="btn btn-sm" onclick="openProductPicker(${idx})" style="margin-left:6px;padding:1px 8px;font-size:10px;line-height:1.5">Vincular</button>`
             : '';
