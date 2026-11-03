@@ -41,3 +41,21 @@ def list_all(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 def count(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) FROM catalogo_fire").fetchone()[0]
+
+
+def codprod_por_seq(conn: sqlite3.Connection, seqs: list[Any]) -> dict[str, str]:
+    """{SEQ em texto: CODPROD_ALTERN} do catálogo local, só dos SEQ que têm código.
+    SEQ ausente ou com código vazio fica fora do mapa."""
+    chaves = sorted({str(s) for s in seqs})
+    out: dict[str, str] = {}
+    for i in range(0, len(chaves), 500):
+        lote = chaves[i : i + 500]
+        rows = conn.execute(
+            "SELECT fire_produto_id, codprod_altern FROM catalogo_fire "
+            f"WHERE fire_produto_id IN ({', '.join('?' * len(lote))})",
+            lote,
+        ).fetchall()
+        for seq, codigo in rows:
+            if codigo and str(codigo).strip():
+                out[str(seq)] = str(codigo).strip()
+    return out

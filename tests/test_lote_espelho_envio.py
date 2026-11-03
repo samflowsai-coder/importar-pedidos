@@ -482,3 +482,32 @@ def test_falha_ao_concluir_deixa_rastro_na_auditoria(espelho_pronto, monkeypatch
     assert _enviar(espelho_pronto).status_code == 200
     (falha,) = _audit(espelho_pronto, "lote_fiscal_falhou")
     assert "banco compartilhado caiu" in falha["motivo"]
+
+
+def test_espelho_em_both_nao_recusa_v1_sem_codigo_mas_pedido_normal_recusa(
+    espelho_pronto, monkeypatch
+):
+    """Espelho não gera planilha: o v1 sem código no catálogo (R21) só recusa o
+    pedido que vai gerar planilha."""
+    from app.erp import depara_apply
+
+    monkeypatch.setenv("EXPORT_MODE", "both")
+    _grava("mm", "M1")
+    monkeypatch.setattr(
+        depara_apply,
+        "resolver",
+        lambda order, *, conn: [
+            {
+                "item_index": 0,
+                "fire_produto_id": "4058",
+                "fire_codigo": "X",
+                "sem_codigo_fire": True,
+                "fire_ean": None,
+                "orig": "X",
+            }
+        ],
+    )
+    assert _enviar(espelho_pronto).status_code == 200
+    r = _enviar(espelho_pronto, "M1")
+    assert r.status_code == 409
+    assert "sem código no catálogo do portal" in r.text

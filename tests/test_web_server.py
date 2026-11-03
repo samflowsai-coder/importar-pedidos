@@ -2231,7 +2231,15 @@ def test_vincular_produto_persiste():
         customer_cnpj=cnpj,
     )
     _seed_catalogo_fire(
-        [{"fire_produto_id": "10", "codigo": "10", "nome": "TENIS AZUL", "ean": "789"}]
+        [
+            {
+                "fire_produto_id": "10",
+                "codigo": "10",
+                "nome": "TENIS AZUL",
+                "ean": "789",
+                "codprod_altern": "ALT10",
+            }
+        ]
     )
 
     r = client.post(
@@ -2250,12 +2258,47 @@ def test_vincular_produto_persiste():
     with db.connect() as conn:
         resolved = produto_depara_repo.lookup(conn, ckey, codigos=["ABC123"], eans=["789"])
     assert resolved[("codigo", "ABC123")]["fire_produto_id"] == "10"
-    assert resolved[("codigo", "ABC123")]["fire_codigo"] == "10"
+    assert resolved[("codigo", "ABC123")]["fire_codigo"] == "ALT10"
     assert resolved[("ean", "789")]["fire_produto_id"] == "10"
 
     # sanity: catalogo_fire copy used to resolve the target product is present.
     with db.connect() as conn:
         assert any(p["fire_produto_id"] == "10" for p in catalogo_fire_repo.list_all(conn))
+
+
+def test_vincular_produto_grava_v1_com_codprod_altern():
+    """O v1 grava o CODPROD_ALTERN (igual ao v2), nunca o SEQ em texto (30/10)."""
+    import uuid
+
+    from app.persistence import db, produto_depara_repo
+
+    entry_id = str(uuid.uuid4())
+    cnpj = "11.222.333/0001-44"
+    _seed_parsed_import_with_item(
+        entry_id,
+        item={"description": "CHINELO", "quantity": 1.0, "product_code": "ABC123"},
+        customer_cnpj=cnpj,
+    )
+    _seed_catalogo_fire(
+        [
+            {
+                "fire_produto_id": "4058",
+                "codigo": "4058",
+                "nome": "CHINELO",
+                "codprod_altern": "16637410001_RIAC",
+            }
+        ]
+    )
+    r = client.post(
+        f"/api/imported/{entry_id}/vincular-produto",
+        json={"item_index": 0, "fire_produto_id": "4058"},
+    )
+    assert r.status_code == 200, r.text
+    ckey = produto_depara_repo.client_key(cnpj, "ACME")
+    with db.connect() as conn:
+        resolved = produto_depara_repo.lookup(conn, ckey, codigos=["ABC123"], eans=[])
+    assert resolved[("codigo", "ABC123")]["fire_produto_id"] == "4058"
+    assert resolved[("codigo", "ABC123")]["fire_codigo"] == "16637410001_RIAC"
 
 
 def test_vincular_rejects_wrong_status():

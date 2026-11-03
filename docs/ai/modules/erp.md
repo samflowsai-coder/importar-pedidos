@@ -230,8 +230,9 @@ preview). **R21:** produto escolhido sem `CODPROD_ALTERN` nunca vai como str(SEQ
 `sem_codigo_fire`; `codigo_vivo_das_escolhas` prefere o código do candidato decidido
 no check ao vivo (`DecisaoEnvio.check_vivo`, preenchido em todo modo) ao do catálogo
 guardado. Envio xlsx/both e export-xlsx recusam com 409 `sem_codigo_fire` ("O produto
-X escolhido para a linha N não tem código no Fire; …") em qualquer modo, só para
-escolha pontual (`_recusa_planilha_pontual`, audit `send_to_fire_blocked` /
+X escolhido para a linha N não tem código no Fire; …"; para o de-para v1 o texto é
+"vinculado … sem código no catálogo do portal; refaça o vínculo") em qualquer modo, e
+não em lote espelho, que não gera planilha (`_recusa_planilha_pontual`, audit `send_to_fire_blocked` /
 `xlsx_export_blocked`); `db` passa pelo SEQ. Em `ligado` quem trava é o portão
 (`sem_codigo_fire` de `itens_planilha`). **M1:** escolha pontual que o check ao vivo
 marca `vinculo_invalido` (SEQ sumiu ou foi bloqueado no Fire;
@@ -385,8 +386,9 @@ dentro do Fire).
   em lotes de 150 e fica com a primeira linha que começa com cada código.
   Conferido na Fire viva contra `SELECT FIRST 1 ... STARTING WITH ?` um a um:
   620/620 iguais (MM + Nasmar, 24/09/2026).
-- Consulta o código que VAI NO XLSX: o do parser, ou o `fire_codigo` do de-para
-  (que o `depara_apply` escreve no export).
+- Consulta o código que VAI NO XLSX: o do parser, ou o `CODPROD_ALTERN` do
+  catálogo local do SEQ vinculado (`depara_apply.codigo_da_planilha`, o que o
+  `depara_apply` escreve no export). Vínculo sem código: sem previsão.
 - Item ganha `troca_no_fire = {fire_product_id, codigo, descricao}` quando o
   palpite difere do match do portal, inclusive item sem match (`fire_product_id`
   None) e código duplicado no Fire (mesmo texto, outro SEQ). `summary` ganha
@@ -409,11 +411,17 @@ dentro do Fire).
   vincule antes).
 - **Limite:** reproduz o comportamento medido, não o código-fonte do Fire. Em
   `EXPORT_MODE=db` (insert com match exato) o aviso não se aplica.
-- ⚠️ **Não verificado:** o `fire_codigo` do de-para é `str(SEQ)`
-  (`catalogo_fire.codigo`). Se o importador do Fire só olha `CODPROD_ALTERN`, um
-  item vinculado sai com o SEQ em texto e pode casar por prefixo com outro
-  produto (310 SEQs na MM e 176 na Nasmar são prefixo de algum código). Se ele
-  tentar SEQ antes, o aviso nesse caso é falso positivo. BACKLOG 2.15.
+- **Código do item vinculado (de-para v1) na planilha:** vem de um lugar só,
+  `depara_apply.codigo_da_planilha`: o `CODPROD_ALTERN` ATUAL do SEQ no catálogo
+  local (`catalogo_fire_repo.codprod_por_seq`), nunca o `fire_codigo` gravado
+  no vínculo nem `str(SEQ)`. `resolver` (export) e `check_order`
+  (`codigo_xlsx`, previsão do importador) usam a mesma função. Incidente de
+  30/10: o v1 gravava `str(SEQ)`, a planilha saía com `CODIGO_PRODUTO=4058`, o
+  importador casa por prefixo de `CODPROD_ALTERN` e os pedidos Riachuelo
+  5146–5163 entraram com item -1 (ou produto errado), com o preview verde.
+  SEQ sem código no catálogo = `sem_codigo_fire: True` e a planilha recusa
+  (R21, `_recusa_planilha_pontual`). `vincular_produto` agora grava o v1 com
+  `codprod_altern`. Limite: catálogo defasado em relação ao Fire.
   **Com `produto_chave_modo=ligado` isso deixa de valer:** a planilha leva o `CODPROD_ALTERN`
   do produto decidido (nunca `str(SEQ)`) e a trava recusa `troca_no_fire`/`sem_codigo_fire`
   em vez de avisar. O aviso acima segue só em `desligado`/`observando`.
@@ -490,7 +498,12 @@ Ordem: **EAN → CODPROD_ALTERN → de-para**. Quando EAN e código falham, olha
 de-para do `client_key` do pedido (SQLite local, rápido) e resolve o
 `fire_produto_id` no Firebird via `FIND_PRODUCT_BY_SEQ` — trazendo DESCRICAO +
 PRECO_VENDA, então a validação de preço segue funcionando. Novo
-`match_source='depara'`. De-para órfão (SEQ sumiu do Fire) → `match=False`.
+`match_source='depara'`. O item segue casado (o preço vale) mesmo quando o SEQ não
+tem `CODPROD_ALTERN` no catálogo local: o item ganha `sem_codigo_planilha: true` e
+`motivo` (`depara_apply.motivo_pontual_sem_codigo`) e a planilha recusa (R21). O
+v1 de TODO item com chave é lido (mesma query, `depara_apply.vinculo_do_item`)
+só para essa flag: item casado direto também a recebe, sem mudar o SEQ que mostra
+(o `resolver` do export aplica o v1 a todo item vinculado). De-para órfão (SEQ sumiu do Fire) → `match=False`.
 Best-effort: sem ambiente ativo / SQLite off, pula o degrau sem quebrar o check.
 
 ### De-para no insert direto (`EXPORT_MODE=db|both`)
@@ -498,8 +511,9 @@ Best-effort: sem ambiente ativo / SQLite off, pula o degrau sem quebrar o check.
 `_send_one_to_fire` aplica `depara_apply` (antes do XLS do modo `both` e do
 insert) e passa ao `FirebirdExporter.export` o mapa
 `produtos_por_item = {posição em order.items: SEQ}` dos itens vinculados. Esses
-itens são buscados **só** por `FIND_PRODUCT_BY_SEQ`: o `fire_codigo` do vínculo
-é `str(SEQ)` e relido como `CODPROD_ALTERN` casaria outro produto. SEQ sumido do
+itens são buscados **só** por `FIND_PRODUCT_BY_SEQ`: o insert segue pelo SEQ e
+não depende do código da planilha (incidente 30/10, pedidos Riachuelo
+5146–5163: SEQ em texto na planilha casava por prefixo). SEQ sumido do
 Fire → `PRODUCT_NOT_FOUND`, sem cair para EAN/código. Audita
 `depara_aplicado_no_fire`.
 

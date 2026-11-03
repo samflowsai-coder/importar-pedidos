@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.erp import produto_escopo, queries
+from app.erp import depara_apply, produto_escopo, queries
 from app.erp.connection import FirebirdConnection
 from app.erp.produto_chave import (
     MOTIVO_CHAVES_DISCORDAM,
@@ -26,9 +26,14 @@ from app.erp.produto_chave import (
     motivo_vinculo_invalido,
 )
 from app.models.order import Order
-from app.persistence import db, produto_depara_repo, produto_vinculo_repo, router
+from app.persistence import (
+    catalogo_fire_repo,
+    db,
+    produto_depara_repo,
+    produto_vinculo_repo,
+    router,
+)
 from app.persistence.context import NoActiveEnvironmentError
-from app.persistence.produto_depara_repo import _norm_key as _depara_norm_key
 
 # Estado do item["produto"] quando o Fire não pôde ser consultado. Não é um
 # resultado de `decidir`: é do check, e nunca vale como produto conferido.
@@ -522,36 +527,48 @@ def check_order(
 
             # 3º degrau: de-para por cliente (SQLite local) → resolve SEQ no Fire.
             depara_map: dict[tuple[str, str], dict] = {}
+            codigos_catalogo: dict[str, str] = {}
             seq_map: dict[Any, tuple] = {}
-            unmatched_codes = [
-                it.product_code
-                for it in order.items
-                if it.product_code
-                and it.product_code not in code_map
-                and not (it.ean and it.ean in ean_map)
-            ]
-            unmatched_eans = [it.ean for it in order.items if it.ean and it.ean not in ean_map]
-            if unmatched_codes or unmatched_eans:
+            # O v1 de TODO item com chave entra no lote (uma query): o `resolver` do
+            # export o aplica a todo item vinculado, então a flag de planilha vale
+            # também para item casado direto. O SEQ resolvido no Fire (abaixo) só
+            # vale para o item sem match direto.
+            todos_codigos = [it.product_code for it in order.items if it.product_code]
+            todos_eans = [it.ean for it in order.items if it.ean]
+            if todos_codigos or todos_eans:
                 try:
                     with db.connect() as sconn:
                         ckey = produto_depara_repo.client_key(
                             order.header.customer_cnpj, order.header.customer_name
                         )
-                        depara_map = produto_depara_repo.lookup(
+                        lidos = produto_depara_repo.lookup(
                             sconn,
                             ckey,
-                            codigos=unmatched_codes,
-                            eans=unmatched_eans,
+                            codigos=todos_codigos,
+                            eans=todos_eans,
                         )
+                        codprod = catalogo_fire_repo.codprod_por_seq(
+                            sconn, [v["fire_produto_id"] for v in lidos.values()]
+                        )
+                    # Só vale com as duas leituras: v1 sem catálogo marcaria todo item
+                    # vinculado como "sem código" (o envio, nesse caso, segue sem v1).
+                    depara_map, codigos_catalogo = lidos, codprod
                 except Exception as exc:  # noqa: BLE001 — sem ambiente ativo / db off: pula degrau
                     from app.utils.logger import logger
 
                     logger.debug(f"de-para lookup pulado: {type(exc).__name__}: {exc}")
+                sem_direto = [
+                    it
+                    for it in order.items
+                    if not (it.ean and it.ean in ean_map)
+                    and not (it.product_code and it.product_code in code_map)
+                ]
                 seqs = list(
                     {
                         int(v["fire_produto_id"])
-                        for v in depara_map.values()
-                        if str(v["fire_produto_id"]).isdigit()
+                        for it in sem_direto
+                        if (v := depara_apply.vinculo_do_item(it, depara_map)) is not None
+                        and str(v["fire_produto_id"]).isdigit()
                     }
                 )
                 # find_products_by_seqs_sql retorna (SEQ, DESCRICAO, PRECO_VENDA, UNIDADE)
@@ -564,7 +581,8 @@ def check_order(
 
             items_report: list[dict] = []
             # Código que vai na coluna CODIGO_PRODUTO do XLSX, por item: o do
-            # parser, ou o `fire_codigo` quando o de-para reescreve no export.
+            # parser, ou o CODPROD_ALTERN do catálogo quando o de-para reescreve
+            # no export (None = sem código: a planilha recusa).
             codigos_xlsx: list[str | None] = []
             matched = 0
             price_match = price_mismatch = price_no_price_in_fire = price_no_order_price = 0
@@ -579,13 +597,23 @@ def check_order(
                 elif it.product_code and it.product_code in code_map:
                     hit, source = code_map[it.product_code], "codprod_altern"
 
+                dv = depara_apply.vinculo_do_item(it, depara_map)
+                if (
+                    dv is not None
+                    and depara_apply.codigo_da_planilha(dv["fire_produto_id"], codigos_catalogo)
+                    is None
+                ):
+                    # O export recusa (R21): o preview acusa o mesmo. O item segue
+                    # casado (o preço vale); só não há código para a planilha.
+                    codigo_xlsx = None
+                    entry["sem_codigo_planilha"] = True
+                    entry["motivo"] = depara_apply.motivo_pontual_sem_codigo(
+                        {
+                            "fire_produto_id": dv["fire_produto_id"],
+                            "item_index": len(items_report),
+                        }
+                    )
                 if hit is None:
-                    dk = None
-                    if it.product_code:
-                        dk = ("codigo", _depara_norm_key("codigo", it.product_code))
-                    if (dk is None or dk not in depara_map) and it.ean:
-                        dk = ("ean", _depara_norm_key("ean", it.ean))
-                    dv = depara_map.get(dk) if dk else None
                     if dv is not None:
                         seq = (
                             int(dv["fire_produto_id"])
@@ -595,7 +623,10 @@ def check_order(
                         resolved = seq_map.get(seq) if seq is not None else None
                         if resolved is not None:
                             hit, source = resolved, "depara"
-                            codigo_xlsx = dv.get("fire_codigo") or it.product_code
+                            if not entry.get("sem_codigo_planilha"):
+                                codigo_xlsx = depara_apply.codigo_da_planilha(
+                                    dv["fire_produto_id"], codigos_catalogo
+                                )
 
                 if hit is not None:
                     seq, desc, preco, unidade = hit
@@ -714,6 +745,9 @@ def check_order(
 def _aplicar_escolha_no_legado(entry: dict, unit_price: float | None, cand: Candidato) -> None:
     """Campos legados do item com o produto da escolha pontual (lido do Fire agora)."""
     preco = cand.preco_venda
+    # A escolha pontual vira o match da linha: o aviso de planilha do v1 não vale.
+    entry.pop("sem_codigo_planilha", None)
+    entry.pop("motivo", None)
     entry.update(
         {
             "match": True,
@@ -798,7 +832,7 @@ def _marcar_trocas_no_fire(
             "descricao": desc,
             # Medido na Fire viva só para item casado por CODPROD_ALTERN ou sem
             # match. Casado por EAN (o XLSX leva a coluna EAN) ou por vínculo
-            # (código = SEQ em texto), não se sabe se o importador usa outra
+            # (código = CODPROD_ALTERN do catálogo), não se sabe se o importador usa outra
             # chave antes do prefixo — a UI pede conferência, não afirma troca.
             "conferido": entry["match_source"] in (None, "codprod_altern"),
         }

@@ -3127,6 +3127,18 @@ function esc(s) {
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+// Item casado cujo vínculo v1 não tem código no catálogo: a planilha recusa.
+// Fonte única do contador do resumo e da marca na linha. Em `ligado` o envio
+// não lê o v1 (sai o produto decidido), então não há o que acusar.
+function semCodigoNaPlanilha(m, data) {
+  return !!(m && m.match && m.sem_codigo_planilha && data && data.produto_chave_modo !== 'ligado');
+}
+// Botão "Vincular" da coluna Fire (item sem match e item sem código na planilha).
+function vincularBtn(idx, isCommitted) {
+  return isCommitted
+    ? ` <button class="btn btn-sm" onclick="openProductPicker(${idx})" style="margin-left:6px;padding:1px 8px;font-size:10px;line-height:1.5">Vincular</button>`
+    : '';
+}
 function escJs(s)   { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 function escPath(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 
@@ -3886,12 +3898,16 @@ function renderPreview(data) {
     const comTroca = check.available ? (check.items || []).filter(i => i.troca_no_fire) : [];
     const trocasCertas = comTroca.filter(i => i.match && i.troca_no_fire.conferido).length;
     const palpites = comTroca.length - trocasCertas;
+    const semCodigoPlanilha = check.available ? (check.items || []).filter(i => semCodigoNaPlanilha(i, data)).length : 0;
     const trocaBit = [
       trocasCertas > 0
         ? `<span style="color:var(--warn-strong);font-weight:600">⚠ O Fire vai gravar outro produto em ${trocasCertas} item(ns) ao importar esta planilha (marcados com "vira" na coluna Fire). Depois de importar, troque o produto desses itens no pedido do Fire.</span>`
         : '',
       palpites > 0
         ? `<span style="color:var(--warn-strong)">⚠ ${palpites} item(ns) podem entrar no Fire com o produto que ele escolher pelo começo do código (marcados com "vira"). Confira no pedido do Fire depois de importar.</span>`
+        : '',
+      semCodigoPlanilha > 0
+        ? `<span style="color:var(--warn-strong);font-weight:600">⚠ ${semCodigoPlanilha} item(ns) com vínculo sem código no catálogo: a planilha não sai até refazer o vínculo (marcados com "sem código na planilha").</span>`
         : '',
       check.available && s.troca_no_fire_checked === false
         ? `<span style="color:var(--text-muted)">Previsão de troca pelo Fire indisponível nesta revisão.</span>`
@@ -3975,10 +3991,7 @@ function renderPreview(data) {
         } else if (!check.available) {
           cell = '<span style="color:var(--text-muted)" title="check indisponível">—</span>';
         } else if (!m || !m.match) {
-          const linkBtn = isCommitted
-            ? ` <button class="btn btn-sm" onclick="openProductPicker(${idx})" style="margin-left:6px;padding:1px 8px;font-size:10px;line-height:1.5">Vincular</button>`
-            : '';
-          cell = `<span style="color:var(--error);font-weight:600" title="sem match no Fire">✗</span>${linkBtn}`;
+          cell = `<span style="color:var(--error);font-weight:600" title="sem match no Fire">✗</span>${vincularBtn(idx, isCommitted)}`;
         } else {
           const ps = m.price_status;
           const idTitle = `#${m.fire_product_id} · ${m.fire_description || ''} · via ${m.match_source}`;
@@ -4025,6 +4038,16 @@ function renderPreview(data) {
           const trocaTitle = `O importador de Excel do Fire casa o código pelo começo e vai gravar #${t.fire_product_id} · ${t.codigo} · ${t.descricao || ''}, ${oQueFazer}`;
           cell += `<div style="color:var(--warn-strong);font-weight:600;font-size:11px;margin-top:2px;white-space:nowrap"
                         title="${esc(trocaTitle)}">⚠ vira ${esc(alvo)}</div>`;
+        }
+        // Por índice, como o contador do resumo e o `produtoDoItem`: o `_checkOf` casa
+        // por chave e, com código repetido no pedido (R18), pega a linha errada.
+        const mi = check && check.available ? (check.items || [])[idx] : null;
+        if (semCodigoNaPlanilha(mi, data)) {
+          // O export recusa este item (vínculo sem código no catálogo): mesmo
+          // aviso "warn-strong" do "vira", com o mesmo botão Vincular do item sem match.
+          // Vale também ao lado do selo de produto (`observando`), onde a recusa é real.
+          cell += `<div style="color:var(--warn-strong);font-weight:600;font-size:11px;margin-top:2px;white-space:nowrap"
+                        title="${esc(mi.motivo || '')}">⚠ sem código na planilha${vincularBtn(idx, isCommitted)}</div>`;
         }
         // PACK: a quantidade é de packs; a nota mostra quantos kits vão dentro.
         const packNote = it.qtd_por_embalagem

@@ -197,12 +197,12 @@ mais os códigos duplicados (`5041G` nas duas). Pontas abertas:
 
 - **Chamado com a Fire Sistemas** (mensagem pronta, a MM envia). Quando responderem,
   revisar a previsão: ela reproduz o comportamento medido, não o código deles.
-- **De-para exporta SEQ como código.** `fire_codigo` = `str(SEQ)`. Não sei se o
-  importador do Fire tenta SEQ exato antes do prefixo de `CODPROD_ALTERN`. Prova
-  barata: importar no Fire uma planilha com 1 item vinculado e ver o produto
-  gravado. Na mesma importação, 1 item com EAN certo e código que colide por
-  prefixo com outro produto responde se o Fire usa o EAN antes. Até lá, esses
-  dois casos saem do aviso como `conferido: false` ("confira"), nunca "troca certa".
+- ~~**De-para exporta SEQ como código.**~~ Respondido pelo incidente de 30/10/2026
+  (Riachuelo, pedidos 5146–5163): o importador do Fire NÃO tenta o SEQ, só o prefixo
+  de `CODPROD_ALTERN`, e a planilha com "4058" gravou o item sem produto (-1).
+  Corrigido: a planilha leva o `CODPROD_ALTERN` do catálogo (`depara_apply.codigo_da_planilha`).
+  Resta a outra metade da prova: se o Fire usa o EAN antes do prefixo. Até lá o item
+  casado por EAN ou por vínculo segue no aviso como `conferido: false` ("confira").
 - **Código com mais de 30 caracteres derruba o check inteiro.** A query de match
   exato (`find_products_by_codes_sql`, `IN (...)`) estoura "string right
   truncation" (coluna `VARCHAR(30)`) e o preview mostra "check indisponível". Bug
@@ -321,6 +321,39 @@ durante o envio.
 `_coerce_text`/`_coerce_date` da Nasmar repetem `celulas.texto`/`celulas.data`. O parser da
 Centauro (ORDER CONFIRMATION) já usa o módulo; migrar os dois como refactor próprio, sem
 mudança de comportamento — `tests/test_new_parsers.py` (Daju/Nasmar) é a rede.
+
+### 2.25 Número com ponto de milhar nos outros parsers
+
+O parser do Mercado Eletrônico cortava a quantidade no milhar (`2.795` → 795; 16 itens
+Riachuelo em 30/10/2026, corrigido). A mesma classe `[\d,]+` aparece em mais 3 parsers,
+sem caso real hoje (auditoria de 03/11 nos `samples/`):
+- `sams_club_parser.py:14` (qtd): com `1.000,00` a linha **não casa** e o item some do
+  pedido, sem truncar. Maior qtd nas amostras: 371. O mais grave dos três.
+- `beira_rio_parser.py:100` e `pedido_compras_revenda_parser.py:112`: capturam o
+  **preço** unitário, ≥ 1.000 improvável para meia.
+- `kolosh_parser.py:20` não se aplica (formato US, `_parse_us_number`).
+Guarda que pegaria todos: validar `qtd × preço ≈ total` do item no validator (medir
+falso positivo com desconto antes de bloquear).
+
+### 2.26 Item casado direto com vínculo v1: preview mostra um SEQ, o envio usa outro
+
+`depara_apply.resolver` aplica o v1 a todo item vinculado; o `check_order` só resolve o SEQ
+do v1 para item SEM match direto (EAN/`CODPROD_ALTERN`). Item que passou a casar direto
+depois de vinculado aparece no preview com o produto do match direto, e a planilha/insert
+saem com o do vínculo. Anterior ao fix de 03/11 (que só passou a acusar o v1 sem código
+nos dois lados, via `vinculo_do_item`). Decisão pendente: o match exato do Fire deve
+vencer o vínculo histórico (regra "dado real") — mudar exige medir quantos itens hoje
+divergem.
+
+### 2.27 Intercompany: aviso "sem código na planilha" sem saída pela tela
+
+Em pedido intercompany o `vincular-produto` não grava v1 (R13), mas `check_order` e
+`resolver` seguem lendo o v1 antigo pela chave da revenda. Se esse v1 aponta para um SEQ
+sem código no catálogo, a planilha recusa (lado seguro) e o "Vincular" não tira o aviso;
+a mensagem manda refazer o vínculo, o que aí não resolve. Hoje inerte (roteamento
+intercompany desligado em produção). Saídas: o Vincular cair em escolha pontual nesse
+caso (`sobrepor_escolhas` já a põe por cima do v1) ou expor o `DELETE
+/api/produtos/depara/{id}` na tela. Medir antes quantos v1 de revenda existem na MM.
 
 ---
 
