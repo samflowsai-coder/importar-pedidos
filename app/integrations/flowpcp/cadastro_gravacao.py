@@ -449,6 +449,18 @@ def _sem_mudanca(lote: _Lote, item: CadastroPendente) -> None:
 # --- gravação (ERP aberto) ---------------------------------------------------
 
 
+def _cod_produto_igual_ao_fiscal(item: CadastroPendente, campos: dict) -> None:
+    """"Cód do Produto" (CODPROD_ALTERN) = "Código Fiscal" (CODPARANFE) no `criar` de kit e
+    pack (decisão do dono, 30/10/2026). Só aí: par e produto antigo usam CODPROD_ALTERN como
+    ponte do Apontaê e chave de casamento de pedido. `codigoMes`, se vier, vence. `atualizar`
+    não mexe: o Flow manda `codigoMes` null (= não mexer) e `codigoNfe` pode mudar em
+    qualquer tipo, então não se sabe sem ler o Fire o que há em CODPROD_ALTERN."""
+    if item.tipo not in ("kit", "pack") or item.acao != "criar":
+        return
+    if item.codigoNfe and not item.codigoMes:
+        campos["CODPROD_ALTERN"] = item.codigoNfe
+
+
 def _campos(item: CadastroPendente, marcas: dict) -> dict:
     """Colunas do Fire. `criar`: só o que veio. `atualizar`: null = não mexer, salvo
     `ean`/`codigoNfe` (limpar). `marcaErp` null = não mexer em MARCA. `atualizar` com
@@ -464,6 +476,7 @@ def _campos(item: CadastroPendente, marcas: dict) -> dict:
             campos[coluna] = valor
         elif item.acao == "atualizar" and wire in LIMPA_COM_NULL:
             campos[coluna] = None
+    _cod_produto_igual_ao_fiscal(item, campos)
     if vai_ao_erp(item, "grupoErp"):
         campos["GRUPO"] = int(item.grupoErp.codigo)
     if item.marcaErp is not None and vai_ao_erp(item, "marcaErp"):

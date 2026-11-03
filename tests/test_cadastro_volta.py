@@ -302,6 +302,7 @@ def test_plano_do_item_bom(env_conn, monkeypatch):
         "CODITEMSPED": 4,
         "GRUPO": 8,
         "CODPARANFE": "KIT3-MEIA-CURTO/PRT",
+        "CODPROD_ALTERN": "KIT3-MEIA-CURTO/PRT",  # Cód do Produto = Código Fiscal (kit sem codigoMes)
         "MARCA": "Kolosh",
     }
     assert "DESCRICAO2" not in plano["campos"]  # cor do item não vai à Descrição Interna
