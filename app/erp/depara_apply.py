@@ -10,13 +10,23 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.persistence import produto_depara_repo
+from app.persistence import catalogo_fire_repo, produto_depara_repo
 from app.persistence.produto_depara_repo import _norm_key
 
 if TYPE_CHECKING:
     import sqlite3
 
     from app.models.order import Order
+
+
+def codigo_da_planilha(fire_produto_id: object, codigos: dict[str, str]) -> str | None:
+    """Fonte única do código que a PLANILHA leva para um item vinculado: o
+    `CODPROD_ALTERN` atual do SEQ no catálogo local (`codigos` vem de
+    `catalogo_fire_repo.codprod_por_seq`). Nunca o `fire_codigo` gravado no
+    vínculo nem o SEQ em texto: o importador de Excel do Fire casa por PREFIXO
+    de `CODPROD_ALTERN` (incidente 30/10, pedidos Riachuelo 5146-5163). None =
+    sem código; a planilha recusa (R21)."""
+    return codigos.get(str(fire_produto_id))
 
 
 def resolver(order: Order, *, conn: sqlite3.Connection) -> list[dict]:
@@ -42,6 +52,9 @@ def resolver(order: Order, *, conn: sqlite3.Connection) -> list[dict]:
     if not dm:
         return []
 
+    codigos = catalogo_fire_repo.codprod_por_seq(
+        conn, [dv["fire_produto_id"] for dv in dm.values()]
+    )
     vinculos: list[dict] = []
     for idx, it in enumerate(order.items):
         dk = None
@@ -52,11 +65,13 @@ def resolver(order: Order, *, conn: sqlite3.Connection) -> list[dict]:
         dv = dm.get(dk) if dk else None
         if dv is None:
             continue
+        codigo = codigo_da_planilha(dv["fire_produto_id"], codigos)
         vinculos.append(
             {
                 "item_index": idx,
                 "fire_produto_id": dv["fire_produto_id"],
-                "fire_codigo": dv["fire_codigo"],
+                "fire_codigo": codigo or it.product_code,
+                "sem_codigo_fire": not codigo,
                 "fire_ean": dv.get("fire_ean"),
                 "orig": it.product_code or it.ean or "",
             }
@@ -80,7 +95,7 @@ def sobrepor_escolhas(order: Order, vinculos: list[dict], escolhidos: dict | Non
     Produto sem `CODPROD_ALTERN` (R21): nunca vai o SEQ em texto (o importador de
     Excel do Fire casaria por PREFIXO); a linha fica com o código do cliente e
     `sem_codigo_fire: True` — só o insert (pelo SEQ) aceita; a planilha recusa
-    (`pontuais_sem_codigo`). `codigo_vivo_das_escolhas` troca pelo código lido
+    (`pontuais_sem_codigo`). (vale também para o de-para v1, via `resolver`). `codigo_vivo_das_escolhas` troca pelo código lido
     do Fire agora, quando o check traz o produto."""
     from app.erp.product_check import escolhas_do_import  # evita ciclo
 
@@ -153,9 +168,9 @@ def codigo_vivo_das_escolhas(vinculos: list[dict], check: dict | None) -> list[d
 
 
 def pontuais_sem_codigo(vinculos: list[dict]) -> list[dict]:
-    """Linhas com escolha pontual cujo produto não tem `CODPROD_ALTERN`: a
-    planilha não consegue apontá-las (R21)."""
-    return [v for v in vinculos if v.get("fonte") == "escolha_pontual" and v.get("sem_codigo_fire")]
+    """Linhas (escolha pontual ou de-para v1) cujo produto não tem
+    `CODPROD_ALTERN`: a planilha não consegue apontá-las (R21)."""
+    return [v for v in vinculos if v.get("sem_codigo_fire")]
 
 
 def pontuais_invalidas(vinculos: list[dict], check: dict | None) -> list[dict]:
@@ -182,8 +197,9 @@ def motivo_pontual_invalida(v: dict) -> str:
 
 
 def motivo_pontual_sem_codigo(v: dict) -> str:
+    como = "escolhido" if v.get("fonte") == "escolha_pontual" else "vinculado"
     return (
-        f"O produto {v['fire_produto_id']} escolhido para a linha {v['item_index'] + 1} "
+        f"O produto {v['fire_produto_id']} {como} para a linha {v['item_index'] + 1} "
         "não tem código no Fire; a planilha não consegue apontá-lo. "
         "Use o envio direto ou ajuste o cadastro."
     )

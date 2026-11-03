@@ -548,16 +548,18 @@ def test_codigo_duplicado_no_fire_tambem_troca(mock_fb):
     assert item["troca_no_fire"]["codigo"] == "5041G"
 
 
+@patch("app.erp.product_check.catalogo_fire_repo")
 @patch("app.erp.product_check.produto_depara_repo")
 @patch("app.erp.product_check.FirebirdConnection")
 @patch("app.erp.product_check.db")
-def test_item_vinculado_consulta_o_codigo_que_vai_no_xlsx(mock_db, mock_fb, mock_depara):
+def test_item_vinculado_consulta_o_codigo_que_vai_no_xlsx(mock_db, mock_fb, mock_depara, mock_cat):
     """O `depara_apply` troca o código do cliente pelo `fire_codigo` no export.
     É esse que o Fire lê, então é esse que a previsão consulta."""
     mock_db.connect.return_value.__enter__.return_value = MagicMock()
     mock_depara.lookup.return_value = {
         ("codigo", "REF-X"): {"fire_produto_id": "77", "fire_codigo": "77"},
     }
+    mock_cat.codprod_por_seq.return_value = {"77": "77"}
     produtos = [(5, "77A", "OUTRO", 1.0), (77, "KIT77", "KIT CERTO", 1.0)]
     report, estado = _check_fisico(mock_fb, produtos, ["REF-X"])
     item = report["items"][0]
@@ -1225,3 +1227,21 @@ def test_check_sem_env_intercompany_nao_roda_e_sem_ambiente_fica_completa(mock_d
         report, _ = _check(mock_fb, _order([{"product_code": "ABC", "unit_price": 1.0}]))
     resolucao.assert_not_called()
     assert report["produto_conferencia_incompleta"] is False
+
+
+@patch("app.erp.product_check.catalogo_fire_repo")
+@patch("app.erp.product_check.produto_depara_repo")
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.db")
+def test_codigo_xlsx_do_vinculo_e_o_do_catalogo(mock_db, mock_fb, mock_depara, mock_cat):
+    """Incidente 30/10: o v1 guardava str(SEQ); o check e o export leem o
+    CODPROD_ALTERN do catálogo (mesma função de `depara_apply`)."""
+    mock_db.connect.return_value.__enter__.return_value = MagicMock()
+    mock_depara.lookup.return_value = {
+        ("codigo", "REF-X"): {"fire_produto_id": "77", "fire_codigo": "77"},
+    }
+    mock_cat.codprod_por_seq.return_value = {"77": "16637410001_RIAC"}
+    produtos = [(77, "16637410001_RIACX", "OUTRO", 1.0)]
+    report, estado = _check_fisico(mock_fb, produtos, ["REF-X"])
+    assert report["items"][0]["match_source"] == "depara"
+    assert estado["previsoes"] == [["16637410001_RIAC"]]

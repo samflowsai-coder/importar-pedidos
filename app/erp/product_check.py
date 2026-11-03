@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.erp import produto_escopo, queries
+from app.erp import depara_apply, produto_escopo, queries
 from app.erp.connection import FirebirdConnection
 from app.erp.produto_chave import (
     MOTIVO_CHAVES_DISCORDAM,
@@ -26,7 +26,13 @@ from app.erp.produto_chave import (
     motivo_vinculo_invalido,
 )
 from app.models.order import Order
-from app.persistence import db, produto_depara_repo, produto_vinculo_repo, router
+from app.persistence import (
+    catalogo_fire_repo,
+    db,
+    produto_depara_repo,
+    produto_vinculo_repo,
+    router,
+)
 from app.persistence.context import NoActiveEnvironmentError
 from app.persistence.produto_depara_repo import _norm_key as _depara_norm_key
 
@@ -522,6 +528,7 @@ def check_order(
 
             # 3º degrau: de-para por cliente (SQLite local) → resolve SEQ no Fire.
             depara_map: dict[tuple[str, str], dict] = {}
+            codigos_catalogo: dict[str, str] = {}
             seq_map: dict[Any, tuple] = {}
             unmatched_codes = [
                 it.product_code
@@ -542,6 +549,9 @@ def check_order(
                             ckey,
                             codigos=unmatched_codes,
                             eans=unmatched_eans,
+                        )
+                        codigos_catalogo = catalogo_fire_repo.codprod_por_seq(
+                            sconn, [v["fire_produto_id"] for v in depara_map.values()]
                         )
                 except Exception as exc:  # noqa: BLE001 — sem ambiente ativo / db off: pula degrau
                     from app.utils.logger import logger
@@ -595,7 +605,12 @@ def check_order(
                         resolved = seq_map.get(seq) if seq is not None else None
                         if resolved is not None:
                             hit, source = resolved, "depara"
-                            codigo_xlsx = dv.get("fire_codigo") or it.product_code
+                            codigo_xlsx = (
+                                depara_apply.codigo_da_planilha(
+                                    dv["fire_produto_id"], codigos_catalogo
+                                )
+                                or it.product_code
+                            )
 
                 if hit is not None:
                     seq, desc, preco, unidade = hit

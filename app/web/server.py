@@ -2902,9 +2902,8 @@ def _send_one_to_fire(
         integracao.guardar_reserva(espelho, request_env),
     ):
         # De-para antes do XLS (modo both) e do insert, com os MESMOS vínculos
-        # que o portão avaliou. Item vinculado entra no Fire pelo SEQ do vínculo:
-        # o `fire_codigo` é str(SEQ) e relido como CODPROD_ALTERN casaria outro
-        # produto (BACKLOG §2.1).
+        # que o portão avaliou. Item vinculado entra no Fire pelo SEQ do vínculo;
+        # o código da planilha é o CODPROD_ALTERN do catálogo (BACKLOG §2.1).
         from app.erp import depara_apply
 
         order_flow = _pedido_para_o_flow(order, decisao, produtos_por_item, entry)
@@ -4250,7 +4249,7 @@ def vincular_produto(
                     chave_tipo=tipo,
                     chave_valor=valor,
                     fire_produto_id=prod["fire_produto_id"],
-                    fire_codigo=prod["codigo"],
+                    fire_codigo=(prod.get("codprod_altern") or "").strip(),
                     fire_ean=prod.get("ean"),
                     fire_nome=prod["nome"],
                     criado_em=now,

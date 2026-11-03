@@ -42,10 +42,11 @@ def test_apply_reescreve_item_vinculado(env_conn):
         criado_em="t",
         criado_por="grazi",
     )
+    _catalogo(env_conn, 77, "ALT77")
     order = _order()
     changed = depara_apply.apply(order, conn=env_conn)
 
-    assert order.items[0].product_code == "77"
+    assert order.items[0].product_code == "ALT77"
     assert order.items[0].ean == "7890"
     assert "REF-X" in (order.items[0].obs or "")
     assert order.items[1].product_code == "SEM-VINCULO"  # intacto
@@ -78,6 +79,7 @@ def test_apply_riachuelo_sem_cnpj_usa_nome_como_chave(env_conn):
         criado_em="t",
         criado_por="grazi",
     )
+    _catalogo(env_conn, 70, "70123")
     order = Order(
         header=OrderHeader(
             order_number="T2", customer_cnpj=None, customer_name="Lojas Riachuelo Sa"
@@ -106,7 +108,91 @@ def test_apply_devolve_o_seq_do_vinculo(env_conn):
         criado_em="t",
         criado_por="grazi",
     )
+    _catalogo(env_conn, 77, "ALT77")
     changed = depara_apply.apply(_order(), conn=env_conn)
     assert changed == [
-        {"item_index": 0, "fire_produto_id": "77", "fire_codigo": "77", "orig": "REF-X"}
+        {"item_index": 0, "fire_produto_id": "77", "fire_codigo": "ALT77", "orig": "REF-X"}
     ]
+
+
+def _catalogo(conn, seq, codprod_altern):
+    conn.execute(
+        "INSERT INTO catalogo_fire (fire_produto_id, codigo, nome, codprod_altern, extraido_em) "
+        "VALUES (?, ?, 'P', ?, 't')",
+        (str(seq), str(seq), codprod_altern),
+    )
+
+
+def _vincular(conn, seq, fire_codigo):
+    produto_depara_repo.upsert(
+        conn,
+        client_key=produto_depara_repo.client_key("11111111000100", None),
+        chave_tipo="codigo",
+        chave_valor="REF-X",
+        fire_produto_id=str(seq),
+        fire_codigo=fire_codigo,
+        fire_ean=None,
+        fire_nome="CHINELO",
+        criado_em="t",
+        criado_por="grazi",
+    )
+
+
+def test_planilha_leva_o_codprod_altern_do_catalogo_nao_o_seq(env_conn):
+    """Incidente 30/10 (Riachuelo 5146-5163): v1 gravado com str(SEQ) fazia a
+    planilha sair com o SEQ, que o importador do Fire casa por prefixo."""
+    _vincular(env_conn, 4058, "4058")
+    _catalogo(env_conn, 4058, "16637410001_RIAC")
+    order = _order()
+    vinculos = depara_apply.resolver(order, conn=env_conn)
+    assert vinculos[0]["fire_codigo"] == "16637410001_RIAC"
+    assert not vinculos[0].get("sem_codigo_fire")
+    assert vinculos[0]["fire_produto_id"] == "4058"  # o insert segue pelo SEQ
+    depara_apply.aplicar(order, vinculos)
+    assert order.items[0].product_code == "16637410001_RIAC"
+
+
+def test_codigo_do_catalogo_vale_mais_que_o_gravado_no_vinculo(env_conn):
+    _vincular(env_conn, 77, "CODIGO-ANTIGO")
+    _catalogo(env_conn, 77, "CODIGO-NOVO")
+    assert depara_apply.resolver(_order(), conn=env_conn)[0]["fire_codigo"] == "CODIGO-NOVO"
+
+
+@pytest.mark.parametrize("catalogado", [False, True])
+def test_sem_codigo_no_catalogo_marca_sem_codigo_fire(env_conn, catalogado):
+    _vincular(env_conn, 4058, "4058")
+    if catalogado:
+        _catalogo(env_conn, 4058, "  ")
+    vinculos = depara_apply.resolver(_order(), conn=env_conn)
+    assert vinculos[0]["sem_codigo_fire"] is True
+    assert vinculos[0]["fire_codigo"] != "4058"
+    assert depara_apply.produtos_por_item(vinculos) == {0: 4058}
+    assert depara_apply.pontuais_sem_codigo(vinculos) == vinculos
+
+
+def test_recusa_da_planilha_pega_vinculo_v1_sem_codigo_e_o_insert_passa(env_conn, monkeypatch):
+    """R21 estendido ao v1: planilha recusa com `sem_codigo_fire`; o insert
+    direto (`planilha=False`) segue pelo SEQ."""
+    from types import SimpleNamespace
+
+    from app.persistence import repo
+    from app.web import server
+
+    _vincular(env_conn, 4058, "4058")
+    vinculos = depara_apply.resolver(_order(), conn=env_conn)
+    auditados: list = []
+    monkeypatch.setattr(repo, "append_audit", lambda *a, **k: auditados.append(a))
+    decisao = SimpleNamespace(check_vivo=None)
+
+    recusa = server._recusa_planilha_pontual("imp-1", vinculos, decisao, "xlsx_export_blocked")
+    assert recusa is not None and recusa[0] == "sem_codigo_fire"
+    assert "4058" in recusa[1] and "linha 1" in recusa[1]
+    assert auditados
+
+    assert (
+        server._recusa_planilha_pontual(
+            "imp-1", vinculos, decisao, "send_to_fire_blocked", planilha=False
+        )
+        is None
+    )
+    assert depara_apply.produtos_por_item(vinculos) == {0: 4058}

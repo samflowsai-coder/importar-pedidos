@@ -409,11 +409,17 @@ dentro do Fire).
   vincule antes).
 - **Limite:** reproduz o comportamento medido, não o código-fonte do Fire. Em
   `EXPORT_MODE=db` (insert com match exato) o aviso não se aplica.
-- ⚠️ **Não verificado:** o `fire_codigo` do de-para é `str(SEQ)`
-  (`catalogo_fire.codigo`). Se o importador do Fire só olha `CODPROD_ALTERN`, um
-  item vinculado sai com o SEQ em texto e pode casar por prefixo com outro
-  produto (310 SEQs na MM e 176 na Nasmar são prefixo de algum código). Se ele
-  tentar SEQ antes, o aviso nesse caso é falso positivo. BACKLOG 2.15.
+- **Código do item vinculado (de-para v1) na planilha:** vem de um lugar só,
+  `depara_apply.codigo_da_planilha`: o `CODPROD_ALTERN` ATUAL do SEQ no catálogo
+  local (`catalogo_fire_repo.codprod_por_seq`), nunca o `fire_codigo` gravado
+  no vínculo nem `str(SEQ)`. `resolver` (export) e `check_order`
+  (`codigo_xlsx`, previsão do importador) usam a mesma função. Incidente de
+  30/10: o v1 gravava `str(SEQ)`, a planilha saía com `CODIGO_PRODUTO=4058`, o
+  importador casa por prefixo de `CODPROD_ALTERN` e os pedidos Riachuelo
+  5146–5163 entraram com item -1 (ou produto errado), com o preview verde.
+  SEQ sem código no catálogo = `sem_codigo_fire: True` e a planilha recusa
+  (R21, `_recusa_planilha_pontual`). `vincular_produto` agora grava o v1 com
+  `codprod_altern`. Limite: catálogo defasado em relação ao Fire.
   **Com `produto_chave_modo=ligado` isso deixa de valer:** a planilha leva o `CODPROD_ALTERN`
   do produto decidido (nunca `str(SEQ)`) e a trava recusa `troca_no_fire`/`sem_codigo_fire`
   em vez de avisar. O aviso acima segue só em `desligado`/`observando`.
@@ -498,8 +504,9 @@ Best-effort: sem ambiente ativo / SQLite off, pula o degrau sem quebrar o check.
 `_send_one_to_fire` aplica `depara_apply` (antes do XLS do modo `both` e do
 insert) e passa ao `FirebirdExporter.export` o mapa
 `produtos_por_item = {posição em order.items: SEQ}` dos itens vinculados. Esses
-itens são buscados **só** por `FIND_PRODUCT_BY_SEQ`: o `fire_codigo` do vínculo
-é `str(SEQ)` e relido como `CODPROD_ALTERN` casaria outro produto. SEQ sumido do
+itens são buscados **só** por `FIND_PRODUCT_BY_SEQ`: o insert segue pelo SEQ e
+não depende do código da planilha (incidente 30/10, pedidos Riachuelo
+5146–5163: SEQ em texto na planilha casava por prefixo). SEQ sumido do
 Fire → `PRODUCT_NOT_FOUND`, sem cair para EAN/código. Audita
 `depara_aplicado_no_fire`.
 
