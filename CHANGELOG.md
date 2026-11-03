@@ -23,6 +23,8 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
+Nada por enquanto.
+
 ## 20261103-1427
 
 1) **Quantidade acima de mil nos pedidos da Riachuelo volta a sair inteira.** Itens como 2.795 e 1.073 kits estavam entrando no ERP cortados (795 e 73); o valor total do item já vinha certo.
