@@ -29,6 +29,7 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 4) **Kit e pack novos do Flow saem com Cód do Produto igual ao Código Fiscal.** Ao cadastrar kit ou pack com código fiscal, o portal grava o mesmo valor em "Cód do Produto" no Fire. Par, produto antigo e correções de produto já cadastrado não mudam; se precisar acertar um kit depois de corrigido, é à mão no Fire.
 5) **O Flow passa a poder corrigir o Cód do Produto de um produto já cadastrado.** Quando o Flow mandar a correção, o portal grava o novo código em "Cód do Produto" no Fire; ele nunca apaga esse código. Até o Flow começar a mandar, nada muda.
 6) **Quantidade acima de mil nos pedidos da Riachuelo volta a sair inteira.** Itens como 2.795 e 1.073 kits estavam entrando no ERP cortados (795 e 73); o valor total do item já vinha certo.
+7) **Item vinculado a um produto do Fire sai na planilha com o código do produto.** Antes a planilha levava o número interno do produto e o Fire gravava o item sem produto (pedidos Riachuelo de 30/10); agora vai o código do cadastro, e se o produto estiver sem código no catálogo do portal o item aparece como pendente na revisão, com o motivo, em vez de sair errado.
 
 ## 20261026-2236
 
