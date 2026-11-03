@@ -109,13 +109,9 @@ class MercadoEletronicoParser(BaseParser):
     # ------------------------------------------------------------------
 
     def _extract_qty(self, line: str) -> float | None:
-        m = re.search(r"([\d,]+)\s*ST", line)
-        if not m:
-            return None
-        try:
-            return float(m.group(1).replace(",", "."))
-        except ValueError:
-            return None
+        # Número BR com milhar opcional ("2.795,0000ST"): o ponto faz parte da quantidade.
+        m = re.search(r"(\d{1,3}(?:\.\d{3})*(?:,\d+)?|\d+(?:,\d+)?)\s*ST", line)
+        return self._parse_br_number(m.group(1)) if m else None
 
     def _extract_prices(self, line: str) -> tuple[float | None, float | None]:
         # "BRL 13,70 BRL 137,00"  or  "BRL 13,70BRL 2.041,30"
