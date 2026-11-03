@@ -70,8 +70,9 @@ class _Cur:
 
 
 class _Fire:
-    def __init__(self, nomes=None, produtos=None, marcas=None):
+    def __init__(self, nomes=None, produtos=None, marcas=None, codigos=None):
         self.nomes = nomes or {}  # NOME -> SEQ
+        self.codigos = codigos or {}  # CODPROD_ALTERN -> SEQ
         self.marcas = marcas if marcas is not None else {17: "Kolosh"}
         self.produtos = produtos if produtos is not None else {3170: "Nao"}
         self.executados = []
@@ -84,6 +85,9 @@ class _Fire:
             return [(1,)]
         if "PRODUTOS_MARCA" in sql:
             return [(c, n) for c, n in self.marcas.items()]
+        if "CODPROD_ALTERN" in sql:
+            seq = self.codigos.get(params[0])
+            return [(seq,)] if seq is not None and seq != params[1] else []
         if "DESCRICAO" in sql:
             return [(seq, nome) for nome, seq in self.nomes.items()]
         if params[0] in self.produtos:
@@ -836,6 +840,21 @@ def test_simular_plano_so_com_as_colunas_listadas(env_conn, monkeypatch):
         valido, cadastro_gravacao._campos(valido, {17: "Kolosh"}),
         cadastro_gravacao._componentes(valido))
     assert plano == json.loads(json.dumps(gravacao))
+
+
+@pytest.mark.parametrize(("codigos", "estado"), [({"GS04-3GG": 3623}, "erro_definitivo"),
+                                                 ({"GS04-3GG": 2645}, "simulado"), ({}, "simulado")])
+def test_atualizar_codigo_mes_de_outro_produto_e_recusado(env_conn, monkeypatch, codigos, estado):
+    _simular(monkeypatch)
+    item = _atualizar_2645(env_conn, codigoMes="GS04-3GG", camposAlterados=["codigoMes"])
+    cv.processar_ambiente("mm", _client=_Client([item]), _fire_conn=_Fire(codigos=codigos),
+                          _env_conn=env_conn)
+    linha = _livro(env_conn)[(BOM["cadastroId"], 1)]
+    assert linha["estado"] == estado
+    if estado == "erro_definitivo":
+        assert linha["erro_codigo"] == "codigo_existe" and "3623" in linha["erro_mensagem"]
+    else:
+        assert json.loads(linha["plano_json"])["campos"] == {"CODPROD_ALTERN": "GS04-3GG"}
 
 
 def test_simular_lista_vazia_e_sem_mudanca(env_conn, monkeypatch):

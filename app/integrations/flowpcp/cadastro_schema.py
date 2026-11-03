@@ -117,6 +117,14 @@ class CadastroPendente(_Estrito):
             raise ValueError("nome vazio ou com espaço nas pontas")
         return v
 
+    @field_validator("codigoMes")
+    @classmethod
+    def _codigo_mes_com_texto(cls, v: str | None) -> str | None:
+        # Só espaços viraria NULL no Fire (texto_ou_nulo) e apagaria a chave de casamento de pedido.
+        if v is not None and not v.strip():
+            raise ValueError("codigoMes só com espaços")
+        return v
+
     @field_validator("tipoItemSped")
     @classmethod
     def _sped(cls, v: int | None) -> int | None:

@@ -389,6 +389,16 @@ def test_campos_alterados_codigo_mes_null_e_contrato_invalido():
     assert item is None and codigo == "contrato_invalido" and "codigoMes" in msg
 
 
+@pytest.mark.parametrize("acao", ["criar", "atualizar"])
+def test_codigo_mes_so_com_espacos_e_contrato_invalido(acao):
+    if acao == "criar":
+        bruto = _item(codigoMes="   ")
+    else:
+        bruto = _atualizar(codigoMes="   ", camposAlterados=["codigoMes"])
+    item, codigo, _ = validar_item(bruto)
+    assert item is None and codigo == "contrato_invalido"
+
+
 def test_campos_alterados_lista_vazia_em_atualizar():
     item, codigo, _ = validar_item(_atualizar(camposAlterados=[]))
     assert codigo is None and item.camposAlterados == []

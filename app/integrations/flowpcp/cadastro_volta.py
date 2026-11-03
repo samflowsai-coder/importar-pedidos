@@ -75,6 +75,7 @@ _SQL_NOMES = "SELECT SEQ, DESCRICAO FROM PRODUTOS"
 _SQL_MARCAS = "SELECT CODIGO, MARCA FROM PRODUTOS_MARCA"
 _SQL_SONDA = "SELECT 1 FROM RDB$DATABASE"
 _SQL_COMPONENTE = "SELECT SEQ, BLOQUEADO FROM PRODUTOS WHERE SEQ = ?"
+_SQL_OUTRO_COM_O_CODIGO = "SELECT FIRST 1 SEQ FROM PRODUTOS WHERE TRIM(CODPROD_ALTERN) = ? AND SEQ <> ?"
 
 
 def _avisa_uma_vez(chave: str, msg: str, nivel: str = "ERROR") -> None:
@@ -268,6 +269,12 @@ def _contra_o_fire(
     outro = outro_seq_com_o_nome(nomes, item)
     if outro is not None:
         return "nome_existe", f"já existe outro produto com esse nome no Fire (SEQ {outro})"
+    if item.acao == "atualizar" and "codigoMes" in (item.camposAlterados or ()):
+        # Cód do Produto é chave de casamento de pedido: dois SEQ com o mesmo código ficam ambíguos.
+        linhas = _select(fire_conn, _SQL_OUTRO_COM_O_CODIGO,
+                         (item.codigoMes.strip(), int(item.erpProdutoId)))
+        if linhas:
+            return "codigo_existe", f"já existe outro produto com esse Cód do Produto no Fire (SEQ {linhas[0][0]})"
     marca = item.marcaErp if vai_ao_erp(item, "marcaErp") else None
     if marca is not None and marca.codigo not in marcas:
         # Erro definitivo (contrato §7): a marca não existe no ERP, esperar não resolve.
