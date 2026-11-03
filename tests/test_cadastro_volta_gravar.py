@@ -1605,6 +1605,18 @@ def test_par_atualizar_com_codigo_mes_null_nao_sobrescreve_a_ponte():
     assert c == {"CODPARANFE": "NFE-2"}
 
 
+@pytest.mark.parametrize("tipo", ["kit", "pack", "simples"])
+def test_atualizar_com_codigo_mes_listado_grava_o_cod_do_produto(tipo):
+    c = _campos(_atualizar("3170", tipo=tipo, codigoNfe="NFE-2", codigoMes="NFE-2",
+                           camposAlterados=["codigoNfe", "codigoMes"]))
+    assert c == {"CODPARANFE": "NFE-2", "CODPROD_ALTERN": "NFE-2"}
+
+
+def test_atualizar_com_codigo_mes_fora_da_lista_nao_grava():
+    c = _campos(_atualizar("3170", tipo="kit", codigoMes="NFE-2", camposAlterados=["nome"]))
+    assert "CODPROD_ALTERN" not in c
+
+
 def test_atualizar_limpar_codigo_fiscal_nao_apaga_o_cod_do_produto():
     c = _campos(_atualizar("3170", codigoNfe=None, camposAlterados=["codigoNfe"]))
     assert c == {"CODPARANFE": None}

@@ -82,6 +82,7 @@ _MENSAGENS_ERRO: dict[str, str] = {
     "contrato_invalido": "O cadastro chegou incompleto ou com um campo em formato inesperado. Confira os dados e aprove de novo.",
     "campo_excede_fire": "Um texto do cadastro é maior do que o ERP aceita. Encurte e aprove de novo.",
     "caractere_invalido": "O cadastro tem um caractere que o ERP não grava (por exemplo, emoji). Troque e aprove de novo.",
+    "codigo_existe": "Já existe outro produto com esse código do produto no ERP. Confira o código e aprove de novo.",
     "componente_ausente": "Um item da composição não existe no ERP.",
     "componente_bloqueado": "Um item da composição está inativo no ERP.",
     "marca_ausente_erp": "A marca do cadastro não existe no ERP. Cadastre a marca no ERP e aprove de novo.",

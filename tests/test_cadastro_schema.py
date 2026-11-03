@@ -378,6 +378,27 @@ def test_campos_alterados_lista_valida_em_atualizar():
     assert codigo is None and item.camposAlterados == ["nome", "ean", "codigoNfe"]
 
 
+def test_campos_alterados_aceita_codigo_mes_com_valor():
+    item, codigo, _ = validar_item(_atualizar(codigoMes="GS04-3GG", camposAlterados=["codigoMes"]))
+    assert codigo is None and item.camposAlterados == ["codigoMes"]
+
+
+def test_campos_alterados_codigo_mes_null_e_contrato_invalido():
+    # Cód do Produto é chave de casamento de pedido: a correção troca, nunca apaga.
+    item, codigo, msg = validar_item(_atualizar(codigoMes=None, camposAlterados=["codigoMes"]))
+    assert item is None and codigo == "contrato_invalido" and "codigoMes" in msg
+
+
+@pytest.mark.parametrize("acao", ["criar", "atualizar"])
+def test_codigo_mes_so_com_espacos_e_contrato_invalido(acao):
+    if acao == "criar":
+        bruto = _item(codigoMes="   ")
+    else:
+        bruto = _atualizar(codigoMes="   ", camposAlterados=["codigoMes"])
+    item, codigo, _ = validar_item(bruto)
+    assert item is None and codigo == "contrato_invalido"
+
+
 def test_campos_alterados_lista_vazia_em_atualizar():
     item, codigo, _ = validar_item(_atualizar(camposAlterados=[]))
     assert codigo is None and item.camposAlterados == []
@@ -399,7 +420,7 @@ def test_campos_alterados_com_repeticao_e_contrato_invalido():
     assert item is None and codigo == "contrato_invalido" and "repet" in msg
 
 
-@pytest.mark.parametrize("valor", ["cor", "codigoMes", "DESCRICAO", "", 1, None])
+@pytest.mark.parametrize("valor", ["cor", "CODPROD_ALTERN", "DESCRICAO", "", 1, None])
 def test_campos_alterados_valor_fora_do_enum_e_contrato_invalido(valor):
     item, codigo, msg = validar_item(_atualizar(camposAlterados=["nome", valor]))
     assert item is None and codigo == "contrato_invalido"
