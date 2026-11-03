@@ -28,6 +28,7 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 3) **O portal passa a saber excluir produto no Fire a pedido do Flow, mas vem desligado.** Só apaga produto que o próprio Flow criou, que não esteja em uso no Fire e que não faça parte de um kit, guarda uma cópia antes de apagar e, para ligar, é preciso pôr o ambiente em `PORTAL_FLOWPCP_CADASTRO_VOLTA_EXCLUIR` e reiniciar.
 4) **Kit e pack novos do Flow saem com Cód do Produto igual ao Código Fiscal.** Ao cadastrar kit ou pack com código fiscal, o portal grava o mesmo valor em "Cód do Produto" no Fire. Par, produto antigo e correções de produto já cadastrado não mudam; se precisar acertar um kit depois de corrigido, é à mão no Fire.
 5) **O Flow passa a poder corrigir o Cód do Produto de um produto já cadastrado.** Quando o Flow mandar a correção, o portal grava o novo código em "Cód do Produto" no Fire; ele nunca apaga esse código. Até o Flow começar a mandar, nada muda.
+6) **Quantidade acima de mil nos pedidos da Riachuelo volta a sair inteira.** Itens como 2.795 e 1.073 pares estavam entrando no ERP cortados (795 e 73); o valor total do item já vinha certo.
 
 ## 20261026-2236
 
