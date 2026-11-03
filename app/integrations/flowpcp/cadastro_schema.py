@@ -33,9 +33,11 @@ LIMITES: dict[str, int] = {
 }
 _SPED_VALIDOS = frozenset({*range(0, 11), 99})
 # Campos que uma correção (`atualizar`) pode mudar no ERP, na ordem do contrato rev. 5 §2.3.
+# `codigoMes` (CODPROD_ALTERN, "Cód do Produto") entrou em 03/11/2026 para o Flow corrigir o código
+# de kit/pack já cadastrado; listado com null é recusado (não está em LIMPA_COM_NULL: nunca apaga).
 CampoAlterado = Literal[
     "nome", "unidadeErp", "ean", "ncm", "tipoItemSped", "grupoErp", "codigoNfe", "componentes",
-    "marcaErp",
+    "marcaErp", "codigoMes",
 ]
 # atualizar: `ean` e `codigoNfe` null = limpar no ERP; os demais null = não mexer (§2.1).
 LIMPA_COM_NULL = frozenset({"ean", "codigoNfe"})
