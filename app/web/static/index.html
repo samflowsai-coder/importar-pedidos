@@ -3133,6 +3133,12 @@ function esc(s) {
 function semCodigoNaPlanilha(m, data) {
   return !!(m && m.match && m.sem_codigo_planilha && data && data.produto_chave_modo !== 'ligado');
 }
+// Botão "Vincular" da coluna Fire (item sem match e item sem código na planilha).
+function vincularBtn(idx, isCommitted) {
+  return isCommitted
+    ? ` <button class="btn btn-sm" onclick="openProductPicker(${idx})" style="margin-left:6px;padding:1px 8px;font-size:10px;line-height:1.5">Vincular</button>`
+    : '';
+}
 function escJs(s)   { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 function escPath(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 
@@ -3985,10 +3991,7 @@ function renderPreview(data) {
         } else if (!check.available) {
           cell = '<span style="color:var(--text-muted)" title="check indisponível">—</span>';
         } else if (!m || !m.match) {
-          const linkBtn = isCommitted
-            ? ` <button class="btn btn-sm" onclick="openProductPicker(${idx})" style="margin-left:6px;padding:1px 8px;font-size:10px;line-height:1.5">Vincular</button>`
-            : '';
-          cell = `<span style="color:var(--error);font-weight:600" title="sem match no Fire">✗</span>${linkBtn}`;
+          cell = `<span style="color:var(--error);font-weight:600" title="sem match no Fire">✗</span>${vincularBtn(idx, isCommitted)}`;
         } else {
           const ps = m.price_status;
           const idTitle = `#${m.fire_product_id} · ${m.fire_description || ''} · via ${m.match_source}`;
@@ -4036,15 +4039,15 @@ function renderPreview(data) {
           cell += `<div style="color:var(--warn-strong);font-weight:600;font-size:11px;margin-top:2px;white-space:nowrap"
                         title="${esc(trocaTitle)}">⚠ vira ${esc(alvo)}</div>`;
         }
-        if (check && check.available && semCodigoNaPlanilha(m, data)) {
+        // Por índice, como o contador do resumo e o `produtoDoItem`: o `_checkOf` casa
+        // por chave e, com código repetido no pedido (R18), pega a linha errada.
+        const mi = check && check.available ? (check.items || [])[idx] : null;
+        if (semCodigoNaPlanilha(mi, data)) {
           // O export recusa este item (vínculo sem código no catálogo): mesmo
           // aviso "warn-strong" do "vira", com o mesmo botão Vincular do item sem match.
           // Vale também ao lado do selo de produto (`observando`), onde a recusa é real.
-          const linkBtn = isCommitted
-            ? ` <button class="btn btn-sm" onclick="openProductPicker(${idx})" style="margin-left:6px;padding:1px 8px;font-size:10px;line-height:1.5">Vincular</button>`
-            : '';
           cell += `<div style="color:var(--warn-strong);font-weight:600;font-size:11px;margin-top:2px;white-space:nowrap"
-                        title="${esc(m.motivo || '')}">⚠ sem código na planilha${linkBtn}</div>`;
+                        title="${esc(mi.motivo || '')}">⚠ sem código na planilha${vincularBtn(idx, isCommitted)}</div>`;
         }
         // PACK: a quantidade é de packs; a nota mostra quantos kits vão dentro.
         const packNote = it.qtd_por_embalagem

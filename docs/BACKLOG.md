@@ -345,6 +345,16 @@ nos dois lados, via `vinculo_do_item`). Decisão pendente: o match exato do Fire
 vencer o vínculo histórico (regra "dado real") — mudar exige medir quantos itens hoje
 divergem.
 
+### 2.27 Intercompany: aviso "sem código na planilha" sem saída pela tela
+
+Em pedido intercompany o `vincular-produto` não grava v1 (R13), mas `check_order` e
+`resolver` seguem lendo o v1 antigo pela chave da revenda. Se esse v1 aponta para um SEQ
+sem código no catálogo, a planilha recusa (lado seguro) e o "Vincular" não tira o aviso;
+a mensagem manda refazer o vínculo, o que aí não resolve. Hoje inerte (roteamento
+intercompany desligado em produção). Saídas: o Vincular cair em escolha pontual nesse
+caso (`sobrepor_escolhas` já a põe por cima do v1) ou expor o `DELETE
+/api/produtos/depara/{id}` na tela. Medir antes quantos v1 de revenda existem na MM.
+
 ---
 
 ## 3. Bloqueado em terceiros
