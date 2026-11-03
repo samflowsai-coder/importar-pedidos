@@ -335,6 +335,16 @@ sem caso real hoje (auditoria de 03/11 nos `samples/`):
 Guarda que pegaria todos: validar `qtd × preço ≈ total` do item no validator (medir
 falso positivo com desconto antes de bloquear).
 
+### 2.26 Item casado direto com vínculo v1: preview mostra um SEQ, o envio usa outro
+
+`depara_apply.resolver` aplica o v1 a todo item vinculado; o `check_order` só resolve o SEQ
+do v1 para item SEM match direto (EAN/`CODPROD_ALTERN`). Item que passou a casar direto
+depois de vinculado aparece no preview com o produto do match direto, e a planilha/insert
+saem com o do vínculo. Anterior ao fix de 03/11 (que só passou a acusar o v1 sem código
+nos dois lados, via `vinculo_do_item`). Decisão pendente: o match exato do Fire deve
+vencer o vínculo histórico (regra "dado real") — mudar exige medir quantos itens hoje
+divergem.
+
 ---
 
 ## 3. Bloqueado em terceiros
