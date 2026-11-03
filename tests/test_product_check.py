@@ -280,10 +280,12 @@ def test_ean_match_first_wins_on_duplicate_key(mock_fb):
 # ---------------------------------------------------------------------------
 
 
+@patch("app.erp.product_check.catalogo_fire_repo")
 @patch("app.erp.product_check.produto_depara_repo")
 @patch("app.erp.product_check.FirebirdConnection")
 @patch("app.erp.product_check.db")
-def test_check_order_terceiro_degrau_depara(mock_db, mock_fb, mock_depara):
+def test_check_order_terceiro_degrau_depara(mock_db, mock_fb, mock_depara, mock_cat):
+    mock_cat.codprod_por_seq.return_value = {"77": "ALT77"}
     mock_fb.return_value.is_configured.return_value = True
     ctx, cur = _make_fb_ctx_batched(
         client_row=(1, "ACME"),
@@ -1245,3 +1247,26 @@ def test_codigo_xlsx_do_vinculo_e_o_do_catalogo(mock_db, mock_fb, mock_depara, m
     report, estado = _check_fisico(mock_fb, produtos, ["REF-X"])
     assert report["items"][0]["match_source"] == "depara"
     assert estado["previsoes"] == [["16637410001_RIAC"]]
+
+
+@patch("app.erp.product_check.catalogo_fire_repo")
+@patch("app.erp.product_check.produto_depara_repo")
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.db")
+def test_v1_sem_codigo_no_catalogo_vira_problema_no_preview(
+    mock_db, mock_fb, mock_depara, mock_cat
+):
+    """O preview acusa o que o export vai recusar (`sem_codigo_fire`): item sem
+    match, motivo da função única e nenhuma previsão com o código do cliente."""
+    mock_db.connect.return_value.__enter__.return_value = MagicMock()
+    mock_depara.lookup.return_value = {
+        ("codigo", "REF-X"): {"fire_produto_id": "77", "fire_codigo": "77"},
+    }
+    mock_cat.codprod_por_seq.return_value = {}
+    produtos = [(77, "KIT77", "KIT", 1.0)]
+    report, estado = _check_fisico(mock_fb, produtos, ["REF-X"])
+    item = report["items"][0]
+    assert item["match"] is False
+    assert "77" in item["motivo"] and "linha 1" in item["motivo"]
+    assert "sem código no catálogo do portal" in item["motivo"]
+    assert all("REF-X" not in lote for lote in estado["previsoes"])

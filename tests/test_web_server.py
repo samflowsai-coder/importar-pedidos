@@ -2231,7 +2231,15 @@ def test_vincular_produto_persiste():
         customer_cnpj=cnpj,
     )
     _seed_catalogo_fire(
-        [{"fire_produto_id": "10", "codigo": "10", "nome": "TENIS AZUL", "ean": "789", "codprod_altern": "ALT10"}]
+        [
+            {
+                "fire_produto_id": "10",
+                "codigo": "10",
+                "nome": "TENIS AZUL",
+                "ean": "789",
+                "codprod_altern": "ALT10",
+            }
+        ]
     )
 
     r = client.post(

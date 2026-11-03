@@ -3978,7 +3978,7 @@ function renderPreview(data) {
           const linkBtn = isCommitted
             ? ` <button class="btn btn-sm" onclick="openProductPicker(${idx})" style="margin-left:6px;padding:1px 8px;font-size:10px;line-height:1.5">Vincular</button>`
             : '';
-          cell = `<span style="color:var(--error);font-weight:600" title="sem match no Fire">✗</span>${linkBtn}`;
+          cell = `<span style="color:var(--error);font-weight:600" title="${esc((m && m.motivo) || 'sem match no Fire')}">✗</span>${linkBtn}`;
         } else {
           const ps = m.price_status;
           const idTitle = `#${m.fire_product_id} · ${m.fire_description || ''} · via ${m.match_source}`;

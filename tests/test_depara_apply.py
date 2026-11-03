@@ -196,3 +196,15 @@ def test_recusa_da_planilha_pega_vinculo_v1_sem_codigo_e_o_insert_passa(env_conn
         is None
     )
     assert depara_apply.produtos_por_item(vinculos) == {0: 4058}
+
+
+def test_motivo_do_v1_e_o_da_pontual_sao_diferentes():
+    v1 = {"fire_produto_id": 4058, "item_index": 2}
+    pontual = {**v1, "fonte": "escolha_pontual"}
+    assert depara_apply.motivo_pontual_sem_codigo(v1) == (
+        "O produto 4058 vinculado à linha 3 está sem código no catálogo do portal, "
+        "então a planilha não consegue apontá-lo. "
+        "Refaça o vínculo dessa linha ou atualize o catálogo."
+    )
+    assert "escolhido para a linha 3" in depara_apply.motivo_pontual_sem_codigo(pontual)
+    assert "envio direto" in depara_apply.motivo_pontual_sem_codigo(pontual)

@@ -2656,7 +2656,8 @@ def _recusa_planilha_pontual(
     R21 (só com `planilha`): o produto não tem `CODPROD_ALTERN` (o SEQ em texto
     seria casado por PREFIXO pelo importador de Excel do Fire); muta `vinculos`
     com o código lido do Fire agora (`decisao.check_vivo`).
-    Só a escolha pontual: o v1 de hoje não muda. Devolve (reason, detalhe) e
+    O de-para v1 sem código no catálogo (`sem_codigo_fire` vindo de `resolver`)
+    cai na mesma recusa; o insert direto segue pelo SEQ. Devolve (reason, detalhe) e
     audita `audit`, ou None."""
     from app.erp import depara_apply
     from app.persistence import repo
@@ -2879,7 +2880,8 @@ def _send_one_to_fire(
         vinculos,
         decisao,
         "send_to_fire_blocked",
-        planilha=export_mode in ("xlsx", "both"),
+        # Espelho de lote não gera planilha (só o insert), então não recusa por ela.
+        planilha=export_mode in ("xlsx", "both") and not integracao.e_espelho(import_id),
     )
     if recusa is not None:
         return _FireSendOutcome(False, reason=recusa[0], http_status=409, detail=recusa[1])

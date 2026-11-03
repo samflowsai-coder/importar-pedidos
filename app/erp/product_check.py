@@ -574,7 +574,8 @@ def check_order(
 
             items_report: list[dict] = []
             # Código que vai na coluna CODIGO_PRODUTO do XLSX, por item: o do
-            # parser, ou o `fire_codigo` quando o de-para reescreve no export.
+            # parser, ou o CODPROD_ALTERN do catálogo quando o de-para reescreve
+            # no export (None = sem código: a planilha recusa).
             codigos_xlsx: list[str | None] = []
             matched = 0
             price_match = price_mismatch = price_no_price_in_fire = price_no_order_price = 0
@@ -604,13 +605,20 @@ def check_order(
                         )
                         resolved = seq_map.get(seq) if seq is not None else None
                         if resolved is not None:
-                            hit, source = resolved, "depara"
-                            codigo_xlsx = (
-                                depara_apply.codigo_da_planilha(
-                                    dv["fire_produto_id"], codigos_catalogo
-                                )
-                                or it.product_code
+                            codigo_xlsx = depara_apply.codigo_da_planilha(
+                                dv["fire_produto_id"], codigos_catalogo
                             )
+                            if codigo_xlsx is None:
+                                # O export recusa (R21): o preview acusa o mesmo, como
+                                # item sem match, com o motivo da função única.
+                                entry["motivo"] = depara_apply.motivo_pontual_sem_codigo(
+                                    {
+                                        "fire_produto_id": dv["fire_produto_id"],
+                                        "item_index": len(items_report),
+                                    }
+                                )
+                            else:
+                                hit, source = resolved, "depara"
 
                 if hit is not None:
                     seq, desc, preco, unidade = hit
@@ -813,7 +821,7 @@ def _marcar_trocas_no_fire(
             "descricao": desc,
             # Medido na Fire viva só para item casado por CODPROD_ALTERN ou sem
             # match. Casado por EAN (o XLSX leva a coluna EAN) ou por vínculo
-            # (código = SEQ em texto), não se sabe se o importador usa outra
+            # (código = CODPROD_ALTERN do catálogo), não se sabe se o importador usa outra
             # chave antes do prefixo — a UI pede conferência, não afirma troca.
             "conferido": entry["match_source"] in (None, "codprod_altern"),
         }

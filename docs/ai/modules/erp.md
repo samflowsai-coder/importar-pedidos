@@ -230,8 +230,9 @@ preview). **R21:** produto escolhido sem `CODPROD_ALTERN` nunca vai como str(SEQ
 `sem_codigo_fire`; `codigo_vivo_das_escolhas` prefere o código do candidato decidido
 no check ao vivo (`DecisaoEnvio.check_vivo`, preenchido em todo modo) ao do catálogo
 guardado. Envio xlsx/both e export-xlsx recusam com 409 `sem_codigo_fire` ("O produto
-X escolhido para a linha N não tem código no Fire; …") em qualquer modo, só para
-escolha pontual (`_recusa_planilha_pontual`, audit `send_to_fire_blocked` /
+X escolhido para a linha N não tem código no Fire; …"; para o de-para v1 o texto é
+"vinculado … sem código no catálogo do portal; refaça o vínculo") em qualquer modo, e
+não em lote espelho, que não gera planilha (`_recusa_planilha_pontual`, audit `send_to_fire_blocked` /
 `xlsx_export_blocked`); `db` passa pelo SEQ. Em `ligado` quem trava é o portão
 (`sem_codigo_fire` de `itens_planilha`). **M1:** escolha pontual que o check ao vivo
 marca `vinculo_invalido` (SEQ sumiu ou foi bloqueado no Fire;

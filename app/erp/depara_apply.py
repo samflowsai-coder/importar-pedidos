@@ -95,8 +95,9 @@ def sobrepor_escolhas(order: Order, vinculos: list[dict], escolhidos: dict | Non
     Produto sem `CODPROD_ALTERN` (R21): nunca vai o SEQ em texto (o importador de
     Excel do Fire casaria por PREFIXO); a linha fica com o código do cliente e
     `sem_codigo_fire: True` — só o insert (pelo SEQ) aceita; a planilha recusa
-    (`pontuais_sem_codigo`). (vale também para o de-para v1, via `resolver`). `codigo_vivo_das_escolhas` troca pelo código lido
-    do Fire agora, quando o check traz o produto."""
+    (`pontuais_sem_codigo`; vale também para o de-para v1, via `resolver`).
+    `codigo_vivo_das_escolhas` troca pelo código lido do Fire agora, quando o
+    check traz o produto."""
     from app.erp.product_check import escolhas_do_import  # evita ciclo
 
     seqs = escolhas_do_import({"produto_escolhido": escolhidos})
@@ -197,11 +198,20 @@ def motivo_pontual_invalida(v: dict) -> str:
 
 
 def motivo_pontual_sem_codigo(v: dict) -> str:
-    como = "escolhido" if v.get("fonte") == "escolha_pontual" else "vinculado"
+    """Motivo da recusa da planilha por produto sem código. Escolha pontual: o
+    produto não tem código no Fire. De-para v1: a causa comum é o SEQ fora do
+    catálogo local (recorte, vínculo antigo, sem sync), que a operadora refaz."""
+    seq, linha = v["fire_produto_id"], v["item_index"] + 1
+    if v.get("fonte") == "escolha_pontual":
+        return (
+            f"O produto {seq} escolhido para a linha {linha} "
+            "não tem código no Fire; a planilha não consegue apontá-lo. "
+            "Use o envio direto ou ajuste o cadastro."
+        )
     return (
-        f"O produto {v['fire_produto_id']} {como} para a linha {v['item_index'] + 1} "
-        "não tem código no Fire; a planilha não consegue apontá-lo. "
-        "Use o envio direto ou ajuste o cadastro."
+        f"O produto {seq} vinculado à linha {linha} está sem código no catálogo do portal, "
+        "então a planilha não consegue apontá-lo. "
+        "Refaça o vínculo dessa linha ou atualize o catálogo."
     )
 
 
