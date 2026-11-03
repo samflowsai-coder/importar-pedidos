@@ -1253,20 +1253,59 @@ def test_codigo_xlsx_do_vinculo_e_o_do_catalogo(mock_db, mock_fb, mock_depara, m
 @patch("app.erp.product_check.produto_depara_repo")
 @patch("app.erp.product_check.FirebirdConnection")
 @patch("app.erp.product_check.db")
-def test_v1_sem_codigo_no_catalogo_vira_problema_no_preview(
+def test_v1_sem_codigo_no_catalogo_segue_casado_e_acusa_a_planilha(
     mock_db, mock_fb, mock_depara, mock_cat
 ):
-    """O preview acusa o que o export vai recusar (`sem_codigo_fire`): item sem
-    match, motivo da função única e nenhuma previsão com o código do cliente."""
+    """O preview acusa o que o export vai recusar (`sem_codigo_fire`), mas o item
+    SEGUE casado (o preço vale): flag, motivo da função única, `match=True` e
+    nenhuma previsão com o código do cliente."""
     mock_db.connect.return_value.__enter__.return_value = MagicMock()
     mock_depara.lookup.return_value = {
         ("codigo", "REF-X"): {"fire_produto_id": "77", "fire_codigo": "77"},
     }
     mock_cat.codprod_por_seq.return_value = {}
-    produtos = [(77, "KIT77", "KIT", 1.0)]
+    produtos = [(77, "KIT77", "KIT", 5.0)]
     report, estado = _check_fisico(mock_fb, produtos, ["REF-X"])
     item = report["items"][0]
-    assert item["match"] is False
+    assert item["match"] is True
+    assert item["fire_product_id"] == 77
+    assert item["sem_codigo_planilha"] is True
     assert "77" in item["motivo"] and "linha 1" in item["motivo"]
     assert "sem código no catálogo do portal" in item["motivo"]
     assert all("REF-X" not in lote for lote in estado["previsoes"])
+    # preço divergente (pedido 1,00 × Fire 5,00) continua bloqueando
+    assert item["price_status"] == "mismatch"
+    bloqueia, _ = product_check.is_blocking(report)
+    assert bloqueia is True
+
+
+@patch("app.erp.product_check.catalogo_fire_repo")
+@patch("app.erp.product_check.produto_depara_repo")
+@patch("app.erp.product_check.FirebirdConnection")
+@patch("app.erp.product_check.db")
+def test_item_casado_direto_com_v1_sem_codigo_tambem_acusa(mock_db, mock_fb, mock_depara, mock_cat):
+    """O `resolver` aplica o v1 a todo item vinculado: o item que casa direto
+    (CODPROD_ALTERN) e tem v1 sem código no catálogo é recusado no export; o
+    preview acusa igual, sem mudar o SEQ que ele já mostra."""
+    mock_db.connect.return_value.__enter__.return_value = MagicMock()
+    mock_depara.lookup.return_value = {
+        ("codigo", "DIRETO"): {"fire_produto_id": "99", "fire_codigo": "99"},
+    }
+    mock_cat.codprod_por_seq.return_value = {}
+    produtos = [(10, "DIRETO", "CASADO DIRETO", 1.0), (99, "OUTRO", "DO VINCULO", 1.0)]
+    report, _ = _check_fisico(mock_fb, produtos, ["DIRETO"])
+    item = report["items"][0]
+    assert item["match_source"] == "codprod_altern"
+    assert item["fire_product_id"] == 10
+    assert item["sem_codigo_planilha"] is True
+    assert "99" in item["motivo"]
+
+
+def test_escolha_pontual_limpa_o_aviso_de_planilha_do_v1():
+    from app.erp.produto_chave import Candidato
+
+    entry = {"sem_codigo_planilha": True, "motivo": "x", "match": False}
+    cand = Candidato(2010, "BRANCO", "ALT", False, "PAR", 10.0)
+    product_check._aplicar_escolha_no_legado(entry, 10.0, cand)
+    assert "sem_codigo_planilha" not in entry and "motivo" not in entry
+    assert entry["match"] is True

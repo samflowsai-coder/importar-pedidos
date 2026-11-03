@@ -3886,12 +3886,16 @@ function renderPreview(data) {
     const comTroca = check.available ? (check.items || []).filter(i => i.troca_no_fire) : [];
     const trocasCertas = comTroca.filter(i => i.match && i.troca_no_fire.conferido).length;
     const palpites = comTroca.length - trocasCertas;
+    const semCodigoPlanilha = check.available ? (check.items || []).filter(i => i.sem_codigo_planilha).length : 0;
     const trocaBit = [
       trocasCertas > 0
         ? `<span style="color:var(--warn-strong);font-weight:600">⚠ O Fire vai gravar outro produto em ${trocasCertas} item(ns) ao importar esta planilha (marcados com "vira" na coluna Fire). Depois de importar, troque o produto desses itens no pedido do Fire.</span>`
         : '',
       palpites > 0
         ? `<span style="color:var(--warn-strong)">⚠ ${palpites} item(ns) podem entrar no Fire com o produto que ele escolher pelo começo do código (marcados com "vira"). Confira no pedido do Fire depois de importar.</span>`
+        : '',
+      semCodigoPlanilha > 0
+        ? `<span style="color:var(--warn-strong);font-weight:600">⚠ ${semCodigoPlanilha} item(ns) com vínculo sem código no catálogo: a planilha não sai até refazer o vínculo (marcados com "sem código na planilha").</span>`
         : '',
       check.available && s.troca_no_fire_checked === false
         ? `<span style="color:var(--text-muted)">Previsão de troca pelo Fire indisponível nesta revisão.</span>`
@@ -3978,7 +3982,7 @@ function renderPreview(data) {
           const linkBtn = isCommitted
             ? ` <button class="btn btn-sm" onclick="openProductPicker(${idx})" style="margin-left:6px;padding:1px 8px;font-size:10px;line-height:1.5">Vincular</button>`
             : '';
-          cell = `<span style="color:var(--error);font-weight:600" title="${esc((m && m.motivo) || 'sem match no Fire')}">✗</span>${linkBtn}`;
+          cell = `<span style="color:var(--error);font-weight:600" title="sem match no Fire">✗</span>${linkBtn}`;
         } else {
           const ps = m.price_status;
           const idTitle = `#${m.fire_product_id} · ${m.fire_description || ''} · via ${m.match_source}`;
@@ -4025,6 +4029,15 @@ function renderPreview(data) {
           const trocaTitle = `O importador de Excel do Fire casa o código pelo começo e vai gravar #${t.fire_product_id} · ${t.codigo} · ${t.descricao || ''}, ${oQueFazer}`;
           cell += `<div style="color:var(--warn-strong);font-weight:600;font-size:11px;margin-top:2px;white-space:nowrap"
                         title="${esc(trocaTitle)}">⚠ vira ${esc(alvo)}</div>`;
+        }
+        if (!prod && check && check.available && m && m.match && m.sem_codigo_planilha) {
+          // O export recusa este item (vínculo sem código no catálogo): mesmo
+          // aviso "warn-strong" do "vira", com o mesmo botão Vincular do item sem match.
+          const linkBtn = isCommitted
+            ? ` <button class="btn btn-sm" onclick="openProductPicker(${idx})" style="margin-left:6px;padding:1px 8px;font-size:10px;line-height:1.5">Vincular</button>`
+            : '';
+          cell += `<div style="color:var(--warn-strong);font-weight:600;font-size:11px;margin-top:2px;white-space:nowrap"
+                        title="${esc(m.motivo || '')}">⚠ sem código na planilha${linkBtn}</div>`;
         }
         // PACK: a quantidade é de packs; a nota mostra quantos kits vão dentro.
         const packNote = it.qtd_por_embalagem

@@ -386,8 +386,9 @@ dentro do Fire).
   em lotes de 150 e fica com a primeira linha que começa com cada código.
   Conferido na Fire viva contra `SELECT FIRST 1 ... STARTING WITH ?` um a um:
   620/620 iguais (MM + Nasmar, 24/09/2026).
-- Consulta o código que VAI NO XLSX: o do parser, ou o `fire_codigo` do de-para
-  (que o `depara_apply` escreve no export).
+- Consulta o código que VAI NO XLSX: o do parser, ou o `CODPROD_ALTERN` do
+  catálogo local do SEQ vinculado (`depara_apply.codigo_da_planilha`, o que o
+  `depara_apply` escreve no export). Vínculo sem código: sem previsão.
 - Item ganha `troca_no_fire = {fire_product_id, codigo, descricao}` quando o
   palpite difere do match do portal, inclusive item sem match (`fire_product_id`
   None) e código duplicado no Fire (mesmo texto, outro SEQ). `summary` ganha
@@ -497,7 +498,12 @@ Ordem: **EAN → CODPROD_ALTERN → de-para**. Quando EAN e código falham, olha
 de-para do `client_key` do pedido (SQLite local, rápido) e resolve o
 `fire_produto_id` no Firebird via `FIND_PRODUCT_BY_SEQ` — trazendo DESCRICAO +
 PRECO_VENDA, então a validação de preço segue funcionando. Novo
-`match_source='depara'`. De-para órfão (SEQ sumiu do Fire) → `match=False`.
+`match_source='depara'`. O item segue casado (o preço vale) mesmo quando o SEQ não
+tem `CODPROD_ALTERN` no catálogo local: o item ganha `sem_codigo_planilha: true` e
+`motivo` (`depara_apply.motivo_pontual_sem_codigo`) e a planilha recusa (R21). O
+v1 de TODO item com chave é lido (mesma query, `depara_apply.vinculo_do_item`)
+só para essa flag: item casado direto também a recebe, sem mudar o SEQ que mostra
+(o `resolver` do export aplica o v1 a todo item vinculado). De-para órfão (SEQ sumiu do Fire) → `match=False`.
 Best-effort: sem ambiente ativo / SQLite off, pula o degrau sem quebrar o check.
 
 ### De-para no insert direto (`EXPORT_MODE=db|both`)

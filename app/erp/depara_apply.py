@@ -29,11 +29,23 @@ def codigo_da_planilha(fire_produto_id: object, codigos: dict[str, str]) -> str 
     return codigos.get(str(fire_produto_id))
 
 
+def vinculo_do_item(it, dm: dict) -> dict | None:
+    """Vínculo v1 que vale para o item, dado o mapa de `produto_depara_repo.lookup`:
+    código primeiro, EAN como fallback. Fonte única de "qual vínculo vale para
+    este item", usada por `resolver` (export/envio) e por `product_check.check_order`."""
+    dk = None
+    if it.product_code:
+        dk = ("codigo", _norm_key("codigo", it.product_code))
+    if (dk is None or dk not in dm) and it.ean:
+        dk = ("ean", _norm_key("ean", it.ean))
+    return dm.get(dk) if dk else None
+
+
 def resolver(order: Order, *, conn: sqlite3.Connection) -> list[dict]:
     """Vínculos de-para dos itens do `order`, SEM mutar nada.
 
     Uma entrada por item vinculado: `item_index`, `fire_produto_id`,
-    `fire_codigo`, `fire_ean`, `orig`. É o mapa que o envio consulta UMA vez
+    `fire_codigo`, `sem_codigo_fire`, `fire_ean`, `orig`. É o mapa que o envio consulta UMA vez
     antes do portão de preço: a trava avalia o mesmo SEQ que o
     `FirebirdExporter` grava e cujo código o XLSX leva (`aplicar`).
 
@@ -52,20 +64,15 @@ def resolver(order: Order, *, conn: sqlite3.Connection) -> list[dict]:
     if not dm:
         return []
 
-    codigos = catalogo_fire_repo.codprod_por_seq(
+    codprod = catalogo_fire_repo.codprod_por_seq(
         conn, [dv["fire_produto_id"] for dv in dm.values()]
     )
     vinculos: list[dict] = []
     for idx, it in enumerate(order.items):
-        dk = None
-        if it.product_code:
-            dk = ("codigo", _norm_key("codigo", it.product_code))
-        if (dk is None or dk not in dm) and it.ean:
-            dk = ("ean", _norm_key("ean", it.ean))
-        dv = dm.get(dk) if dk else None
+        dv = vinculo_do_item(it, dm)
         if dv is None:
             continue
-        codigo = codigo_da_planilha(dv["fire_produto_id"], codigos)
+        codigo = codigo_da_planilha(dv["fire_produto_id"], codprod)
         vinculos.append(
             {
                 "item_index": idx,
