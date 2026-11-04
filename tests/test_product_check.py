@@ -1236,7 +1236,7 @@ def test_check_sem_env_intercompany_nao_roda_e_sem_ambiente_fica_completa(mock_d
 @patch("app.erp.product_check.FirebirdConnection")
 @patch("app.erp.product_check.db")
 def test_codigo_xlsx_do_vinculo_e_o_do_catalogo(mock_db, mock_fb, mock_depara, mock_cat):
-    """Incidente 30/10: o v1 guardava str(SEQ); o check e o export leem o
+    """O v1 guardava str(SEQ) (PR #126); o check e o export leem o
     CODPROD_ALTERN do catálogo (mesma função de `depara_apply`)."""
     mock_db.connect.return_value.__enter__.return_value = MagicMock()
     mock_depara.lookup.return_value = {
