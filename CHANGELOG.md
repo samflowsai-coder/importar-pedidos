@@ -23,7 +23,7 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
-Nada por enquanto.
+1) **A atualização não desfaz mais o pacote quando um arquivo está ocupado na hora de gravar a versão.** O erro "Não é possível criar um arquivo já existente" fazia o portal voltar para a versão anterior; agora a gravação tenta de novo por alguns segundos. Vale a partir da atualização seguinte a esta.
 
 ## 20261103-1427
 

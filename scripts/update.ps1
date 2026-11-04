@@ -85,7 +85,8 @@ function Get-JsonValue {
 
 # Escreve um hashtable como JSON UTF-8 SEM BOM -- critico: Python
 # `Path.read_text(encoding="utf-8")` (app/web/routes_update.py::_current_version)
-# nao tolera BOM. Copiada verbatim de scripts/apply-update.ps1 (mesma razao).
+# nao tolera BOM. Mesma escrita de scripts/apply-update.ps1, SEM o retry de la: aqui o
+# applied_update.json e gravado antes de o app subir, sem leitor concorrente.
 function Write-JsonNoBom {
     param([string]$Path, [hashtable]$Data)
     $dir = Split-Path -Parent $Path

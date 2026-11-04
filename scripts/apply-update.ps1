@@ -191,7 +191,24 @@ function Write-JsonNoBom {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     $tmp = Join-Path $dir ([Guid]::NewGuid().ToString("N") + ".tmp")
     [System.IO.File]::WriteAllText($tmp, $json, $utf8NoBom)
-    Move-Item -Path $tmp -Destination $Path -Force
+    # O Move-Item -Force nao e atomico: se o destino ainda existe na hora da troca (delete
+    # pendente por antivirus/indexador, ou outro processo com o arquivo aberto), o Windows
+    # devolve 183 "arquivo ja existente" e o update inteiro caia em rollback (03/11/2026,
+    # pacote 1427, applied_update.json; causa exata nao provada). Tenta por ~3 s.
+    $tentativas = 15
+    for ($i = 1; $i -le $tentativas; $i++) {
+        try {
+            Move-Item -Path $tmp -Destination $Path -Force -ErrorAction Stop
+            return
+        } catch {
+            if ($i -eq $tentativas) {
+                Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+                throw
+            }
+            Write-Log "Write-JsonNoBom: $Path ocupado (tentativa $i/$tentativas): $($_.Exception.Message)"
+            Start-Sleep -Milliseconds 200
+        }
+    }
 }
 
 function Write-Phase {
