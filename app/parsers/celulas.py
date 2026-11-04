@@ -75,3 +75,16 @@ def data(value) -> str | None:
         return (_EXCEL_EPOCH + _dt.timedelta(days=int(value))).strftime("%d/%m/%Y")
     s = str(value).strip()
     return s or None
+
+
+def limites_das_abas(sheets: list[dict]) -> list[tuple[str, int, int]]:
+    """`(nome, início, fim)` de cada aba dentro do `rows` que o extractor concatena.
+
+    O `XLSExtractor` junta TODAS as abas numa lista só e devolve em `sheets` quantas
+    linhas cada uma ocupa. Sem isso o parser não sabe onde uma aba termina.
+    """
+    limites, acc = [], 0
+    for s in sheets:
+        limites.append((s["name"], acc, acc + s["rows"]))
+        acc += s["rows"]
+    return limites

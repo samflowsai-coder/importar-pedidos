@@ -1738,6 +1738,50 @@ def test_pedido_compras_revenda_preco_com_milhar():
     assert PedidoComprasRevendaParser()._extract_unit_price(bloco) == 1050.95
 
 
+# ── Template Nasmar: mesmo produto em mais de uma aba (chamado Camila 04/11) ──
+#
+# AF186 Cascavel: abas "Setembro" e "Novembro" com a mesma grade (no Fire são
+# dois pedidos, Nasmar 1193 faturado e 1192 em aberto). O parser lia até o fim
+# do arquivo e somava as duas: 40 itens, 384 kits, o dobro. Abas com produtos
+# DIFERENTES (Pulmão AW/AF/Magic Feet) continuam virando um pedido só.
+
+AF186_ABAS = "Pedido Authentic Feet AF186 abas Setembro Novembro.xlsx"
+
+
+def test_nasmar_template_mesmo_produto_em_duas_abas_recusa():
+    from app.extractors.xls_extractor import XLSExtractor
+    from app.parsers.base_parser import PedidoRecusadoError
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    extracted = XLSExtractor().extract(_load(AF186_ABAS))
+    with pytest.raises(PedidoRecusadoError, match="Setembro.*Novembro"):
+        NasmarTemplateParser().parse(extracted)
+
+
+def test_nasmar_template_aba_unica_do_mesmo_arquivo_sai_inteira():
+    """Com só a aba do pedido (o que a operação faz para importar uma entrega)."""
+    from app.extractors.xls_extractor import XLSExtractor
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    extracted = XLSExtractor().extract(_load(AF186_ABAS))
+    n = extracted["sheets"][0]["rows"]
+    so_novembro = {
+        **extracted,
+        "rows": extracted["rows"][n:],
+        "sheets": extracted["sheets"][1:],
+    }
+    order = NasmarTemplateParser().parse(so_novembro)
+    assert len(order.items) == 20
+    assert sum(i.quantity for i in order.items) == 192
+    assert round(sum(i.total_price for i in order.items), 2) == 2736.0
+
+
+def test_nasmar_template_abas_com_produtos_diferentes_continuam_juntas():
+    order = _process("Pedido Grupo Afeet Pulmao.xlsx")
+    codigos = [i.product_code for i in order.items]
+    assert len(codigos) == len(set(codigos)) == 82
+
+
 # ── Authentic Feet (05/10/2026): o MESMO template, com `QUAN.` no lugar de TOTAL KITS ──
 #
 # Lote de 9 planilhas da MM: a coluna de quantidade de kits veio como `QUAN.`,
