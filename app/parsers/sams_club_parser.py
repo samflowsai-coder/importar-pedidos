@@ -3,18 +3,24 @@ from __future__ import annotations
 import re
 
 from app.models.order import Order, OrderHeader, OrderItem
-from app.parsers.base_parser import BaseParser
+from app.parsers.base_parser import BaseParser, PedidoRecusadoError
 from app.utils.logger import logger
 
 _SIGNATURE_CNPJ = "00.063.960"
 _SIGNATURE_TEXT = "Itens do Pedido"
 _GRADE_MARKER = "Cross Docking"
 
+# `Qtde na Emb.` e `Qtde Pedida` vêm com milhar ("1.103,00"): sem o ponto no
+# grupo a linha inteira não casava e o item sumia (PO 06883676 = Fire 5256).
 _ITEM_RE = re.compile(
-    r"^(\d+)\s+(\d{13})\s+Unidade\s+([\d,]+)\s+([\d,]+)\s+([\d,.]+)\s+([\d,.]+)"
+    r"^(\d+)\s+(\d{13})\s+Unidade\s+([\d.,]+)\s+([\d.,]+)\s+([\d,.]+)\s+([\d,.]+)"
     r".*?([\d,.]+)$",
     re.MULTILINE,
 )
+# Tudo que tem cara de linha de item (nº + EAN + unidade, qualquer que seja ela).
+# Serve de contagem contra o `_ITEM_RE`. O nº tem até 4 dígitos para não pegar a
+# Cross Docking, que começa com dois EANs.
+_ITEM_SHAPE_RE = re.compile(r"^\d{1,4}\s+(\d{13})\s+[^\W\d]", re.MULTILINE)
 
 # Linha "de dados" da tabela Cross Docking: <EAN local> <EAN produto> <qty> <data inicial>
 _CD_DATA_RE = re.compile(r"^(\d{13})\s+(\d{13})\s+([\d,.]+)\s+(\d{2}\s*/\s*\d{2}\s*/\s*\d{4})\s*$")
@@ -135,6 +141,24 @@ class SamsClubParser(BaseParser):
         m = re.search(re.escape(_SIGNATURE_TEXT), text, re.IGNORECASE)
         return text[m.start() :] if m else text
 
+    def _item_matches(self, text: str) -> list[re.Match[str]]:
+        """Linhas da tabela 'Itens do Pedido', sem perder nenhuma em silêncio.
+
+        Linha com cara de item que o `_ITEM_RE` não lê recusa o PDF: um item a
+        menos sai como pedido válido com total menor, e ninguém vê.
+        """
+        section = self._items_section(text)
+        matches = list(_ITEM_RE.finditer(section))
+        lidas = {m.start() for m in matches}
+        perdidas = [m for m in _ITEM_SHAPE_RE.finditer(section) if m.start() not in lidas]
+        if perdidas:
+            eans = ", ".join(m.group(1) for m in perdidas)
+            raise PedidoRecusadoError(
+                f"Sam's: {len(perdidas)} linha(s) de item do PDF não foram lidas (EAN {eans}). "
+                "O pedido não foi importado para não entrar sem esses itens."
+            )
+        return matches
+
     def _build_item_lookup(self, text: str) -> dict[str, tuple[float, int | None]]:
         """Mapa {ean_produto: (preço, kits por pack)} da tabela 'Itens do Pedido'.
 
@@ -144,9 +168,8 @@ class SamsClubParser(BaseParser):
         ⚠️ `Qtde na Emb.` (grupo 3) só vira `qtd_por_embalagem`: ver
         `_parse_items`. Não usar como multiplicador.
         """
-        section = self._items_section(text)
         lookup: dict[str, tuple[float, int | None]] = {}
-        for m in _ITEM_RE.finditer(section):
+        for m in self._item_matches(text):
             unit_price = self._parse_br_number(m.group(5))
             lookup[m.group(2)] = (
                 unit_price if unit_price is not None else 0.0,
@@ -241,10 +264,8 @@ class SamsClubParser(BaseParser):
 
     def _warn_if_grade_diverges(self, text: str, items: list[OrderItem]) -> None:
         """Soma qty da grade por SKU e compara com a tabela superior. Warning se divergir."""
-        section = self._items_section(text)
-
         agg: dict[str, float] = {}
-        for m in _ITEM_RE.finditer(section):
+        for m in self._item_matches(text):
             ean = m.group(2)
             ped = self._parse_br_number(m.group(4)) or 0.0
             agg[ean] = agg.get(ean, 0.0) + ped
@@ -278,16 +299,13 @@ class SamsClubParser(BaseParser):
         despercebido porque emb=1 na esmagadora maioria dos itens (16 dos 18 do
         sample de janeiro).
         """
-        # Restrict to section after "Itens do Pedido"
-        section = self._items_section(text)
-
         delivery_date = self._extract_date(text, r"Data Inicial:\s*(\d{2}\s*/\s*\d{2}\s*/\s*\d{4})")
         delivery_cnpj, delivery_name = self._parse_delivery_location(text)
         ean_m = _DELIVERY_EAN_RE.search(text)
         delivery_ean = ean_m.group(1) if ean_m else None
 
         items = []
-        for m in _ITEM_RE.finditer(section):
+        for m in self._item_matches(text):
             ean = m.group(2)
             qty = self._parse_br_number(m.group(4))
             preco_bruto = self._parse_br_number(m.group(5))

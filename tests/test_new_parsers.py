@@ -1581,6 +1581,7 @@ def test_sams_consolidado_antigo_kit_de_36():
         ("PEDIDO SAMS CLUB.pdf", 33577.67),
         ("PEDIDO SAMS CLUB CD DF.pdf", 5983.17),
         ("PEDIDO SAMS CLUB GRADE.pdf", 40891.24),
+        ("PEDIDO SAMS CLUB 06883676 MILHAR.pdf", 343069.61),
     ],
 )
 def test_sams_soma_dos_itens_bate_com_o_sumario_do_pdf(sample, total_mercadorias):
@@ -1597,6 +1598,68 @@ def test_sams_soma_dos_itens_bate_com_o_sumario_do_pdf(sample, total_mercadorias
     order = _process(sample)
     soma = sum(i.total_price or 0 for i in order.items)
     assert soma == pytest.approx(total_mercadorias, abs=0.01)
+
+
+# ── Sam's: quantidade com milhar (chamado Camila 04/11, PO 06883676 = Fire 5256) ──
+#
+# `Qtde Pedida` de 1.103,00 e 1.043,00: o regex da linha só aceitava `[\d,]+`, a
+# linha inteira não casava e o item sumia sem aviso (18 de 20 no Fire, faltando
+# R$ 60.281,14).
+
+SAMS_MILHAR = "PEDIDO SAMS CLUB 06883676 MILHAR.pdf"
+
+
+def test_sams_quantidade_com_milhar_nao_derruba_o_item():
+    order = _process(SAMS_MILHAR)
+    assert len(order.items) == 20
+    por_ean = {i.ean: i for i in order.items}
+    assert por_ean["7898686876759"].quantity == 1103.0
+    assert por_ean["7898686876759"].total_price == 30983.27
+    assert por_ean["7898686876780"].quantity == 1043.0
+    assert por_ean["7898686876780"].total_price == 29297.87
+
+
+def _sams_text(linha_item: str) -> str:
+    return (
+        "PEDIDO DE COMPRA\n"
+        "Número Pedido: 06883676-0000 Data de Emissão: 31 / 10 / 2026\n"
+        "CNPJ: 00.063.960 / 0003-62\n"
+        "Data Inicial: 29 / 01 / 2027 Data Final: 29 / 01 / 2027\n"
+        "CNPJ do Local de Entrega: 00.063.960 / 0122-98 CD SAMS SP\n"
+        "Itens do Pedido\n"
+        "1 7898686876711 Unidade 1,00 609,00 28,09 28,09 0,00 0,00 17.106,81\n"
+        f"{linha_item}\n"
+        "Sumário\n"
+    )
+
+
+def test_sams_grade_com_milhar_mantem_o_preco_do_sku():
+    """Na GRADE o preço vem da tabela superior; sem casar a linha o SKU ficava sem preço."""
+    from app.parsers.sams_club_parser import SamsClubParser
+
+    lookup = SamsClubParser()._build_item_lookup(
+        _sams_text("2 7898686876759 Unidade 1,00 1.103,00 28,09 28,09 0,00 0,00 30.983,27")
+    )
+    assert lookup["7898686876759"] == (28.09, None)
+
+
+def test_sams_linha_de_item_que_nao_casa_recusa_o_pedido():
+    """Rede: linha com cara de item que o regex não lê recusa o PDF, nunca some calada."""
+    from app.parsers.base_parser import PedidoRecusadoError
+    from app.parsers.sams_club_parser import SamsClubParser
+
+    texto = _sams_text("2 7898686876759 Unidade 1,00 ??? 28,09 28,09 0,00 0,00 30.983,27")
+    with pytest.raises(PedidoRecusadoError, match="7898686876759"):
+        SamsClubParser().parse({"text": texto})
+
+
+def test_sams_linha_com_outra_unidade_tambem_recusa():
+    from app.parsers.base_parser import PedidoRecusadoError
+    from app.parsers.sams_club_parser import SamsClubParser
+
+    texto = _sams_text("2 7898686876759 Caixa 1,00 5,00 28,09 28,09 0,00 0,00 140,45")
+    with pytest.raises(PedidoRecusadoError, match="7898686876759"):
+        SamsClubParser().parse({"text": texto})
 
 
 # ── Authentic Feet (05/10/2026): o MESMO template, com `QUAN.` no lugar de TOTAL KITS ──
