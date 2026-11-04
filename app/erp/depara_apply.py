@@ -24,7 +24,7 @@ def codigo_da_planilha(fire_produto_id: object, codigos: dict[str, str]) -> str 
     `CODPROD_ALTERN` atual do SEQ no catálogo local (`codigos` vem de
     `catalogo_fire_repo.codprod_por_seq`). Nunca o `fire_codigo` gravado no
     vínculo nem o SEQ em texto: o importador de Excel do Fire casa por PREFIXO
-    de `CODPROD_ALTERN` (incidente 30/10, pedidos Riachuelo 5146-5163). None =
+    de `CODPROD_ALTERN`, e o SEQ em texto poderia casar com outro produto. None =
     sem código; a planilha recusa (R21)."""
     return codigos.get(str(fire_produto_id))
 

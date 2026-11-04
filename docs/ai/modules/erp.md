@@ -513,7 +513,7 @@ Best-effort: sem ambiente ativo / SQLite off, pula o degrau sem quebrar o check.
 insert) e passa ao `FirebirdExporter.export` o mapa
 `produtos_por_item = {posição em order.items: SEQ}` dos itens vinculados. Esses
 itens são buscados **só** por `FIND_PRODUCT_BY_SEQ`: o insert segue pelo SEQ e
-não depende do código da planilha (onde o SEQ em texto casaria por prefixo
+não depende do código da planilha (onde o SEQ em texto poderia casar por prefixo
 de `CODPROD_ALTERN` com outro produto). SEQ sumido do
 Fire → `PRODUCT_NOT_FOUND`, sem cair para EAN/código. Audita
 `depara_aplicado_no_fire`.
