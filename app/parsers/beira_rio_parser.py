@@ -97,7 +97,8 @@ class BeiranRioParser(BaseParser):
         # ── Line 1: item_code + description + price ──────────────────
         line1 = lines[0].strip()
         # A unidade varia por item (KIT, PAR): o preço vem depois dela, qualquer que seja.
-        m1 = re.match(r"(\d{10})(.+?)\s+\d{8}\s+[A-Z]{2,4}\s+([\d,]+)", line1)
+        # Preço com milhar ("1.050,00000"): sem o ponto no grupo virava 1,00.
+        m1 = re.match(r"(\d{10})(.+?)\s+\d{8}\s+[A-Z]{2,4}\s+([\d.,]+)", line1)
         if m1:
             item_code = m1.group(1)
             desc_part = m1.group(2).strip().rstrip(" -").strip()

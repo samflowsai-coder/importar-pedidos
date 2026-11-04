@@ -1581,6 +1581,7 @@ def test_sams_consolidado_antigo_kit_de_36():
         ("PEDIDO SAMS CLUB.pdf", 33577.67),
         ("PEDIDO SAMS CLUB CD DF.pdf", 5983.17),
         ("PEDIDO SAMS CLUB GRADE.pdf", 40891.24),
+        ("PEDIDO SAMS CLUB 06883676 MILHAR.pdf", 343069.61),
     ],
 )
 def test_sams_soma_dos_itens_bate_com_o_sumario_do_pdf(sample, total_mercadorias):
@@ -1597,6 +1598,144 @@ def test_sams_soma_dos_itens_bate_com_o_sumario_do_pdf(sample, total_mercadorias
     order = _process(sample)
     soma = sum(i.total_price or 0 for i in order.items)
     assert soma == pytest.approx(total_mercadorias, abs=0.01)
+
+
+# ── Sam's: quantidade com milhar (chamado Camila 04/11, PO 06883676 = Fire 5256) ──
+#
+# `Qtde Pedida` de 1.103,00 e 1.043,00: o regex da linha só aceitava `[\d,]+`, a
+# linha inteira não casava e o item sumia sem aviso (18 de 20 no Fire, faltando
+# R$ 60.281,14).
+
+SAMS_MILHAR = "PEDIDO SAMS CLUB 06883676 MILHAR.pdf"
+
+
+def test_sams_quantidade_com_milhar_nao_derruba_o_item():
+    order = _process(SAMS_MILHAR)
+    assert len(order.items) == 20
+    por_ean = {i.ean: i for i in order.items}
+    assert por_ean["7898686876759"].quantity == 1103.0
+    assert por_ean["7898686876759"].total_price == 30983.27
+    assert por_ean["7898686876780"].quantity == 1043.0
+    assert por_ean["7898686876780"].total_price == 29297.87
+
+
+def _sams_text(linha_item: str, sumario: str | None = None) -> str:
+    rodape = f"Mercadorias Com.\n{sumario} 0,00 9,45 {sumario}\n" if sumario else ""
+    return (
+        "PEDIDO DE COMPRA\n"
+        "Número Pedido: 06883676-0000 Data de Emissão: 31 / 10 / 2026\n"
+        "CNPJ: 00.063.960 / 0003-62\n"
+        "Data Inicial: 29 / 01 / 2027 Data Final: 29 / 01 / 2027\n"
+        "CNPJ do Local de Entrega: 00.063.960 / 0122-98 CD SAMS SP\n"
+        "Itens do Pedido\n"
+        "1 7898686876711 Unidade 1,00 609,00 28,09 28,09 0,00 0,00 17.106,81\n"
+        f"{linha_item}\n"
+        "Sumário\n"
+        "Valor Total Valor Total IPI Valor Total Desc.\n"
+        f"{rodape}"
+    )
+
+
+def test_sams_grade_com_milhar_mantem_o_preco_do_sku():
+    """Na GRADE o preço vem da tabela superior; sem casar a linha o SKU ficava sem preço."""
+    from app.parsers.sams_club_parser import SamsClubParser
+
+    lookup = SamsClubParser()._build_item_lookup(
+        _sams_text("2 7898686876759 Unidade 1,00 1.103,00 28,09 28,09 0,00 0,00 30.983,27")
+    )
+    assert lookup["7898686876759"] == (28.09, None)
+
+
+def test_sams_linha_de_item_que_nao_casa_recusa_o_pedido():
+    """Rede: linha com cara de item que o regex não lê recusa o PDF, nunca some calada."""
+    from app.parsers.base_parser import PedidoRecusadoError
+    from app.parsers.sams_club_parser import SamsClubParser
+
+    texto = _sams_text("2 7898686876759 Unidade 1,00 ??? 28,09 28,09 0,00 0,00 30.983,27")
+    with pytest.raises(PedidoRecusadoError, match="7898686876759"):
+        SamsClubParser().parse({"text": texto})
+
+
+@pytest.mark.parametrize(
+    "linha",
+    [
+        "2 7898686876759 1,00 5,00 28,09 28,09 0,00 0,00 140,45",  # sem a coluna de unidade
+        "2 17898686876759 Unidade 1,00 5,00 28,09 28,09 0,00 0,00 140,45",  # DUN-14
+    ],
+)
+def test_sams_linha_de_item_fora_do_formato_recusa(linha):
+    from app.parsers.base_parser import PedidoRecusadoError
+    from app.parsers.sams_club_parser import SamsClubParser
+
+    with pytest.raises(PedidoRecusadoError, match="não foram lidas"):
+        SamsClubParser().parse({"text": _sams_text(linha)})
+
+
+def test_sams_soma_dos_itens_diferente_do_sumario_recusa():
+    """Âncora dura: o Valor Total Mercadorias impresso. Pega perda que a contagem não vê."""
+    from app.parsers.base_parser import PedidoRecusadoError
+    from app.parsers.sams_club_parser import SamsClubParser
+
+    linha = "2 7898686876759 Unidade 1,00 5,00 28,09 28,09 0,00 0,00 140,45"
+    ok = SamsClubParser().parse({"text": _sams_text(linha, sumario="17.247,26")})
+    assert len(ok.items) == 2
+
+    with pytest.raises(PedidoRecusadoError, match="Sumário"):
+        SamsClubParser().parse({"text": _sams_text(linha, sumario="47.530,53")})
+
+
+def test_sams_grade_com_linha_da_cross_docking_perdida_recusa():
+    """Na GRADE o item importado vem da Cross Docking: linha perdida lá também recusa."""
+    from app.parsers.base_parser import PedidoRecusadoError
+    from app.parsers.sams_club_parser import SamsClubParser
+
+    texto = (
+        _sams_text("2 7898686876759 Unidade 1,00 5,00 28,09 28,09 0,00 0,00 140,45", "17.247,26")
+        + "Cross Docking\n"
+        + "00.063.960 /\n"
+        + "7891737001698 7898686876711 609,00 00 / 00 / 0000\n"
+        + "0094-08\n"
+        + "00.063.960 /\n"
+        + "7891737001698 7898686876759 cinco 00 / 00 / 0000\n"  # não casa: some da grade
+        + "0094-08\n"
+    )
+    with pytest.raises(PedidoRecusadoError, match="Sumário"):
+        SamsClubParser().parse({"text": texto})
+
+
+def test_sams_linha_com_outra_unidade_tambem_recusa():
+    from app.parsers.base_parser import PedidoRecusadoError
+    from app.parsers.sams_club_parser import SamsClubParser
+
+    texto = _sams_text("2 7898686876759 Caixa 1,00 5,00 28,09 28,09 0,00 0,00 140,45")
+    with pytest.raises(PedidoRecusadoError, match="7898686876759"):
+        SamsClubParser().parse({"text": texto})
+
+
+# ── Preço unitário com milhar (varredura do chamado 04/11) ──
+#
+# Mesmo padrão `[\d,]+` do Sam's, no preço: `1.050,0000` virava 1,00. Latente
+# (maior preço nos samples: R$ 12,73), fechado antes que um kit caro apareça.
+
+
+def test_beira_rio_preco_com_milhar():
+    from app.extractors.pdf_extractor import PDFExtractor
+
+    texto = PDFExtractor().extract(_load("PEDIDO BEIRA RIO.pdf"))["text"]
+    texto = texto.replace("KIT 8,19000", "KIT 1.050,00000", 1)
+    assert "KIT 1.050,00000" in texto
+    from app.parsers.beira_rio_parser import BeiranRioParser
+
+    order = BeiranRioParser().parse({"text": texto})
+    precos = {i.unit_price for i in order.items if i.product_code == "1000626853"}
+    assert precos == {1050.0}
+
+
+def test_pedido_compras_revenda_preco_com_milhar():
+    from app.parsers.pedido_compras_revenda_parser import PedidoComprasRevendaParser
+
+    bloco = "20 12 5196673 7909901827460 6115.95.00 PAR 15 1.050,9500 0,0000 % 1.050,9500 0,00 0,0000 15.764,25 0,00"
+    assert PedidoComprasRevendaParser()._extract_unit_price(bloco) == 1050.95
 
 
 # ── Authentic Feet (05/10/2026): o MESMO template, com `QUAN.` no lugar de TOTAL KITS ──

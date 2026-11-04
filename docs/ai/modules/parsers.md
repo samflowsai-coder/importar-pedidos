@@ -143,6 +143,21 @@ e devolvia lixo calado: pedido `MARCA`, 2 itens falsos, sem cliente.
    - `delivery_ean` (EAN da loja) é a chave inequívoca usada pelo exportador para split — evita ambiguidade quando o CNPJ da filial coincide com o `customer_cnpj` (caso `00.063.960/0094-08`).
    - `_warn_if_grade_diverges()` soma qty da grade por SKU e compara com a tabela superior; emite `logger.warning` se divergir.
 
+Duas redes, nos dois layouts, contra item perdido em silêncio. Qualquer uma recusa o PDF
+(`PedidoRecusadoError`) em vez de importar com item a menos:
+- `_item_matches()` conta toda linha com cara de item (`_ITEM_SHAPE_RE`: nº + código de
+  13/14 dígitos, com ou sem unidade) contra as que o `_ITEM_RE` lê. Se sobrar linha,
+  recusa com os EANs.
+- `_conferir_sumario()` compara a soma dos itens com o `Valor Total Mercadorias` do
+  Sumário (`_SUMARIO_RE`, que pega os dois rótulos de layout), com tolerância de R$ 0,50
+  (o PDF diverge de si mesmo em 1 centavo). É a âncora que cobre a Cross Docking da
+  GRADE. Sem Sumário no texto, só `logger.warning`.
+
+Origem: chamado Camila 04/11/2026, PO 06883676-0000 = Fire 5256. `Qtde
+Pedida` de `1.103,00` não casava com `[\d,]+`, a linha sumia sem aviso e o pedido entrou
+com 18 de 20 itens (R$ 60.281,14 a menos). Hoje as duas colunas de quantidade aceitam
+milhar. Sample: `PEDIDO SAMS CLUB 06883676 MILHAR.pdf`.
+
 Ambos layouts compartilham `_parse_header()` (regex `Número (?:do )?Pedido:` cobre as duas variações), mas ele recebe `grade=` porque a regra de cliente difere — ver abaixo. Detecção case-insensitive em `can_parse`.
 
 ### `Qtde na Emb.` é o tamanho do PACK, nunca multiplicador

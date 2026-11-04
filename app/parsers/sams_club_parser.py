@@ -3,18 +3,34 @@ from __future__ import annotations
 import re
 
 from app.models.order import Order, OrderHeader, OrderItem
-from app.parsers.base_parser import BaseParser
+from app.parsers.base_parser import BaseParser, PedidoRecusadoError
 from app.utils.logger import logger
 
 _SIGNATURE_CNPJ = "00.063.960"
 _SIGNATURE_TEXT = "Itens do Pedido"
 _GRADE_MARKER = "Cross Docking"
 
+# `Qtde na Emb.` e `Qtde Pedida` vêm com milhar ("1.103,00"): sem o ponto no
+# grupo a linha inteira não casava e o item sumia (PO 06883676 = Fire 5256).
 _ITEM_RE = re.compile(
-    r"^(\d+)\s+(\d{13})\s+Unidade\s+([\d,]+)\s+([\d,]+)\s+([\d,.]+)\s+([\d,.]+)"
+    r"^(\d+)\s+(\d{13})\s+Unidade\s+([\d.,]+)\s+([\d.,]+)\s+([\d,.]+)\s+([\d,.]+)"
     r".*?([\d,.]+)$",
     re.MULTILINE,
 )
+# Tudo que tem cara de linha de item: nº + código de 13/14 dígitos (EAN ou DUN),
+# com ou sem a coluna de unidade. Serve de contagem contra o `_ITEM_RE`. O nº tem
+# até 4 dígitos para não pegar a Cross Docking, que começa com dois EANs.
+_ITEM_SHAPE_RE = re.compile(r"^\d{1,4}\s+(\d{13,14})\b", re.MULTILINE)
+
+# `Valor Total Mercadorias`: 1º valor da 1ª linha numérica depois do título do
+# Sumário. O rótulo muda de layout ("Mercadorias Com." no consolidado, "Mercadorias
+# IPI Com. ... Pedido" na GRADE); a posição do valor não.
+_SUMARIO_RE = re.compile(
+    r"^Sum[áa]rio\s*$.*?^(\d{1,3}(?:\.\d{3})*,\d{2})\s", re.IGNORECASE | re.MULTILINE | re.DOTALL
+)
+# O PDF diverge de si mesmo em 1 centavo (cada linha é arredondada, o Sumário não):
+# 06883660-0000 e o sample de janeiro. Item perdido vale no mínimo 1 kit (~R$ 28).
+_SUMARIO_TOLERANCIA = 0.50
 
 # Linha "de dados" da tabela Cross Docking: <EAN local> <EAN produto> <qty> <data inicial>
 _CD_DATA_RE = re.compile(r"^(\d{13})\s+(\d{13})\s+([\d,.]+)\s+(\d{2}\s*/\s*\d{2}\s*/\s*\d{4})\s*$")
@@ -68,6 +84,7 @@ class SamsClubParser(BaseParser):
         if not items:
             return None
 
+        self._conferir_sumario(text, items)
         self._anotar_packs(items, header.order_number)
         return Order(header=header, items=items)
 
@@ -135,6 +152,44 @@ class SamsClubParser(BaseParser):
         m = re.search(re.escape(_SIGNATURE_TEXT), text, re.IGNORECASE)
         return text[m.start() :] if m else text
 
+    def _item_matches(self, text: str) -> list[re.Match[str]]:
+        """Linhas da tabela 'Itens do Pedido', sem perder nenhuma em silêncio.
+
+        Linha com cara de item que o `_ITEM_RE` não lê recusa o PDF: um item a
+        menos sai como pedido válido com total menor, e ninguém vê.
+        """
+        section = self._items_section(text)
+        matches = list(_ITEM_RE.finditer(section))
+        lidas = {m.start() for m in matches}
+        perdidas = [m for m in _ITEM_SHAPE_RE.finditer(section) if m.start() not in lidas]
+        if perdidas:
+            eans = ", ".join(m.group(1) for m in perdidas)
+            raise PedidoRecusadoError(
+                f"Sam's: {len(perdidas)} linha(s) de item do PDF não foram lidas (EAN {eans}). "
+                "O pedido não foi importado para não entrar sem esses itens."
+            )
+        return matches
+
+    def _conferir_sumario(self, text: str, items: list[OrderItem]) -> None:
+        """Soma dos itens contra o `Valor Total Mercadorias` impresso no PDF.
+
+        Âncora dura dos dois layouts: pega item perdido que a contagem de linhas
+        não vê (na GRADE o item importado vem da Cross Docking). Sem Sumário no
+        texto, só avisa: a contagem de linhas continua valendo.
+        """
+        m = _SUMARIO_RE.search(text)
+        impresso = self._parse_br_number(m.group(1)) if m else None
+        if impresso is None:
+            logger.warning("Sams: Sumário não encontrado; soma dos itens não conferida")
+            return
+        soma = round(sum(it.total_price or 0.0 for it in items), 2)
+        if abs(soma - impresso) > _SUMARIO_TOLERANCIA:
+            raise PedidoRecusadoError(
+                f"Sam's: a soma dos itens lidos (R$ {_fmt_brl(soma)}) não bate com o Sumário "
+                f"do PDF (R$ {_fmt_brl(impresso)}). O pedido não foi importado para não "
+                "entrar com item ou valor a menos."
+            )
+
     def _build_item_lookup(self, text: str) -> dict[str, tuple[float, int | None]]:
         """Mapa {ean_produto: (preço, kits por pack)} da tabela 'Itens do Pedido'.
 
@@ -144,9 +199,8 @@ class SamsClubParser(BaseParser):
         ⚠️ `Qtde na Emb.` (grupo 3) só vira `qtd_por_embalagem`: ver
         `_parse_items`. Não usar como multiplicador.
         """
-        section = self._items_section(text)
         lookup: dict[str, tuple[float, int | None]] = {}
-        for m in _ITEM_RE.finditer(section):
+        for m in self._item_matches(text):
             unit_price = self._parse_br_number(m.group(5))
             lookup[m.group(2)] = (
                 unit_price if unit_price is not None else 0.0,
@@ -241,10 +295,8 @@ class SamsClubParser(BaseParser):
 
     def _warn_if_grade_diverges(self, text: str, items: list[OrderItem]) -> None:
         """Soma qty da grade por SKU e compara com a tabela superior. Warning se divergir."""
-        section = self._items_section(text)
-
         agg: dict[str, float] = {}
-        for m in _ITEM_RE.finditer(section):
+        for m in self._item_matches(text):
             ean = m.group(2)
             ped = self._parse_br_number(m.group(4)) or 0.0
             agg[ean] = agg.get(ean, 0.0) + ped
@@ -278,16 +330,13 @@ class SamsClubParser(BaseParser):
         despercebido porque emb=1 na esmagadora maioria dos itens (16 dos 18 do
         sample de janeiro).
         """
-        # Restrict to section after "Itens do Pedido"
-        section = self._items_section(text)
-
         delivery_date = self._extract_date(text, r"Data Inicial:\s*(\d{2}\s*/\s*\d{2}\s*/\s*\d{4})")
         delivery_cnpj, delivery_name = self._parse_delivery_location(text)
         ean_m = _DELIVERY_EAN_RE.search(text)
         delivery_ean = ean_m.group(1) if ean_m else None
 
         items = []
-        for m in _ITEM_RE.finditer(section):
+        for m in self._item_matches(text):
             ean = m.group(2)
             qty = self._parse_br_number(m.group(4))
             preco_bruto = self._parse_br_number(m.group(5))
@@ -401,3 +450,8 @@ class SamsClubParser(BaseParser):
 def _fmt_int(valor: float) -> str:
     """1908.0 → '1.908' (milhar com ponto, como o Fire imprime)."""
     return f"{round(valor):,}".replace(",", ".")
+
+
+def _fmt_brl(valor: float) -> str:
+    """60281.14 → '60.281,14'."""
+    return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
