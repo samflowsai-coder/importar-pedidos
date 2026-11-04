@@ -1619,7 +1619,8 @@ def test_sams_quantidade_com_milhar_nao_derruba_o_item():
     assert por_ean["7898686876780"].total_price == 29297.87
 
 
-def _sams_text(linha_item: str) -> str:
+def _sams_text(linha_item: str, sumario: str | None = None) -> str:
+    rodape = f"Mercadorias Com.\n{sumario} 0,00 9,45 {sumario}\n" if sumario else ""
     return (
         "PEDIDO DE COMPRA\n"
         "Número Pedido: 06883676-0000 Data de Emissão: 31 / 10 / 2026\n"
@@ -1630,6 +1631,8 @@ def _sams_text(linha_item: str) -> str:
         "1 7898686876711 Unidade 1,00 609,00 28,09 28,09 0,00 0,00 17.106,81\n"
         f"{linha_item}\n"
         "Sumário\n"
+        "Valor Total Valor Total IPI Valor Total Desc.\n"
+        f"{rodape}"
     )
 
 
@@ -1650,6 +1653,53 @@ def test_sams_linha_de_item_que_nao_casa_recusa_o_pedido():
 
     texto = _sams_text("2 7898686876759 Unidade 1,00 ??? 28,09 28,09 0,00 0,00 30.983,27")
     with pytest.raises(PedidoRecusadoError, match="7898686876759"):
+        SamsClubParser().parse({"text": texto})
+
+
+@pytest.mark.parametrize(
+    "linha",
+    [
+        "2 7898686876759 1,00 5,00 28,09 28,09 0,00 0,00 140,45",  # sem a coluna de unidade
+        "2 17898686876759 Unidade 1,00 5,00 28,09 28,09 0,00 0,00 140,45",  # DUN-14
+    ],
+)
+def test_sams_linha_de_item_fora_do_formato_recusa(linha):
+    from app.parsers.base_parser import PedidoRecusadoError
+    from app.parsers.sams_club_parser import SamsClubParser
+
+    with pytest.raises(PedidoRecusadoError, match="não foram lidas"):
+        SamsClubParser().parse({"text": _sams_text(linha)})
+
+
+def test_sams_soma_dos_itens_diferente_do_sumario_recusa():
+    """Âncora dura: o Valor Total Mercadorias impresso. Pega perda que a contagem não vê."""
+    from app.parsers.base_parser import PedidoRecusadoError
+    from app.parsers.sams_club_parser import SamsClubParser
+
+    linha = "2 7898686876759 Unidade 1,00 5,00 28,09 28,09 0,00 0,00 140,45"
+    ok = SamsClubParser().parse({"text": _sams_text(linha, sumario="17.247,26")})
+    assert len(ok.items) == 2
+
+    with pytest.raises(PedidoRecusadoError, match="Sumário"):
+        SamsClubParser().parse({"text": _sams_text(linha, sumario="47.530,53")})
+
+
+def test_sams_grade_com_linha_da_cross_docking_perdida_recusa():
+    """Na GRADE o item importado vem da Cross Docking: linha perdida lá também recusa."""
+    from app.parsers.base_parser import PedidoRecusadoError
+    from app.parsers.sams_club_parser import SamsClubParser
+
+    texto = (
+        _sams_text("2 7898686876759 Unidade 1,00 5,00 28,09 28,09 0,00 0,00 140,45", "17.247,26")
+        + "Cross Docking\n"
+        + "00.063.960 /\n"
+        + "7891737001698 7898686876711 609,00 00 / 00 / 0000\n"
+        + "0094-08\n"
+        + "00.063.960 /\n"
+        + "7891737001698 7898686876759 cinco 00 / 00 / 0000\n"  # não casa: some da grade
+        + "0094-08\n"
+    )
+    with pytest.raises(PedidoRecusadoError, match="Sumário"):
         SamsClubParser().parse({"text": texto})
 
 

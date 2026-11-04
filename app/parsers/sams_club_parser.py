@@ -17,10 +17,20 @@ _ITEM_RE = re.compile(
     r".*?([\d,.]+)$",
     re.MULTILINE,
 )
-# Tudo que tem cara de linha de item (nº + EAN + unidade, qualquer que seja ela).
-# Serve de contagem contra o `_ITEM_RE`. O nº tem até 4 dígitos para não pegar a
-# Cross Docking, que começa com dois EANs.
-_ITEM_SHAPE_RE = re.compile(r"^\d{1,4}\s+(\d{13})\s+[^\W\d]", re.MULTILINE)
+# Tudo que tem cara de linha de item: nº + código de 13/14 dígitos (EAN ou DUN),
+# com ou sem a coluna de unidade. Serve de contagem contra o `_ITEM_RE`. O nº tem
+# até 4 dígitos para não pegar a Cross Docking, que começa com dois EANs.
+_ITEM_SHAPE_RE = re.compile(r"^\d{1,4}\s+(\d{13,14})\b", re.MULTILINE)
+
+# `Valor Total Mercadorias`: 1º valor da 1ª linha numérica depois do título do
+# Sumário. O rótulo muda de layout ("Mercadorias Com." no consolidado, "Mercadorias
+# IPI Com. ... Pedido" na GRADE); a posição do valor não.
+_SUMARIO_RE = re.compile(
+    r"^Sum[áa]rio\s*$.*?^(\d{1,3}(?:\.\d{3})*,\d{2})\s", re.IGNORECASE | re.MULTILINE | re.DOTALL
+)
+# O PDF diverge de si mesmo em 1 centavo (cada linha é arredondada, o Sumário não):
+# 06883660-0000 e o sample de janeiro. Item perdido vale no mínimo 1 kit (~R$ 28).
+_SUMARIO_TOLERANCIA = 0.50
 
 # Linha "de dados" da tabela Cross Docking: <EAN local> <EAN produto> <qty> <data inicial>
 _CD_DATA_RE = re.compile(r"^(\d{13})\s+(\d{13})\s+([\d,.]+)\s+(\d{2}\s*/\s*\d{2}\s*/\s*\d{4})\s*$")
@@ -74,6 +84,7 @@ class SamsClubParser(BaseParser):
         if not items:
             return None
 
+        self._conferir_sumario(text, items)
         self._anotar_packs(items, header.order_number)
         return Order(header=header, items=items)
 
@@ -158,6 +169,26 @@ class SamsClubParser(BaseParser):
                 "O pedido não foi importado para não entrar sem esses itens."
             )
         return matches
+
+    def _conferir_sumario(self, text: str, items: list[OrderItem]) -> None:
+        """Soma dos itens contra o `Valor Total Mercadorias` impresso no PDF.
+
+        Âncora dura dos dois layouts: pega item perdido que a contagem de linhas
+        não vê (na GRADE o item importado vem da Cross Docking). Sem Sumário no
+        texto, só avisa: a contagem de linhas continua valendo.
+        """
+        m = _SUMARIO_RE.search(text)
+        impresso = self._parse_br_number(m.group(1)) if m else None
+        if impresso is None:
+            logger.warning("Sams: Sumário não encontrado; soma dos itens não conferida")
+            return
+        soma = round(sum(it.total_price or 0.0 for it in items), 2)
+        if abs(soma - impresso) > _SUMARIO_TOLERANCIA:
+            raise PedidoRecusadoError(
+                f"Sam's: a soma dos itens lidos (R$ {_fmt_brl(soma)}) não bate com o Sumário "
+                f"do PDF (R$ {_fmt_brl(impresso)}). O pedido não foi importado para não "
+                "entrar com item ou valor a menos."
+            )
 
     def _build_item_lookup(self, text: str) -> dict[str, tuple[float, int | None]]:
         """Mapa {ean_produto: (preço, kits por pack)} da tabela 'Itens do Pedido'.
@@ -419,3 +450,8 @@ class SamsClubParser(BaseParser):
 def _fmt_int(valor: float) -> str:
     """1908.0 → '1.908' (milhar com ponto, como o Fire imprime)."""
     return f"{round(valor):,}".replace(",", ".")
+
+
+def _fmt_brl(valor: float) -> str:
+    """60281.14 → '60.281,14'."""
+    return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
