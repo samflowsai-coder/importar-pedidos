@@ -1712,6 +1712,32 @@ def test_sams_linha_com_outra_unidade_tambem_recusa():
         SamsClubParser().parse({"text": texto})
 
 
+# ── Preço unitário com milhar (varredura do chamado 04/11) ──
+#
+# Mesmo padrão `[\d,]+` do Sam's, no preço: `1.050,0000` virava 1,00. Latente
+# (maior preço nos samples: R$ 12,73), fechado antes que um kit caro apareça.
+
+
+def test_beira_rio_preco_com_milhar():
+    from app.extractors.pdf_extractor import PDFExtractor
+
+    texto = PDFExtractor().extract(_load("PEDIDO BEIRA RIO.pdf"))["text"]
+    texto = texto.replace("KIT 8,19000", "KIT 1.050,00000", 1)
+    assert "KIT 1.050,00000" in texto
+    from app.parsers.beira_rio_parser import BeiranRioParser
+
+    order = BeiranRioParser().parse({"text": texto})
+    precos = {i.unit_price for i in order.items if i.product_code == "1000626853"}
+    assert precos == {1050.0}
+
+
+def test_pedido_compras_revenda_preco_com_milhar():
+    from app.parsers.pedido_compras_revenda_parser import PedidoComprasRevendaParser
+
+    bloco = "20 12 5196673 7909901827460 6115.95.00 PAR 15 1.050,9500 0,0000 % 1.050,9500 0,00 0,0000 15.764,25 0,00"
+    assert PedidoComprasRevendaParser()._extract_unit_price(bloco) == 1050.95
+
+
 # ── Authentic Feet (05/10/2026): o MESMO template, com `QUAN.` no lugar de TOTAL KITS ──
 #
 # Lote de 9 planilhas da MM: a coluna de quantidade de kits veio como `QUAN.`,

@@ -109,7 +109,8 @@ class PedidoComprasRevendaParser(BaseParser):
 
     def _extract_unit_price(self, block: str) -> float | None:
         # After UNI qty, first price value: "PAR 1500 10,9500"
-        m = re.search(r"(?:PAR|KIT|PC|UN|UND|PCS|UNID|ST)\s+[\d.]+\s+([\d,]+)", block, re.IGNORECASE)
+        # Preço com milhar ("1.050,9500"): sem o ponto no grupo virava 1,00.
+        m = re.search(r"(?:PAR|KIT|PC|UN|UND|PCS|UNID|ST)\s+[\d.]+\s+([\d.,]+)", block, re.IGNORECASE)
         if m:
             return self._parse_br_number(m.group(1))
         return None
