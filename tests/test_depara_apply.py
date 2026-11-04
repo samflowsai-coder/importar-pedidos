@@ -139,8 +139,8 @@ def _vincular(conn, seq, fire_codigo):
 
 
 def test_planilha_leva_o_codprod_altern_do_catalogo_nao_o_seq(env_conn):
-    """Incidente 30/10 (Riachuelo 5146-5163): v1 gravado com str(SEQ) fazia a
-    planilha sair com o SEQ, que o importador do Fire casa por prefixo."""
+    """v1 gravado com str(SEQ) fazia a planilha sair com o SEQ, que o
+    importador do Fire casaria por prefixo de `CODPROD_ALTERN` (PR #126)."""
     _vincular(env_conn, 4058, "4058")
     _catalogo(env_conn, 4058, "16637410001_RIAC")
     order = _order()

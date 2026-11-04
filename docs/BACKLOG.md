@@ -197,11 +197,13 @@ mais os códigos duplicados (`5041G` nas duas). Pontas abertas:
 
 - **Chamado com a Fire Sistemas** (mensagem pronta, a MM envia). Quando responderem,
   revisar a previsão: ela reproduz o comportamento medido, não o código deles.
-- ~~**De-para exporta SEQ como código.**~~ Respondido pelo incidente de 30/10/2026
-  (Riachuelo, pedidos 5146–5163): o importador do Fire NÃO tenta o SEQ, só o prefixo
-  de `CODPROD_ALTERN`, e a planilha com "4058" gravou o item sem produto (-1).
-  Corrigido: a planilha leva o `CODPROD_ALTERN` do catálogo (`depara_apply.codigo_da_planilha`).
-  Resta a outra metade da prova: se o Fire usa o EAN antes do prefixo. Até lá o item
+- ~~**De-para exporta SEQ como código.**~~ Corrigido em 03/11/2026 (PR #126): a planilha
+  leva o `CODPROD_ALTERN` do catálogo (`depara_apply.codigo_da_planilha`), então não
+  importa mais se o Fire tentaria o SEQ (pergunta segue sem prova). O incidente Riachuelo
+  de 30/10 (itens -1 nos pedidos 5146–5163) **não** foi isso: os kits tinham sido criados
+  pela volta do cadastro em 29/10 sem `CODPROD_ALTERN` (só `CODPARANFE`) e a planilha levava
+  o código do parser; corrigido no PR #123 (kit/pack nascem com Cód do Produto = fiscal).
+  Resta saber se o Fire usa o EAN antes do prefixo. Até lá o item
   casado por EAN ou por vínculo segue no aviso como `conferido: false` ("confira").
 - **Código com mais de 30 caracteres derruba o check inteiro.** A query de match
   exato (`find_products_by_codes_sql`, `IN (...)`) estoura "string right

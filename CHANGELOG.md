@@ -28,7 +28,7 @@ Nada por enquanto.
 ## 20261103-1427
 
 1) **Quantidade acima de mil nos pedidos da Riachuelo volta a sair inteira.** Itens como 2.795 e 1.073 kits estavam entrando no ERP cortados (795 e 73); o valor total do item já vinha certo.
-2) **Item vinculado a um produto do Fire sai na planilha com o código do produto.** Antes a planilha levava o número interno do produto e o Fire gravava o item sem produto (pedidos Riachuelo de 30/10); agora vai o código do cadastro, e se o produto estiver sem código no catálogo do portal o item aparece marcado na revisão ("sem código na planilha", com o motivo e o botão Vincular), em vez de sair errado.
+2) **Item vinculado a um produto do Fire sai na planilha com o código do produto.** Antes a planilha podia levar o número interno do produto no lugar do código do cadastro; agora vai o código do cadastro, e se o produto estiver sem código no catálogo do portal o item aparece marcado na revisão ("sem código na planilha", com o motivo e o botão Vincular), em vez de sair errado.
 
 ## 20261103-1057
 
