@@ -415,11 +415,12 @@ dentro do Fire).
   `depara_apply.codigo_da_planilha`: o `CODPROD_ALTERN` ATUAL do SEQ no catálogo
   local (`catalogo_fire_repo.codprod_por_seq`), nunca o `fire_codigo` gravado
   no vínculo nem `str(SEQ)`. `resolver` (export) e `check_order`
-  (`codigo_xlsx`, previsão do importador) usam a mesma função. Incidente de
-  30/10: o v1 gravava `str(SEQ)`, a planilha saía com `CODIGO_PRODUTO=4058`, o
-  importador casa por prefixo de `CODPROD_ALTERN` e os pedidos Riachuelo
-  5146–5163 entraram com item -1 (ou produto errado), com o preview verde.
-  SEQ sem código no catálogo = `sem_codigo_fire: True` e a planilha recusa
+  (`codigo_xlsx`, previsão do importador) usam a mesma função. Antes (até
+  03/11) o v1 gravava `str(SEQ)` e a planilha saía com o SEQ no lugar do código;
+  o importador casa por prefixo de `CODPROD_ALTERN`, então o item podia entrar
+  como -1 ou como outro produto, com o preview verde. (O incidente Riachuelo de
+  30/10 não foi esse: foram kits criados pela volta do cadastro sem
+  `CODPROD_ALTERN`; ver PR #123.) SEQ sem código no catálogo = `sem_codigo_fire: True` e a planilha recusa
   (R21, `_recusa_planilha_pontual`). `vincular_produto` agora grava o v1 com
   `codprod_altern`. Limite: catálogo defasado em relação ao Fire.
   **Com `produto_chave_modo=ligado` isso deixa de valer:** a planilha leva o `CODPROD_ALTERN`
@@ -512,8 +513,8 @@ Best-effort: sem ambiente ativo / SQLite off, pula o degrau sem quebrar o check.
 insert) e passa ao `FirebirdExporter.export` o mapa
 `produtos_por_item = {posição em order.items: SEQ}` dos itens vinculados. Esses
 itens são buscados **só** por `FIND_PRODUCT_BY_SEQ`: o insert segue pelo SEQ e
-não depende do código da planilha (incidente 30/10, pedidos Riachuelo
-5146–5163: SEQ em texto na planilha casava por prefixo). SEQ sumido do
+não depende do código da planilha (onde o SEQ em texto casaria por prefixo
+de `CODPROD_ALTERN` com outro produto). SEQ sumido do
 Fire → `PRODUCT_NOT_FOUND`, sem cair para EAN/código. Audita
 `depara_aplicado_no_fire`.
 
