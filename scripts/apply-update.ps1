@@ -191,7 +191,23 @@ function Write-JsonNoBom {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     $tmp = Join-Path $dir ([Guid]::NewGuid().ToString("N") + ".tmp")
     [System.IO.File]::WriteAllText($tmp, $json, $utf8NoBom)
-    Move-Item -Path $tmp -Destination $Path -Force
+    # Se outro processo segura o destino na hora da troca (o app recem-subido lendo
+    # applied_update.json, a tela lendo status.json), o Windows devolve 183 "arquivo ja
+    # existente" e o update inteiro caia em rollback (03/11/2026, pacote 1427). Tenta por ~3 s.
+    $tentativas = 15
+    for ($i = 1; $i -le $tentativas; $i++) {
+        try {
+            Move-Item -Path $tmp -Destination $Path -Force -ErrorAction Stop
+            return
+        } catch {
+            if ($i -eq $tentativas) {
+                Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+                throw
+            }
+            Write-Log "Write-JsonNoBom: $Path ocupado (tentativa $i/$tentativas): $($_.Exception.Message)"
+            Start-Sleep -Milliseconds 200
+        }
+    }
 }
 
 function Write-Phase {

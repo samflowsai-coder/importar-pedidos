@@ -525,6 +525,24 @@ def test_updater_ps1_tem_ramo_restart_sem_backup_nem_pip():
     assert "Backup-CurrentInstall -Destination $backupDir" in src
 
 
+def test_updater_ps1_write_json_tenta_de_novo_com_arquivo_ocupado():
+    """03/11/2026: o Move-Item do applied_update.json bateu no app recém-subido
+    (WinError 183) e o update 1427 caiu em rollback. Trava por texto o retry."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "scripts" / "apply-update.ps1").read_text(
+        encoding="utf-8")
+    start = src.index("function Write-JsonNoBom")
+    body = src[start:src.index("\n}\n", start)]
+    assert "for ($i = 1; $i -le $tentativas; $i++)" in body
+    assert "Move-Item -Path $tmp -Destination $Path -Force -ErrorAction Stop" in body
+    assert "Start-Sleep -Milliseconds" in body
+    # na última tentativa: limpa o .tmp e propaga o erro (o rollback continua valendo)
+    ultima = body[body.index("if ($i -eq $tentativas)"):]
+    assert ultima.index("Remove-Item -Path $tmp") < ultima.index("throw")
+    # PowerShell 5.1 lê .ps1 sem BOM como ANSI: o build recusa não-ASCII (build_package.sh)
+    assert src.isascii()
+
+
 def test_pagina_atualizacao_tem_botao_reiniciar_com_confirmacao(setup):
     body = _client().get("/admin/atualizacao").content.decode()
     assert "Reiniciar o portal" in body

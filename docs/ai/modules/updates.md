@@ -121,6 +121,13 @@ Se a mudança no `.env` trocar `PORTAL_PORT`, o admin precisa abrir o endereço 
 
 Backup em `backups/update/<id>/` — **sempre sob o AppDir**, nunca sob o DataDir.
 
+`Write-JsonNoBom` (status.json, applied_update.json) grava num `.tmp` e troca com
+`Move-Item -Force`, tentando até 15 vezes a cada 200 ms se o destino estiver preso por
+outro processo; na última falha apaga o `.tmp` e propaga (cai no rollback). Motivo: em
+03/11/2026 o app recém-subido segurava `applied_update.json` e o WinError 183 desfez o
+update 1427 (sobrou um `.tmp` órfão em `data/`). O `.ps1` que roda é o instalado, então a
+correção vale a partir do update seguinte ao que a traz.
+
 ## Armadilha resolvida: `APP_DATA_DIR` divergente
 
 O `.ps1` resolve o data dir **exatamente** como `routes_update._data_dir()`
