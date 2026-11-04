@@ -27,6 +27,7 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 2) **Itens com quantidade acima de mil nos pedidos do Sam's voltam a entrar.** Itens como 1.103 e 1.043 kits ficavam de fora do pedido sem aviso, e o valor total saía menor.
 3) **Pedido do Sam's que não fecha com o total do próprio PDF é recusado, em vez de entrar incompleto.** O portal confere a soma dos itens com o "Valor Total Mercadorias" do PDF. Se não bater, ou se alguma linha de item não puder ser lida, a tela diz o motivo e o pedido não segue.
 4) **Preço unitário acima de mil reais passa a sair inteiro nos pedidos Beira Rio e Pedido de Compras Revenda.** Até hoje nenhum pedido chegou perto desse valor, mas um preço como 1.050,00 entraria como 1,00.
+5) **Planilha da Nasmar com o mesmo produto em duas abas é recusada, em vez de entrar em dobro.** Uma planilha com as abas "Setembro" e "Novembro" iguais virava um pedido com todos os itens duas vezes; agora a tela pede para deixar só a aba do pedido que vai importar. Abas com produtos diferentes, como as do Pulmão, continuam virando um pedido só.
 
 ## 20261103-1427
 

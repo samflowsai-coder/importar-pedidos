@@ -86,10 +86,7 @@ class CentauroOrderConfirmationParser(BaseParser):
         rótulos e `BASE OPÇÕES` tem centenas de linhas. Os itens só valem até o
         fim da aba onde o cabeçalho foi achado.
         """
-        limites, acc = [], 0
-        for s in sheets:
-            limites.append((acc, acc + s["rows"]))
-            acc += s["rows"]
+        limites = celulas.limites_das_abas(sheets)
         for i, row in enumerate(rows):
             rotulos = [" ".join(str(c).split()).upper() if c is not None else "" for c in row]
             col = {}
@@ -97,7 +94,7 @@ class CentauroOrderConfirmationParser(BaseParser):
                 if rotulo in rotulos:
                     col[campo] = rotulos.index(rotulo)
             if all(c in col for c in _OBRIGATORIAS):
-                fim = next((b for a, b in limites if a <= i < b), len(rows))
+                fim = next((b for _, a, b in limites if a <= i < b), len(rows))
                 return i, fim, col
         return None
 

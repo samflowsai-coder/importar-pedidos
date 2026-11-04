@@ -4,7 +4,8 @@ import datetime as _dt
 import re
 
 from app.models.order import Order, OrderHeader, OrderItem
-from app.parsers.base_parser import BaseParser
+from app.parsers import celulas
+from app.parsers.base_parser import BaseParser, PedidoRecusadoError
 
 _CNPJ_RE = re.compile(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}")
 _ESPACO = re.compile(r"\s+")
@@ -112,7 +113,7 @@ class NasmarTemplateParser(BaseParser):
             return None
 
         order_header = self._parse_header_block(rows, header_idx)
-        items = self._parse_items(rows, header_idx, col_map)
+        items = self._parse_items(rows, header_idx, col_map, extracted.get("sheets") or [])
 
         if not items:
             return None
@@ -271,10 +272,22 @@ class NasmarTemplateParser(BaseParser):
                 return i, col_map
         return None, {}
 
-    def _parse_items(self, rows: list, header_idx: int, col_map: dict) -> list[OrderItem]:
-        items: list[OrderItem] = []
+    def _parse_items(
+        self, rows: list, header_idx: int, col_map: dict, sheets: list[dict] | None = None
+    ) -> list[OrderItem]:
+        """Itens de todas as abas a partir do cabeçalho.
 
-        for row in rows[header_idx + 1:]:
+        Abas com produtos diferentes viram um pedido só (Pulmão: AW, AF e Magic Feet
+        para o mesmo cliente). O MESMO código em duas abas recusa: é a mesma grade
+        em dois meses (AF186: Setembro e Novembro são os pedidos Nasmar 1193 e 1192)
+        e o portal não tem como saber qual entrega a operação quer. Antes somava as
+        duas e o pedido saía em dobro.
+        """
+        items: list[OrderItem] = []
+        abas = celulas.limites_das_abas(sheets or [])
+        aba_do_codigo: dict[str, set[str]] = {}
+
+        for n, row in enumerate(rows[header_idx + 1:], start=header_idx + 1):
             if not row or all(c is None or str(c).strip() == "" for c in row):
                 continue
 
@@ -304,6 +317,9 @@ class NasmarTemplateParser(BaseParser):
             # A MM pediu pra tirar só da Kings; o "KIT 3" da AF/MF fica.
             obs = None if codigo_kings else self._cell(row, col_map.get("obs")) or None
 
+            aba = next((nome for nome, a, b in abas if a <= n < b), "")
+            aba_do_codigo.setdefault(codigo, set()).add(aba)
+
             items.append(OrderItem(
                 product_code=codigo,
                 description=description or None,
@@ -313,6 +329,14 @@ class NasmarTemplateParser(BaseParser):
                 obs=obs,
             ))
 
+        repetidas = sorted({a for nomes in aba_do_codigo.values() if len(nomes) > 1 for a in nomes})
+        if repetidas:
+            ordem = [nome for nome, _, _ in abas]
+            nomes = " e ".join(f'"{a}"' for a in sorted(repetidas, key=ordem.index))
+            raise PedidoRecusadoError(
+                f"A planilha tem os mesmos produtos nas abas {nomes}. Cada aba vira um pedido "
+                "no Fire: deixe na planilha só a aba do pedido que vai importar e suba de novo."
+            )
         return items
 
     def _codigo_variante(self, ref: str, ref_cor: str, tamanhos: str) -> str:

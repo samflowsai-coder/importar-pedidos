@@ -234,6 +234,15 @@ Samples: `Pedido Authentic Fit.xlsx`, `Pedido Magic Feet MF048.xlsx`,
 `PEDIDO NBA MOGI SHOPPING.xlsx`, `Planilha modelo cliente Kings.xlsx` (modelo em
 branco: quantidades zeradas, os testes preenchem em memória).
 
+- **Várias abas:** os itens são lidos a partir do 1º cabeçalho até o fim do arquivo,
+  atravessando as abas. Abas com produtos diferentes viram um pedido só (Pulmão: AW,
+  AF e Magic Feet, 82 itens). Se o **mesmo código** aparecer em **duas abas**, o
+  parser recusa (`PedidoRecusadoError`, com os nomes das abas). Origem: chamado Camila
+  04/11/2026, AF186 Cascavel, com abas "Setembro" e "Novembro" iguais, que no Fire são
+  os pedidos Nasmar 1193 e 1192. O parser somava as duas e o pedido saía em dobro.
+  Abas iguais podem ser duas entregas, e o portal não escolhe por inferência. Limites
+  de aba: `celulas.limites_das_abas`, o mesmo usado pela Centauro OC. Sample: `Pedido
+  Authentic Feet AF186 abas Setembro Novembro.xlsx`.
 - **`_match_header(row)` é fonte única** do gate e do `col_map` — `can_parse` e
   `_find_header_row` chamam a mesma função. Antes eram duas cópias literais da mesma
   condição: idênticas, mas livres para divergir a cada edição, e qualquer divergência
