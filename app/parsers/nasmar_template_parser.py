@@ -329,13 +329,18 @@ class NasmarTemplateParser(BaseParser):
                 obs=obs,
             ))
 
-        repetidas = sorted({a for nomes in aba_do_codigo.values() if len(nomes) > 1 for a in nomes})
+        repetidas = {a for nomes in aba_do_codigo.values() if len(nomes) > 1 for a in nomes}
         if repetidas:
+            # Na ordem da planilha; aba sem nome (linha fora de `sheets`) vai por último.
             ordem = [nome for nome, _, _ in abas]
-            nomes = " e ".join(f'"{a}"' for a in sorted(repetidas, key=ordem.index))
+            posicao = {nome: i for i, nome in enumerate(ordem)}
+            nomes = " e ".join(
+                f'"{a}"' for a in sorted(repetidas, key=lambda a: posicao.get(a, len(ordem)))
+            )
             raise PedidoRecusadoError(
-                f"A planilha tem os mesmos produtos nas abas {nomes}. Cada aba vira um pedido "
-                "no Fire: deixe na planilha só a aba do pedido que vai importar e suba de novo."
+                f"A planilha tem os mesmos produtos nas abas {nomes}. Abas com os mesmos "
+                "produtos são pedidos diferentes no Fire: deixe na planilha só a aba do "
+                "pedido que vai importar e suba de novo."
             )
         return items
 

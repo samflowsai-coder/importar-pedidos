@@ -680,6 +680,32 @@ def test_kallan_all_quantities_positive():
         assert item.quantity is not None and item.quantity > 0
 
 
+def test_kallan_preco_e_a_contra_proposta_nao_o_pdv():
+    """PDV (29,99) é o preço sugerido ao consumidor; a MM vende pela Contra Proposta.
+
+    Fonte: pedidos Kallan faturados no Fire .7 (3660, 3664, 3668...) gravam 11,29 /
+    11,64 / 13,29 / 8,98, que é a coluna `Contra Proopsta` (assim, com o erro de
+    digitação), e `K01 × Contra Proposta = CUSTO TTL` em todas as linhas.
+    """
+    order = _process("PEDIDO KALLAN K01.xlsx")
+    assert order.items[0].unit_price == 11.29
+    assert {i.unit_price for i in order.items} == {11.29, 11.64, 13.29, 8.98}
+    for i in order.items:
+        assert round(i.quantity * i.unit_price, 2) == round(i.total_price, 2)
+
+
+def test_kallan_sem_contra_proposta_nao_usa_o_pdv():
+    from app.parsers.kallan_xls_parser import KallanXlsParser
+
+    rows = [
+        ["RAZÃO SOCIAL:", "KALLAN CALCADOS LTDA."],
+        ["Produto", "Referência", "PDV", "K01", "CUSTO TTL"],
+        ["Meia Sapatilha", "K3SBCCYL10F", 29.99, 36, 406.44],
+    ]
+    order = KallanXlsParser().parse({"text": "KALLAN", "rows": rows})
+    assert order.items[0].unit_price is None
+
+
 # ── DesmembramentoXlsParser ──────────────────────────────────────────────────
 
 
@@ -1699,8 +1725,17 @@ def test_sams_grade_com_linha_da_cross_docking_perdida_recusa():
         + "7891737001698 7898686876759 cinco 00 / 00 / 0000\n"  # não casa: some da grade
         + "0094-08\n"
     )
-    with pytest.raises(PedidoRecusadoError, match="Sumário"):
+    with pytest.raises(PedidoRecusadoError, match="EAN 7898686876759"):
         SamsClubParser().parse({"text": texto})
+
+
+def test_sams_sem_sumario_so_avisa_e_segue():
+    """Sem Sumário no texto a soma não é conferida; a contagem de linhas segue valendo."""
+    from app.parsers.sams_club_parser import SamsClubParser
+
+    linha = "2 7898686876759 Unidade 1,00 5,00 28,09 28,09 0,00 0,00 140,45"
+    order = SamsClubParser().parse({"text": _sams_text(linha)})
+    assert len(order.items) == 2
 
 
 def test_sams_linha_com_outra_unidade_tambem_recusa():
@@ -1774,6 +1809,34 @@ def test_nasmar_template_aba_unica_do_mesmo_arquivo_sai_inteira():
     assert len(order.items) == 20
     assert sum(i.quantity for i in order.items) == 192
     assert round(sum(i.total_price for i in order.items), 2) == 2736.0
+
+
+def test_nasmar_template_mesmo_codigo_na_mesma_aba_nao_recusa():
+    """A regra é entre abas: grade repetida dentro de UMA aba segue como antes."""
+    from app.extractors.xls_extractor import XLSExtractor
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    extracted = XLSExtractor().extract(_load(AF186_ABAS))
+    n = extracted["sheets"][0]["rows"]
+    uma_aba = {
+        **extracted,
+        "sheets": [{"name": "Setembro", "rows": len(extracted["rows"])}],
+    }
+    order = NasmarTemplateParser().parse(uma_aba)
+    assert len(order.items) == 40
+    assert n < len(extracted["rows"])
+
+
+def test_nasmar_template_sheets_incompleto_nao_quebra_a_recusa():
+    """`sheets` que não cobre todas as linhas: recusa com a mensagem, sem ValueError."""
+    from app.extractors.xls_extractor import XLSExtractor
+    from app.parsers.base_parser import PedidoRecusadoError
+    from app.parsers.nasmar_template_parser import NasmarTemplateParser
+
+    extracted = XLSExtractor().extract(_load(AF186_ABAS))
+    parcial = {**extracted, "sheets": extracted["sheets"][:1]}
+    with pytest.raises(PedidoRecusadoError, match='"Setembro"'):
+        NasmarTemplateParser().parse(parcial)
 
 
 def test_nasmar_template_abas_com_produtos_diferentes_continuam_juntas():

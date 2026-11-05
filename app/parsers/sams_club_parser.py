@@ -74,17 +74,19 @@ class SamsClubParser(BaseParser):
         grade = _GRADE_MARKER in text
         header = self._parse_header(text, grade=grade)
 
+        divergentes: list[str] = []
         if grade:
-            item_lookup = self._build_item_lookup(text)
+            matches = self._item_matches(text)
+            item_lookup = self._build_item_lookup(text, matches)
             items = self._parse_cross_docking(text, item_lookup, header)
-            self._warn_if_grade_diverges(text, items)
+            divergentes = self._warn_if_grade_diverges(text, items, matches)
         else:
             items = self._parse_items(text)
 
         if not items:
             return None
 
-        self._conferir_sumario(text, items)
+        self._conferir_sumario(text, items, divergentes)
         self._anotar_packs(items, header.order_number)
         return Order(header=header, items=items)
 
@@ -170,12 +172,15 @@ class SamsClubParser(BaseParser):
             )
         return matches
 
-    def _conferir_sumario(self, text: str, items: list[OrderItem]) -> None:
+    def _conferir_sumario(
+        self, text: str, items: list[OrderItem], divergentes: list[str] | None = None
+    ) -> None:
         """Soma dos itens contra o `Valor Total Mercadorias` impresso no PDF.
 
         Âncora dura dos dois layouts: pega item perdido que a contagem de linhas
         não vê (na GRADE o item importado vem da Cross Docking). Sem Sumário no
-        texto, só avisa: a contagem de linhas continua valendo.
+        texto, só avisa: a contagem de linhas continua valendo. Na GRADE, os SKUs
+        cuja grade não fecha com a tabela superior vão na mensagem.
         """
         m = _SUMARIO_RE.search(text)
         impresso = self._parse_br_number(m.group(1)) if m else None
@@ -184,13 +189,16 @@ class SamsClubParser(BaseParser):
             return
         soma = round(sum(it.total_price or 0.0 for it in items), 2)
         if abs(soma - impresso) > _SUMARIO_TOLERANCIA:
+            onde = f" Itens que não fecham: EAN {', '.join(divergentes)}." if divergentes else ""
             raise PedidoRecusadoError(
                 f"Sam's: a soma dos itens lidos (R$ {_fmt_brl(soma)}) não bate com o Sumário "
-                f"do PDF (R$ {_fmt_brl(impresso)}). O pedido não foi importado para não "
-                "entrar com item ou valor a menos."
+                f"do PDF (R$ {_fmt_brl(impresso)}).{onde} O pedido não foi importado para "
+                "não entrar com item ou valor a menos."
             )
 
-    def _build_item_lookup(self, text: str) -> dict[str, tuple[float, int | None]]:
+    def _build_item_lookup(
+        self, text: str, matches: list[re.Match[str]] | None = None
+    ) -> dict[str, tuple[float, int | None]]:
         """Mapa {ean_produto: (preço, kits por pack)} da tabela 'Itens do Pedido'.
 
         A seção Cross Docking não repete preço nem embalagem — só a quantidade
@@ -200,7 +208,7 @@ class SamsClubParser(BaseParser):
         `_parse_items`. Não usar como multiplicador.
         """
         lookup: dict[str, tuple[float, int | None]] = {}
-        for m in self._item_matches(text):
+        for m in matches if matches is not None else self._item_matches(text):
             unit_price = self._parse_br_number(m.group(5))
             lookup[m.group(2)] = (
                 unit_price if unit_price is not None else 0.0,
@@ -293,10 +301,16 @@ class SamsClubParser(BaseParser):
             return f"{head}/{tail}"
         return None
 
-    def _warn_if_grade_diverges(self, text: str, items: list[OrderItem]) -> None:
-        """Soma qty da grade por SKU e compara com a tabela superior. Warning se divergir."""
+    def _warn_if_grade_diverges(
+        self, text: str, items: list[OrderItem], matches: list[re.Match[str]] | None = None
+    ) -> list[str]:
+        """Soma qty da grade por SKU e compara com a tabela superior.
+
+        Avisa no log e devolve os EANs que divergem, para a recusa do Sumário
+        dizer ao operador qual item não fechou.
+        """
         agg: dict[str, float] = {}
-        for m in self._item_matches(text):
+        for m in matches if matches is not None else self._item_matches(text):
             ean = m.group(2)
             ped = self._parse_br_number(m.group(4)) or 0.0
             agg[ean] = agg.get(ean, 0.0) + ped
@@ -306,12 +320,15 @@ class SamsClubParser(BaseParser):
             if it.ean and it.quantity:
                 grade_sum[it.ean] = grade_sum.get(it.ean, 0.0) + it.quantity
 
+        divergentes: list[str] = []
         for ean, expected in agg.items():
             got = grade_sum.get(ean, 0.0)
             if abs(got - expected) > 0.01:
+                divergentes.append(ean)
                 logger.warning(
                     f"Sams GRADE: divergência qty SKU {ean}: agregado={expected} grade={got}"
                 )
+        return divergentes
 
     def _parse_items(self, text: str) -> list[OrderItem]:
         """Itens do layout consolidado.

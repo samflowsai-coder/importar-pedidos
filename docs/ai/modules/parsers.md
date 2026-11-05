@@ -116,6 +116,16 @@ e devolvia lixo calado: pedido `MARCA`, 2 itens falsos, sem cliente.
 - **Uma OC por arquivo.** Duas OCs distintas levantam `ValueError` (não devolve `None`: com `None`
   o Generic pegaria o arquivo e gravaria lixo). OC vazia → `order_number=None` e o pipeline numera `SN-`.
 
+## Kallan XLS: o preço é a Contra Proposta, não o PDV
+
+A planilha traz `PDV` (preço sugerido ao consumidor, ex.: 29,99) e `Contra Proopsta`
+(assim, com o erro de digitação; é o preço de venda da MM, ex.: 11,29). O `unit_price`
+vem da **Contra Proposta**: os pedidos Kallan faturados no Fire .7 (3660, 3664, 3668…)
+gravam 11,29 / 11,64 / 13,29 / 8,98, e `K01 × Contra Proposta = CUSTO TTL` em todas as
+linhas do sample. A coluna casa pelo prefixo normalizado `contra pro`. Sem ela, o
+preço fica vazio (o portal sinaliza item sem preço), nunca o PDV. Até 04/11/2026 o
+parser lia o PDV, cerca de 2,6x o preço real.
+
 ## SBF/Centauro: CNPJ de Faturamento, não de Cobrança
 
 `SbfCentauroParser._extract_customer` lê o CNPJ + nome da seção **"Dados para Entrega / Faturamento"** (ex.: `06.347.409/0296-51` — CD Jarinu), **não** da seção "Informações de Cobrança" (`/0001-65` — matriz SBF). Razão: o Fire cadastra o cliente pela filial faturada, então o exporter (`FIND_CLIENT_BY_CNPJ`) precisa do CNPJ /0296-51 para achar o cadastro. Usar a matriz quebra o lookup. Texto extraído via regex (a tabela `pdfplumber` mistura essa seção com o painel "Atenção Fornecedor").
