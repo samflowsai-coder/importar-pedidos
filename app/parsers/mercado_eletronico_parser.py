@@ -1,13 +1,26 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+
+from loguru import logger
 
 from app.models.order import Order, OrderHeader, OrderItem
-from app.parsers.base_parser import BaseParser
+from app.parsers.base_parser import BaseParser, PedidoRecusadoError
 
 _SIGNATURE = "Mercado Eletrônico"
 # Item header line: "NNN. D,DD % DD,DD % QQ,QQQQST BRL ..."
-_ITEM_LINE = re.compile(r"^\d+\.\s+[\d,]", re.MULTILINE)
+# (aceita "CANCELADO" logo após o número, para o bloco do item cancelado não
+# ser engolido pelo item anterior)
+_ITEM_LINE = re.compile(r"^\d+\.\s+(?:CANCELADO\s+)?[\d,]", re.MULTILINE)
+# Item cancelado pela varejista: o ME imprime "CANCELADO" sob o número do item,
+# mantém quantidade e preço unitário e só zera o "Preço Total Item". Dois sinais,
+# porque a posição da palavra no texto depende da ordem que o pdfplumber dá à
+# célula do número: a palavra (procurada só antes da descrição, para nome de
+# produto não derrubar item) ou o Preço Total zerado com preço unitário > 0.
+_CANCELADO_RE = re.compile(r"\bCANCELADO\b")
+_DESCRICAO_RE = re.compile(r"Descri[çc][aã]o do Material")
+_PRECO_TOTAL_ITEM_RE = re.compile(r"Pre[çc]o Total Item:\s*([\d.,]+)")
 # Formatted CNPJ: XX.XXX.XXX/XXXX-XX
 _CNPJ_RE = re.compile(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}")
 # Page-footer artifacts printed by the portal between item rows on page breaks:
@@ -20,6 +33,22 @@ _PAGE_ARTIFACT_RE = re.compile(
     r"|^\s*\d+\s+\d+/\d+\s*$",
     re.MULTILINE,
 )
+
+
+@dataclass(frozen=True)
+class _Cancelado:
+    numero: str
+    codigo: str | None
+    quantidade: float | None
+    cnpj: str | None
+
+
+def _fmt_qtd(qtd: float | None) -> str:
+    if qtd is None:
+        return "?"
+    if qtd == int(qtd):
+        return str(int(qtd))
+    return str(qtd).replace(".", ",")
 
 
 class MercadoEletronicoParser(BaseParser):
@@ -38,11 +67,19 @@ class MercadoEletronicoParser(BaseParser):
             return None
 
         header = self._parse_header(text)
-        items = self._parse_items(text)
+        items, cancelados = self._parse_items(text)
 
         if not items:
+            if cancelados:
+                pedido = f"do pedido {header.order_number} " if header.order_number else ""
+                numeros = ", ".join(c.numero for c in cancelados)
+                raise PedidoRecusadoError(
+                    f"Todos os itens {pedido}estão CANCELADOS no Mercado Eletrônico "
+                    f"(itens {numeros}): não há o que importar."
+                )
             return None
 
+        self._anotar_cancelados(items, cancelados, header.order_number)
         return Order(header=header, items=items)
 
     # ------------------------------------------------------------------
@@ -64,21 +101,73 @@ class MercadoEletronicoParser(BaseParser):
     # Items — text-based to capture all items including cross-page ones
     # ------------------------------------------------------------------
 
-    def _parse_items(self, full_text: str) -> list[OrderItem]:
+    def _parse_items(self, full_text: str) -> tuple[list[OrderItem], list[_Cancelado]]:
+        """Itens válidos e os itens CANCELADOS (que ficam fora do pedido)."""
         # Strip page-footer artifacts (portal URL + pagination stamps) before parsing
         full_text = _PAGE_ARTIFACT_RE.sub("", full_text)
         positions = [m.start() for m in _ITEM_LINE.finditer(full_text)]
         if not positions:
-            return []
+            return [], []
 
         items = []
+        cancelados: list[_Cancelado] = []
         for i, start in enumerate(positions):
             end = positions[i + 1] if i + 1 < len(positions) else len(full_text)
             block = full_text[start:end]
+            if self._is_cancelado(block):
+                cancelado = _Cancelado(
+                    numero=block.split(".", 1)[0].strip(),
+                    codigo=self._extract_desc_and_code(block)[1],
+                    quantidade=self._extract_qty(block.splitlines()[0]),
+                    cnpj=self._extract_cnpj(block),
+                )
+                cancelados.append(cancelado)
+                logger.warning(f"Mercado Eletrônico: item CANCELADO fora do pedido: {cancelado}")
+                continue
             item = self._parse_block(block)
             if item:
                 items.append(item)
-        return items
+        return items, cancelados
+
+    def _is_cancelado(self, block: str) -> bool:
+        cabeca = _DESCRICAO_RE.split(block, maxsplit=1)[0]
+        if _CANCELADO_RE.search(cabeca):
+            return True
+        m = _PRECO_TOTAL_ITEM_RE.search(block)
+        if not m or self._parse_br_number(m.group(1)) != 0:
+            return False
+        unit_price, _ = self._extract_prices(block.splitlines()[0])
+        return bool(unit_price)
+
+    def _anotar_cancelados(
+        self, items: list[OrderItem], cancelados: list[_Cancelado], order_number: str | None
+    ) -> None:
+        """Avisa na OBS da loja que item cancelado ficou fora do pedido.
+
+        Pedido alterado costuma já estar no Fire (a operação exclui e sobe de
+        novo); a OBS é o que chega ao preview e ao Fire. Mesmas regras da OBS
+        do Sam's (`_anotar_packs`): começa pelo número do pedido, é a mesma em
+        todas as linhas da loja e só vale para a loja do item cancelado.
+
+        Loja com TODOS os itens cancelados não tem linha para levar a OBS: ela
+        só não aparece no pedido (e no log, como WARNING). Não vai para a OBS de
+        outra loja, que sai impressa na separação do pedido errado. No fluxo da
+        operação (exclui o pedido alterado no Fire e sobe de novo) isso basta.
+        """
+        por_loja: dict[str, list[_Cancelado]] = {}
+        for c in cancelados:
+            por_loja.setdefault(c.cnpj or "", []).append(c)
+        for cnpj, grupo in por_loja.items():
+            fora = ", ".join(
+                f"ITEM {c.numero} {c.codigo or '?'} QTD {_fmt_qtd(c.quantidade)}" for c in grupo
+            )
+            partes = [f"CANCELADO PELO CLIENTE, FORA DO PEDIDO: {fora}"]
+            if order_number:
+                partes.insert(0, order_number)
+            obs = " | ".join(partes)
+            for it in items:
+                if (it.delivery_cnpj or "") == cnpj:
+                    it.obs = f"{it.obs} | {obs}" if it.obs else obs
 
     def _parse_block(self, block: str) -> OrderItem | None:
         first_line = block.splitlines()[0]

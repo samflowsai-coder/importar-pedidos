@@ -43,6 +43,16 @@ Transformar a saída do extractor (texto + tabelas) em um `Order` (pydantic). Ca
 - **`can_parse` precisa ser barato.** Não parseie nada lá — apenas detecte formato.
 - **Datas e números brasileiros:** sempre passe por `_parse_br_number` / `OrderNormalizer`.
 - **Riachuelo/ME tem footer paginado** — strip já feito, ver commit `d25d480`.
+- **Riachuelo/ME: item CANCELADO fica fora.** Pedido alterado volta com "CANCELADO"
+  sob o número do item (quantidade e preço unitário mantidos, só o `Preço Total Item`
+  zera). `_is_cancelado` usa dois sinais: a palavra antes de `Descrição do Material`
+  (nome de produto não derruba item) ou `Preço Total Item` 0 com preço unitário > 0
+  (bonificação de preço 0 não é cancelada). O cancelado vai para a OBS da loja dele
+  (`_anotar_cancelados`, mesmas regras de `_anotar_packs` do Sam's); todos cancelados =
+  `PedidoRecusadoError` (não cai no genérico/LLM). Layout real conferido em
+  `samples/PEDIDO RIACHUELO 6702663768 CANCELADO.pdf`: `CANCELADO já incluso já incluso`
+  na linha seguinte ao número, e a soma dos `Preço Total Item` fecha com o
+  `Valor total do Pedido`.
 
 ## Kolosh/Dakota: o código do Fire está na DESCRIÇÃO, não na coluna de código
 
