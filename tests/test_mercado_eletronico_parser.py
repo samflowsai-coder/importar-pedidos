@@ -215,3 +215,29 @@ def test_item_de_preco_zero_nao_e_cancelado():
     )
     order = MercadoEletronicoParser().parse({"text": text})
     assert [i.quantity for i in order.items] == [15]
+
+
+_SAMPLE_CANCELADO = (
+    Path(__file__).parent.parent / "samples" / "PEDIDO RIACHUELO 6702663768 CANCELADO.pdf"
+)
+
+
+@pytest.mark.skipif(not _SAMPLE_CANCELADO.exists(), reason="sample ausente")
+def test_pdf_real_com_itens_cancelados():
+    """PDF do chamado: itens 200 e 300 da LJ190 (Natal) cancelados, Fire 5272."""
+    import pdfplumber
+
+    with pdfplumber.open(_SAMPLE_CANCELADO) as pdf:
+        texto = "\n".join(p.extract_text() or "" for p in pdf.pages)
+
+    order = MercadoEletronicoParser().parse({"text": texto})
+
+    natal = "33.200.056/0343-96"
+    assert len(order.items) == 8
+    codigos_natal = sorted(i.product_code for i in order.items if i.delivery_cnpj == natal)
+    assert codigos_natal == ["15968707001", "15968707002", "15968707005"]
+    assert {i.obs for i in order.items if i.delivery_cnpj == natal} == {
+        "6702663768 | CANCELADO PELO CLIENTE, FORA DO PEDIDO: "
+        "ITEM 200 15968707003 QTD 156, ITEM 300 15968707004 QTD 166"
+    }
+    assert {i.obs for i in order.items if i.delivery_cnpj != natal} == {None}
