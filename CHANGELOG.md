@@ -23,7 +23,7 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 ## Não publicado
 
-Nada por enquanto.
+1) **Item CANCELADO no pedido da Riachuelo não entra mais.** Quando a Riachuelo altera o pedido, o item cancelado volta no PDF com a quantidade e o preço, só marcado CANCELADO; o portal importava como se valesse. Agora ele fica fora e a observação do pedido daquela loja diz qual item foi cancelado. Pedido com todos os itens cancelados é recusado com aviso.
 
 ## 20261104-2208
 
