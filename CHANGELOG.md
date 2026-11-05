@@ -25,6 +25,11 @@ em `RELEASE_NOTES.txt`, sobrescrito a cada build. O histórico delas está no gi
 
 Nada por enquanto.
 
+## 20261104-2208
+
+1) **Pedido da Kallan sai com o preço de venda da MM, não com o preço sugerido ao consumidor.** O portal lia a coluna PDV (29,99) no lugar da Contra Proposta (11,29). Os pedidos que já estão no Fire estão com o preço certo.
+2) **Recusa do Sam's no layout por loja diz qual item não fechou.** Quando a soma não bate com o total do PDF, a mensagem passa a trazer o EAN do item.
+
 ## 20261104-1231
 
 1) **A atualização não desfaz mais o pacote quando um arquivo está ocupado na hora de gravar a versão.** O erro "Não é possível criar um arquivo já existente" fazia o portal voltar para a versão anterior; agora a gravação tenta de novo por alguns segundos. Vale a partir da atualização seguinte a esta.

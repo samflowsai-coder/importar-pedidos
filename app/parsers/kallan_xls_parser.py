@@ -103,7 +103,7 @@ class KallanXlsParser(BaseParser):
             numeracao = cells[col_map["numeracao"]] if col_map.get("numeracao") is not None and col_map["numeracao"] < len(cells) else ""
             cor = cells[col_map["cor"]] if col_map.get("cor") is not None and col_map["cor"] < len(cells) else ""
             referencia = cells[col_map["referencia"]] if col_map.get("referencia") is not None and col_map["referencia"] < len(cells) else ""
-            pdv_str = cells[col_map["pdv"]] if col_map.get("pdv") is not None and col_map["pdv"] < len(cells) else ""
+            preco_str = cells[col_map["contra_proposta"]] if col_map.get("contra_proposta") is not None and col_map["contra_proposta"] < len(cells) else ""
             qty_str = cells[col_map["qty_col"]] if col_map.get("qty_col") is not None and col_map["qty_col"] < len(cells) else ""
             total_str = cells[col_map["custo_ttl"]] if col_map.get("custo_ttl") is not None and col_map["custo_ttl"] < len(cells) else ""
 
@@ -114,7 +114,11 @@ class KallanXlsParser(BaseParser):
             description_parts = [p for p in [produto, apresentacao, tipo, numeracao, cor] if p]
             description = " ".join(description_parts)
 
-            unit_price = self._parse_number(pdv_str)
+            # Preço de venda da MM é a Contra Proposta, não o PDV (preço sugerido ao
+            # consumidor, ~2,6x maior). Fonte: pedidos Kallan faturados no Fire .7
+            # gravam a Contra Proposta, e K01 × Contra Proposta = CUSTO TTL. Sem a
+            # coluna, o preço fica vazio (o portal sinaliza) em vez de cair no PDV.
+            unit_price = self._parse_number(preco_str)
             total_price = self._parse_number(total_str)
 
             items.append(OrderItem(
@@ -145,7 +149,12 @@ class KallanXlsParser(BaseParser):
             col_map["tipo"] = next((j for j, c in enumerate(cells_lower) if c == "tipo"), None)
             col_map["numeracao"] = next((j for j, c in enumerate(cells_lower) if c == "numeração"), None)
             col_map["cor"] = next((j for j, c in enumerate(cells_lower) if c == "cor"), None)
-            col_map["pdv"] = next((j for j, c in enumerate(cells) if c == "PDV"), None)
+            # O rótulo vem com erro de digitação na planilha ("Contra Proopsta"):
+            # casa pelo prefixo, não pela grafia exata.
+            col_map["contra_proposta"] = next(
+                (j for j, c in enumerate(cells_lower) if " ".join(c.split()).startswith("contra pro")),
+                None,
+            )
             col_map["custo_ttl"] = next((j for j, c in enumerate(cells) if c == "CUSTO TTL"), None)
 
             # Find quantity column: store code pattern like K01, not PDV/NCM
